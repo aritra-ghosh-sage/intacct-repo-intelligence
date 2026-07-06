@@ -1,0 +1,15 @@
+[project]
+name = "intacct-repo-intelligence"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "click>=8.4.2",
+    "gitpython>=3.1.50",
+    "pyyaml>=6.0.3",
+    "tabulate>=0.10.0",
+    "tqdm>=4.68.3",
+    "tree-sitter==0.21.3",
+    "tree-sitter-languages==1.10.2",
+]
