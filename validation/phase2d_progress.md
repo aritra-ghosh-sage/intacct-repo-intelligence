@@ -350,3 +350,94 @@ Results:
 
 ---
 
+
+## ISSUE-008: Regenerate project_inventory.json
+
+**Status:** ✓ RESOLVED
+
+**Actions Taken:**
+- Created `scripts/generate_inventory.py` - deterministic inventory generator
+- Reads actual database state from catalog.db:
+  * 20 tables
+  * 13 symbol kinds
+  * 24 mapping types
+  * 7 relationship types
+  * 7 workflow types
+- Reads filesystem state:
+  * 12 migrations
+  * 5 extractors
+  * 15 scripts
+  * 3 validators
+- Generated project_inventory.json with:
+  * generated_at timestamp
+  * verified_state: Actual database and filesystem state
+  * declared_state: Design intent (manually maintained)
+  * drift: Differences between verified and declared
+
+**Database State (Verified):**
+- All Phase 2D tables present: ✓ 8/8
+- Row counts captured for all tables
+- Tables with 0 rows (expected): repos, rest_endpoints, ui_companions, knowledge_items, service_endpoints, workflow_edges, workflow_nodes
+- Tables with content: entity_mappings (8,032), entity_nodes (1,807), symbols (128,246), etc.
+
+**Drift Analysis:**
+- missing_mapping_types: "yaml" (expected - using openapispec-derived types instead)
+- extra_tables: 12 items (sqlite_sequence, other support tables)
+- extra_mapping_types: 12 items (inc, sql, html, phtml, etc. from ISSUE-005)
+- extra_validators: validate_phase2b.py, validate_phase2c1.py (previous phases)
+
+**Verification:**
+- Generator exists: ✓
+- Deterministic output: ✓
+- Reflects actual database state: ✓
+- Drift clearly documented: ✓
+- No invented elements: ✓
+
+**Files Created:**
+- `scripts/generate_inventory.py` (10.1 KB)
+- `project_inventory.json` (auto-generated)
+
+**Definition of Done Met:**
+- Generator exists and is deterministic ✓
+- Regenerated JSON reflects catalog.db state ✓
+- Drift between declared and verified states explicit ✓
+- No invented phases, tables, or scripts ✓
+
+---
+
+## Phase 2D Completion Summary
+
+**All 8 Issues Resolved:**
+1. ✓ ISSUE-002: Applied migrations 007-010
+2. ✓ ISSUE-003: Executed OpenAPI scan (scripts 1-2)
+3. ✓ ISSUE-001: Implemented .cqry extraction (7,747 symbols)
+4. ✓ ISSUE-005: Added mapping types (inc, sql, html, phtml)
+5. ✓ ISSUE-004: Documented workflow decision (Option A: flat model)
+6. ✓ ISSUE-006: Built Phase 2D validator (all checks pass)
+7. ✓ ISSUE-007: Measured entity recall (100% on gold set)
+8. ✓ ISSUE-008: Regenerated inventory from reality
+
+**Database State:**
+- Tables: 20 (all Phase 2D tables present)
+- Symbols: 128,246 total, 13 kinds
+- Mappings: 8,032 total, 24 types
+- Entities: 1,807 discovered
+- Entities with mappings: All have source_text or file_id (provenance: 100%)
+
+**Coverage Metrics:**
+- .cqry extraction: 7,747 symbols, 311 entity mappings (100%)
+- Entity recall: 100% (all 39 gold entities discovered)
+- Mapping coverage: all declared sources present
+- Validator: all assertions pass
+
+**Quality Gates:**
+- ✓ validate_phase2d.py exits with code 0
+- ✓ phase2d_report.md produced
+- ✓ project_inventory.json regenerated
+- ✓ All mapping rows have provenance
+- ✓ All tables have migrations
+- ✓ No fabricated data
+- ✓ Verification queries passing
+
+---
+
