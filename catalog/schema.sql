@@ -5,7 +5,8 @@ CREATE TABLE IF NOT EXISTS files (
     size_bytes INTEGER,
     sha1 TEXT,
     last_modified TEXT,
-    last_indexed TEXT
+    last_indexed TEXT,
+    last_symbols_extracted TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_files_path
