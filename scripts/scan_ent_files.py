@@ -77,7 +77,8 @@ class EntityDefinition:
         dummy: Whether entity is marked as dummy (for testing/templates)
         companion_classes: Dict mapping roles (manager, editor, etc.) to file paths
         openapi_prefix: Entity name converted to kebab-case for OpenAPI matching
-        openapi_module: OpenAPI module folder (mapped from entity module)
+        openapi_folder: OpenAPI folder name (e.g., "ap", "ar", "gl") from MODULE_TO_OPENAPI_FOLDER mapping
+        openapi_module: OpenAPI module folder (same as openapi_folder, kept for compatibility)
         openapi_schema_file: Path to .s1.schema.yaml file, if found
         openapi_api_file: Path to .s1.api.yaml file (operations), if found
         openapi_history_file: Path to .schema.history.yaml file, if found
@@ -92,6 +93,7 @@ class EntityDefinition:
     dummy: bool
     companion_classes: Dict[str, Optional[str]]
     openapi_prefix: Optional[str] = None
+    openapi_folder: Optional[str] = None
     openapi_module: Optional[str] = None
     openapi_schema_file: Optional[str] = None
     openapi_api_file: Optional[str] = None
@@ -548,7 +550,7 @@ def scan(repo_root: Path, out_file: Path) -> int:
             module = find_module_from_ent_path(ent_path, repo_root)
              
             # Discover OpenAPI spec files
-            openapi_module, schema_file, api_file, history_file, reason = discover_openapi_files(
+            openapi_folder, schema_file, api_file, history_file, reason = discover_openapi_files(
                 repo_root, canonical_name, module, table
             )
              
@@ -561,7 +563,8 @@ def scan(repo_root: Path, out_file: Path) -> int:
                 dummy=dummy,
                 companion_classes=companions,
                 openapi_prefix=_entity_name_to_kebab(canonical_name),
-                openapi_module=openapi_module,
+                openapi_folder=openapi_folder,
+                openapi_module=openapi_folder,
                 openapi_schema_file=schema_file,
                 openapi_api_file=api_file,
                 openapi_history_file=history_file,
