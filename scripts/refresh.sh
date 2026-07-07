@@ -105,6 +105,71 @@ fi
 echo ""
 
 # ===================================================================
+# Phase 8: Relationship Extraction
+# ===================================================================
+echo "🔗 Phase 8: Extracting symbol relationships..."
+echo "   Analyzing code to identify relationships (INHERITS, IMPLEMENTS, IMPORTS, etc.)"
+python -m parser.extract_relationships --db catalog/catalog.db --repo-root "/home/aritraghosh/projects/main"
+if [ $? -ne 0 ]; then
+  echo "   ⚠️  Relationship extraction completed with warnings (non-fatal)"
+else
+  echo "   ✅ Relationship extraction complete"
+fi
+echo ""
+
+# ===================================================================
+# Phase 9: Workflow Building
+# ===================================================================
+echo "🔄 Phase 9: Building workflows..."
+echo "   Extracting workflow definitions from entity mappings and YAML handlers"
+python scripts/build_workflows.py build --db catalog/catalog.db --repo-root "/home/aritraghosh/projects/main"
+if [ $? -ne 0 ]; then
+  echo "   ⚠️  Workflow building completed with warnings (non-fatal)"
+else
+  echo "   ✅ Workflow building complete"
+fi
+echo ""
+
+# ===================================================================
+# Phase 10: UI Companions Building
+# ===================================================================
+echo "🖼️  Phase 10: Building UI companion mappings..."
+echo "   Identifying UI editors, listers, and pickers"
+python scripts/build_ui_companions.py --db catalog/catalog.db
+if [ $? -ne 0 ]; then
+  echo "   ⚠️  UI companions building completed with warnings (non-fatal)"
+else
+  echo "   ✅ UI companions building complete"
+fi
+echo ""
+
+# ===================================================================
+# Phase 11: OpenAPI Specification Scanning
+# ===================================================================
+echo "📚 Phase 11: Scanning OpenAPI specifications..."
+echo "   Indexing OpenAPI YAML specification files"
+python scripts/scan_openapispec.py scan --db catalog/catalog.db --repo-root "/home/aritraghosh/projects/main"
+if [ $? -ne 0 ]; then
+  echo "   ⚠️  OpenAPI scanning completed with warnings (non-fatal)"
+else
+  echo "   ✅ OpenAPI scanning complete"
+fi
+echo ""
+
+# ===================================================================
+# Phase 12: REST Endpoints Extraction
+# ===================================================================
+echo "🌐 Phase 12: Extracting REST endpoints..."
+echo "   Parsing OpenAPI files from openapispec_index to extract REST API paths and methods"
+python scripts/build_rest_endpoints.py build --db catalog/catalog.db --repo-root "/home/aritraghosh/projects/main"
+if [ $? -ne 0 ]; then
+  echo "   ⚠️  REST endpoints extraction completed with warnings (non-fatal)"
+else
+  echo "   ✅ REST endpoints extraction complete"
+fi
+echo ""
+
+# ===================================================================
 # Summary
 # ===================================================================
 END_TIME=$(date +%s)
@@ -125,14 +190,21 @@ tables = [
     ('symbols', 'Symbols extracted'),
     ('entity_nodes', 'Entity definitions'),
     ('entity_roots', 'Entity root mappings'),
+    ('entity_mappings', 'Entity-symbol mappings'),
     ('relationships', 'Symbol relationships'),
+    ('workflows', 'Workflow definitions'),
+    ('workflow_steps', 'Workflow steps'),
+    ('ui_companions', 'UI layer mappings'),
+    ('openapispec_index', 'OpenAPI specs indexed'),
+    ('rest_endpoints', 'REST API endpoints'),
 ]
 for table, desc in tables:
     try:
         count = cur.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]
-        print(f'   ✓ {table}: {count:,} records ({desc})')
+        status = '✓' if count > 0 else '⚠'
+        print(f'   {status} {table:20} {count:>10,} records ({desc})')
     except:
-        print(f'   ✗ {table}: Not available')
+        print(f'   ✗ {table:20} Error reading table')
 conn.close()
 "
 echo ""
