@@ -195,3 +195,40 @@ Relationship Extraction
         │
         ▼
  Human & AI Consumers
+```
+
+---
+
+ ## Storage Architecture
+
+The project uses two complementary storage systems.
+
+### SQLite
+
+SQLite is the authoritative source of extracted facts.
+
+It stores files, symbols, relationships, entity mappings, provenance
+information, and validation metrics.
+
+SQLite is optimized for deterministic extraction, validation,
+auditing, and reproducibility.
+
+### Kùzu
+
+Kùzu is the graph query layer.
+
+Data from SQLite is projected into Kùzu to support graph traversal,
+dependency analysis, impact analysis, and AI-assisted navigation.
+
+### Design Principle
+
+SQLite answers:
+
+"What facts do we know?"
+
+Kùzu answers:
+
+"How are those facts connected?"
+
+AI systems should use Kùzu for traversal and SQLite for evidence and
+provenance.
