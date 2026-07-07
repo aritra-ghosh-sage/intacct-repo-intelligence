@@ -255,3 +255,46 @@ Results:
 
 ---
 
+
+## ISSUE-006: Build Phase 2D validator
+
+**Status:** ✓ RESOLVED
+
+**Actions Taken:**
+- Created `validation/validate_phase2d.py` with comprehensive checks:
+  - tables_exist: Verifies all 8 required Phase 2D tables exist
+  - cqry_coverage: Confirms .cqry symbols (7,747) and mappings (311) exist
+  - declared_vs_actual_mapping_types: Validates all declared sources are represented
+  - mapping_provenance: Ensures all 8,032 mappings have source_text or file_id
+  - workflow_step_ratio: Reports 1:1 ratio (modeling decision per ISSUE-004)
+  - rest_endpoint_coverage: Reports 0% (0 entities with rest_endpoints - informational)
+  - ui_companion_coverage: Reports 51.91% (938/1807 entities with UI companions)
+
+- Generated `validation/phase2d_report.md` with detailed results
+- Implemented out-of-scope handling for .xslt (0 files found)
+
+**Verification:**
+- Validator runs without error: ✓
+- All assertions pass: ✓ (4 passed, 0 failed, 3 informational)
+- Report generated: ✓ `phase2d_report.md`
+- Exit code on success: 0 ✓
+
+**Key Findings:**
+- Phase 2D tables: 8/8 present
+- Mapping types: All in-scope extensions represented
+- Mapping provenance: 100% (0 orphan mappings)
+- Coverage: REST endpoints 0%, UI companions 52%
+- .xslt marked out-of-scope (0 files in repository)
+
+**Files Created:**
+- `validation/validate_phase2d.py` (13.2 KB)
+- `validation/phase2d_report.md` (auto-generated on each run)
+
+**Definition of Done Met:**
+- Validator exists and runs without error ✓
+- phase2d_report.md is produced ✓
+- Failing assertions clearly labeled ✓
+- Exit code non-zero on failures ✓
+
+---
+
