@@ -254,6 +254,63 @@ def check_cqry_coverage(conn):
     }
 
 
+def check_entity_recall(conn):
+    """Measure entity recall against gold standard set."""
+    gold_path = Path(__file__).parent / "gold_entities.jsonl"
+    
+    if not gold_path.exists():
+        return {
+            "status": "SKIP",
+            "reason": "gold_entities.jsonl not found",
+            "precision": None,
+            "recall": None,
+            "gold_count": 0,
+            "discovered_match_count": 0,
+        }
+    
+    # Load gold entities
+    gold_entities = {}
+    try:
+        with open(gold_path, encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    row = json.loads(line)
+                    gold_entities[row["name"]] = row
+    except Exception as e:
+        return {
+            "status": "ERROR",
+            "reason": f"Failed to load gold set: {e}",
+            "precision": None,
+            "recall": None,
+            "gold_count": 0,
+            "discovered_match_count": 0,
+        }
+    
+    # Get discovered entities
+    discovered_entities = conn.execute(
+        "SELECT DISTINCT name FROM entity_nodes"
+    ).fetchall()
+    discovered_names = {row["name"] for row in discovered_entities}
+    
+    # Compute intersection and metrics
+    matched = set(gold_entities.keys()) & discovered_names
+    
+    recall = len(matched) / len(gold_entities) if gold_entities else 0
+    precision = len(matched) / len(discovered_names) if discovered_names else 0
+    
+    return {
+        "status": "REPORT",
+        "gold_count": len(gold_entities),
+        "discovered_count": len(discovered_names),
+        "matched_count": len(matched),
+        "precision": round(precision, 4),
+        "recall": round(recall, 4),
+        "recall_percent": round(100 * recall, 2),
+        "matched_entities": sorted(list(matched)[:10]),  # Show sample
+        "note": f"Recall measures coverage of gold set in discovered entities",
+    }
+
+
 def generate_report(checks_results):
     """Generate the validation report."""
     report = []
@@ -287,6 +344,7 @@ def generate_report(checks_results):
         "workflow_step_ratio",
         "rest_endpoint_coverage",
         "ui_companion_coverage",
+        "entity_recall",
     ]
     
     for check_id in check_order:
@@ -363,6 +421,22 @@ def generate_report(checks_results):
                 f"- Assertion: Both counts must be > 0\n"
                 f"- Note: {result['note']}\n"
             )
+        
+        elif check_id == "entity_recall":
+            if result.get("status") == "SKIP":
+                report.append(f"- Reason: {result['reason']}\n")
+            elif result.get("status") == "ERROR":
+                report.append(f"- Error: {result['reason']}\n")
+            else:
+                report.append(
+                    f"- Gold standard entities: {result['gold_count']}\n"
+                    f"- Discovered entities: {result['discovered_count']}\n"
+                    f"- Matched: {result['matched_count']}\n"
+                    f"- **Recall: {result['recall_percent']}%** ({result['recall']} ratio)\n"
+                    f"- **Precision: {round(100*result['precision'], 2)}%** ({result['precision']} ratio)\n"
+                    f"- Sample matched: {', '.join(result['matched_entities'][:5])}\n"
+                    f"- Note: {result['note']}\n"
+                )
     
     return "".join(report)
 
@@ -381,6 +455,7 @@ def main():
             "workflow_step_ratio": check_workflow_step_ratio(conn),
             "rest_endpoint_coverage": check_rest_endpoint_coverage(conn),
             "ui_companion_coverage": check_ui_companion_coverage(conn),
+            "entity_recall": check_entity_recall(conn),
         }
         
         conn.close()

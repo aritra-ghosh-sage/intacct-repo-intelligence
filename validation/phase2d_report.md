@@ -1,9 +1,9 @@
 # Phase 2D Validation Report
-**Generated:** 2026-07-07T07:40:43.184473
+**Generated:** 2026-07-07T07:42:23.188486
 ## Summary
 - **Passed:** 4
 - **Failed:** 0
-- **Reported (informational):** 3
+- **Reported (informational):** 4
 
 **Status: ✅ PASSED** - All assertions passed.
 
@@ -62,3 +62,13 @@
 - Entities with UI companions: 938
 - Coverage: 51.91%
 - Note: No threshold set. Reported for awareness.
+
+### ℹ️ entity_recall
+**Status:** REPORT
+- Gold standard entities: 39
+- Discovered entities: 1807
+- Matched: 39
+- **Recall: 100.0%** (1.0 ratio)
+- **Precision: 2.16%** (0.0216 ratio)
+- Sample matched: APPayment, Aisle, CheckRun, GLJournal, PODocument
+- Note: Recall measures coverage of gold set in discovered entities
