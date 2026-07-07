@@ -78,12 +78,10 @@ class EntityDefinition:
         companion_classes: Dict mapping roles (manager, editor, etc.) to file paths
         openapi_prefix: Entity name converted to kebab-case for OpenAPI matching
         openapi_module: OpenAPI module folder (mapped from entity module)
-        openapi_folder: Discovered OpenAPI entity folder path (e.g., "ar/models")
         openapi_schema_file: Path to .s1.schema.yaml file, if found
         openapi_api_file: Path to .s1.api.yaml file (operations), if found
         openapi_history_file: Path to .schema.history.yaml file, if found
-        x_mapped_to: Entity name that maps to these OpenAPI files (for aliasing)
-        openapi_status: 'found' if OpenAPI files exist, 'not_found' if searched but nothing, null if not searched
+        openapi_status: 'found' if OpenAPI files exist, 'no_files_found' if searched but nothing, null if not searched
         openapi_reason: Explanation of search result or why search was skipped
     """
     entity_name: str
@@ -95,11 +93,9 @@ class EntityDefinition:
     companion_classes: Dict[str, Optional[str]]
     openapi_prefix: Optional[str] = None
     openapi_module: Optional[str] = None
-    openapi_folder: Optional[str] = None
     openapi_schema_file: Optional[str] = None
     openapi_api_file: Optional[str] = None
     openapi_history_file: Optional[str] = None
-    x_mapped_to: Optional[str] = None
     openapi_status: Optional[str] = None
     openapi_reason: Optional[str] = None
 
@@ -216,21 +212,21 @@ def discover_openapi_files(
     if models_dir.exists():
         for candidate in search_candidates:
             # Look for objects.XXX.{candidate}.s1.schema.yaml or workflows.XXX.{candidate}.s1.schema.yaml
-            matches = list(models_dir.glob(f"*.{candidate}.s1.schema.yaml"))
+            matches = sorted(models_dir.glob(f"*.{candidate}.s1.schema.yaml"))
             if matches:
                 schema_file = to_repo_relative(matches[0], repo_root)
                 break
     
     if paths_dir.exists():
         for candidate in search_candidates:
-            matches = list(paths_dir.glob(f"*.{candidate}.s1.api.yaml"))
+            matches = sorted(paths_dir.glob(f"*.{candidate}.s1.api.yaml"))
             if matches:
                 api_file = to_repo_relative(matches[0], repo_root)
                 break
     
     if history_dir.exists():
         for candidate in search_candidates:
-            matches = list(history_dir.glob(f"*.{candidate}.schema.history.yaml"))
+            matches = sorted(history_dir.glob(f"*.{candidate}.schema.history.yaml"))
             if matches:
                 history_file = to_repo_relative(matches[0], repo_root)
                 break
@@ -548,29 +544,30 @@ def scan(repo_root: Path, out_file: Path) -> int:
                 prefix_acronyms=prefix_acronyms,
             )
             table, view, dummy = parse_top_level_ent_metadata(ent_path)
-
+            module = find_module_from_ent_path(ent_path, repo_root)
+             
+            # Discover OpenAPI spec files
+            openapi_module, schema_file, api_file, history_file, reason = discover_openapi_files(
+                repo_root, canonical_name, module, table
+            )
+             
             row = EntityDefinition(
                 entity_name=canonical_name,
                 ent_file=to_repo_relative(ent_path, repo_root),
-                module=find_module_from_ent_path(ent_path, repo_root),
+                module=module,
                 table=table,
                 view=view,
                 dummy=dummy,
                 companion_classes=companions,
                 openapi_prefix=_entity_name_to_kebab(canonical_name),
+                openapi_module=openapi_module,
+                openapi_schema_file=schema_file,
+                openapi_api_file=api_file,
+                openapi_history_file=history_file,
+                openapi_status=reason if reason in ("found", "no_files_found") else None,
+                openapi_reason=reason,
             )
-            
-            # Discover OpenAPI spec files
-            openapi_folder, schema_file, api_file, history_file, reason = discover_openapi_files(
-                repo_root, canonical_name, row.module, table
-            )
-            row.openapi_module = openapi_folder
-            row.openapi_schema_file = schema_file
-            row.openapi_api_file = api_file
-            row.openapi_history_file = history_file
-            row.openapi_status = reason if reason in ("found", "no_files_found") else None
-            row.openapi_reason = reason
-            
+             
             f.write(json.dumps(asdict(row), ensure_ascii=False, sort_keys=True) + "\n")
             count += 1
 
