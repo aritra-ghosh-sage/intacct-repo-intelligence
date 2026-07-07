@@ -98,172 +98,6 @@ def _role_to_suffix(role: str) -> str:
     return "".join(part.capitalize() for part in role.split("_"))
 
 
-def _camel_to_kebab(name: str) -> str:
-    s1 = re.sub(r"([a-z0-9])([A-Z])", r"\1-\2", name)
-    s2 = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1-\2", s1)
-    return s2.replace("_", "-").lower()
-
-
-def _strip_leading_acronym(name: str) -> str:
-    match = re.match(r"^([A-Z]{2,})([A-Z].+)$", name)
-    if match:
-        return match.group(2)
-    return name
-
-
-def _build_yaml_slug_candidates(entity: dict[str, Any]) -> list[str]:
-    candidates: list[str] = []
-
-    def add(value: str | None) -> None:
-        if not value:
-            return
-        normalized = value.strip().lower()
-        if not normalized:
-            return
-        if normalized not in candidates:
-            candidates.append(normalized)
-
-    entity_name = str(entity.get("entity_name") or "")
-    if entity_name:
-        add(_camel_to_kebab(entity_name))
-        add(_camel_to_kebab(_strip_leading_acronym(entity_name)))
-
-    ent_file = str(entity.get("ent_file") or "")
-    ent_stem = Path(ent_file).stem
-    if ent_stem:
-        add(ent_stem.replace("_", "-"))
-
-    module = str(entity.get("module") or "").lower()
-    module_prefix = module[:2] if len(module) >= 2 else ""
-    if ent_stem and module_prefix and ent_stem.lower().startswith(module_prefix):
-        add(ent_stem[len(module_prefix) :].replace("_", "-"))
-
-    table = str(entity.get("table") or "")
-    if table:
-        add(table.replace("_", "-"))
-        if module_prefix and table.lower().startswith(module_prefix):
-            add(table[len(module_prefix) :].replace("_", "-"))
-
-    return candidates
-
-
-def _build_openapi_module_candidates(module: str | None) -> list[str]:
-    """Generate OpenAPI folder name candidates from entity module name.
-    
-    This function uses MODULE_TO_FOLDER mapping to convert entity module names
-    to actual OpenAPI folder names. This is necessary because:
-    - Some modules map to their exact names (e.g., "cre" → "cre", "contract" → "contract")
-    - Some map to abbreviations (e.g., "apar" → "ap", "inventory" → "inv")
-    - The old module[:2] truncation was incorrect for many modules
-    
-    Code review fix for Issue #4: Ensures module filtering correctly matches folder names
-    """
-    out: list[str] = []
-
-    def add(value: str | None) -> None:
-        if not value:
-            return
-        v = value.strip().lower()
-        if v and v not in out:
-            out.append(v)
-
-    if module:
-        module_lower = module.strip().lower()
-        
-        # Check if module has a known mapping to OpenAPI folder
-        if module_lower in MODULE_TO_FOLDER:
-            add(MODULE_TO_FOLDER[module_lower])
-        
-        # Fall back to trying the module name as-is (for unmapped but valid folder names)
-        add(module_lower)
-        
-        # Try first 2-3 characters as fallback for partially matched names
-        if len(module_lower) >= 3:
-            add(module_lower[:3])
-        if len(module_lower) >= 2:
-            add(module_lower[:2])
-        
-        # Try prefix before underscore if present
-        if "_" in module_lower:
-            add(module_lower.split("_", 1)[0])
-
-    return out
-
-
-def _discover_openapi_yaml_path(
-    conn: sqlite3.Connection,
-    module_candidates: list[str],
-    slug_candidates: list[str],
-    subdir: str,
-    tail_pattern: str,
-) -> str | None:
-    base_conditions = [f"LOWER(path) LIKE 'app/source/openapispec/%/{subdir}/%'"]
-    params: list[str] = []
-    if module_candidates:
-        module_predicates = []
-        for module_name in module_candidates:
-            module_predicates.append("LOWER(path) LIKE ?")
-            params.append(f"app/source/openapispec/{module_name}/{subdir}/%")
-        base_conditions.append(f"({' OR '.join(module_predicates)})")
-
-    for slug in slug_candidates:
-        row = conn.execute(
-            f"""
-            SELECT path
-            FROM files
-            WHERE {' AND '.join(base_conditions)}
-              AND LOWER(path) LIKE ?
-            ORDER BY LENGTH(path), path
-            LIMIT 1
-            """,
-            (*params, tail_pattern.format(slug=slug)),
-        ).fetchone()
-        if row and row["path"]:
-            return str(row["path"])
-    return None
-
-
-def discover_related_yaml(conn: sqlite3.Connection, entity: dict[str, Any]) -> dict[str, str]:
-    module = entity.get("module")
-    module_candidates = _build_openapi_module_candidates(module if isinstance(module, str) else None)
-    slug_candidates = _build_yaml_slug_candidates(entity)
-    if not slug_candidates:
-        return {}
-
-    discovered: dict[str, str] = {}
-
-    schema_path = _discover_openapi_yaml_path(
-        conn=conn,
-        module_candidates=module_candidates,
-        slug_candidates=slug_candidates,
-        subdir="models",
-        tail_pattern="% .{slug}.s%.schema.yaml".replace(" ", ""),
-    )
-    if schema_path:
-        discovered[OPENAPI_SCHEMA_MAPPING_TYPE] = schema_path
-
-    operations_path = _discover_openapi_yaml_path(
-        conn=conn,
-        module_candidates=module_candidates,
-        slug_candidates=slug_candidates,
-        subdir="paths",
-        tail_pattern="% .{slug}.s%.api.yaml".replace(" ", ""),
-    )
-    if operations_path:
-        discovered[OPENAPI_OPERATIONS_MAPPING_TYPE] = operations_path
-
-    history_path = _discover_openapi_yaml_path(
-        conn=conn,
-        module_candidates=module_candidates,
-        slug_candidates=slug_candidates,
-        subdir="history",
-        tail_pattern="% .{slug}.schema.history.yaml".replace(" ", ""),
-    )
-    if history_path:
-        discovered[OPENAPI_HISTORY_MAPPING_TYPE] = history_path
-
-    return discovered
-
 
 def classify_yaml_mapping_type(path: str) -> str:
     lowered = path.lower()
@@ -277,41 +111,6 @@ def classify_yaml_mapping_type(path: str) -> str:
         return OPENAPI_HISTORY_MAPPING_TYPE
     return "yaml"
 
-
-def discover_module_files(
-    conn: sqlite3.Connection, entity: dict[str, Any], extension: str
-) -> list[str]:
-    """Discover files in entity's module directory."""
-    module = entity.get("module")
-    
-    if not module or not isinstance(module, str):
-        return []
-
-    # Find files in this module's directory
-    rows = conn.execute(
-        """
-        SELECT DISTINCT path FROM files
-        WHERE path LIKE ? AND path LIKE ?
-        LIMIT 1
-        """,
-        (f"%/{module}/%", f"%.{extension}"),
-    ).fetchall()
-    
-    return [row["path"] for row in rows]
-
-
-def discover_related_files(
-    conn: sqlite3.Connection, entity: dict[str, Any]
-) -> dict[str, list[str]]:
-    """Discover related files for new mapping types (inc, sql, html, phtml)."""
-    discovered: dict[str, list[str]] = {}
-    
-    for ext in ["inc", "sql", "html", "phtml"]:
-        files = discover_module_files(conn, entity, ext)
-        if files:
-            discovered[ext] = files
-    
-    return discovered
 
 
 def ensure_entity_columns(conn: sqlite3.Connection) -> None:
@@ -680,19 +479,24 @@ def build(db: str, entities: Path, reset: bool) -> BuildStats:
                 if inserted:
                     stats.mappings_inserted += 1
         
-            # ---- Phase 2C.1 enhancement ----
-            # Ingest related files (yaml, xslt, inc, xml) as file-only mappings.
+            # ---- Use entity_definitions.jsonl as source of truth ----
+            # Only ingest related files explicitly listed in entity_definitions.jsonl.
+            # Do not use heuristic discovery — alert if data is missing.
 
             related = entity.get("related_files") or {}
-            has_yaml_related = False
 
             for related_role in RELATED_FILE_ROLES:
                 related_path = related.get(related_role) if isinstance(related, dict) else None
                 if not related_path:
+                    # Alert if related file is missing from entity_definitions.jsonl
+                    click.echo(
+                        f"⚠ Missing {related_role} for entity {entity_name} in entity_definitions.jsonl",
+                        err=True,
+                    )
                     continue
+                 
                 mapping_type = related_role
                 if related_role == "yaml":
-                    has_yaml_related = True
                     mapping_type = classify_yaml_mapping_type(str(related_path))
 
                 inserted = insert_mapping(
@@ -705,35 +509,6 @@ def build(db: str, entities: Path, reset: bool) -> BuildStats:
                 )
                 if inserted:
                     stats.mappings_inserted += 1
-
-            if not has_yaml_related:
-                discovered_yaml = discover_related_yaml(conn, entity)
-                for mapping_type, discovered_path in discovered_yaml.items():
-                    inserted = insert_mapping(
-                        conn,
-                        entity_id,
-                        symbol_id=None,
-                        mapping_type=mapping_type,
-                        confidence=0.9,
-                        source_text=discovered_path,
-                    )
-                    if inserted:
-                        stats.mappings_inserted += 1
-
-            # ---- Phase 2D: Discover .inc, .sql, .html, .phtml files by module ----
-            discovered_files = discover_related_files(conn, entity)
-            for ext, file_paths in discovered_files.items():
-               for file_path in file_paths:
-                   inserted = insert_mapping(
-                       conn,
-                       entity_id,
-                       symbol_id=None,
-                       mapping_type=ext,
-                       confidence=0.7,
-                       source_text=file_path,
-                   )
-                   if inserted:
-                       stats.mappings_inserted += 1
 
         conn.commit()
     finally:
