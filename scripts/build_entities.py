@@ -52,6 +52,40 @@ OPENAPI_SCHEMA_MAPPING_TYPE = "openapispec_schema"
 OPENAPI_OPERATIONS_MAPPING_TYPE = "openapispec_operations"
 OPENAPI_HISTORY_MAPPING_TYPE = "openapispec_history"
 
+# Module name to OpenAPI folder mapping - discovered from actual /openapispec folders
+# This fixes the incorrect module[:2] truncation that failed for many module names
+MODULE_TO_FOLDER = {
+    "apar": "ap",
+    "appframework": "ap",
+    "cca": "cca",
+    "cm": "cm",
+    "common": "common",
+    "company": "co",
+    "companyassistant": "co",
+    "compliance": "co",
+    "config": "co",
+    "console": "co",
+    "consolidation": "co",
+    "contract": "contract",
+    "core": "core",
+    "cre": "cre",
+    "cw": "cw",
+    "ee": "ee",
+    "fa": "fa",
+    "gaap": "ap",
+    "gl": "gl",
+    "igc": "igc",
+    "inventory": "inv",
+    "med": "med",
+    "pa": "pa",
+    "platform": "platform",
+    "purchasing": "purchasing",
+    "sales": "sales",
+    "scheduling": "scheduling",
+    "sicollaboration": "co",
+    "tax": "tax",
+}
+
 
 @dataclass
 class BuildStats:
@@ -114,6 +148,16 @@ def _build_yaml_slug_candidates(entity: dict[str, Any]) -> list[str]:
 
 
 def _build_openapi_module_candidates(module: str | None) -> list[str]:
+    """Generate OpenAPI folder name candidates from entity module name.
+    
+    This function uses MODULE_TO_FOLDER mapping to convert entity module names
+    to actual OpenAPI folder names. This is necessary because:
+    - Some modules map to their exact names (e.g., "cre" → "cre", "contract" → "contract")
+    - Some map to abbreviations (e.g., "apar" → "ap", "inventory" → "inv")
+    - The old module[:2] truncation was incorrect for many modules
+    
+    Code review fix for Issue #4: Ensures module filtering correctly matches folder names
+    """
     out: list[str] = []
 
     def add(value: str | None) -> None:
@@ -124,10 +168,24 @@ def _build_openapi_module_candidates(module: str | None) -> list[str]:
             out.append(v)
 
     if module:
-        add(module)
-        add(module[:2])
-        if "_" in module:
-            add(module.split("_", 1)[0])
+        module_lower = module.strip().lower()
+        
+        # Check if module has a known mapping to OpenAPI folder
+        if module_lower in MODULE_TO_FOLDER:
+            add(MODULE_TO_FOLDER[module_lower])
+        
+        # Fall back to trying the module name as-is (for unmapped but valid folder names)
+        add(module_lower)
+        
+        # Try first 2-3 characters as fallback for partially matched names
+        if len(module_lower) >= 3:
+            add(module_lower[:3])
+        if len(module_lower) >= 2:
+            add(module_lower[:2])
+        
+        # Try prefix before underscore if present
+        if "_" in module_lower:
+            add(module_lower.split("_", 1)[0])
 
     return out
 
