@@ -45,6 +45,7 @@ RELATED_FILE_ROLES: list[str] = [
     "xslt",
     "inc",
     "xml",
+    "cqry",  # Query definition files (Phase 2D - ISSUE-001)
 ]
 
 OPENAPI_SCHEMA_MAPPING_TYPE = "openapispec_schema"

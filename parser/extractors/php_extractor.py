@@ -3,6 +3,11 @@
 from tree_sitter_languages import get_parser
 from .base import Symbol
 
+# Path B: Delegate .cqry files to dedicated extractor.
+# .cqry files have a specific PHP structure (query definition arrays) that
+# doesn't parse well with the standard PHP tree-sitter grammar.
+# See cqry_extractor.py for .cqry-specific extraction logic.
+
 _parser = get_parser("php")
 
 
@@ -17,7 +22,12 @@ def _find_name(node, source: bytes) -> str | None:
     return None
 
 
-def extract(source: bytes) -> list:
+def extract(source: bytes, file_path: str = "") -> list:
+    # If this is a .cqry file, delegate to the dedicated extractor
+    if file_path.endswith(".cqry"):
+        from . import cqry_extractor
+        return cqry_extractor.extract(source)
+    
     tree = _parser.parse(source)
     root = tree.root_node
     symbols: list[Symbol] = []

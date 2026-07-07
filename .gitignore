@@ -14,3 +14,7 @@ uv.lock
 # Local catalog database
 catalog/catalog.db
 catalog.db
+all_tables_row_count.txt
+code_files.txt
+entity_mapping.txt
+repo_tree.txt

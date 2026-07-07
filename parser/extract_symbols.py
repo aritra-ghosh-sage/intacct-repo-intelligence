@@ -72,7 +72,11 @@ def extract_all(only_changed: bool = True):
             # Remove old symbols for this file (idempotent re-extraction)
             cur.execute("DELETE FROM symbols WHERE file_id = ?", (file_id,))
 
-            symbols = extractor.extract(source)
+            # Pass file path to extractor for format-specific delegation (e.g., .cqry -> cqry_extractor)
+            if hasattr(extractor, 'extract') and extractor.extract.__code__.co_argcount > 1:
+                symbols = extractor.extract(source, rel_path)
+            else:
+                symbols = extractor.extract(source)
             for s in symbols:
                 cur.execute("""
                     INSERT INTO symbols
