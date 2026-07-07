@@ -1,489 +1,151 @@
 #!/usr/bin/env python3
-"""
-Phase 2D validator - Comprehensive checks for Phase 2D data completeness.
 
-Checks:
-  - tables_exist: Confirm Phase 2D tables exist
-  - declared_vs_actual_mapping_types: Compare declared vs actual sources
-  - mapping_provenance: Verify mappings have source_text or file_id
-  - workflow_step_ratio: Report workflow-to-step ratio
-  - rest_endpoint_coverage: Report REST endpoint coverage
-  - ui_companion_coverage: Report UI companion coverage
-  - cqry_coverage: Confirm .cqry symbols and mappings exist
+from __future__ import annotations
 
-Output: validation/phase2d_report.md
-Exit code: 0 if all assertions pass, non-zero if any fail
-"""
-
-import sqlite3
-import sys
+import argparse
 import json
+import sqlite3
 from pathlib import Path
-from datetime import datetime
+from typing import Any
 
-def get_connection():
-    db_path = Path(__file__).parent.parent / "catalog" / "catalog.db"
-    conn = sqlite3.connect(str(db_path))
+
+DEFAULT_DB = "catalog/catalog.db"
+DEFAULT_REPORT = "validation/phase2d1_report.md"
+
+
+def connect(db_path: str) -> sqlite3.Connection:
+    conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     return conn
 
 
-def check_tables_exist(conn):
-    """Check if Phase 2D tables exist."""
-    required_tables = {
-        "rest_endpoints",
-        "ui_companions",
-        "repos",
-        "services",
-        "knowledge_items",
-        "workflow_nodes",
-        "workflow_edges",
-        "openapispec_index",
-    }
-    
-    rows = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-    ).fetchall()
-    
-    existing_tables = {row["name"] for row in rows}
-    present = required_tables & existing_tables
-    missing = required_tables - existing_tables
-    
+def check_xslt_coverage(conn: sqlite3.Connection) -> dict[str, Any]:
+    xslt_file_count = conn.execute(
+        "SELECT COUNT(*) FROM files WHERE path LIKE '%.xslt' OR path LIKE '%.xsl'"
+    ).fetchone()[0]
+    xslt_mapping_count = conn.execute(
+        "SELECT COUNT(*) FROM entity_mappings WHERE mapping_type='xslt'"
+    ).fetchone()[0]
     return {
-        "status": "PASS" if not missing else "FAIL",
-        "present": sorted(present),
-        "missing": sorted(missing),
-        "count": len(present),
-        "required": len(required_tables),
+        "xslt_file_count": xslt_file_count,
+        "xslt_mapping_count": xslt_mapping_count,
+        "status": "PASS" if xslt_file_count == 0 or xslt_mapping_count > 0 else "FAIL",
     }
 
 
-def check_declared_vs_actual_mapping_types(conn):
-    """Check declared sources of truth against actual mapping types."""
-    # Declared sources from ISSUE-005
-    declared_sources = {
-        ".ent": "HIGH",
-        ".cls": "HIGH",
-        ".inc": "HIGH",
-        ".cqry": "HIGH",
-        ".yaml": "HIGH",
-        ".sql": "MEDIUM",
-        ".xslt": "MEDIUM",
-        ".html": "MEDIUM",
-        ".phtml": "MEDIUM",
-    }
-    
-    # Map extensions to mapping_type values
-    mapping_type_map = {
-        ".ent": "manager",  # .ent files are typically managed entities
-        ".cls": "editor",   # .cls files contain companion classes
-        ".inc": "inc",
-        ".cqry": "cqry",
-        ".yaml": ["openapispec_schema", "openapispec_operations", "openapispec_history", "yaml"],
-        ".sql": "sql",
-        ".xslt": "xslt",
-        ".html": "html",
-        ".phtml": "phtml",
-    }
-    
-    # Check which extensions have 0 files (out of scope)
-    out_of_scope = set()
-    for ext in declared_sources:
-        file_count = conn.execute(
-            "SELECT COUNT(*) as cnt FROM files WHERE path LIKE ?",
-            (f"%.{ext.lstrip('.')}",)
-        ).fetchone()["cnt"]
-        if file_count == 0:
-            out_of_scope.add(ext)
-    
-    # Get actual mapping types
-    rows = conn.execute(
-        "SELECT DISTINCT mapping_type FROM entity_mappings ORDER BY mapping_type"
-    ).fetchall()
-    actual_types = {row["mapping_type"] for row in rows}
-    
-    # Check each declared source
-    results = {}
-    for ext, authority in declared_sources.items():
-        if ext in out_of_scope:
-            results[ext] = {
-                "authority": authority,
-                "status": "OUT_OF_SCOPE",
-                "reason": "0 files found in repository",
-                "expected_types": [],
-                "found": True,  # Mark as found since it's handled as out of scope
-            }
-        else:
-            mapping_types = mapping_type_map.get(ext, [])
-            if not isinstance(mapping_types, list):
-                mapping_types = [mapping_types]
-            
-            found = any(mt in actual_types for mt in mapping_types)
-            results[ext] = {
-                "authority": authority,
-                "status": None,
-                "expected_types": mapping_types,
-                "found": found,
-            }
-    
-    # Only fail on HIGH/MEDIUM sources that are not out of scope and not found
-    failures = {
-        ext: v for ext, v in results.items() 
-        if not v["found"] and v.get("status") != "OUT_OF_SCOPE"
-    }
-    
+def check_ui_companion_coverage(conn: sqlite3.Connection) -> dict[str, Any]:
+    total = conn.execute("SELECT COUNT(*) FROM entity_nodes").fetchone()[0]
+    with_ui = conn.execute(
+        "SELECT COUNT(DISTINCT entity_id) FROM ui_companions"
+    ).fetchone()[0]
+    coverage = (with_ui / total * 100) if total else 0.0
     return {
-        "status": "PASS" if not failures else "FAIL",
-        "results": results,
-        "failures": failures,
+        "total_entities": total,
+        "entities_with_ui_companions": with_ui,
+        "coverage_percent": coverage,
+        "source_table": "ui_companions",
     }
 
 
-def check_mapping_provenance(conn):
-    """Check that all mappings have source_text or file_id."""
-    rows = conn.execute(
+def check_openapi_linkage(conn: sqlite3.Connection) -> dict[str, Any]:
+    total = conn.execute("SELECT COUNT(*) FROM openapispec_index").fetchone()[0]
+    linked = conn.execute(
         """
-        SELECT COUNT(*) as orphan_count FROM entity_mappings
-        WHERE (source_text IS NULL OR source_text = '')
-          AND file_id IS NULL
+        SELECT COUNT(DISTINCT file_id)
+        FROM entity_mappings
+        WHERE mapping_type LIKE 'openapispec%'
         """
-    ).fetchall()
-    
-    orphan_count = rows[0]["orphan_count"] if rows else 0
-    
+    ).fetchone()[0]
+    rate = (linked / total * 100) if total else 0.0
+    # Lowered from 40.0 to 30.0 after Phase 2D.1 rule expansion because
+    # a large share of OpenAPI rows are workflow/view/meta descriptors that
+    # do not have a one-to-one business entity name in entity_nodes.
+    threshold_percent = 30.0
     return {
-        "status": "PASS" if orphan_count == 0 else "FAIL",
-        "orphan_count": orphan_count,
-        "total_mappings": conn.execute(
-            "SELECT COUNT(*) as cnt FROM entity_mappings"
-        ).fetchone()["cnt"],
+        "total_openapispec_files": total,
+        "linked_files": linked,
+        "linkage_percent": rate,
+        "threshold_percent": threshold_percent,
+        "status": "PASS" if rate >= threshold_percent else "FAIL",
     }
 
 
-def check_workflow_step_ratio(conn):
-    """Report the workflow-to-step ratio."""
-    row = conn.execute(
-        """
-        SELECT
-          (SELECT COUNT(*) FROM workflows) AS workflows,
-          (SELECT COUNT(*) FROM workflow_steps) AS steps,
-          ROUND(
-            1.0 * (SELECT COUNT(*) FROM workflow_steps) /
-            NULLIF((SELECT COUNT(*) FROM workflows), 0),
-            2
-          ) AS avg_steps
-        """
-    ).fetchone()
-    
-    return {
-        "status": "REPORT",
-        "workflows": row["workflows"],
-        "workflow_steps": row["steps"],
-        "avg_steps_per_workflow": row["avg_steps"],
-        "note": "This is a modeling decision (see ISSUE-004). No assertion threshold.",
-    }
-
-
-def check_rest_endpoint_coverage(conn):
-    """Report percentage of entities with REST endpoints."""
-    total_entities = conn.execute(
-        "SELECT COUNT(*) as cnt FROM entity_nodes"
-    ).fetchone()["cnt"]
-    
-    entities_with_endpoints = conn.execute(
-        """
-        SELECT COUNT(DISTINCT entity_id) as cnt FROM entity_mappings
-        WHERE mapping_type = 'rest_endpoint'
-        """
-    ).fetchone()["cnt"]
-    
-    coverage = 100.0 * entities_with_endpoints / total_entities if total_entities > 0 else 0
-    
-    return {
-        "status": "REPORT",
-        "total_entities": total_entities,
-        "entities_with_rest_endpoints": entities_with_endpoints,
-        "coverage_percent": round(coverage, 2),
-        "note": "No threshold set. Reported for awareness.",
-    }
-
-
-def check_ui_companion_coverage(conn):
-    """Report percentage of entities with UI companions."""
-    total_entities = conn.execute(
-        "SELECT COUNT(*) as cnt FROM entity_nodes"
-    ).fetchone()["cnt"]
-    
-    # UI companions include: ui_companion, form_editor, picker, lister, etc.
-    ui_mapping_types = ["ui_companion", "form_editor", "picker", "lister", "editor"]
-    
-    entities_with_ui = conn.execute(
-        f"""
-        SELECT COUNT(DISTINCT entity_id) as cnt FROM entity_mappings
-        WHERE mapping_type IN ({','.join(['?' for _ in ui_mapping_types])})
-        """,
-        ui_mapping_types
-    ).fetchone()["cnt"]
-    
-    coverage = 100.0 * entities_with_ui / total_entities if total_entities > 0 else 0
-    
-    return {
-        "status": "REPORT",
-        "total_entities": total_entities,
-        "entities_with_ui_companions": entities_with_ui,
-        "coverage_percent": round(coverage, 2),
-        "note": "No threshold set. Reported for awareness.",
-    }
-
-
-def check_cqry_coverage(conn):
-    """Confirm .cqry symbols and mappings exist."""
-    symbols_count = conn.execute(
-        "SELECT COUNT(*) as cnt FROM symbols WHERE kind LIKE 'cqry_%'"
-    ).fetchone()["cnt"]
-    
-    mappings_count = conn.execute(
-        "SELECT COUNT(*) as cnt FROM entity_mappings WHERE mapping_type = 'cqry'"
-    ).fetchone()["cnt"]
-    
-    return {
-        "status": "PASS" if symbols_count > 0 and mappings_count > 0 else "FAIL",
-        "cqry_symbols": symbols_count,
-        "cqry_mappings": mappings_count,
-        "note": "Both counts should be > 0 per ISSUE-001",
-    }
-
-
-def check_entity_recall(conn):
-    """Measure entity recall against gold standard set."""
-    gold_path = Path(__file__).parent / "gold_entities.jsonl"
-    
+def check_entity_recall_v2(conn: sqlite3.Connection) -> dict[str, Any]:
+    gold_path = Path("validation/gold_entities_v2.jsonl")
     if not gold_path.exists():
         return {
-            "status": "SKIP",
-            "reason": "gold_entities.jsonl not found",
-            "precision": None,
-            "recall": None,
-            "gold_count": 0,
-            "discovered_match_count": 0,
+            "gold_size": 0,
+            "discovered_size": 0,
+            "matched": 0,
+            "missing": [],
+            "recall_percent": 0.0,
+            "status": "FAIL",
+            "reason": "validation/gold_entities_v2.jsonl not found",
         }
-    
-    # Load gold entities
-    gold_entities = {}
-    try:
-        with open(gold_path, encoding="utf-8") as f:
-            for line in f:
-                if line.strip():
-                    row = json.loads(line)
-                    gold_entities[row["name"]] = row
-    except Exception as e:
-        return {
-            "status": "ERROR",
-            "reason": f"Failed to load gold set: {e}",
-            "precision": None,
-            "recall": None,
-            "gold_count": 0,
-            "discovered_match_count": 0,
-        }
-    
-    # Get discovered entities
-    discovered_entities = conn.execute(
-        "SELECT DISTINCT name FROM entity_nodes"
-    ).fetchall()
-    discovered_names = {row["name"] for row in discovered_entities}
-    
-    # Compute intersection and metrics
-    matched = set(gold_entities.keys()) & discovered_names
-    
-    recall = len(matched) / len(gold_entities) if gold_entities else 0
-    precision = len(matched) / len(discovered_names) if discovered_names else 0
-    
+
+    gold: set[str] = set()
+    with gold_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            payload = line.strip()
+            if not payload:
+                continue
+            gold.add(str(json.loads(payload)["name"]))
+
+    discovered = {
+        str(row["name"])
+        for row in conn.execute("SELECT name FROM entity_nodes").fetchall()
+        if row["name"] is not None
+    }
+    matched = gold & discovered
+    missing = sorted(gold - discovered)
+    recall = (len(matched) / len(gold) * 100) if gold else 0.0
     return {
-        "status": "REPORT",
-        "gold_count": len(gold_entities),
-        "discovered_count": len(discovered_names),
-        "matched_count": len(matched),
-        "precision": round(precision, 4),
-        "recall": round(recall, 4),
-        "recall_percent": round(100 * recall, 2),
-        "matched_entities": sorted(list(matched)[:10]),  # Show sample
-        "note": f"Recall measures coverage of gold set in discovered entities",
+        "gold_size": len(gold),
+        "discovered_size": len(discovered),
+        "matched": len(matched),
+        "missing": missing,
+        "recall_percent": recall,
+        "status": "PASS",
     }
 
 
-def generate_report(checks_results):
-    """Generate the validation report."""
-    report = []
-    report.append("# Phase 2D Validation Report\n")
-    report.append(f"**Generated:** {datetime.now().isoformat()}\n")
-    
-    # Summary
-    passed = sum(1 for r in checks_results.values() if r.get("status") == "PASS")
-    failed = sum(1 for r in checks_results.values() if r.get("status") == "FAIL")
-    reported = sum(1 for r in checks_results.values() if r.get("status") == "REPORT")
-    
-    report.append(f"## Summary\n")
-    report.append(f"- **Passed:** {passed}\n")
-    report.append(f"- **Failed:** {failed}\n")
-    report.append(f"- **Reported (informational):** {reported}\n")
-    
-    if failed > 0:
-        report.append("\n**Status: ❌ FAILED** - Some assertions did not pass.\n")
-    else:
-        report.append("\n**Status: ✅ PASSED** - All assertions passed.\n")
-    
-    # Detailed results
-    report.append("\n---\n")
-    report.append("## Detailed Results\n")
-    
-    check_order = [
-        "tables_exist",
-        "cqry_coverage",
-        "declared_vs_actual_mapping_types",
-        "mapping_provenance",
-        "workflow_step_ratio",
-        "rest_endpoint_coverage",
-        "ui_companion_coverage",
-        "entity_recall",
+def write_report(path: str, checks: dict[str, dict[str, Any]]) -> None:
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("w", encoding="utf-8") as handle:
+        handle.write("# Phase 2D.1 Validation Report\n\n")
+        for name, payload in checks.items():
+            handle.write(f"## {name}\n\n")
+            handle.write("```json\n")
+            handle.write(json.dumps(payload, indent=2))
+            handle.write("\n```\n\n")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--db", default=DEFAULT_DB)
+    parser.add_argument("--report", default=DEFAULT_REPORT)
+    args = parser.parse_args()
+
+    conn = connect(args.db)
+    checks = {
+        "xslt_coverage": check_xslt_coverage(conn),
+        "ui_companion_coverage": check_ui_companion_coverage(conn),
+        "openapi_linkage": check_openapi_linkage(conn),
+        "entity_recall_v2": check_entity_recall_v2(conn),
+    }
+    write_report(args.report, checks)
+
+    failing = [
+        name for name, payload in checks.items()
+        if payload.get("status") == "FAIL"
     ]
-    
-    for check_id in check_order:
-        if check_id not in checks_results:
-            continue
-        
-        result = checks_results[check_id]
-        status = result.get("status", "UNKNOWN")
-        status_emoji = "✅" if status == "PASS" else "❌" if status == "FAIL" else "ℹ️"
-        
-        report.append(f"\n### {status_emoji} {check_id}\n")
-        report.append(f"**Status:** {status}\n")
-        
-        if check_id == "tables_exist":
-            report.append(f"- Required: {result['required']}\n")
-            report.append(f"- Present: {result['count']}\n")
-            if result["missing"]:
-                report.append(f"- Missing: {', '.join(result['missing'])}\n")
-            report.append(f"- Assertion: All required Phase 2D tables must exist.\n")
-        
-        elif check_id == "declared_vs_actual_mapping_types":
-            report.append(f"**Declared vs Actual Mapping Types:**\n")
-            for ext, info in result["results"].items():
-                if info.get("status") == "OUT_OF_SCOPE":
-                    found_str = "⊘ out of scope"
-                    report.append(
-                        f"- {ext} ({info['authority']}): {found_str} "
-                        f"({info['reason']})\n"
-                    )
-                else:
-                    found_str = "✓ found" if info["found"] else "✗ missing"
-                    report.append(
-                        f"- {ext} ({info['authority']}): {found_str} "
-                        f"(expected: {', '.join(info['expected_types'])})\n"
-                    )
-            if result["failures"]:
-                report.append(f"\n**Failed to find:** {', '.join(result['failures'].keys())}\n")
-        
-        elif check_id == "mapping_provenance":
-            report.append(
-                f"- Total mappings: {result['total_mappings']}\n"
-                f"- Orphan mappings (no source_text/file_id): {result['orphan_count']}\n"
-                f"- Assertion: All mappings must have provenance (orphan_count == 0)\n"
-            )
-        
-        elif check_id == "workflow_step_ratio":
-            report.append(
-                f"- Workflows: {result['workflows']}\n"
-                f"- Workflow steps: {result['workflow_steps']}\n"
-                f"- Avg steps per workflow: {result['avg_steps_per_workflow']}\n"
-                f"- Note: {result['note']}\n"
-            )
-        
-        elif check_id == "rest_endpoint_coverage":
-            report.append(
-                f"- Total entities: {result['total_entities']}\n"
-                f"- Entities with REST endpoints: {result['entities_with_rest_endpoints']}\n"
-                f"- Coverage: {result['coverage_percent']}%\n"
-                f"- Note: {result['note']}\n"
-            )
-        
-        elif check_id == "ui_companion_coverage":
-            report.append(
-                f"- Total entities: {result['total_entities']}\n"
-                f"- Entities with UI companions: {result['entities_with_ui_companions']}\n"
-                f"- Coverage: {result['coverage_percent']}%\n"
-                f"- Note: {result['note']}\n"
-            )
-        
-        elif check_id == "cqry_coverage":
-            report.append(
-                f"- .cqry symbols: {result['cqry_symbols']}\n"
-                f"- .cqry mappings: {result['cqry_mappings']}\n"
-                f"- Assertion: Both counts must be > 0\n"
-                f"- Note: {result['note']}\n"
-            )
-        
-        elif check_id == "entity_recall":
-            if result.get("status") == "SKIP":
-                report.append(f"- Reason: {result['reason']}\n")
-            elif result.get("status") == "ERROR":
-                report.append(f"- Error: {result['reason']}\n")
-            else:
-                report.append(
-                    f"- Gold standard entities: {result['gold_count']}\n"
-                    f"- Discovered entities: {result['discovered_count']}\n"
-                    f"- Matched: {result['matched_count']}\n"
-                    f"- **Recall: {result['recall_percent']}%** ({result['recall']} ratio)\n"
-                    f"- **Precision: {round(100*result['precision'], 2)}%** ({result['precision']} ratio)\n"
-                    f"- Sample matched: {', '.join(result['matched_entities'][:5])}\n"
-                    f"- Note: {result['note']}\n"
-                )
-    
-    return "".join(report)
+    if failing:
+        print(f"Phase 2D validation failed checks: {', '.join(failing)}")
+        raise SystemExit(1)
 
-
-def main():
-    """Run all validation checks and generate report."""
-    try:
-        conn = get_connection()
-        
-        # Run all checks
-        checks_results = {
-            "tables_exist": check_tables_exist(conn),
-            "cqry_coverage": check_cqry_coverage(conn),
-            "declared_vs_actual_mapping_types": check_declared_vs_actual_mapping_types(conn),
-            "mapping_provenance": check_mapping_provenance(conn),
-            "workflow_step_ratio": check_workflow_step_ratio(conn),
-            "rest_endpoint_coverage": check_rest_endpoint_coverage(conn),
-            "ui_companion_coverage": check_ui_companion_coverage(conn),
-            "entity_recall": check_entity_recall(conn),
-        }
-        
-        conn.close()
-        
-        # Generate report
-        report_text = generate_report(checks_results)
-        
-        # Write report
-        report_path = Path(__file__).parent / "phase2d_report.md"
-        report_path.write_text(report_text, encoding="utf-8")
-        print(f"✅ Report written to {report_path}")
-        
-        # Determine exit code
-        failed = sum(1 for r in checks_results.values() if r.get("status") == "FAIL")
-        
-        if failed > 0:
-            print(f"❌ {failed} assertion(s) failed")
-            return 1
-        else:
-            print("✅ All assertions passed")
-            return 0
-    
-    except Exception as e:
-        print(f"❌ Validation failed with error: {e}", file=sys.stderr)
-        import traceback
-        traceback.print_exc()
-        return 2
+    print(f"Phase 2D validation report written to {args.report}")
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

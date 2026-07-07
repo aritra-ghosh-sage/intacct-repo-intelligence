@@ -21,14 +21,20 @@ EXTRACTORS = {
 }
 
 
-def extract_all(only_changed: bool = True):
+def extract_all(only_changed: bool = True, languages: list[str] | None = None):
     conn = get_connection()
     cur = conn.cursor()
 
     started = datetime.now(timezone.utc).isoformat()
 
-    placeholders = ",".join(["?"] * len(EXTRACTORS))
-    lang_tuple = tuple(EXTRACTORS.keys())
+    selected_languages = [lang for lang in (languages or list(EXTRACTORS.keys())) if lang in EXTRACTORS]
+    if not selected_languages:
+        print("⚠️  No valid extractors selected.")
+        conn.close()
+        return
+
+    placeholders = ",".join(["?"] * len(selected_languages))
+    lang_tuple = tuple(selected_languages)
 
     if only_changed:
         # A file needs (re-)extraction if:
@@ -120,6 +126,16 @@ def extract_all(only_changed: bool = True):
 
 
 if __name__ == "__main__":
-    import sys
-    full = "--full" in sys.argv
-    extract_all(only_changed=not full)
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--full", action="store_true", help="Extract symbols for all files, not only changed files.")
+    parser.add_argument(
+        "--language",
+        action="append",
+        choices=sorted(EXTRACTORS.keys()),
+        help="Limit extraction to one or more languages (repeat flag to pass multiple).",
+    )
+    args = parser.parse_args()
+
+    extract_all(only_changed=not args.full, languages=args.language)

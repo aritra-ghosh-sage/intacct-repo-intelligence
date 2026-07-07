@@ -1,0 +1,69 @@
+sqlite3 catalog/catalog.db "
+SELECT name FROM entity_nodes
+WHERE LOWER(REPLACE(name, '_', '')) IN (
+  'bsactivitylog', 'bsinvoice', 'bsorderlineitem',
+  'apaccountlabel', 'apadjustmentbatch'
+);
+"
+APAccountLabel
+APAdjustmentBatch
+BS_ActivityLog
+BS_Invoice
+BS_OrderLineItem
+--------------------------------------------------------------------------------------------------------
+~/projects/intacct-repo-intelligence$ sqlite3 catalog/catalog.db "Select count(1) from ui_companions;"
+0
+--------------------------------------------------------------------------------------------------------
+~/projects/intacct-repo-intelligence$ grep -A5 "threshold" ../intacct-repo-intelligence.worktree
+s/phase2d1remediationexecution/validation/phase2d1_progress.md
+    openapi_threshold_percent: 30.0
+  notes: Sampled 30 unlinked rows showed three dominant gaps (slug naming variants, missing resource-path extraction, and module-name mismatch). Added deterministic rules for canonical normalization, slug parsing, resource-path parsing, canonical suffix/prefix normalization, and module-family scoped matching. Threshold was set to 30% with justification because many OpenAPI rows represent workflow/view/meta descriptors without one-to-one entity names in entity_nodes.
+
+- issue_id: ISSUE-D1K
+  status: resolved
+  verification_output: |
+--------------------------------------------------------------------------------------------------------
+aritraghosh@DESKTOP-MOUB2OU:~/projects/main$ find app/ -type f -name '*.xslt' | wc -l
+0
+aritraghosh@DESKTOP-MOUB2OU:~/projects/main$ find app/ -type f -name '*.xsl' | wc -l
+293
+--------------------------------------------------------------------------------------------------------
+~/projects/intacct-repo-intelligence$ sqlite3 catalog/catalog.db "
+SELECT em.entity_id, en.name, em.source_text
+FROM entity_mappings em
+JOIN entity_nodes en ON en.id = em.entity_id
+WHERE em.mapping_type = 'xslt'
+LIMIT 10;
+"
+--------------------------------------------------------------------------------------------------------
+sqlite3 catalog/catalog.db "
+SELECT mapping_type, COUNT(*)
+FROM entity_mappings
+WHERE mapping_type IN ('sql', 'yaml')
+GROUP BY mapping_type;
+"
+sql|17
+--------------------------------------------------------------------------------------------------------
+~/projects/intacct-repo-intelligence.worktrees/phase2d1remediationexecution/validation$ cat phase2d1_progress.md | grep -E "D1I|D1F|sql|yaml"
+- issue_id: ISSUE-D1I
+    WHERE mapping_type = 'sql'
+    WHERE mapping_type = 'sql'
+    - migrations/012_purge_sql_drop_mappings.sql
+    sql_mappings_total: 17
+    sql_drop_all_mappings: 17
+    sql_mappings_total: 0
+    sql_drop_all_mappings: 0
+- issue_id: ISSUE-D1F
+    SELECT COUNT(*) FROM entity_mappings WHERE mapping_type='yaml';
+    WHERE em.mapping_type = 'yaml'
+    Contact|app/tests/source/api/openapi/contact/__test.vendor.s1.api.yaml
+    Company|app/tests/source/api/openapi/company/__test.userinfo.s1.api.yaml
+    Document|app/tests/source/api/openapi/document/__test.sodocument.s1.api.yaml
+    yaml_mappings: 0
+    non_openapispec_yaml_files: 108
+    yaml_mappings: 3
+    yaml_mappings_missing_provenance: 0
+(intacct-repo-intelligence) aritraghosh@DESKTOP-MOUB2OU:~/projects/intacct-repo-intelligence.worktrees/phase2d1remediationexecution/validation$
+--------------------------------------------------------------------------------------------------------
+python check_entity_recall_v2.py
+{'gold_size': 54, 'discovered_size': 1807, 'matched': 40, 'matched_names': ['APAccountlabel', 'APAdjustment', 'APAdjustmentbatch', 'APAdjustmentitem', 'APAdjustmentitemreverse', 'APAdjustmentreverse', 'APAdjustmenttaxentry', 'APAdminapproverpick', 'APAdvance', 'APAdvanceapproval', 'APAdvanceitem', 'APAdvancerequest', 'APAdvancereverse', 'APAgegraph', 'APAmortizationschedule', 'APAmortizationscheduleentry', 'APAmortizationtemplate', 'APApprovaldelegate', 'APApprovaldelegatedetail', 'APApprovalpolicy', 'APApprovalpolicydetail', 'APApprovalrule', 'APApprovalruledetail', 'APApprovalruleset', 'APApproverdelegategrouppick', 'Adminapbillapproverpick', 'Agingentry', 'Agingsetup', 'BSActivityLog', 'BSInvoice', 'BSInvoiceLineItem', 'BSOrderLineItem', 'BSPriceList', 'BSPriceListLine', 'BSProduct', 'BSSubscription', 'Billingclientcompany', 'BsInvoiceedit', 'BsInvoicelist', 'Bsterritory'], 'missing_names': ['Account', 'AccountAllocation', 'AccountAllocationBasis', 'AccountAllocationBasisAdjustmentBook', 'AccountAllocationGroup', 'AccountAllocationGroupMember', 'AccountAllocationReverse', 'AccountAllocationRun', 'AccountAllocationSource', 'AccountAllocationSourceAdjustmentBook', 'AccountAllocationTarget', 'AccountBalance', 'AccountBalanceByDimension', 'AccountCategory'], 'renamed_matches': {'BSActivityLog': 'BS_ActivityLog', 'Bsterritory': 'BsTerritory', 'Agingsetup': 'AgingSetup', 'APAdjustmentbatch': 'APAdjustmentBatch', 'APAgegraph': 'APAgeGraph', 'BSInvoiceLineItem': 'BS_InvoiceLineItem', 'Billingclientcompany': 'BillingClientCompany', 'APApprovaldelegatedetail': 'APApprovalDelegateDetail', 'APAmortizationscheduleentry': 'APAmortizationScheduleEntry', 'APApprovalpolicydetail': 'APApprovalPolicyDetail', 'APAdvancerequest': 'APAdvanceRequest', 'APAdvanceapproval': 'APAdvanceApproval', 'BSSubscription': 'BS_Subscription', 'APApprovalruleset': 'APApprovalRuleSet', 'APAdjustmentitem': 'APAdjustmentItem', 'APApprovalrule': 'APApprovalRule', 'APAdvancereverse': 'APAdvanceReverse', 'APAdjustmentreverse': 'APAdjustmentReverse', 'APApprovaldelegate': 'APApprovalDelegate', 'BsInvoiceedit': 'BS_InvoiceEdit', 'APApprovalruledetail': 'APApprovalRuleDetail', 'BSPriceList': 'BS_PriceList', 'APAdjustmenttaxentry': 'APAdjustmentTaxEntry', 'BSOrderLineItem': 'BS_OrderLineItem', 'APAdvanceitem': 'APAdvanceItem', 'BSInvoice': 'BS_Invoice', 'BSPriceListLine': 'BS_PriceListLine', 'Adminapbillapproverpick': 'AdminAPBillApproverPick', 'APAdjustmentitemreverse': 'APAdjustmentItemReverse', 'APApproverdelegategrouppick': 'APApproverDelegateGroupPick', 'APAdminapproverpick': 'APAdminApproverPick', 'BSProduct': 'BS_Product', 'APAmortizationschedule': 'APAmortizationSchedule', 'APAmortizationtemplate': 'APAmortizationTemplate', 'APAccountlabel': 'APAccountLabel', 'Agingentry': 'AgingEntry', 'BsInvoicelist': 'BS_InvoiceList', 'APApprovalpolicy': 'APApprovalPolicy'}, 'recall_percent': 74.07}
