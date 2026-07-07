@@ -287,7 +287,8 @@ def build_class_stem_index(app_dir: Path) -> Dict[str, List[Path]]:
     Index class-like files by lowercase stem for deterministic, case-insensitive lookup.
     """
     stem_index: Dict[str, List[Path]] = {}
-    for path in sorted(app_dir.rglob("*"), key=lambda p: p.as_posix()):
+    all_paths = sorted(app_dir.rglob("*"), key=lambda p: p.as_posix())
+    for path in tqdm(all_paths, desc="Indexing class files", unit="file", disable=len(all_paths) < 1000):
         if not path.is_file():
             continue
         if path.suffix.lower() not in CLASS_EXTS:
