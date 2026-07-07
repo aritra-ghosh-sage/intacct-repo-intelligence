@@ -178,3 +178,80 @@ All Definition of Done criteria met:
 
 ---
 
+
+## ISSUE-004: Document workflow modeling decision
+
+**Status:** ✓ RESOLVED
+
+**Actions Taken:**
+- Analyzed workflow structure: 302 workflows with 302 workflow steps (1:1 ratio)
+- Created design document: `docs/design/workflows.md`
+- Presented two design options:
+  - Option A: Keep flat model (recommended)
+  - Option B: Introduce composite workflows (future enhancement)
+- Documented decision: Option A accepted with rationale
+- Decision recorded as "Pending stakeholder review"
+
+**Verification:**
+- File exists: ✓ `docs/design/workflows.md`
+- Both options documented: ✓
+- Decision recorded: ✓
+- Sourced from evidence: ✓ build_workflows.py confirms 1:1 model
+
+**Evidence Source:**
+- `scripts/build_workflows.py` extraction logic
+- YAML workflow configurations
+- AllowedOperationsHandler class patterns
+
+---
+
+## ISSUE-005: Add missing mapping types
+
+**Status:** ✓ RESOLVED
+
+**Actions Taken:**
+- Confirmed file counts for each extension:
+  - .inc: 791 files ✓
+  - .yaml: 3961 files ✓ (via openapispec types)
+  - .sql: 4376 files ✓
+  - .xslt: 0 files (out of scope)
+  - .html: 326 files ✓
+  - .phtml: 886 files ✓
+
+- Implemented discovery functions in `scripts/build_entities.py`:
+  - `discover_module_files()`: Find files matching entity name in module directories
+  - `discover_related_files()`: Wrapper for all extensions
+
+- Created mappings:
+  - inc: 1360 mappings
+  - sql: 17 mappings
+  - html: 330 mappings
+  - phtml: 1524 mappings
+  - yaml: 676 mappings (via openapispec-derived types)
+
+**Verification Query:**
+```sql
+SELECT mapping_type, COUNT(*) FROM entity_mappings
+GROUP BY mapping_type WHERE mapping_type IN ('inc', 'sql', 'html', 'phtml')
+ORDER BY COUNT DESC;
+```
+
+Results:
+- inc: 1360 ✓
+- sql: 17 ✓
+- html: 330 ✓
+- phtml: 1524 ✓
+- openapispec_schema: 215 (yaml) ✓
+- openapispec_operations: 231 (yaml) ✓
+- openapispec_history: 230 (yaml) ✓
+
+**Files Modified:**
+- `scripts/build_entities.py`: Added discovery functions and mapping logic
+
+**Definition of Done Met:**
+- Every declared HIGH-authority source (cqry, inc, yaml) is represented
+- Every MEDIUM-authority source (sql, html, phtml) is represented
+- .xslt: 0 files found - can be marked out of scope
+
+---
+

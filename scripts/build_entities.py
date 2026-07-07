@@ -220,6 +220,42 @@ def classify_yaml_mapping_type(path: str) -> str:
     return "yaml"
 
 
+def discover_module_files(
+    conn: sqlite3.Connection, entity: dict[str, Any], extension: str
+) -> list[str]:
+    """Discover files in entity's module directory."""
+    module = entity.get("module")
+    
+    if not module or not isinstance(module, str):
+        return []
+
+    # Find files in this module's directory
+    rows = conn.execute(
+        f"""
+        SELECT DISTINCT path FROM files
+        WHERE path LIKE ? AND path LIKE ?
+        LIMIT 1
+        """,
+        (f"%/{module}/%", f"%.{extension}"),
+    ).fetchall()
+    
+    return [row["path"] for row in rows]
+
+
+def discover_related_files(
+    conn: sqlite3.Connection, entity: dict[str, Any]
+) -> dict[str, list[str]]:
+    """Discover related files for new mapping types (inc, sql, html, phtml)."""
+    discovered: dict[str, list[str]] = {}
+    
+    for ext in ["inc", "sql", "html", "phtml"]:
+        files = discover_module_files(conn, entity, ext)
+        if files:
+            discovered[ext] = files
+    
+    return discovered
+
+
 def ensure_entity_columns(conn: sqlite3.Connection) -> None:
     cols = {
         row["name"]
@@ -625,6 +661,21 @@ def build(db: str, entities: Path, reset: bool) -> BuildStats:
                     )
                     if inserted:
                         stats.mappings_inserted += 1
+
+            # ---- Phase 2D: Discover .inc, .sql, .html, .phtml files by module ----
+            discovered_files = discover_related_files(conn, entity)
+            for ext, file_paths in discovered_files.items():
+               for file_path in file_paths:
+                   inserted = insert_mapping(
+                       conn,
+                       entity_id,
+                       symbol_id=None,
+                       mapping_type=ext,
+                       confidence=0.7,
+                       source_text=file_path,
+                   )
+                   if inserted:
+                       stats.mappings_inserted += 1
 
         conn.commit()
     finally:
