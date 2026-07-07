@@ -231,7 +231,7 @@ def discover_module_files(
 
     # Find files in this module's directory
     rows = conn.execute(
-        f"""
+        """
         SELECT DISTINCT path FROM files
         WHERE path LIKE ? AND path LIKE ?
         LIMIT 1
