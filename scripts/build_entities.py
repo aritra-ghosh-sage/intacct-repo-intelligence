@@ -45,6 +45,7 @@ RELATED_FILE_ROLES: list[str] = [
     "xslt",
     "inc",
     "xml",
+    "sql",
 ]
 
 OPENAPI_SCHEMA_MAPPING_TYPE = "openapispec_schema"
@@ -217,6 +218,109 @@ def classify_yaml_mapping_type(path: str) -> str:
     if "/history/" in lowered and lowered.endswith(".schema.history.yaml"):
         return OPENAPI_HISTORY_MAPPING_TYPE
     return "yaml"
+
+
+def classify_sql_mapping_type(path: str) -> str | None:
+    """
+    Option A (ISSUE-D1I): SQL mapping uses explicit path-level opt-outs.
+
+    SQL files matching teardown/drop/cleanup naming patterns, files under
+    migrations/, and files under platform/sql/ are excluded because they are
+    typically schema-maintenance scripts with low entity provenance signal.
+    """
+    lowered = path.lower()
+    basename = Path(lowered).name
+    if basename.startswith(("drop_all", "teardown_", "cleanup_")):
+        return None
+    if "/migrations/" in lowered or "/platform/sql/" in lowered:
+        return None
+    if "/teardown/" in lowered:
+        return None
+    return "sql"
+
+
+def _normalized_match_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", value.lower())
+
+
+def _path_tokens(path: str) -> set[str]:
+    return {
+        token for token in re.split(r"[^a-z0-9]+", path.lower())
+        if token
+    }
+
+
+def discover_related_xslt(conn: sqlite3.Connection, entity: dict[str, Any]) -> str | None:
+    entity_name = str(entity.get("entity_name") or "")
+    entity_key = _normalized_match_key(entity_name)
+    if not entity_key:
+        return None
+
+    params: list[str] = ["%.xslt", "%.xsl", f"%{entity_key}%"]
+    conditions = [
+        "(LOWER(path) LIKE ? OR LOWER(path) LIKE ?)",
+        "LOWER(path) LIKE ?",
+    ]
+    module = str(entity.get("module") or "").strip().lower()
+    if module:
+        conditions.append("LOWER(path) LIKE ?")
+        params.append(f"app/source/{module}/%")
+
+    rows = conn.execute(
+        f"""
+        SELECT path
+        FROM files
+        WHERE {' AND '.join(conditions)}
+        ORDER BY LENGTH(path), path
+        """,
+        tuple(params),
+    ).fetchall()
+    for row in rows:
+        path = str(row["path"])
+        if entity_key in _path_tokens(path):
+            return path
+    return None
+
+
+def _normalized_path_segments(path: str) -> set[str]:
+    keys: set[str] = set()
+    for segment in Path(path).parts:
+        segment_key = _normalized_match_key(Path(segment).stem)
+        if segment_key:
+            keys.add(segment_key)
+    return keys
+
+
+def discover_related_literal_yaml(conn: sqlite3.Connection, entity: dict[str, Any]) -> str | None:
+    """
+    Filename/path-segment discovery only (ISSUE-D1F).
+
+    Matches entity names against YAML path segments without reading file
+    contents, and excludes openapispec paths to avoid conflating literal
+    YAML coverage with OpenAPI mappings.
+    """
+    entity_name = str(entity.get("entity_name") or "")
+    entity_key = _normalized_match_key(entity_name)
+    if not entity_key:
+        return None
+
+    rows = conn.execute(
+        """
+        SELECT path
+        FROM files
+        WHERE (LOWER(path) LIKE '%.yaml' OR LOWER(path) LIKE '%.yml')
+          AND LOWER(path) NOT LIKE '%openapispec%'
+          AND LOWER(path) LIKE ?
+        ORDER BY LENGTH(path), path
+        """,
+        (f"%{entity_key}%",),
+    ).fetchall()
+    for row in rows:
+        path = str(row["path"])
+        segments = _normalized_path_segments(path)
+        if entity_key in segments:
+            return path
+    return None
 
 
 def ensure_entity_columns(conn: sqlite3.Connection) -> None:
@@ -518,6 +622,7 @@ def _read_entities_jsonl(entities_path: Path) -> list[dict[str, Any]]:
 
 
 def build(db: str, entities: Path, reset: bool) -> BuildStats:
+    """Build entity nodes and mappings idempotently using INSERT...WHERE NOT EXISTS."""
     rows = _read_entities_jsonl(entities)
     missing_symbols: list[dict[str, str]] = []
     stats = BuildStats()
@@ -590,6 +695,7 @@ def build(db: str, entities: Path, reset: bool) -> BuildStats:
 
             related = entity.get("related_files") or {}
             has_yaml_related = False
+            has_xslt_related = False
 
             for related_role in RELATED_FILE_ROLES:
                 related_path = related.get(related_role) if isinstance(related, dict) else None
@@ -599,6 +705,12 @@ def build(db: str, entities: Path, reset: bool) -> BuildStats:
                 if related_role == "yaml":
                     has_yaml_related = True
                     mapping_type = classify_yaml_mapping_type(str(related_path))
+                elif related_role == "xslt":
+                    has_xslt_related = True
+                elif related_role == "sql":
+                    mapping_type = classify_sql_mapping_type(str(related_path))
+                    if mapping_type is None:
+                        continue
 
                 inserted = insert_mapping(
                     conn,
@@ -612,6 +724,19 @@ def build(db: str, entities: Path, reset: bool) -> BuildStats:
                     stats.mappings_inserted += 1
 
             if not has_yaml_related:
+                literal_yaml = discover_related_literal_yaml(conn, entity)
+                if literal_yaml:
+                    inserted = insert_mapping(
+                        conn,
+                        entity_id,
+                        symbol_id=None,
+                        mapping_type="yaml",
+                        confidence=0.7,
+                        source_text=literal_yaml,
+                    )
+                    if inserted:
+                        stats.mappings_inserted += 1
+
                 discovered_yaml = discover_related_yaml(conn, entity)
                 for mapping_type, discovered_path in discovered_yaml.items():
                     inserted = insert_mapping(
@@ -621,6 +746,20 @@ def build(db: str, entities: Path, reset: bool) -> BuildStats:
                         mapping_type=mapping_type,
                         confidence=0.9,
                         source_text=discovered_path,
+                    )
+                    if inserted:
+                        stats.mappings_inserted += 1
+
+            if not has_xslt_related:
+                discovered_xslt = discover_related_xslt(conn, entity)
+                if discovered_xslt:
+                    inserted = insert_mapping(
+                        conn,
+                        entity_id,
+                        symbol_id=None,
+                        mapping_type="xslt",
+                        confidence=0.7,
+                        source_text=discovered_xslt,
                     )
                     if inserted:
                         stats.mappings_inserted += 1
