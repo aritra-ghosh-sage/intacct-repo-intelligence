@@ -19,3 +19,7 @@ code_files.txt
 entity_mapping.txt
 repo_tree.txt
 catalog/catalog.db-journal
+.vscode/mcp.json
+validation/phase2d1_remediation.md:Zone.Identifier
+validation/phase2d1_remediation.md
+validation/phase2d_validation_check.txt
