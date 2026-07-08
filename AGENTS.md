@@ -44,7 +44,7 @@ python -m parser.extract_symbols --full
 python scripts/scan_ent_files.py scan --repo-root "/home/aritraghosh/projects/main"
 python scripts/build_entities.py build
 python scripts/build_entity_roots.py build
-python -m parser.extract_relationships --db catalog/catalog.db --repo-root "/home/aritraghosh/projects/main"
+python -m parser.extract_relationships --repo-root "/home/aritraghosh/projects/main"
 python scripts/build_workflows.py build --db catalog/catalog.db --repo-root "/home/aritraghosh/projects/main"
 python scripts/build_ui_companions.py --db catalog/catalog.db
 python scripts/scan_openapispec.py scan --db catalog/catalog.db --repo-root "/home/aritraghosh/projects/main"

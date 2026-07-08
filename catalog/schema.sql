@@ -6,7 +6,8 @@ CREATE TABLE IF NOT EXISTS files (
     sha1 TEXT,
     last_modified TEXT,
     last_indexed TEXT,
-    last_symbols_extracted TEXT
+    last_symbols_extracted TEXT,
+    last_relationships_extracted TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_files_path
@@ -57,6 +58,15 @@ CREATE TABLE IF NOT EXISTS symbol_extraction_runs (
     completed_at TEXT,
     files_processed INTEGER,
     symbols_extracted INTEGER,
+    errors INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS relationship_extraction_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at TEXT,
+    completed_at TEXT,
+    files_processed INTEGER,
+    relationships_extracted INTEGER,
     errors INTEGER
 );
 

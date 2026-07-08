@@ -847,7 +847,6 @@ def show_openapispec_view(conn: sqlite3.Connection, entity_name: str) -> int:
         FROM entity_mappings
         WHERE entity_id = ?
           AND mapping_type LIKE 'openapispec_%'
-          AND state = 'active'
         ORDER BY mapping_type, source_text
         """,
         (entity["id"],),

@@ -32,7 +32,7 @@ It creates a useful first graph for dependency and reverse-dependency queries.
 
 from __future__ import annotations
 
-import argparse
+from datetime import datetime, timezone
 import re
 import sqlite3
 from dataclasses import dataclass
@@ -40,11 +40,10 @@ from pathlib import Path
 from typing import Iterable, Optional
 from tqdm import tqdm
 
-from config import CATALOG_DB
+from config import REPO_PATH
 from catalog.db import get_connection
 
-
-DEFAULT_DB = CATALOG_DB
+RELATIONSHIP_EXTRACTOR = "phase2_regex_mvp"
 
 
 REL_INHERITS = "INHERITS"
@@ -154,47 +153,42 @@ def pick_col(columns: set[str], candidates: list[str]) -> Optional[str]:
     return None
 
 
-def load_files(conn: sqlite3.Connection, limit: Optional[int], file_filter: Optional[str]) -> list[FileRow]:
-    cols = table_columns(conn, "files")
+def load_files(
+    conn: sqlite3.Connection,
+    only_changed: bool,
+    languages: list[str],
+    limit: Optional[int],
+    file_filter: Optional[str],
+) -> list[FileRow]:
+    placeholders = ",".join(["?"] * len(languages))
+    params: list[object] = list(languages)
 
-    id_col = pick_col(cols, ["id", "file_id"])
-    path_col = pick_col(cols, ["path", "file_path", "relative_path", "full_path"])
-    lang_col = pick_col(cols, ["language", "lang", "file_type"])
-
-    if not id_col or not path_col:
-        raise RuntimeError(f"Cannot infer files table columns. Found: {sorted(cols)}")
-
-    sql = f"SELECT {id_col} AS id, {path_col} AS path"
-    if lang_col:
-        sql += f", {lang_col} AS language"
-    else:
-        sql += ", NULL AS language"
-    sql += " FROM files"
-
-    params = []
-    where = []
+    where = [f"language IN ({placeholders})"]
+    if only_changed:
+        where.append("(last_relationships_extracted IS NULL OR last_indexed > last_relationships_extracted)")
 
     if file_filter:
-        where.append(f"{path_col} LIKE ?")
+        where.append("path LIKE ?")
         params.append(f"%{file_filter}%")
 
-    if where:
-        sql += " WHERE " + " AND ".join(where)
-
-    sql += f" ORDER BY {id_col}"
+    sql = f"""
+        SELECT id, path, language
+        FROM files
+        WHERE {" AND ".join(where)}
+        ORDER BY id
+    """
 
     if limit:
         sql += " LIMIT ?"
         params.append(limit)
 
     rows = conn.execute(sql, params).fetchall()
-
     out: list[FileRow] = []
-    for r in rows:
-        path = r["path"]
+    for row in rows:
+        path = row["path"]
         ext = Path(path).suffix.lower()
-        language = r["language"] or SUPPORTED_EXTENSIONS.get(ext, "unknown")
-        out.append(FileRow(id=r["id"], path=path, language=language))
+        language = row["language"] or SUPPORTED_EXTENSIONS.get(ext, "unknown")
+        out.append(FileRow(id=row["id"], path=path, language=language))
 
     return out
 
@@ -407,6 +401,24 @@ def ensure_relationship_classification_columns(conn: sqlite3.Connection) -> None
     conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_relationships_resolution_class
         ON relationships(resolution_class)
+    """)
+    conn.commit()
+
+
+def ensure_relationship_tracking_schema(conn: sqlite3.Connection) -> None:
+    file_cols = table_columns(conn, "files")
+    if "last_relationships_extracted" not in file_cols:
+        conn.execute("ALTER TABLE files ADD COLUMN last_relationships_extracted TEXT")
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS relationship_extraction_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            started_at TEXT,
+            completed_at TEXT,
+            files_processed INTEGER,
+            relationships_extracted INTEGER,
+            errors INTEGER
+        )
     """)
     conn.commit()
 
@@ -804,6 +816,15 @@ def extract_js_ts(
     return rels
 
 
+EXTRACTORS = {
+    "php": extract_php,
+    "java": extract_java,
+    "xml": extract_xml,
+    "javascript": extract_js_ts,
+    "typescript": extract_js_ts,
+}
+
+
 def extract_relationships_for_file(
     repo_root: Path,
     file_row: FileRow,
@@ -819,19 +840,11 @@ def extract_relationships_for_file(
     language = (file_row.language or SUPPORTED_EXTENSIONS.get(ext, "unknown")).lower()
     file_row.language = language
 
-    if ext == ".php" or language == "php":
-        return extract_php(text, file_row, symbols_by_name, symbols_by_file, symbols_by_qualified_name)
+    extractor = EXTRACTORS.get(language)
+    if not extractor:
+        return []
 
-    if ext == ".java" or language == "java":
-        return extract_java(text, file_row, symbols_by_name, symbols_by_file, symbols_by_qualified_name)
-
-    if ext == ".xml" or language == "xml":
-        return extract_xml(text, file_row, symbols_by_name, symbols_by_file, symbols_by_qualified_name)
-
-    if ext in {".js", ".jsx", ".ts", ".tsx"} or language in {"javascript", "typescript"}:
-        return extract_js_ts(text, file_row, symbols_by_name, symbols_by_file, symbols_by_qualified_name)
-
-    return []
+    return extractor(text, file_row, symbols_by_name, symbols_by_file, symbols_by_qualified_name)
 
 
 def insert_relationships(conn: sqlite3.Connection, rels: Iterable[Relationship]) -> int:
@@ -874,7 +887,7 @@ def insert_relationships(conn: sqlite3.Connection, rels: Iterable[Relationship])
             r.evidence,
             r.resolution_class,
             r.resolution_reason,
-            "phase2_regex_mvp",
+            RELATIONSHIP_EXTRACTOR,
         ))
         if cur.rowcount > 0:
             inserted += 1
@@ -883,54 +896,119 @@ def insert_relationships(conn: sqlite3.Connection, rels: Iterable[Relationship])
 
 
 def reset_relationships(conn: sqlite3.Connection) -> None:
-    conn.execute("DELETE FROM relationships WHERE extractor = 'phase2_regex_mvp'")
+    conn.execute("DELETE FROM relationships WHERE extractor = ?", (RELATIONSHIP_EXTRACTOR,))
     conn.commit()
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--db", default=DEFAULT_DB)
-    parser.add_argument("--repo-root", default=".")
-    parser.add_argument("--limit", type=int)
-    parser.add_argument("--file", help="Only process files whose path contains this string")
-    parser.add_argument("--reset", action="store_true", help="Delete previous phase2_regex_mvp relationships")
-    parser.add_argument("--commit-every", type=int, default=1000)
-    args = parser.parse_args()
+def extract_all(
+    only_changed: bool = True,
+    languages: list[str] | None = None,
+    repo_root: str = REPO_PATH,
+    reset: bool = False,
+    commit_every: int = 1000,
+    limit: int | None = None,
+    file_filter: str | None = None,
+) -> None:
+    conn = get_connection()
+    cur = conn.cursor()
+    started = datetime.now(timezone.utc).isoformat()
 
-    conn = get_connection(args.db)
+    ensure_relationship_tracking_schema(conn)
     ensure_relationship_classification_columns(conn)
 
-    if args.reset:
+    selected_languages = [lang for lang in (languages or list(EXTRACTORS.keys())) if lang in EXTRACTORS]
+    if not selected_languages:
+        print("⚠️  No valid extractors selected.")
+        conn.close()
+        return
+
+    if reset:
         reset_relationships(conn)
 
     symbols_by_name, symbols_by_file, symbols_by_qualified_name = load_symbols(conn)
-    files = load_files(conn, args.limit, args.file)
+    files = load_files(
+        conn=conn,
+        only_changed=only_changed,
+        languages=selected_languages,
+        limit=limit,
+        file_filter=file_filter,
+    )
     print(f"🔎 Extracting relationships from {len(files)} files")
 
-    repo_root = Path(args.repo_root).resolve()
-
+    repo_root_path = Path(repo_root).resolve()
     total_inserted = 0
+    errors = 0
     processed = 0
 
-    for f in tqdm(files, desc="Extracting"):
-        rels = extract_relationships_for_file(
-            repo_root,
-            f,
-            symbols_by_name,
-            symbols_by_file,
-            symbols_by_qualified_name,
-        )
-        total_inserted += insert_relationships(conn, rels)
-        processed += 1
+    for file_row in tqdm(files, desc="Extracting"):
+        try:
+            rels = extract_relationships_for_file(
+                repo_root_path,
+                file_row,
+                symbols_by_name,
+                symbols_by_file,
+                symbols_by_qualified_name,
+            )
+            total_inserted += insert_relationships(conn, rels)
+            processed += 1
+            cur.execute(
+                "UPDATE files SET last_relationships_extracted = ? WHERE id = ?",
+                (started, file_row.id),
+            )
 
-        if processed % args.commit_every == 0:
-            conn.commit()
-            tqdm.write(f"Processed={processed}, inserted={total_inserted}")
+            if commit_every > 0 and processed % commit_every == 0:
+                conn.commit()
+                tqdm.write(f"Processed={processed}, inserted={total_inserted}")
+        except Exception as e:
+            errors += 1
+            print(f"⚠️  {file_row.path}: {e}")
+
+    completed = datetime.now(timezone.utc).isoformat()
+    cur.execute("""
+        INSERT INTO relationship_extraction_runs
+        (started_at, completed_at, files_processed, relationships_extracted, errors)
+        VALUES (?, ?, ?, ?, ?)
+    """, (started, completed, processed, total_inserted, errors))
 
     conn.commit()
+    conn.close()
 
-    print(f"Done. Processed files={processed}, inserted relationships={total_inserted}")
+    print(f"\n📊 Relationships extracted: {total_inserted}")
+    print(f"   Errors:                  {errors}")
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Extract relationships for all files, not only changed files.",
+    )
+    parser.add_argument(
+        "--language",
+        action="append",
+        choices=sorted(EXTRACTORS.keys()),
+        help="Limit extraction to one or more languages (repeat flag to pass multiple).",
+    )
+    parser.add_argument("--repo-root", default=REPO_PATH)
+    parser.add_argument("--limit", type=int)
+    parser.add_argument("--file", help="Only process files whose path contains this string")
+    parser.add_argument(
+        "--reset",
+        action="store_true",
+        help=f"Delete previous {RELATIONSHIP_EXTRACTOR} relationships",
+    )
+    parser.add_argument("--commit-every", type=int, default=1000)
+    args = parser.parse_args()
+
+    extract_all(
+        only_changed=not args.full,
+        languages=args.language,
+        repo_root=args.repo_root,
+        reset=args.reset,
+        commit_every=args.commit_every,
+        limit=args.limit,
+        file_filter=args.file,
+    )

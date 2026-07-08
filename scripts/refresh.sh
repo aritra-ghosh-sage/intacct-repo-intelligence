@@ -96,7 +96,7 @@ echo ""
 # ===================================================================
 echo "🔗 Phase 7: Extracting symbol relationships..."
 echo "   Analyzing code to identify relationships (INHERITS, IMPLEMENTS, IMPORTS, etc.)"
-python -m parser.extract_relationships --db catalog/catalog.db --repo-root "/home/aritraghosh/projects/main"
+python -m parser.extract_relationships --repo-root "/home/aritraghosh/projects/main"
 if [ $? -ne 0 ]; then
   echo "   ⚠️  Relationship extraction completed with warnings (non-fatal)"
 else
