@@ -8,7 +8,7 @@ Extracts REST API endpoints from OpenAPI specification files indexed in openapis
 For each OpenAPI paths file in the openapispec_index:
 - Parse the YAML file to extract all paths and HTTP methods
 - Link endpoints to files via file_id
-- Optionally link to entities if canonical_name can be matched to entity_nodes
+- Optionally link to entities using existing OpenAPI-derived entity_mappings
 - Populate the rest_endpoints table with method, path, and foreign key references
 
 Expected output: ~2,000-3,000 REST endpoints across all OpenAPI specs.
@@ -123,6 +123,33 @@ def _insert_endpoints(
     return inserted
 
 
+def _resolve_entity_ids_by_file(conn: sqlite3.Connection) -> dict[int, int]:
+    """
+    Build a deterministic file_id -> entity_id map from OpenAPI-derived mappings.
+
+    Only files with exactly one distinct entity_id are mapped; ambiguous files are skipped.
+    """
+    rows = conn.execute(
+        """
+        SELECT
+            file_id,
+            COUNT(DISTINCT entity_id) AS entity_count,
+            MIN(entity_id) AS entity_id
+        FROM entity_mappings
+        WHERE file_id IS NOT NULL
+          AND entity_id IS NOT NULL
+          AND mapping_type LIKE 'openapispec_%'
+        GROUP BY file_id
+        """
+    ).fetchall()
+
+    resolved: dict[int, int] = {}
+    for row in rows:
+        if row["entity_count"] == 1:
+            resolved[int(row["file_id"])] = int(row["entity_id"])
+    return resolved
+
+
 def build(
     db: str,
     repo_root: Path,
@@ -151,6 +178,7 @@ def build(
             conn.commit()
 
         stats = BuildStats()
+        entity_by_file_id = _resolve_entity_ids_by_file(conn)
 
         # Get all OpenAPI spec files from openapispec_index
         # Focus on files in paths directories which contain REST endpoint definitions
@@ -187,9 +215,10 @@ def build(
                 continue
 
             # Prepare data for insertion: (method, path, file_id, entity_id)
-            # For now, entity_id is None; could be enhanced to link via slug matching
+            # entity_id is populated only when file_id resolves deterministically.
+            resolved_entity_id = entity_by_file_id.get(int(file_id))
             endpoints_to_insert = [
-                (method, path, file_id, None)
+                (method, path, file_id, resolved_entity_id)
                 for method, path in endpoints
             ]
 
