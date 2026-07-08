@@ -57,7 +57,7 @@ echo ""
 echo "📋 Phase 4: Processing ENT files..."
 echo "   Scanning PHP entity files for entity metadata"
 REPO_ROOT="/home/aritraghosh/projects/main"
-python scripts/scan_ent_files.py scan --repo-root "$REPO_ROOT"
+python scripts/scan_ent_files.py --repo-root "$REPO_ROOT"
 if [ $? -ne 0 ]; then
   echo "   ⚠️  ENT file scanning completed with warnings (non-fatal)"
 else
