@@ -1,47 +1,37 @@
 #!/usr/bin/env python3
 """
-Scan .ent files from source code repository to build entity definitions JSONL.
+Deterministically scan ia-app/app for .ent files and emit JSONL metadata.
 
-Deterministically scans source code for .ent files and emits JSONL metadata with:
-  - Canonical PascalCase entity name
-  - Verified companion classes from disk
-  - Parsed table/view/dummy metadata from entity definition
-  - Module assignment based on source folder structure
-  - Relative file paths for version control
+For each .ent file:
+  - compute canonical PascalCase entity name
+    - verify companion classes on disk (never guessed)
+    - parse top-level table/view/dummy from the entity definition
+    - resolve matching OpenAPI schema/api/history files from the existing spec tree
+  - emit one JSON object per line
 
-One JSON object emitted per .ent file (one per line).
-
-Examples:
-    # Scan Intacct source code and generate metadata
-    python scripts/scan_ent_files.py scan \\
-        --repo-root /home/aritraghosh/projects/main
-
-    # Use environment variable for repo root
-    export SOURCE_REPO_ROOT=/home/aritraghosh/projects/main
-    python scripts/scan_ent_files.py scan
-
-    # Specify custom output path
-    python scripts/scan_ent_files.py scan --output /tmp/entities.jsonl
+Usage:
+    python scripts/scan_ent_files.py \
+        --repo-root /path/to/ia-app \
+        --out /path/to/entity_definitions.jsonl
 """
 
 from __future__ import annotations
 
+import argparse
 import json
-import os
 import re
-import sys
 from collections import Counter
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
-import click
-from tqdm import tqdm
-
-DEFAULT_REPO_ROOT = os.environ.get("SOURCE_REPO_ROOT")
-DEFAULT_OUTPUT = os.environ.get("OUTPUT_PATH", "config/entity_definitions.jsonl")
-
-CLASS_EXTS = (".cls", ".php", ".ent", ".inc", ".cqry", ".xslt", ".phtml", ".html", ".js", ".yaml")
+CLASS_EXTS = (".cls", ".php", ".ent", ".inc", ".cqry", ".xslt", ".phtml", ".html", ".js")
+SCHEMA_FILE_RE = re.compile(
+    r"^(?P<kind>objects|services)\.(?P<prefix>.+?)\.(?P<object>[^.]+)\.s1\.schema\.yaml$"
+)
+WORKFLOW_SCHEMA_FILE_RE = re.compile(
+    r"^workflows\.(?P<prefix>[^.]+)\.(?P<workflow>.+)\.s1\.schema\.yaml$"
+)
 
 ALLOWED_COMPANION_ROLES = (
     # CORE
@@ -65,41 +55,40 @@ ALLOWED_COMPANION_ROLES = (
 
 @dataclass
 class EntityDefinition:
-    """
-    Entity metadata extracted from .ent file scanning.
-    
-    Attributes:
-        entity_name: Canonical PascalCase entity name (e.g., "Customer", "APBill")
-        ent_file: Relative path to .ent source file
-        module: Module assignment (first folder under app/source/, e.g., "ap", "ar", "Billing")
-        table: Top-level database table name, if defined
-        view: Top-level database view name, if defined
-        dummy: Whether entity is marked as dummy (for testing/templates)
-        companion_classes: Dict mapping roles (manager, editor, etc.) to file paths
-        openapi_prefix: Entity name converted to kebab-case for OpenAPI matching
-        openapi_folder: OpenAPI folder name (e.g., "ap", "ar", "gl") from MODULE_TO_OPENAPI_FOLDER mapping
-        openapi_module: OpenAPI module folder (same as openapi_folder, kept for compatibility)
-        openapi_schema_file: Path to .s1.schema.yaml file, if found
-        openapi_api_file: Path to .s1.api.yaml file (operations), if found
-        openapi_history_file: Path to .schema.history.yaml file, if found
-        openapi_status: 'found' if OpenAPI files exist, 'no_files_found' if searched but nothing, null if not searched
-        openapi_reason: Explanation of search result or why search was skipped
-    """
     entity_name: str
-    ent_file: str
+    ent_file: Optional[str]
     module: Optional[str]
     table: Optional[str]
     view: Optional[str]
     dummy: bool
     companion_classes: Dict[str, Optional[str]]
-    openapi_prefix: Optional[str] = None
-    openapi_folder: Optional[str] = None
-    openapi_module: Optional[str] = None
-    openapi_schema_file: Optional[str] = None
-    openapi_api_file: Optional[str] = None
-    openapi_history_file: Optional[str] = None
-    openapi_status: Optional[str] = None
-    openapi_reason: Optional[str] = None
+    openapi_prefix: Optional[str]
+    openapi_module: Optional[str]
+    openapi_folder: Optional[str]
+    openapi_schema_file: Optional[str]
+    openapi_api_file: Optional[str]
+    openapi_history_file: Optional[str]
+    x_mapped_to: Optional[str]
+    openapi_status: str
+    openapi_reason: Optional[str]
+    workflow_prefix: Optional[str]
+    workflow_module: Optional[str]
+    workflow_folder: Optional[str]
+    workflow_schema_file: Optional[str]
+    workflow_api_files: Optional[List[str]]
+    workflow_history_file: Optional[str]
+    workflow_x_mapped_to: Optional[str]
+    workflow_status: str
+    workflow_reason: Optional[str]
+    service_prefix: Optional[str]
+    service_module: Optional[str]
+    service_folder: Optional[str]
+    service_schema_file: Optional[str]
+    service_api_files: Optional[List[str]]
+    service_history_file: Optional[str]
+    service_x_mapped_to: Optional[str]
+    service_status: str
+    service_reason: Optional[str]
 
 
 def to_repo_relative(path: Path, repo_root: Path) -> str:
@@ -123,121 +112,6 @@ def build_prefix_acronyms(repo_root: Path) -> Dict[str, str]:
             hints[key] = module_dir.name.upper()
 
     return hints
-
-
-# Module name to OpenAPI folder mapping - discovered from actual /openapispec folders
-MODULE_TO_OPENAPI_FOLDER = {
-    "apar": "ap",
-    "appframework": "ap",
-    "cca": "cca",
-    "cm": "cm",
-    "common": "common",
-    "company": "co",
-    "companyassistant": "co",
-    "compliance": "co",
-    "config": "co",
-    "console": "co",
-    "consolidation": "co",
-    "contract": "contract",
-    "core": "core",
-    "cre": "cre",
-    "crw": "crw",
-    "cw": "cw",
-    "dds": "dds",
-    "dn": "dn",
-    "ee": "ee",
-    "fa": "fa",
-    "fia": "fia",
-    "gaap": "ap",
-    "gl": "gl",
-    "igc": "igc",
-    "inventory": "inv",
-    "med": "med",
-    "pa": "pa",
-    "platform": "platform",
-    "purchasing": "purchasing",
-    "sales": "sales",
-    "scheduling": "scheduling",
-    "sicollaboration": "co",
-    "tax": "tax",
-}
-
-
-def _entity_name_to_kebab(name: str) -> str:
-    """Convert PascalCase entity name to kebab-case for OpenAPI matching."""
-    s1 = re.sub(r"([a-z0-9])([A-Z])", r"\1-\2", name)
-    s2 = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1-\2", s1)
-    return s2.replace("_", "-").lower()
-
-
-def discover_openapi_files(
-    repo_root: Path, entity_name: str, module: Optional[str], table: Optional[str]
-) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str], Optional[str]]:
-    """
-    Discover OpenAPI spec files for an entity.
-    
-    Returns: (openapi_module, openapi_schema_file, openapi_api_file, openapi_history_file, openapi_reason)
-    """
-    if not module or not entity_name:
-        return None, None, None, None, "missing_module_or_entity_name"
-    
-    openapispec_dir = repo_root / "app" / "source" / "openapispec"
-    if not openapispec_dir.exists():
-        return None, None, None, None, "openapispec_directory_not_found"
-    
-    # Map entity module to OpenAPI folder
-    openapi_folder = MODULE_TO_OPENAPI_FOLDER.get(module.lower())
-    if not openapi_folder:
-        return None, None, None, None, f"module_{module}_not_in_mapping"
-    
-    openapi_module_dir = openapispec_dir / openapi_folder
-    if not openapi_module_dir.exists():
-        return None, None, None, None, f"openapi_folder_{openapi_folder}_not_found"
-    
-    # Generate search candidates from entity name
-    kebab_name = _entity_name_to_kebab(entity_name)
-    search_candidates = [kebab_name]
-    
-    # Add table name if different
-    if table and table != entity_name.lower():
-        search_candidates.append(table.replace("_", "-").lower())
-    
-    # Search for schema file
-    schema_file = None
-    api_file = None
-    history_file = None
-    
-    models_dir = openapi_module_dir / "models"
-    paths_dir = openapi_module_dir / "paths"
-    history_dir = openapi_module_dir / "history"
-    
-    if models_dir.exists():
-        for candidate in search_candidates:
-            # Look for objects.XXX.{candidate}.s1.schema.yaml or workflows.XXX.{candidate}.s1.schema.yaml
-            matches = sorted(models_dir.glob(f"*.{candidate}.s1.schema.yaml"))
-            if matches:
-                schema_file = to_repo_relative(matches[0], repo_root)
-                break
-    
-    if paths_dir.exists():
-        for candidate in search_candidates:
-            matches = sorted(paths_dir.glob(f"*.{candidate}.s1.api.yaml"))
-            if matches:
-                api_file = to_repo_relative(matches[0], repo_root)
-                break
-    
-    if history_dir.exists():
-        for candidate in search_candidates:
-            matches = sorted(history_dir.glob(f"*.{candidate}.schema.history.yaml"))
-            if matches:
-                history_file = to_repo_relative(matches[0], repo_root)
-                break
-    
-    if schema_file or api_file or history_file:
-        return openapi_folder, schema_file, api_file, history_file, "found"
-    else:
-        return openapi_folder, None, None, None, "no_files_found"
-
 
 
 def fallback_pascal_case(stem: str, prefix_acronyms: Dict[str, str]) -> str:
@@ -280,90 +154,73 @@ def find_module_from_ent_path(ent_path: Path, repo_root: Path) -> Optional[str]:
     return None
 
 
-def role_to_suffix(role: str) -> str:
-    return "".join(part.capitalize() for part in role.split("_"))
+def iter_class_files(entity_dir: Path) -> Iterable[Path]:
+    for p in sorted(entity_dir.iterdir()):
+        if p.is_file() and p.suffix.lower() in CLASS_EXTS:
+            yield p
 
 
-def build_class_stem_index(app_dir: Path) -> Dict[str, List[Path]]:
+def pascal_to_snake(name: str) -> str:
+    s1 = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", name)
+    s2 = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s1)
+    return s2.lower()
+
+
+def slug_to_pascal(value: str) -> str:
+    parts = [part for part in re.split(r"[^a-zA-Z0-9]+", value) if part]
+    return "".join(part.capitalize() for part in parts)
+
+
+def derive_openapi_prefix(entity_name: str) -> str:
     """
-    Index class-like files by lowercase stem for deterministic, case-insensitive lookup.
+    Legacy fallback prefix derivation used when x-mappedTo matching fails.
     """
-    stem_index: Dict[str, List[Path]] = {}
-    all_paths = sorted(app_dir.rglob("*"), key=lambda p: p.as_posix())
-    for path in tqdm(all_paths, desc="Indexing class files", unit="file", disable=len(all_paths) < 1000):
-        if not path.is_file():
-            continue
-        if path.suffix.lower() not in CLASS_EXTS:
-            continue
-        stem_index.setdefault(path.stem.lower(), []).append(path)
-    return stem_index
-
-
-def discover_search_roots(ent_path: Path, repo_root: Path) -> List[Path]:
-    """
-    Ordered directories for companion selection priority.
-    """
-    roots: List[Path] = []
-
-    def _add(path: Path) -> None:
-        resolved = path.resolve()
-        if resolved.exists() and resolved not in roots:
-            roots.append(resolved)
-
-    app_dir = repo_root / "app"
-    module = find_module_from_ent_path(ent_path, repo_root)
-
-    _add(ent_path.parent)
-    if module:
-        _add(repo_root / "app" / "source" / module)
-
-    _add(repo_root / "app" / "source" / "common")
-    _add(repo_root / "app" / "source" / "core")
-    _add(repo_root / "app" / "common")
-    _add(repo_root / "app" / "core")
-    _add(repo_root / "app" / "resources" / "js")
-    _add(app_dir)
-    return roots
-
-
-def pick_best_candidate(candidates: List[Path], search_roots: List[Path]) -> Path:
-    def root_priority(path: Path) -> int:
-        resolved = path.resolve()
-        for idx, root in enumerate(search_roots):
-            try:
-                resolved.relative_to(root)
-                return idx
-            except ValueError:
-                continue
-        return len(search_roots)
-
-    return sorted(candidates, key=lambda p: (root_priority(p), p.as_posix()))[0]
+    normalized = pascal_to_snake(entity_name).replace("_", "-")
+    return re.sub(r"-{2,}", "-", normalized).strip("-")
 
 
 def discover_companions(
     ent_stem: str,
-    ent_path: Path,
+    entity_dir: Path,
     repo_root: Path,
-    class_stem_index: Dict[str, List[Path]],
     prefix_acronyms: Dict[str, str],
 ) -> Tuple[str, Dict[str, Optional[str]]]:
     """
-    Verify companion classes from indexed files only.
-    """
-    search_roots = discover_search_roots(ent_path, repo_root)
-    canonical_candidates: List[str] = []
+    Verify companion classes from disk only.
 
-    companions: Dict[str, Optional[str]] = {role: None for role in ALLOWED_COMPANION_ROLES}
-    for role in ALLOWED_COMPANION_ROLES:
-        suffix = role_to_suffix(role)
-        stem_key = f"{ent_stem.lower()}{suffix.lower()}"
-        candidates = class_stem_index.get(stem_key, [])
-        if not candidates:
+    Companion matching rule (source-trail only, no guessed suffix list):
+      class_stem.lower().startswith(ent_stem.lower()) and has non-empty suffix
+
+    Role key is derived from discovered class suffix (PascalCase -> snake_case).
+    Canonical entity_name is derived from discovered class prefix; fallback is
+    deterministic and uses code-derived acronym hints.
+    """
+    companions_raw: Dict[str, List[Path]] = {}
+    canonical_candidates: List[str] = []
+    stem_low = ent_stem.lower()
+    stem_len = len(ent_stem)
+
+    for cls_file in iter_class_files(entity_dir):
+        cls_stem = cls_file.stem
+        if not cls_stem.lower().startswith(stem_low):
             continue
 
-        chosen = pick_best_candidate(candidates, search_roots)
+        suffix = cls_stem[stem_len:]
+        if not suffix:
+            continue
+
+        role = pascal_to_snake(suffix)
+        if role not in ALLOWED_COMPANION_ROLES:
+            continue
+
+        companions_raw.setdefault(role, []).append(cls_file)
+
+        canonical_candidates.append(cls_stem[:stem_len])
+
+    companions: Dict[str, Optional[str]] = {role: None for role in ALLOWED_COMPANION_ROLES}
+    for role, paths in sorted(companions_raw.items()):
+        chosen = sorted(paths, key=lambda p: p.as_posix())[0]
         companions[role] = to_repo_relative(chosen, repo_root)
-        canonical_candidates.append(chosen.stem[: len(chosen.stem) - len(suffix)])
 
     if canonical_candidates:
         counts = Counter(canonical_candidates)
@@ -373,6 +230,392 @@ def discover_companions(
         canonical = fallback_pascal_case(ent_stem, prefix_acronyms)
 
     return canonical, companions
+
+
+@dataclass
+class OpenApiMapping:
+    x_mapped_to: str
+    openapi_prefix: str
+    openapi_module: str
+    openapi_folder: str
+    openapi_schema_file: str
+    openapi_api_file: str
+    openapi_history_file: str
+    openapi_status: str
+    openapi_reason: Optional[str]
+
+
+@dataclass
+class WorkflowMapping:
+    workflow_x_mapped_to: str
+    workflow_prefix: str
+    workflow_module: str
+    workflow_folder: str
+    workflow_schema_file: str
+    workflow_api_files: List[str]
+    workflow_history_file: Optional[str]
+    workflow_status: str
+    workflow_reason: Optional[str]
+
+
+@dataclass
+class ServiceMapping:
+    service_x_mapped_to: Optional[str]
+    service_prefix: str
+    service_module: str
+    service_folder: str
+    service_schema_file: str
+    service_api_files: List[str]
+    service_history_file: Optional[str]
+    service_status: str
+    service_reason: Optional[str]
+
+
+def _read_openapi_root_x_mapped_to(schema_path: Path) -> Optional[str]:
+    try:
+        text = schema_path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+
+    match = re.search(r"(?m)^\s*x-mappedTo:\s*([^\s#]+)", text)
+    if not match:
+        return None
+
+    return match.group(1).strip().strip('"\'')
+
+
+def _iter_openapi_schema_infos(repo_root: Path) -> Iterable[Tuple[Path, re.Match[str], Optional[str]]]:
+    openapi_root = repo_root / "app" / "source" / "openapispec"
+    if not openapi_root.exists():
+        return []
+
+    items: List[Tuple[Path, re.Match[str], Optional[str]]] = []
+    for schema_path in sorted(openapi_root.rglob("*.schema.yaml"), key=lambda p: p.as_posix()):
+        schema_match = SCHEMA_FILE_RE.match(schema_path.name)
+        if not schema_match:
+            continue
+        x_mapped_to = _read_openapi_root_x_mapped_to(schema_path)
+        items.append((schema_path, schema_match, x_mapped_to))
+    return items
+
+
+def _build_openapi_mapping(
+    repo_root: Path,
+    schema_path: Path,
+    schema_match: re.Match[str],
+    x_mapped_to: str,
+) -> OpenApiMapping:
+    kind = schema_match.group("kind")
+    prefix = schema_match.group("prefix")
+    object_name = schema_match.group("object")
+    openapi_module = schema_path.parent.parent.name
+    openapi_folder = to_repo_relative(schema_path.parent.parent, repo_root)
+
+    object_name_candidates: List[str] = [object_name]
+    if kind == "services":
+        for suffix in ("-request", "-response"):
+            if object_name.endswith(suffix):
+                base_object_name = object_name[: -len(suffix)]
+                if base_object_name:
+                    object_name_candidates.append(base_object_name)
+                break
+
+    api_paths = [
+        schema_path.parent.parent / "paths" / f"{kind}.{prefix}.{candidate}.s1.api.yaml"
+        for candidate in object_name_candidates
+    ]
+    history_paths = [
+        schema_path.parent.parent / "history" / f"{kind}.{prefix}.{candidate}.schema.history.yaml"
+        for candidate in object_name_candidates
+    ]
+
+    api_path = next((path for path in api_paths if path.exists()), api_paths[0])
+    history_path = next((path for path in history_paths if path.exists()), history_paths[0])
+
+    api_exists = api_path.exists()
+    history_exists = history_path.exists()
+    status = "ok"
+    reason: Optional[str] = None
+    if not api_exists or not history_exists:
+        status = "partial"
+        missing: List[str] = []
+        if not api_exists:
+            missing.append("api")
+        if not history_exists:
+            missing.append("history")
+        reason = f"missing {' and '.join(missing)} file(s)"
+
+    return OpenApiMapping(
+        x_mapped_to=x_mapped_to,
+        openapi_prefix=prefix,
+        openapi_module=openapi_module,
+        openapi_folder=openapi_folder,
+        openapi_schema_file=to_repo_relative(schema_path, repo_root),
+        openapi_api_file=to_repo_relative(api_path, repo_root),
+        openapi_history_file=to_repo_relative(history_path, repo_root),
+        openapi_status=status,
+        openapi_reason=reason,
+    )
+
+
+def build_openapi_index(repo_root: Path) -> Dict[str, OpenApiMapping]:
+    """
+    Build an index from the OpenAPI spec tree keyed by root x-mappedTo.
+    """
+    index: Dict[str, OpenApiMapping] = {}
+    for schema_path, schema_match, x_mapped_to in _iter_openapi_schema_infos(repo_root):
+        if not x_mapped_to:
+            continue
+
+        key = x_mapped_to.lower()
+        if key in index:
+            # Keep the first discovered mapping for determinism.
+            continue
+
+        index[key] = _build_openapi_mapping(repo_root, schema_path, schema_match, x_mapped_to)
+
+    return index
+
+
+def build_openapi_name_index(repo_root: Path) -> Dict[str, OpenApiMapping]:
+    """
+    Build a name-based index keyed by schema object name for fallback matching.
+    """
+    index: Dict[str, OpenApiMapping] = {}
+    for schema_path, schema_match, x_mapped_to in _iter_openapi_schema_infos(repo_root):
+        mapping = _build_openapi_mapping(repo_root, schema_path, schema_match, x_mapped_to or "")
+        object_name = schema_match.group("object").lower()
+        index.setdefault(object_name, mapping)
+
+        if schema_match.group("kind") == "services":
+            index.setdefault(f"{mapping.openapi_module}-{object_name}", mapping)
+            for suffix in ("-request", "-response"):
+                if object_name.endswith(suffix):
+                    base_object_name = object_name[: -len(suffix)]
+                    if base_object_name:
+                        index.setdefault(base_object_name, mapping)
+                        index.setdefault(f"{mapping.openapi_module}-{base_object_name}", mapping)
+                    break
+    return index
+
+
+def _build_service_mapping(
+    repo_root: Path,
+    schema_path: Path,
+    schema_match: re.Match[str],
+    x_mapped_to: Optional[str],
+) -> ServiceMapping:
+    prefix = schema_match.group("prefix")
+    object_name = schema_match.group("object")
+    service_module = schema_path.parent.parent.name
+    service_folder = to_repo_relative(schema_path.parent.parent, repo_root)
+
+    object_name_candidates: List[str] = [object_name]
+    for suffix in ("-request", "-response"):
+        if object_name.endswith(suffix):
+            base_object_name = object_name[: -len(suffix)]
+            if base_object_name:
+                object_name_candidates.append(base_object_name)
+            break
+
+    paths_dir = schema_path.parent.parent / "paths"
+    apis_dir = schema_path.parent.parent / "apis"
+    history_dir = schema_path.parent.parent / "history"
+
+    api_paths: List[Path] = []
+    if paths_dir.exists():
+        for candidate in object_name_candidates:
+            api_paths.extend(
+                sorted(
+                    paths_dir.glob(f"services.{prefix}.{candidate}.s1.api.yaml"),
+                    key=lambda p: p.as_posix(),
+                )
+            )
+    if apis_dir.exists():
+        for candidate in object_name_candidates:
+            api_paths.extend(
+                sorted(
+                    apis_dir.glob(f"services.{prefix}.{candidate}.s1.api.yaml"),
+                    key=lambda p: p.as_posix(),
+                )
+            )
+
+    deduped_api_paths: List[Path] = []
+    seen_api_paths = set()
+    for api_path in sorted(api_paths, key=lambda p: p.as_posix()):
+        key = api_path.as_posix()
+        if key in seen_api_paths:
+            continue
+        seen_api_paths.add(key)
+        deduped_api_paths.append(api_path)
+
+    history_candidates = [
+        history_dir / f"services.{prefix}.{candidate}.schema.history.yaml"
+        for candidate in object_name_candidates
+    ]
+    history_path = next((path for path in history_candidates if path.exists()), None)
+
+    status = "ok"
+    reason: Optional[str] = None
+    has_history = history_path is not None
+    if not deduped_api_paths and not has_history:
+        status = "partial"
+        reason = "missing api and history file(s)"
+    elif not deduped_api_paths:
+        status = "partial"
+        reason = "missing api file(s)"
+    elif not has_history:
+        status = "partial"
+        reason = "missing history file(s)"
+
+    return ServiceMapping(
+        service_x_mapped_to=x_mapped_to,
+        service_prefix=prefix,
+        service_module=service_module,
+        service_folder=service_folder,
+        service_schema_file=to_repo_relative(schema_path, repo_root),
+        service_api_files=[to_repo_relative(path, repo_root) for path in deduped_api_paths],
+        service_history_file=to_repo_relative(history_path, repo_root) if history_path else None,
+        service_status=status,
+        service_reason=reason,
+    )
+
+
+def build_service_indexes(
+    repo_root: Path,
+) -> Tuple[Dict[str, ServiceMapping], Dict[str, ServiceMapping], Dict[str, ServiceMapping]]:
+    """
+    Build service indexes:
+      - by x-mappedTo (entity-centric)
+      - by derived name key (fallback, including services.reports special matching)
+      - by schema path (for synthetic row emission)
+    """
+    by_x_mapped: Dict[str, ServiceMapping] = {}
+    by_name: Dict[str, ServiceMapping] = {}
+    by_schema: Dict[str, ServiceMapping] = {}
+
+    for schema_path, schema_match, x_mapped_to in _iter_openapi_schema_infos(repo_root):
+        if schema_match.group("kind") != "services":
+            continue
+
+        mapping = _build_service_mapping(repo_root, schema_path, schema_match, x_mapped_to)
+        by_schema.setdefault(mapping.service_schema_file, mapping)
+
+        if x_mapped_to:
+            by_x_mapped.setdefault(x_mapped_to.lower(), mapping)
+
+        object_name = schema_match.group("object").lower()
+        by_name.setdefault(object_name, mapping)
+        by_name.setdefault(f"{mapping.service_module}-{object_name}", mapping)
+
+        for suffix in ("-request", "-response"):
+            if object_name.endswith(suffix):
+                base_object_name = object_name[: -len(suffix)]
+                if base_object_name:
+                    by_name.setdefault(base_object_name, mapping)
+                    by_name.setdefault(f"{mapping.service_module}-{base_object_name}", mapping)
+                break
+
+    return by_x_mapped, by_name, by_schema
+
+
+def build_workflow_index(repo_root: Path) -> Dict[str, WorkflowMapping]:
+    """
+    Build an index from OpenAPI workflow schema files keyed by x-mappedTo.
+    """
+    index: Dict[str, WorkflowMapping] = {}
+    openapi_root = repo_root / "app" / "source" / "openapispec"
+    if not openapi_root.exists():
+        return index
+
+    for schema_path in sorted(openapi_root.rglob("workflows.*.s1.schema.yaml"), key=lambda p: p.as_posix()):
+        schema_match = WORKFLOW_SCHEMA_FILE_RE.match(schema_path.name)
+        if not schema_match:
+            continue
+
+        x_mapped_to = _read_openapi_root_x_mapped_to(schema_path)
+        if not x_mapped_to:
+            continue
+
+        prefix = schema_match.group("prefix")
+        workflow_name = schema_match.group("workflow")
+        workflow_module = schema_path.parent.parent.name
+        workflow_folder = to_repo_relative(schema_path.parent.parent, repo_root)
+
+        paths_dir = schema_path.parent.parent / "paths"
+        apis_dir = schema_path.parent.parent / "apis"
+        history_dir = schema_path.parent.parent / "history"
+        history_path = history_dir / f"workflows.{prefix}.{workflow_name}.schema.history.yaml"
+
+        api_paths: List[Path] = []
+        if paths_dir.exists():
+            api_paths.extend(
+                sorted(paths_dir.glob(f"workflows.{prefix}.{workflow_name}.s1.api.yaml"), key=lambda p: p.as_posix())
+            )
+            api_paths.extend(
+                sorted(paths_dir.glob(f"workflows.{prefix}.{workflow_name}.*.s1.api.yaml"), key=lambda p: p.as_posix())
+            )
+        if apis_dir.exists():
+            api_paths.extend(
+                sorted(apis_dir.glob(f"workflows.{prefix}.{workflow_name}.s1.api.yaml"), key=lambda p: p.as_posix())
+            )
+            api_paths.extend(
+                sorted(apis_dir.glob(f"workflows.{prefix}.{workflow_name}.*.s1.api.yaml"), key=lambda p: p.as_posix())
+            )
+
+        # De-duplicate while preserving deterministic order.
+        deduped_api_paths: List[Path] = []
+        seen_api_paths = set()
+        for api_path in sorted(api_paths, key=lambda p: p.as_posix()):
+            key = api_path.as_posix()
+            if key in seen_api_paths:
+                continue
+            seen_api_paths.add(key)
+            deduped_api_paths.append(api_path)
+
+        action_history_paths: List[Path] = []
+        for api_path in deduped_api_paths:
+            api_name = api_path.name
+            if not api_name.endswith(".s1.api.yaml"):
+                continue
+            action_history_name = api_name.replace(".s1.api.yaml", ".schema.history.yaml")
+            action_history_paths.append(history_dir / action_history_name)
+
+        has_all_action_histories = bool(action_history_paths) and all(path.exists() for path in action_history_paths)
+
+        status = "ok"
+        reason: Optional[str] = None
+        has_workflow_history = history_path.exists()
+        has_complete_history = has_workflow_history or has_all_action_histories
+
+        if not deduped_api_paths and not has_complete_history:
+            status = "partial"
+            reason = "missing api and history file(s)"
+        elif not deduped_api_paths:
+            status = "partial"
+            reason = "missing api file(s)"
+        elif not has_complete_history:
+            status = "partial"
+            reason = "missing history file(s)"
+
+        key = x_mapped_to.lower()
+        if key in index:
+            # Keep the first discovered mapping for determinism.
+            continue
+
+        index[key] = WorkflowMapping(
+            workflow_x_mapped_to=x_mapped_to,
+            workflow_prefix=prefix,
+            workflow_module=workflow_module,
+            workflow_folder=workflow_folder,
+            workflow_schema_file=to_repo_relative(schema_path, repo_root),
+            workflow_api_files=[to_repo_relative(path, repo_root) for path in deduped_api_paths],
+            workflow_history_file=to_repo_relative(history_path, repo_root) if history_path.exists() else None,
+            workflow_status=status,
+            workflow_reason=reason,
+        )
+
+    return index
 
 
 def _skip_quoted(text: str, i: int, quote: str) -> int:
@@ -387,6 +630,47 @@ def _skip_quoted(text: str, i: int, quote: str) -> int:
             return i + 1
         i += 1
     return n
+
+
+def _skip_comment(text: str, i: int) -> int:
+    """
+    Skip PHP comments starting at index i.
+    Supports:
+      - // line comment
+      - # line comment
+      - /* block comment */
+    """
+    n = len(text)
+    if i >= n:
+        return i
+
+    # # line comment
+    if text[i] == "#":
+        while i < n and text[i] != "\n":
+            i += 1
+        return i
+
+    if text[i] != "/" or i + 1 >= n:
+        return i
+
+    nxt = text[i + 1]
+    # // line comment
+    if nxt == "/":
+        i += 2
+        while i < n and text[i] != "\n":
+            i += 1
+        return i
+
+    # /* block comment */
+    if nxt == "*":
+        i += 2
+        while i + 1 < n:
+            if text[i] == "*" and text[i + 1] == "/":
+                return i + 2
+            i += 1
+        return n
+
+    return i
 
 
 def _find_schema_array_start(text: str) -> Optional[int]:
@@ -440,6 +724,12 @@ def parse_top_level_ent_metadata(ent_path: Path) -> Tuple[Optional[str], Optiona
 
     while i < n and depth > 0:
         ch = text[i]
+
+        if ch == "#" or ch == "/":
+            ni = _skip_comment(text, i)
+            if ni != i:
+                i = ni
+                continue
 
         if ch in ("'", '"'):
             # Try top-level key parse at depth 1.
@@ -506,125 +796,238 @@ def parse_top_level_ent_metadata(ent_path: Path) -> Tuple[Optional[str], Optiona
 
 
 def scan(repo_root: Path, out_file: Path) -> int:
-    """
-    Scan repository for .ent files and generate entity definitions JSONL.
-    
-    Args:
-        repo_root: Path to repository root
-        out_file: Output JSONL file path
-        
-    Returns:
-        Number of entities written
-        
-    Raises:
-        FileNotFoundError: If app/source directory doesn't exist
-    """
     app_dir = repo_root / "app"
     if not app_dir.exists():
-        raise FileNotFoundError(f"app/ directory not found at {app_dir}")
-    
-    source_dir = app_dir / "source"
-    if not source_dir.exists():
-        raise FileNotFoundError(f"app/source/ directory not found at {source_dir}")
+        raise FileNotFoundError(f"{app_dir} does not exist")
 
     ent_paths = sorted(app_dir.rglob("*.ent"), key=lambda p: p.as_posix())
-    if not ent_paths:
-        click.echo(f"⚠ No .ent files found in {app_dir}", err=True)
-    
     prefix_acronyms = build_prefix_acronyms(repo_root)
-    class_stem_index = build_class_stem_index(app_dir)
+    openapi_index = build_openapi_index(repo_root)
+    openapi_name_index = build_openapi_name_index(repo_root)
+    workflow_index = build_workflow_index(repo_root)
+    service_index, service_name_index, service_schema_index = build_service_indexes(repo_root)
     out_file.parent.mkdir(parents=True, exist_ok=True)
 
     count = 0
+    consumed_service_schema_files = set()
     with out_file.open("w", encoding="utf-8") as f:
-        for ent_path in tqdm(ent_paths, desc="Scanning .ent files", unit="file"):
+        for ent_path in ent_paths:
             ent_stem = ent_path.stem
             canonical_name, companions = discover_companions(
                 ent_stem=ent_stem,
-                ent_path=ent_path,
+                entity_dir=ent_path.parent,
                 repo_root=repo_root,
-                class_stem_index=class_stem_index,
                 prefix_acronyms=prefix_acronyms,
             )
             table, view, dummy = parse_top_level_ent_metadata(ent_path)
-            module = find_module_from_ent_path(ent_path, repo_root)
-             
-            # Discover OpenAPI spec files
-            openapi_folder, schema_file, api_file, history_file, reason = discover_openapi_files(
-                repo_root, canonical_name, module, table
-            )
-             
+
+            openapi_mapping = openapi_index.get(canonical_name.lower())
+            if openapi_mapping is None:
+                openapi_mapping = openapi_index.get(ent_stem.lower())
+
+            if openapi_mapping is None:
+                derived_prefix = derive_openapi_prefix(canonical_name)
+                candidate_mapping = openapi_name_index.get(derived_prefix)
+                if candidate_mapping is not None:
+                    openapi_mapping = OpenApiMapping(
+                        x_mapped_to=None,
+                        openapi_prefix=derived_prefix,
+                        openapi_module=candidate_mapping.openapi_module,
+                        openapi_folder=candidate_mapping.openapi_folder,
+                        openapi_schema_file=candidate_mapping.openapi_schema_file,
+                        openapi_api_file=candidate_mapping.openapi_api_file,
+                        openapi_history_file=candidate_mapping.openapi_history_file,
+                        openapi_status=candidate_mapping.openapi_status,
+                        openapi_reason=(
+                            f"name-based fallback matched {derived_prefix}; "
+                            f"x-mappedTo mismatch for {canonical_name}"
+                        ),
+                    )
+
+            if openapi_mapping is None:
+                openapi_mapping = OpenApiMapping(
+                    x_mapped_to=None,
+                    openapi_prefix=derive_openapi_prefix(canonical_name),
+                    openapi_module=None,
+                    openapi_folder=None,
+                    openapi_schema_file=None,
+                    openapi_api_file=None,
+                    openapi_history_file=None,
+                    openapi_status="unmapped",
+                    openapi_reason=f"no OpenAPI schema with x-mappedTo matching {canonical_name}",
+                )
+
+            workflow_mapping = workflow_index.get(canonical_name.lower())
+            if workflow_mapping is None:
+                workflow_mapping = workflow_index.get(ent_stem.lower())
+
+            if workflow_mapping is None:
+                workflow_mapping = WorkflowMapping(
+                    workflow_x_mapped_to=None,
+                    workflow_prefix=None,
+                    workflow_module=None,
+                    workflow_folder=None,
+                    workflow_schema_file=None,
+                    workflow_api_files=[],
+                    workflow_history_file=None,
+                    workflow_status="unmapped",
+                    workflow_reason=f"no workflow schema with x-mappedTo matching {canonical_name}",
+                )
+
+            service_mapping = service_index.get(canonical_name.lower())
+            if service_mapping is None:
+                service_mapping = service_index.get(ent_stem.lower())
+
+            if service_mapping is None:
+                derived_prefix = derive_openapi_prefix(canonical_name)
+                candidate_service_mapping = service_name_index.get(derived_prefix)
+                if candidate_service_mapping is not None:
+                    service_mapping = ServiceMapping(
+                        service_x_mapped_to=candidate_service_mapping.service_x_mapped_to,
+                        service_prefix=derived_prefix,
+                        service_module=candidate_service_mapping.service_module,
+                        service_folder=candidate_service_mapping.service_folder,
+                        service_schema_file=candidate_service_mapping.service_schema_file,
+                        service_api_files=candidate_service_mapping.service_api_files,
+                        service_history_file=candidate_service_mapping.service_history_file,
+                        service_status=candidate_service_mapping.service_status,
+                        service_reason=(
+                            f"name-based fallback matched {derived_prefix}; "
+                            f"x-mappedTo mismatch for {canonical_name}"
+                        ),
+                    )
+
+            if service_mapping is None:
+                service_mapping = ServiceMapping(
+                    service_x_mapped_to=None,
+                    service_prefix=None,
+                    service_module=None,
+                    service_folder=None,
+                    service_schema_file=None,
+                    service_api_files=[],
+                    service_history_file=None,
+                    service_status="unmapped",
+                    service_reason=f"no service schema with x-mappedTo matching {canonical_name}",
+                )
+
+            if service_mapping.service_schema_file:
+                consumed_service_schema_files.add(service_mapping.service_schema_file)
+
             row = EntityDefinition(
                 entity_name=canonical_name,
                 ent_file=to_repo_relative(ent_path, repo_root),
-                module=module,
+                module=find_module_from_ent_path(ent_path, repo_root),
                 table=table,
                 view=view,
                 dummy=dummy,
                 companion_classes=companions,
-                openapi_prefix=_entity_name_to_kebab(canonical_name),
-                openapi_folder=openapi_folder,
-                openapi_module=openapi_folder,
-                openapi_schema_file=schema_file,
-                openapi_api_file=api_file,
-                openapi_history_file=history_file,
-                openapi_status=reason if reason in ("found", "no_files_found") else None,
-                openapi_reason=reason,
+                openapi_prefix=openapi_mapping.openapi_prefix,
+                openapi_module=openapi_mapping.openapi_module,
+                openapi_folder=openapi_mapping.openapi_folder,
+                openapi_schema_file=openapi_mapping.openapi_schema_file,
+                openapi_api_file=openapi_mapping.openapi_api_file,
+                openapi_history_file=openapi_mapping.openapi_history_file,
+                x_mapped_to=openapi_mapping.x_mapped_to,
+                openapi_status=openapi_mapping.openapi_status,
+                openapi_reason=openapi_mapping.openapi_reason,
+                workflow_prefix=workflow_mapping.workflow_prefix,
+                workflow_module=workflow_mapping.workflow_module,
+                workflow_folder=workflow_mapping.workflow_folder,
+                workflow_schema_file=workflow_mapping.workflow_schema_file,
+                workflow_api_files=workflow_mapping.workflow_api_files if workflow_mapping.workflow_api_files else None,
+                workflow_history_file=workflow_mapping.workflow_history_file,
+                workflow_x_mapped_to=workflow_mapping.workflow_x_mapped_to,
+                workflow_status=workflow_mapping.workflow_status,
+                workflow_reason=workflow_mapping.workflow_reason,
+                service_prefix=service_mapping.service_prefix,
+                service_module=service_mapping.service_module,
+                service_folder=service_mapping.service_folder,
+                service_schema_file=service_mapping.service_schema_file,
+                service_api_files=service_mapping.service_api_files if service_mapping.service_api_files else None,
+                service_history_file=service_mapping.service_history_file,
+                service_x_mapped_to=service_mapping.service_x_mapped_to,
+                service_status=service_mapping.service_status,
+                service_reason=service_mapping.service_reason,
             )
-             
+            f.write(json.dumps(asdict(row), ensure_ascii=False, sort_keys=True) + "\n")
+            count += 1
+
+        for schema_file in sorted(service_schema_index.keys()):
+            if schema_file in consumed_service_schema_files:
+                continue
+
+            service_mapping = service_schema_index[schema_file]
+            object_token = Path(schema_file).name.replace(".s1.schema.yaml", "").split(".")[-1]
+            synthetic_key = f"{service_mapping.service_module}.{service_mapping.service_prefix}.{object_token}"
+            synthetic_entity_name = slug_to_pascal(synthetic_key)
+            companion_defaults = {role: None for role in ALLOWED_COMPANION_ROLES}
+
+            row = EntityDefinition(
+                entity_name=synthetic_entity_name or object_token,
+                ent_file=None,
+                module=None,
+                table=None,
+                view=None,
+                dummy=False,
+                companion_classes=companion_defaults,
+                openapi_prefix=None,
+                openapi_module=None,
+                openapi_folder=None,
+                openapi_schema_file=None,
+                openapi_api_file=None,
+                openapi_history_file=None,
+                x_mapped_to=None,
+                openapi_status="unmapped",
+                openapi_reason="no object schema mapped to synthetic service row",
+                workflow_prefix=None,
+                workflow_module=None,
+                workflow_folder=None,
+                workflow_schema_file=None,
+                workflow_api_files=None,
+                workflow_history_file=None,
+                workflow_x_mapped_to=None,
+                workflow_status="unmapped",
+                workflow_reason="no workflow schema mapped to synthetic service row",
+                service_prefix=service_mapping.service_prefix,
+                service_module=service_mapping.service_module,
+                service_folder=service_mapping.service_folder,
+                service_schema_file=service_mapping.service_schema_file,
+                service_api_files=service_mapping.service_api_files if service_mapping.service_api_files else None,
+                service_history_file=service_mapping.service_history_file,
+                service_x_mapped_to=service_mapping.service_x_mapped_to,
+                service_status=service_mapping.service_status,
+                service_reason="service-only synthetic row (no .ent mapping)",
+            )
             f.write(json.dumps(asdict(row), ensure_ascii=False, sort_keys=True) + "\n")
             count += 1
 
     return count
 
 
-@click.group()
-def cli() -> None:
-    pass
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Scan ia-app .ent files and emit deterministic JSONL metadata."
+    )
+    parser.add_argument(
+        "--repo-root",
+        default=".",
+        help="Repository root (default: current directory).",
+    )
+    parser.add_argument(
+        "--out",
+        default="entity_definitions.jsonl",
+        help="Output JSONL path (default: entity_definitions.jsonl).",
+    )
+    args = parser.parse_args()
 
+    repo_root = Path(args.repo_root).resolve()
+    out_file = Path(args.out)
+    if not out_file.is_absolute():
+        out_file = (repo_root / out_file).resolve()
 
-@cli.command("scan")
-@click.option(
-    "--repo-root",
-    type=click.Path(path_type=Path, exists=True, file_okay=False, dir_okay=True),
-    default=DEFAULT_REPO_ROOT,
-    required=DEFAULT_REPO_ROOT is None,
-    show_default=True if DEFAULT_REPO_ROOT else "required",
-    help="Path to source repository root (e.g., /home/aritraghosh/projects/main). Can be set via SOURCE_REPO_ROOT environment variable.",
-)
-@click.option(
-    "-o",
-    "--output",
-    type=click.Path(path_type=Path, dir_okay=False),
-    default=DEFAULT_OUTPUT,
-    show_default=True,
-    help="Output JSONL file path. Can be set via OUTPUT_PATH environment variable.",
-)
-def scan_command(repo_root: Path, output: Path) -> None:
-    """
-    Scan source repository for .ent files and generate entity definitions.
-    
-    Reads from app/source/ folder in repository and generates JSONL metadata
-    file with entity names, modules, tables, and companion class mappings.
-    """
-    repo_root = repo_root.resolve()
-    output_file = output
-    
-    # Resolve relative paths relative to repo_root, not current working directory
-    if not output_file.is_absolute():
-        output_file = (repo_root / output_file).resolve()
-    
-    try:
-        count = scan(repo_root, output_file)
-        click.echo(f"✓ Wrote {count:,} entities to {output_file}", err=False)
-        sys.exit(0)
-    except FileNotFoundError as e:
-        click.echo(f"✗ Error: {e}", err=True)
-        sys.exit(1)
-    except Exception as e:
-        click.echo(f"✗ Unexpected error: {e}", err=True)
-        sys.exit(1)
+    count = scan(repo_root, out_file)
+    print(f"Wrote {count} entities to {out_file}")
 
 
 if __name__ == "__main__":
-    cli()
+    main()

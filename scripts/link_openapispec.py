@@ -132,6 +132,13 @@ def _split_slug_parts(value: str) -> list[str]:
     return [part for part in re.split(r"[./]", value.lower()) if part]
 
 
+def _segment_acronym(value: str) -> str:
+    parts = [part for part in re.split(r"[-_]", value.lower()) if part]
+    if len(parts) < 2:
+        return ""
+    return "".join(part[0] for part in parts if part)
+
+
 def _openapi_name_candidates(
     canonical_name: str,
     slug: str,
@@ -165,6 +172,18 @@ def _openapi_name_candidates(
             if part in metadata_parts:
                 continue
             add(part)
+        # Rule 2b: domain+object condensed key.
+        # Example: accounts-payable.bill -> apbill
+        for idx in range(len(slug_parts) - 1):
+            left = slug_parts[idx]
+            right = slug_parts[idx + 1]
+            if left in metadata_parts or right in metadata_parts:
+                continue
+            if "-" not in left:
+                continue
+            acronym = _segment_acronym(left)
+            if acronym:
+                add(f"{acronym}-{right}")
     for part in slug_parts:
         if part in metadata_parts:
             continue
@@ -177,6 +196,15 @@ def _openapi_name_candidates(
         idx = path_parts.index("objects")
         if idx + 1 < len(path_parts):
             add(path_parts[idx + 1])
+        if idx + 2 < len(path_parts):
+            add(path_parts[idx + 2])
+            # Rule 3b: object path condensed key.
+            # Example: /objects/accounts-payable/bill -> apbill
+            domain = path_parts[idx + 1]
+            obj = path_parts[idx + 2]
+            acronym = _segment_acronym(domain)
+            if acronym:
+                add(f"{acronym}-{obj}")
     for part in path_parts:
         if part in metadata_parts:
             continue
