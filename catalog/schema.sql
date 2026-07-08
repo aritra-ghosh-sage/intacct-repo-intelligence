@@ -244,3 +244,40 @@ CREATE TABLE IF NOT EXISTS openapispec_index (
 CREATE INDEX IF NOT EXISTS idx_openapispec_file_id ON openapispec_index(file_id);
 CREATE INDEX IF NOT EXISTS idx_openapispec_module ON openapispec_index(module);
 CREATE INDEX IF NOT EXISTS idx_openapispec_slug ON openapispec_index(slug);
+
+
+
+DROP VIEW IF EXISTS graph_ready_entities;
+
+CREATE VIEW graph_ready_entities AS
+WITH strong_roots AS (
+  SELECT
+    er.entity_id,
+    COUNT(*) AS strong_root_count,
+    MAX(er.weight) AS max_root_weight,
+    SUM(CASE WHEN er.is_shared = 0 THEN 1 ELSE 0 END) AS non_shared_strong_root_count,
+    SUM(CASE WHEN er.is_shared = 1 THEN 1 ELSE 0 END) AS shared_strong_root_count,
+    GROUP_CONCAT(DISTINCT er.role) AS strong_roles
+  FROM entity_roots er
+  WHERE er.weight >= 0.75
+  GROUP BY er.entity_id
+)
+SELECT
+  en.id,
+  en.name,
+  en.entity_type,
+  en.confidence,
+  en.created_at,
+  en.ent_file,
+  en.module,
+  en.table_name,
+  en.view_name,
+  en.dummy,
+  sr.strong_root_count,
+  sr.max_root_weight,
+  sr.non_shared_strong_root_count,
+  sr.shared_strong_root_count,
+  sr.strong_roles
+FROM entity_nodes en
+JOIN strong_roots sr
+  ON sr.entity_id = en.id;
