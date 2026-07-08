@@ -16,17 +16,6 @@ CREATE INDEX IF NOT EXISTS idx_files_path
 CREATE INDEX IF NOT EXISTS idx_files_language
     ON files(language);
 
-CREATE TABLE IF NOT EXISTS index_runs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    started_at TEXT,
-    completed_at TEXT,
-    files_scanned INTEGER,
-    files_added INTEGER,
-    files_updated INTEGER,
-    files_skipped INTEGER,
-    git_commit TEXT
-);
-
 CREATE TABLE IF NOT EXISTS symbols (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     file_id INTEGER NOT NULL,
@@ -51,24 +40,6 @@ CREATE INDEX IF NOT EXISTS idx_symbols_file
 
 CREATE INDEX IF NOT EXISTS idx_symbols_language
     ON symbols(language);
-
-CREATE TABLE IF NOT EXISTS symbol_extraction_runs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    started_at TEXT,
-    completed_at TEXT,
-    files_processed INTEGER,
-    symbols_extracted INTEGER,
-    errors INTEGER
-);
-
-CREATE TABLE IF NOT EXISTS relationship_extraction_runs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    started_at TEXT,
-    completed_at TEXT,
-    files_processed INTEGER,
-    relationships_extracted INTEGER,
-    errors INTEGER
-);
 
 CREATE TABLE IF NOT EXISTS relationships (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -212,31 +183,6 @@ CREATE INDEX IF NOT EXISTS idx_workflows_entity  ON workflows(entity_id);
 CREATE INDEX IF NOT EXISTS idx_workflows_type    ON workflows(workflow_type);
 CREATE INDEX IF NOT EXISTS idx_workflows_source  ON workflows(source_kind);
 
-CREATE TABLE IF NOT EXISTS workflow_steps (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-
-    workflow_id INTEGER NOT NULL,
-    ordinal INTEGER NOT NULL,
-
-    name TEXT NOT NULL,
-    action TEXT,                     -- e.g. submit | approve | reject | post | reverse | recall
-    step_kind TEXT,                  -- rest_op | approval_step | post_step | reverse_step | ui_action
-
-    symbol_id INTEGER,
-    file_id INTEGER,
-    file_path TEXT,
-
-    confidence REAL DEFAULT 1.0,
-    evidence TEXT,
-
-    FOREIGN KEY(workflow_id) REFERENCES workflows(id) ON DELETE CASCADE,
-    FOREIGN KEY(symbol_id) REFERENCES symbols(id) ON DELETE SET NULL,
-    FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE SET NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_workflow_steps_workflow ON workflow_steps(workflow_id);
-CREATE INDEX IF NOT EXISTS idx_workflow_steps_action   ON workflow_steps(action);
-
 CREATE TABLE IF NOT EXISTS workflow_nodes (
     id INTEGER PRIMARY KEY,
     name TEXT,
@@ -263,34 +209,11 @@ CREATE TABLE IF NOT EXISTS rest_endpoints (
     file_id INTEGER
 );
 
-CREATE TABLE IF NOT EXISTS ui_companions (
-    id INTEGER PRIMARY KEY,
-    entity_id INTEGER,
-    kind TEXT,                 -- editor | lister | picker
-    file_id INTEGER,
-    language TEXT              -- javascript | typescript | xslt | phtml
-);
-
 CREATE TABLE repos (
     id INTEGER PRIMARY KEY,
     name TEXT,                 -- ia-app | ia-core | ia-restapi-automation-tests | vendor-domain-service
     kind TEXT,                 -- monorepo | domain_service | test_suite
     language TEXT              -- php | java | ts
-);
-
-CREATE TABLE IF NOT EXISTS services (
-    id INTEGER PRIMARY KEY,
-    repo_id INTEGER,
-    name TEXT,                 -- vendor-domain-service
-    entity_id INTEGER          -- optional; when the service maps to one domain object
-);
-
-CREATE TABLE IF NOT EXISTS service_endpoints (
-    id INTEGER PRIMARY KEY,
-    service_id INTEGER,
-    method TEXT,
-    path TEXT,
-    rest_endpoint_id INTEGER   -- optional link to ia-app REST endpoint
 );
 
 CREATE TABLE IF NOT EXISTS knowledge_items (

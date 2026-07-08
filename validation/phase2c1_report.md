@@ -6,15 +6,11 @@
 
 OK — no issues found.
 
-### workflow_steps with missing workflow
-
-OK — no issues found.
-
-### workflows without any steps
-
-OK — no issues found.
-
 ### unknown workflow_type values
+
+OK — no issues found.
+
+### deprecated workflow_type values
 
 OK — no issues found.
 
@@ -22,21 +18,14 @@ OK — no issues found.
 
 ### workflow_type distribution
 
-- `('allowed_operations', 160)`
-- `('entry', 77)`
+- `('allowed_operations', 154)`
+- `('entry', 79)`
 - `('item', 26)`
-- `('reverse', 21)`
+- `('reverse', 20)`
 - `('approval', 8)`
 - `('batch', 8)`
-- `('ui', 2)`
 
-### step_kind distribution
+### source_kind distribution
 
-- `('handler', 160)`
-- `('entry_manager', 77)`
-- `('item_manager', 26)`
-- `('reverse_manager', 21)`
-- `('batch_manager', 8)`
-- `('approval_manager', 8)`
-- `('ui_action', 2)`
+- `('class', 295)`
 

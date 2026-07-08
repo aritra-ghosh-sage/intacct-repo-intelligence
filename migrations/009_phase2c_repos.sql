@@ -5,17 +5,5 @@ CREATE TABLE IF NOT EXISTS repos (
     language TEXT              -- php | java | ts
 );
 
-CREATE TABLE IF NOT EXISTS services (
-    id INTEGER PRIMARY KEY,
-    repo_id INTEGER,
-    name TEXT,                 -- vendor-domain-service
-    entity_id INTEGER          -- optional; when the service maps to one domain object
-);
-
-CREATE TABLE IF NOT EXISTS service_endpoints (
-    id INTEGER PRIMARY KEY,
-    service_id INTEGER,
-    method TEXT,
-    path TEXT,
-    rest_endpoint_id INTEGER   -- optional link to ia-app REST endpoint
-);
+-- services retired
+-- service_endpoints retired

@@ -49,18 +49,6 @@ def get_workflows(conn, entity_id, workflow_type):
     ).fetchall()
 
 
-def get_steps(conn, workflow_id):
-    return conn.execute(
-        """
-        SELECT *
-        FROM workflow_steps
-        WHERE workflow_id = ?
-        ORDER BY ordinal
-        """,
-        (workflow_id,),
-    ).fetchall()
-
-
 def build_grouped_workflows(conn, entity_name, workflow_type):
     entity = get_entity(conn, entity_name)
     if not entity:
@@ -70,14 +58,12 @@ def build_grouped_workflows(conn, entity_name, workflow_type):
     workflows = get_workflows(conn, entity["id"], workflow_type)
 
     for wf in workflows:
-        steps = get_steps(conn, wf["id"])
         grouped[wf["workflow_type"]].append(
             (
                 wf["id"],
                 wf["name"],
                 wf["source_kind"],
                 wf["source_file"],
-                steps,
             )
         )
 
@@ -99,8 +85,8 @@ def list_workflows(entity_name, db, workflow_type):
 
     print(f"\nWorkflows for {entity_name}:")
     for wf_type, items in sorted(grouped.items()):
-        for _, wf_name, _, _, steps in items:
-            print(f"  [{wf_type}] {wf_name} ({len(steps)} steps)")
+        for _, wf_name, _, _ in items:
+            print(f"  [{wf_type}] {wf_name}")
 
     conn.close()
 
@@ -133,26 +119,12 @@ def show_entity_workflows(entity_name, db, workflow_type):
         print(f"[{wf_type}]")
         print("-" * len(f"[{wf_type}]"))
 
-        for _, wf_name, source_kind, source_file, steps in grouped[wf_type]:
+        for _, wf_name, source_kind, source_file in grouped[wf_type]:
             print(f"  {wf_name}")
             print(
                 f"    source: {source_kind}"
                 f"{' | ' + source_file if source_file else ''}"
             )
-
-            for s in steps:
-                ordinal = s["ordinal"]
-                action = s["action"] or ""
-                label = s["name"]
-                kind = s["step_kind"] or ""
-                file_path = s["file_path"] or ""
-                print(
-                    f"      {ordinal:>2}. "
-                    f"{label:<40} "
-                    f"{action:<12} "
-                    f"{kind:<20} "
-                    f"{file_path}"
-                )
 
     conn.close()
 

@@ -126,9 +126,7 @@ def get_declared_state():
                 "status": "complete",
                 "target_tables": [
                     "rest_endpoints",
-                    "ui_companions",
                     "repos",
-                    "services",
                     "knowledge_items",
                     "workflow_nodes",
                     "workflow_edges",
@@ -148,6 +146,9 @@ def get_declared_state():
                     "openapispec_schema",
                     "openapispec_operations",
                     "openapispec_history",
+                    "openapispec_view",
+                    "openapispec_uimeta",
+                    "openapispec_viewmeta",
                 ],
                 "required_extractors": [
                     "java_extractor.py",

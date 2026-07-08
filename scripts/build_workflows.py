@@ -69,13 +69,12 @@ OPENAPI_MAPPING_PREFIX = "openapispec_"
 class BuildStats:
     entities_processed: int = 0
     workflows_inserted: int = 0
-    steps_inserted: int = 0
 
 
 def get_entities(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(
         """
-        SELECT id, name, ent_file, module
+        SELECT id, name
         FROM entity_nodes
         ORDER BY name
         """
@@ -98,16 +97,6 @@ def get_entity_roots(conn: sqlite3.Connection, entity_id: int) -> list[sqlite3.R
         """,
         (entity_id,),
     ).fetchall()
-
-
-def find_file_id_by_path(conn: sqlite3.Connection, path: str | None) -> int | None:
-    if not path:
-        return None
-    row = conn.execute(
-        "SELECT id FROM files WHERE path = ? LIMIT 1",
-        (path,),
-    ).fetchone()
-    return row["id"] if row else None
 
 
 def insert_workflow(
@@ -163,68 +152,6 @@ def insert_workflow(
     ).fetchone()
 
     return (int(row["id"]) if row else None), False
-
-
-def insert_workflow_step(
-    conn: sqlite3.Connection,
-    workflow_id: int,
-    ordinal: int,
-    name: str,
-    action: str | None,
-    step_kind: str,
-    symbol_id: int | None,
-    file_id: int | None,
-    file_path: str | None,
-    evidence: str,
-) -> bool:
-    cur = conn.execute(
-        """
-        INSERT INTO workflow_steps(
-            workflow_id,
-            ordinal,
-            name,
-            action,
-            step_kind,
-            symbol_id,
-            file_id,
-            file_path,
-            evidence
-        )
-        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
-        WHERE NOT EXISTS (
-            SELECT 1
-            FROM workflow_steps
-            WHERE workflow_id = ?
-              AND ordinal = ?
-              AND name = ?
-              AND IFNULL(action, '') = IFNULL(?, '')
-              AND step_kind = ?
-              AND IFNULL(symbol_id, -1) = IFNULL(?, -1)
-              AND IFNULL(file_id, -1) = IFNULL(?, -1)
-              AND IFNULL(file_path, '') = IFNULL(?, '')
-        )
-        """,
-        (
-            workflow_id,
-            ordinal,
-            name,
-            action,
-            step_kind,
-            symbol_id,
-            file_id,
-            file_path,
-            evidence[:500] if evidence else None,
-            workflow_id,
-            ordinal,
-            name,
-            action,
-            step_kind,
-            symbol_id,
-            file_id,
-            file_path,
-        ),
-    )
-    return cur.rowcount > 0
 
 
 def normalize_action(text: str | None) -> str | None:
@@ -385,12 +312,11 @@ def build_workflows_for_entity(
     repo_root: Path,
     entity: sqlite3.Row,
     roots: list[sqlite3.Row],
-) -> tuple[int, int]:
+) -> int:
     """
-    Returns (workflows_inserted, steps_inserted) for this entity.
+    Returns workflows_inserted for this entity.
     """
     wf_count = 0
-    step_count = 0
 
     entity_id = entity["id"]
     entity_name = entity["name"]
@@ -426,23 +352,6 @@ def build_workflows_for_entity(
         if workflow_inserted:
             wf_count += 1
 
-        ordinal = 0
-        for action, evidence in actions:
-            ordinal += 1
-            step_inserted = insert_workflow_step(
-                conn,
-                workflow_id=wf_id,
-                ordinal=ordinal,
-                name=action,
-                action=action,
-                step_kind="rest_op",
-                symbol_id=None,
-                file_id=find_file_id_by_path(conn, yaml_path),
-                file_path=yaml_path,
-                evidence=evidence,
-            )
-            if step_inserted:
-                step_count += 1
 
     # ------------------------------------------------------------------
     # 2. AllowedOperationsHandler workflow (surface even if no YAML)
@@ -462,24 +371,8 @@ def build_workflows_for_entity(
             reason=f"AllowedOperationsHandler class present: {r['symbol_name']}",
         )
 
-        if wf_id is not None:
-            if workflow_inserted:
-                wf_count += 1
-
-            step_inserted = insert_workflow_step(
-                conn,
-                workflow_id=wf_id,
-                ordinal=1,
-                name=f"{r['symbol_name']} entry point",
-                action=None,
-                step_kind="handler",
-                symbol_id=r["symbol_id"],
-                file_id=r["symbol_file_id"],
-                file_path=None,
-                evidence=f"AllowedOperationsHandler class {r['symbol_name']}",
-            )
-            if step_inserted:
-                step_count += 1
+        if wf_id is not None and workflow_inserted:
+            wf_count += 1
 
     # ------------------------------------------------------------------
     # 3. Behavioral workflows from Manager subclasses
@@ -504,70 +397,10 @@ def build_workflows_for_entity(
             reason=f"Discovered from role={r['mapping_type']} symbol={r['symbol_name']}",
         )
 
-        if wf_id is not None:
-            if workflow_inserted:
-                wf_count += 1
+        if wf_id is not None and workflow_inserted:
+            wf_count += 1
 
-            step_inserted = insert_workflow_step(
-                conn,
-                workflow_id=wf_id,
-                ordinal=1,
-                name=r["symbol_name"],
-                action=None,
-                step_kind=f"{wf_type}_manager",
-                symbol_id=r["symbol_id"],
-                file_id=r["symbol_file_id"],
-                file_path=None,
-                evidence=(
-                    f"{r['mapping_type']} class present: {r['symbol_name']}"
-                ),
-            )
-            if step_inserted:
-                step_count += 1
-
-    # ------------------------------------------------------------------
-    # 4. UI companion workflows (file_only_companion)
-    # ------------------------------------------------------------------
-    for r in roots:
-        if r["mapping_type"] not in {"editor", "form_editor", "lister", "picker"}:
-            continue
-
-        companion_path = r["source_text"]
-
-        if not companion_path or not companion_path.lower().endswith((".js", ".ts")):
-            continue
-
-        wf_id, workflow_inserted = insert_workflow(
-            conn,
-            entity_id=entity_id,
-            name=f"{entity_name} UI {r['mapping_type']}",
-            workflow_type="ui",
-            source_kind="ui_companion",
-            source_file=companion_path,
-            source_symbol_id=r["symbol_id"],
-            reason=f"UI companion {r['mapping_type']}: {companion_path}",
-        )
-
-        if wf_id is not None:
-            if workflow_inserted:
-                wf_count += 1
-
-            step_inserted = insert_workflow_step(
-                conn,
-                workflow_id=wf_id,
-                ordinal=1,
-                name=Path(companion_path).stem,
-                action=None,
-                step_kind="ui_action",
-                symbol_id=r["symbol_id"],
-                file_id=find_file_id_by_path(conn, companion_path),
-                file_path=companion_path,
-                evidence=f"UI companion for {r['mapping_type']}",
-            )
-            if step_inserted:
-                step_count += 1
-
-    return wf_count, step_count
+    return wf_count
 
 
 def build(db: str, repo_root: Path, reset: bool) -> BuildStats:
@@ -583,21 +416,19 @@ def build(db: str, repo_root: Path, reset: bool) -> BuildStats:
     conn = get_connection(db)
     try:
         if reset:
-            conn.execute("DELETE FROM workflow_steps")
             conn.execute("DELETE FROM workflows")
             conn.commit()
 
         entities = get_entities(conn)
         for entity in tqdm(entities, desc="Building workflows", unit="entity"):
             roots = get_entity_roots(conn, entity["id"])
-            wf, steps = build_workflows_for_entity(
+            wf = build_workflows_for_entity(
                 conn=conn,
                 repo_root=repo_root,
                 entity=entity,
                 roots=roots,
             )
             stats.workflows_inserted += wf
-            stats.steps_inserted += steps
             stats.entities_processed += 1
 
             if stats.entities_processed % 500 == 0:
@@ -629,7 +460,6 @@ def build_command(db: str, repo_root: Path, reset: bool) -> None:
     stats = build(db=db, repo_root=repo_root.resolve(), reset=reset)
     click.echo(f"Processed entities:  {stats.entities_processed}")
     click.echo(f"Workflows inserted:  {stats.workflows_inserted}")
-    click.echo(f"Workflow steps:      {stats.steps_inserted}")
 
 
 

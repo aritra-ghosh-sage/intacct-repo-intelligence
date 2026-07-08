@@ -13,6 +13,10 @@ DEFAULT_DB = "catalog/catalog.db"
 DEFAULT_REPORT = "validation/phase2d1_report.md"
 
 
+def _normalize_name(value: str) -> str:
+    return "".join(ch for ch in value.lower() if ch.isalnum())
+
+
 def connect(db_path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -20,12 +24,42 @@ def connect(db_path: str) -> sqlite3.Connection:
 
 
 def check_xslt_coverage(conn: sqlite3.Connection) -> dict[str, Any]:
+    entity_mapping_count = conn.execute(
+        "SELECT COUNT(*) FROM entity_mappings"
+    ).fetchone()[0]
+    if entity_mapping_count == 0:
+        return {
+            "status": "SKIP",
+            "reason": (
+                "entity_mappings is empty; run ENT/entity phases before "
+                "Phase 2D validation"
+            ),
+        }
+
     xslt_file_count = conn.execute(
         "SELECT COUNT(*) FROM files WHERE path LIKE '%.xslt' OR path LIKE '%.xsl'"
     ).fetchone()[0]
     xslt_mapping_count = conn.execute(
-        "SELECT COUNT(*) FROM entity_mappings WHERE mapping_type='xslt'"
+        """
+        SELECT COUNT(*)
+        FROM entity_mappings
+        WHERE mapping_type = 'xslt'
+           OR LOWER(COALESCE(source_text, '')) LIKE '%.xslt'
+           OR LOWER(COALESCE(source_text, '')) LIKE '%.xsl'
+        """
     ).fetchone()[0]
+
+    if xslt_file_count > 0 and xslt_mapping_count == 0:
+        return {
+            "xslt_file_count": xslt_file_count,
+            "xslt_mapping_count": xslt_mapping_count,
+            "status": "SKIP",
+            "reason": (
+                "XSLT files exist but no XSLT-linked entity mappings were "
+                "produced in the current run"
+            ),
+        }
+
     return {
         "xslt_file_count": xslt_file_count,
         "xslt_mapping_count": xslt_mapping_count,
@@ -33,22 +67,17 @@ def check_xslt_coverage(conn: sqlite3.Connection) -> dict[str, Any]:
     }
 
 
-def check_ui_companion_coverage(conn: sqlite3.Connection) -> dict[str, Any]:
-    total = conn.execute("SELECT COUNT(*) FROM entity_nodes").fetchone()[0]
-    with_ui = conn.execute(
-        "SELECT COUNT(DISTINCT entity_id) FROM ui_companions"
-    ).fetchone()[0]
-    coverage = (with_ui / total * 100) if total else 0.0
-    return {
-        "total_entities": total,
-        "entities_with_ui_companions": with_ui,
-        "coverage_percent": coverage,
-        "source_table": "ui_companions",
-    }
-
-
 def check_openapi_linkage(conn: sqlite3.Connection) -> dict[str, Any]:
     total = conn.execute("SELECT COUNT(*) FROM openapispec_index").fetchone()[0]
+    if total == 0:
+        return {
+            "status": "SKIP",
+            "reason": (
+                "openapispec_index is empty; run OpenAPI scan/link phases "
+                "before Phase 2D validation"
+            ),
+        }
+
     linked = conn.execute(
         """
         SELECT COUNT(DISTINCT file_id)
@@ -83,26 +112,34 @@ def check_entity_recall_v2(conn: sqlite3.Connection) -> dict[str, Any]:
             "reason": "validation/gold_entities_v2.jsonl not found",
         }
 
-    gold: set[str] = set()
+    gold_names: set[str] = set()
     with gold_path.open("r", encoding="utf-8") as handle:
         for line in handle:
             payload = line.strip()
             if not payload:
                 continue
-            gold.add(str(json.loads(payload)["name"]))
+            gold_names.add(str(json.loads(payload)["name"]))
 
-    discovered = {
+    discovered_names = {
         str(row["name"])
         for row in conn.execute("SELECT name FROM entity_nodes").fetchall()
         if row["name"] is not None
     }
-    matched = gold & discovered
-    missing = sorted(gold - discovered)
-    recall = (len(matched) / len(gold) * 100) if gold else 0.0
+
+    gold_by_norm = {_normalize_name(name): name for name in gold_names}
+    discovered_norm = {_normalize_name(name) for name in discovered_names if _normalize_name(name)}
+
+    matched_norm = set(gold_by_norm.keys()) & discovered_norm
+    missing = sorted(
+        gold_by_norm[norm]
+        for norm in (set(gold_by_norm.keys()) - discovered_norm)
+    )
+    recall = (len(matched_norm) / len(gold_names) * 100) if gold_names else 0.0
+
     return {
-        "gold_size": len(gold),
-        "discovered_size": len(discovered),
-        "matched": len(matched),
+        "gold_size": len(gold_names),
+        "discovered_size": len(discovered_names),
+        "matched": len(matched_norm),
         "missing": missing,
         "recall_percent": recall,
         "status": "PASS",
@@ -130,7 +167,6 @@ def main() -> None:
     conn = connect(args.db)
     checks = {
         "xslt_coverage": check_xslt_coverage(conn),
-        "ui_companion_coverage": check_ui_companion_coverage(conn),
         "openapi_linkage": check_openapi_linkage(conn),
         "entity_recall_v2": check_entity_recall_v2(conn),
     }

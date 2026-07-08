@@ -3,7 +3,7 @@
 """
 Phase 2C.1 validation.
 
-Checks structural integrity of workflows and workflow_steps.
+Checks structural integrity of workflows.
 """
 
 from __future__ import annotations
@@ -40,28 +40,6 @@ def check_structural(conn):
         ("workflows with missing entity", [r["id"] for r in orphan_workflows])
     )
 
-    orphan_steps = q(conn, """
-        SELECT ws.id
-        FROM workflow_steps ws
-        LEFT JOIN workflows w ON w.id = ws.workflow_id
-        WHERE w.id IS NULL
-    """)
-    findings.append(
-        ("workflow_steps with missing workflow",
-         [r["id"] for r in orphan_steps])
-    )
-
-    empty_workflows = q(conn, """
-        SELECT w.id, w.name
-        FROM workflows w
-        LEFT JOIN workflow_steps ws ON ws.workflow_id = w.id
-        WHERE ws.id IS NULL
-    """)
-    findings.append(
-        ("workflows without any steps",
-         [f"{r['id']} {r['name']}" for r in empty_workflows])
-    )
-
     invalid_types = q(conn, """
         SELECT DISTINCT workflow_type
         FROM workflows
@@ -82,6 +60,19 @@ def check_structural(conn):
          [r["workflow_type"] for r in invalid_types])
     )
 
+    deprecated_types = q(conn, """
+        SELECT workflow_type, COUNT(*) AS cnt
+        FROM workflows
+        WHERE workflow_type IN ('ui')
+        GROUP BY workflow_type
+    """)
+    findings.append(
+        (
+            "deprecated workflow_type values",
+            [f"{r['workflow_type']} ({r['cnt']})" for r in deprecated_types],
+        )
+    )
+
     return findings
 
 
@@ -99,14 +90,16 @@ def check_distribution(conn):
     )
 
     rows = q(conn, """
-        SELECT step_kind, COUNT(*) AS cnt
-        FROM workflow_steps
-        GROUP BY step_kind
+        SELECT source_kind, COUNT(*) AS cnt
+        FROM workflows
+        GROUP BY source_kind
         ORDER BY cnt DESC
     """)
     findings.append(
-        ("step_kind distribution",
-         [(r["step_kind"], r["cnt"]) for r in rows])
+        (
+            "source_kind distribution",
+            [(r["source_kind"], r["cnt"]) for r in rows],
+        )
     )
 
     return findings

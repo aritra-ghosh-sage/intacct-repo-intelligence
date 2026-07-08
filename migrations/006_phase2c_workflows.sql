@@ -28,27 +28,4 @@ CREATE INDEX IF NOT EXISTS idx_workflows_type    ON workflows(workflow_type);
 CREATE INDEX IF NOT EXISTS idx_workflows_source  ON workflows(source_kind);
 
 
-CREATE TABLE IF NOT EXISTS workflow_steps (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-
-    workflow_id INTEGER NOT NULL,
-    ordinal INTEGER NOT NULL,
-
-    name TEXT NOT NULL,
-    action TEXT,                     -- e.g. submit | approve | reject | post | reverse | recall
-    step_kind TEXT,                  -- rest_op | approval_step | post_step | reverse_step | ui_action
-
-    symbol_id INTEGER,
-    file_id INTEGER,
-    file_path TEXT,
-
-    confidence REAL DEFAULT 1.0,
-    evidence TEXT,
-
-    FOREIGN KEY(workflow_id) REFERENCES workflows(id) ON DELETE CASCADE,
-    FOREIGN KEY(symbol_id) REFERENCES symbols(id) ON DELETE SET NULL,
-    FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE SET NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_workflow_steps_workflow ON workflow_steps(workflow_id);
-CREATE INDEX IF NOT EXISTS idx_workflow_steps_action   ON workflow_steps(action);
+-- workflow_steps retired

@@ -409,17 +409,6 @@ def ensure_relationship_tracking_schema(conn: sqlite3.Connection) -> None:
     file_cols = table_columns(conn, "files")
     if "last_relationships_extracted" not in file_cols:
         conn.execute("ALTER TABLE files ADD COLUMN last_relationships_extracted TEXT")
-
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS relationship_extraction_runs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            started_at TEXT,
-            completed_at TEXT,
-            files_processed INTEGER,
-            relationships_extracted INTEGER,
-            errors INTEGER
-        )
-    """)
     conn.commit()
 
 
@@ -962,13 +951,6 @@ def extract_all(
         except Exception as e:
             errors += 1
             print(f"⚠️  {file_row.path}: {e}")
-
-    completed = datetime.now(timezone.utc).isoformat()
-    cur.execute("""
-        INSERT INTO relationship_extraction_runs
-        (started_at, completed_at, files_processed, relationships_extracted, errors)
-        VALUES (?, ?, ?, ?, ?)
-    """, (started, completed, processed, total_inserted, errors))
 
     conn.commit()
     conn.close()

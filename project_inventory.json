@@ -1,0 +1,258 @@
+{
+  "project_name": "intacct-repo-intelligence",
+  "generated_at": "2026-07-08T15:34:28.028559+00:00",
+  "generator": "scripts/generate_inventory.py",
+  "verified_state": {
+    "generated_at": "2026-07-08T15:34:28.003919+00:00",
+    "phases": {
+      "phase2d": {
+        "status": "verified",
+        "description": "Phase 2D regenerated from database state"
+      }
+    },
+    "database": {
+      "tables": {
+        "entity_mappings": {
+          "status": "present",
+          "rows": 5214
+        },
+        "entity_nodes": {
+          "status": "present",
+          "rows": 1897
+        },
+        "entity_roots": {
+          "status": "present",
+          "rows": 3760
+        },
+        "files": {
+          "status": "present",
+          "rows": 46242
+        },
+        "knowledge_items": {
+          "status": "present",
+          "rows": 0
+        },
+        "openapispec_index": {
+          "status": "present",
+          "rows": 3959
+        },
+        "relationships": {
+          "status": "present",
+          "rows": 238488
+        },
+        "repos": {
+          "status": "present",
+          "rows": 0
+        },
+        "rest_endpoints": {
+          "status": "present",
+          "rows": 3020
+        },
+        "sqlite_sequence": {
+          "status": "present",
+          "rows": 8
+        },
+        "symbols": {
+          "status": "present",
+          "rows": 130705
+        },
+        "workflow_edges": {
+          "status": "present",
+          "rows": 0
+        },
+        "workflow_nodes": {
+          "status": "present",
+          "rows": 0
+        },
+        "workflows": {
+          "status": "present",
+          "rows": 295
+        }
+      },
+      "total_rows_by_table": {},
+      "symbol_kinds": [
+        "class",
+        "cqry_field",
+        "cqry_join",
+        "cqry_query",
+        "cqry_table",
+        "function",
+        "interface",
+        "method",
+        "procedure",
+        "table",
+        "template",
+        "template_match",
+        "view"
+      ],
+      "mapping_types": [
+        "allowed_operations_handler",
+        "approval_manager",
+        "batch_manager",
+        "batch_picker",
+        "editor",
+        "entity_manager",
+        "entry_manager",
+        "form_editor",
+        "item_manager",
+        "lister",
+        "manager",
+        "openapispec_history",
+        "openapispec_operations",
+        "openapispec_schema",
+        "openapispec_uimeta",
+        "openapispec_unknown",
+        "pick_manager",
+        "pick_picker",
+        "picker",
+        "reverse_manager"
+      ],
+      "relationship_types": [
+        "CALLS",
+        "IMPLEMENTS",
+        "IMPORTS",
+        "INHERITS",
+        "REFERENCES",
+        "STATIC_CALLS",
+        "USES"
+      ],
+      "workflow_types": [
+        "allowed_operations",
+        "approval",
+        "batch",
+        "entry",
+        "item",
+        "reverse"
+      ]
+    },
+    "filesystem": {
+      "migrations": [
+        "002_relationships.sql",
+        "003_relationship_classification.sql",
+        "004_entities.sql",
+        "004_entity_roots.sql",
+        "005_entity_roots_is_shared.sql",
+        "006_entity_type_non_domain_overrides.sql",
+        "006_phase2c_workflows.sql",
+        "007_phase2c_rest.sql",
+        "008_phase2c_ui.sql",
+        "009_phase2c_repos.sql",
+        "010_phase2c_knowledge.sql",
+        "011_openapispec_index.sql",
+        "012_purge_sql_drop_mappings.sql"
+      ],
+      "parsers": [
+        "cqry_extractor.py",
+        "java_extractor.py",
+        "php_extractor.py",
+        "sql_extractor.py",
+        "xslt_extractor.py"
+      ],
+      "scripts": [
+        "benchmark_score.py",
+        "build_entities.py",
+        "build_entity_roots.py",
+        "build_rest_endpoints.py",
+        "build_workflows.py",
+        "generate_inventory.py",
+        "link_openapispec.py",
+        "merge_entities.py",
+        "query_catalog.py",
+        "query_entity.py",
+        "query_relationships.py",
+        "query_rest.py",
+        "query_workflow.py",
+        "scan_ent_files.py",
+        "scan_openapispec.py"
+      ],
+      "validators": [
+        "validate_phase2b.py",
+        "validate_phase2c1.py",
+        "validate_phase2d.py",
+        "validate_phase2d1.py"
+      ]
+    }
+  },
+  "declared_state": {
+    "phases": {
+      "phase2d": {
+        "status": "complete",
+        "target_tables": [
+          "rest_endpoints",
+          "repos",
+          "knowledge_items",
+          "workflow_nodes",
+          "workflow_edges",
+          "openapispec_index"
+        ],
+        "expected_mapping_types": [
+          "manager",
+          "editor",
+          "lister",
+          "picker",
+          "cqry",
+          "inc",
+          "yaml",
+          "sql",
+          "html",
+          "phtml",
+          "openapispec_schema",
+          "openapispec_operations",
+          "openapispec_history",
+          "openapispec_uimeta",
+          "openapispec_viewmeta"
+        ],
+        "required_extractors": [
+          "java_extractor.py",
+          "php_extractor.py",
+          "sql_extractor.py",
+          "xslt_extractor.py",
+          "cqry_extractor.py"
+        ],
+        "required_validators": [
+          "validate_phase2d.py"
+        ]
+      }
+    }
+  },
+  "drift": {
+    "missing_mapping_types": [
+      "cqry",
+      "html",
+      "inc",
+      "openapispec_viewmeta",
+      "phtml",
+      "sql",
+      "yaml"
+    ],
+    "extra_tables": [
+      "entity_mappings",
+      "entity_nodes",
+      "entity_roots",
+      "files",
+      "relationships",
+      "sqlite_sequence",
+      "symbols",
+      "workflows"
+    ],
+    "extra_mapping_types": [
+      "allowed_operations_handler",
+      "approval_manager",
+      "batch_manager",
+      "batch_picker",
+      "entity_manager",
+      "entry_manager",
+      "form_editor",
+      "item_manager",
+      "openapispec_unknown",
+      "pick_manager",
+      "pick_picker",
+      "reverse_manager"
+    ],
+    "extra_validators": [
+      "validate_phase2b.py",
+      "validate_phase2c1.py",
+      "validate_phase2d1.py"
+    ]
+  }
+}

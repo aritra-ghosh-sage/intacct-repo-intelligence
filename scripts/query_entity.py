@@ -754,18 +754,6 @@ def get_workflows(
     ).fetchall()
 
 
-def get_workflow_steps(conn: sqlite3.Connection, workflow_id: int) -> list[sqlite3.Row]:
-    return conn.execute(
-        """
-        SELECT ordinal, name, action, step_kind, evidence
-        FROM workflow_steps
-        WHERE workflow_id = ?
-        ORDER BY ordinal, id
-        """,
-        (workflow_id,),
-    ).fetchall()
-
-
 def show_workflow_view(conn: sqlite3.Connection, entity_name: str) -> int:
     entity = get_entity(conn, entity_name)
     if not entity:
@@ -790,14 +778,6 @@ def show_workflow_view(conn: sqlite3.Connection, entity_name: str) -> int:
             src = wf["source_kind"]
             source_file = wf["source_file"] or ""
             click.echo(f"  {wf['name']}   [source={src} {source_file}]")
-
-            steps = get_workflow_steps(conn, wf["id"])
-            for step in steps:
-                action_suffix = f" action={step['action']}" if step["action"] else ""
-                click.echo(
-                    f"    {step['ordinal']:>2}. {step['name']} "
-                    f"[{step['step_kind']}{action_suffix}]"
-                )
 
     return 0
 

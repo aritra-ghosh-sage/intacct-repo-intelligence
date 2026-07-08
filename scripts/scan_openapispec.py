@@ -81,6 +81,12 @@ def _infer_kind(filename: str) -> str:
         return "schema"
     if lowered.endswith(".api.yaml"):
         return "operations"
+    if lowered.endswith(".view.yaml"):
+        return "view"
+    if lowered.endswith(".uimeta.yaml"):
+        return "uimeta"
+    if lowered.endswith(".viewmeta.yaml"):
+        return "viewmeta"
     if "paths" in lowered:
         return "paths"
     if "components" in lowered:
@@ -99,7 +105,12 @@ def _infer_kind(filename: str) -> str:
 def _infer_slug(filename: str) -> str:
     stem = filename
     stem = re.sub(r"\.schema\.history\.yaml$", "", stem, flags=re.IGNORECASE)
-    stem = re.sub(r"\.s\d+\.(schema|api)\.yaml$", "", stem, flags=re.IGNORECASE)
+    stem = re.sub(
+        r"\.s\d+\.(schema|api|view|uimeta|viewmeta)\.yaml$",
+        "",
+        stem,
+        flags=re.IGNORECASE,
+    )
     stem = re.sub(r"^objects\.", "", stem, flags=re.IGNORECASE)
     return stem
 
@@ -170,6 +181,10 @@ def scan_openapispec(conn: sqlite3.Connection, repo_root: Path) -> ScanStats:
         raise click.ClickException(
             "Required table openapispec_index is missing. Run the corresponding migration first."
         )
+
+    # Rebuild the index snapshot each run so kind/classification corrections
+    # replace stale rows instead of accumulating duplicates.
+    conn.execute("DELETE FROM openapispec_index")
 
     stats = ScanStats()
     for yaml_path in tqdm(sorted(root.rglob("*.yaml")), desc="Scanning OpenAPI specs", unit="file"):

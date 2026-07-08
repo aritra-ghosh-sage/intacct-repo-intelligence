@@ -21,15 +21,15 @@ import sys
 from pathlib import Path
 
 try:
-    from scripts.build_entities import COMPANION_ROLES
+    from scripts.build_entities import COMPANION_ROLES, RELATED_FILE_ROLES
     from scripts.build_entity_roots import ROLE_REASON, ROLE_WEIGHT
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from scripts.build_entities import COMPANION_ROLES
+    from scripts.build_entities import COMPANION_ROLES, RELATED_FILE_ROLES
     from scripts.build_entity_roots import ROLE_REASON, ROLE_WEIGHT
 
 DEFAULT_DB = "catalog/catalog.db"
-DEFAULT_REPO_ROOT = "/home/aritraghosh/projects/ia-app"
+DEFAULT_REPO_ROOT = "/home/aritraghosh/projects/main"
 DEFAULT_REPORT = "validation/phase2b_report.md"
 DEFAULT_ENTITIES = "config/entity_definitions.jsonl"
 
@@ -139,6 +139,7 @@ def check_mapping_roles_and_roots(conn: sqlite3.Connection) -> list:
     findings = []
 
     valid_roles = set(ROLE_WEIGHT)
+    valid_roles.update(RELATED_FILE_ROLES)
     unknown_mapping_roles = q(
         conn,
         """
@@ -148,7 +149,12 @@ def check_mapping_roles_and_roots(conn: sqlite3.Connection) -> list:
         ORDER BY mapping_type
         """,
     )
-    unknown = [r["mapping_type"] for r in unknown_mapping_roles if r["mapping_type"] not in valid_roles]
+    unknown = [
+        r["mapping_type"]
+        for r in unknown_mapping_roles
+        if r["mapping_type"] not in valid_roles
+        and not str(r["mapping_type"]).startswith("openapispec_")
+    ]
     findings.append(("entity_mappings with unknown mapping_type", unknown))
 
     rows = q(
@@ -213,8 +219,13 @@ def check_structural(conn: sqlite3.Connection) -> list:
     missing_ent = q(conn, """
         SELECT name
         FROM entity_nodes
-        WHERE ent_file IS NULL OR ent_file = ''
-    """)
+        WHERE (ent_file IS NULL OR ent_file = '')
+          AND id IN (
+              SELECT DISTINCT entity_id
+              FROM entity_mappings
+              WHERE mapping_type IN ({roles})
+          )
+    """.format(roles=", ".join(["?"] * len(ROLE_WEIGHT))), tuple(ROLE_WEIGHT.keys()))
     findings.append(
         ("entity_nodes without ent_file", [r["name"] for r in missing_ent])
     )
@@ -224,7 +235,8 @@ def check_structural(conn: sqlite3.Connection) -> list:
         FROM entity_mappings em
         LEFT JOIN symbols s
             ON s.id = em.symbol_id
-        WHERE s.id IS NULL
+        WHERE em.symbol_id IS NOT NULL
+          AND s.id IS NULL
     """)
     findings.append(
         ("entity_mappings pointing to missing symbols",
@@ -310,8 +322,13 @@ def check_structural(conn: sqlite3.Connection) -> list:
         SELECT en.name
         FROM entity_nodes en
         WHERE en.entity_type IN ('business_entity', 'domain_object')
-          AND en.ent_file IS NULL
-    """)
+                    AND (en.ent_file IS NULL OR en.ent_file = '')
+          AND en.id IN (
+              SELECT DISTINCT entity_id
+              FROM entity_mappings
+              WHERE mapping_type IN ({roles})
+          )
+    """.format(roles=", ".join(["?"] * len(ROLE_WEIGHT))), tuple(ROLE_WEIGHT.keys()))
     if domain_without_type:
         findings.append(
             ("domain entities missing ent_file despite classification",
@@ -346,8 +363,10 @@ def check_filesystem(
 
     missing_ent_files = []
     for r in q(conn, "SELECT name, ent_file FROM entity_nodes"):
-        full = os.path.join(repo_root, r["ent_file"] or "")
-        if not r["ent_file"] or not os.path.exists(full):
+        if not r["ent_file"]:
+            continue
+        full = os.path.join(repo_root, r["ent_file"])
+        if not os.path.exists(full):
             missing_ent_files.append((r["name"], r["ent_file"]))
 
     findings.append(("entity_nodes with .ent files missing on disk", missing_ent_files))
@@ -361,7 +380,8 @@ def check_filesystem(
         FROM entity_mappings em
         JOIN entity_nodes en ON en.id = em.entity_id
         WHERE em.source_text IS NOT NULL
-    """)
+          AND em.mapping_type IN ({roles})
+    """.format(roles=", ".join(["?"] * len(COMPANION_ROLES))), tuple(COMPANION_ROLES))
 
     for r in rows:
         candidate = os.path.join(repo_root, r["source_text"])

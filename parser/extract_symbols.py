@@ -109,15 +109,6 @@ def extract_all(only_changed: bool = True, languages: list[str] | None = None):
             errors += 1
             print(f"⚠️  {rel_path}: {e}")
 
-    completed = datetime.now(timezone.utc).isoformat()
-
-    cur.execute("""
-        INSERT INTO symbol_extraction_runs
-        (started_at, completed_at, files_processed,
-         symbols_extracted, errors)
-        VALUES (?, ?, ?, ?, ?)
-    """, (started, completed, len(rows), total_symbols, errors))
-
     conn.commit()
     conn.close()
 

@@ -50,8 +50,7 @@ OK — no issues found.
 
 ### entity_mappings pointing to missing symbols
 
-- `(10483, None)`
-- `(10638, None)`
+OK — no issues found.
 
 ### entity_roots not backed by entity_mappings
 
@@ -60,13 +59,133 @@ OK — no issues found.
 ### domain entities with 0 seed roots at weight >= 0.75
 
 - `Apxbatch`
+- `PASwebhookqueue`
+- `PASwebhookqueuehistory`
 - `Qdepositpayment`
+- `Recordgeneratorqueue`
+- `Recordgeneratorqueuehistory`
+- `Stxexternalqueue`
+- `Stxexternalqueuehistory`
+- `Stxfileuploadqueue`
+- `Stxfileuploadqueuehistory`
+- `Stxwebhookqueue`
+- `Stxwebhookqueuehistory`
+- `Apautomatedtransactionfileupload`
+- `AUTOMATEDTRANSACTIONCompany`
+- `AUTOMATEDTRANSACTIONSetup`
+- `Automationfeedbackext`
+- `Poautomatedtransactionfileupload`
+- `Attachment`
+- `Entityusecode`
 - `GLObals`
 - `Stdrepeat`
+- `IaSuiteUserApp`
 - `Schemamap`
+- `Girunsummary`
+- `GLObalrunobjectsummary`
+- `Runobject`
+- `Runobjectdetail`
+- `Runobjectgroup`
+- `Runobjectsummary`
 - `Base`
+- `DDSHistory`
+- `DDSJob`
+- `DDSJobconfig`
+- `DDSJobsummary`
+- `DDSNotice`
+- `DDSSchedule`
+- `DDSSetup`
+- `DDSSubscription`
+- `Cashflowdigitalnetworksyncqueue`
+- `Cashflowdigitalnetworksyncqueuehistory`
+- `Digitalnetworksyncqueue`
+- `Digitalnetworksyncqueuehistory`
+- `Podigitalnetworksyncqueue`
+- `Podigitalnetworksyncqueuehistory`
+- `Expenseexternalqueue`
+- `Expenseexternalqueuehistory`
+- `Expensefileuploadqueue`
+- `Expensefileuploadqueuehistory`
+- `Expensewebhookqueue`
+- `Expensewebhookqueuehistory`
+- `Deprschrunsummary`
 - `EmployeeAging`
+- `Expensefileupload`
+- `CONsbookdeletionqueue`
+- `CONsbookdeletionqueuehistory`
+- `Projectrunsummary`
+- `Tsdocentryresolve`
+- `Activitylog`
+- `Appissue`
+- `Apppageproperties`
+- `Approvedapplication`
+- `Cerpsetup`
+- `CSPviolation`
+- `PACkageownership`
+- `PACkagepushhistory`
+- `PACkagepushqueue`
+- `PACkagerepository`
+- `PACkagesubscriber`
+- `PACkagetracking`
+- `Ptapplication`
+- `Ptnamespace`
+- `Transactionmap`
+- `Triggerlogs`
+- `SFORCEQueue`
+- `SFORCEQueuehistory`
+- `SFORCESyncqueuejobui`
+- `Loanstatementrunsummary`
+- `Acctlabeltaxgroup`
+- `Customeravataxsyncqueue`
+- `Customeravataxsyncqueuehistory`
 - `TAXSummary`
+- `AppToolsAppToolsSuiteUserListResponse`
+- `AppToolsAppToolsUserMyApplicationsResponse`
+- `CoCompanyConfigAudiTrailListResponse`
+- `CollaborationCollaborationSageIdInitializeUsersRequest`
+- `CollaborationCollaborationSageIdInitializeUsersResponse`
+- `CollaborationCollaborationSageIdUsersResponse`
+- `CommonCommonAuthAllOperationsRequest`
+- `CommonCommonAuthAllOperationsResponse`
+- `CommonCommonAuthAllowedOperationsRequest`
+- `CommonCommonAuthAllowedOperationsResponse`
+- `CommonCoreComposite`
+- `CommonCoreExport`
+- `CommonCoreKeyValueMap`
+- `CommonReportSubmittedStatus`
+- `CoreAdminProvisioningGrantSlideInPermissionsRequest`
+- `CoreAdminProvisioningGrantSlideInPermissionsResponse`
+- `CoreCoreAllowedOperationsRequest`
+- `CoreCoreAllowedOperationsResponse`
+- `CoreCoreAsyncJobStatus`
+- `CoreCoreAsyncOperationResponse`
+- `CoreCoreRelatedObjectsQuery`
+- `CoreIodlProxyFsComponentContentDeploy`
+- `CoreIodlProxyFsComponentContent`
+- `CoreIodlProxyFsComponentId`
+- `CoreReportStatusCanceled`
+- `CoreReportsStoredReports`
+- `GlGeneralLedgerAccountingBooksCloseBooksResponse`
+- `GlGeneralLedgerAccountingBooksLockStatutoryPeriodRequest`
+- `GlGeneralLedgerAccountingBooksLockStatutoryPeriodResponse`
+- `GlGeneralLedgerAccountingBooksOpenBooksResponse`
+- `GlReportsGeneralLedgerAccountBalanceByDimension`
+- `GlReportsGeneralLedgerAccountGroupHierarchy`
+- `GlReportsGeneralLedgerBasic`
+- `GlReportsGeneralLedgerDetails`
+- `GlReportsGeneralLedgerReconciliation`
+- `GlReportsGeneralLedgerTrialBalance`
+- `InvReportsInventoryControlInventoryCosting`
+- `InvReportsInventoryControlInventoryRegister`
+- `InvReportsInventoryControlInventoryStatus`
+- `InvReportsInventoryControlInventoryValuation`
+- `InvReportsInventoryControlItemActivity`
+- `InvReportsInventoryControlItemList`
+- `InvReportsInventoryControlLotTracking`
+- `InvReportsInventoryControlPhysicalInventory`
+- `InvReportsInventoryControlSerialTracking`
+- `PurchasingReportsPurchasingPriceList`
+- `SalesReportsOrderEntryPriceList`
 
 ### non-domain entities with 0 seed roots at weight >= 0.75
 
@@ -82,208 +201,208 @@ OK — no issues found.
 
 ### symbols acting as root for multiple entities
 
-- `(703025, 2)`
-- `(703311, 2)`
-- `(706263, 2)`
-- `(706405, 2)`
-- `(706432, 2)`
-- `(706716, 2)`
-- `(706722, 2)`
-- `(706803, 2)`
-- `(707101, 2)`
-- `(707102, 2)`
-- `(707466, 2)`
-- `(708188, 2)`
-- `(708397, 2)`
-- `(708973, 2)`
-- `(709234, 2)`
-- `(709928, 2)`
-- `(709941, 2)`
-- `(710065, 2)`
-- `(710189, 2)`
-- `(710444, 2)`
-- `(710454, 2)`
-- `(710487, 2)`
-- `(711112, 2)`
-- `(711167, 2)`
-- `(711257, 2)`
-- `(711383, 2)`
-- `(711735, 2)`
-- `(711746, 2)`
-- `(711863, 2)`
-- `(711865, 2)`
-- `(711873, 2)`
-- `(711894, 2)`
-- `(711897, 2)`
-- `(711981, 2)`
-- `(712314, 2)`
-- `(712398, 2)`
-- `(712416, 2)`
-- `(712807, 2)`
-- `(712882, 2)`
-- `(712962, 2)`
-- `(713077, 2)`
-- `(713673, 2)`
-- `(713891, 2)`
-- `(714036, 2)`
-- `(714042, 2)`
-- `(714092, 2)`
-- `(714822, 2)`
-- `(714824, 2)`
-- `(714911, 2)`
-- `(715623, 2)`
-- `(715654, 2)`
-- `(716201, 2)`
-- `(716260, 2)`
-- `(716490, 2)`
-- `(716673, 2)`
-- `(717434, 2)`
-- `(717530, 2)`
-- `(717578, 2)`
-- `(717983, 2)`
-- `(718013, 2)`
-- `(718229, 2)`
-- `(718242, 2)`
-- `(718675, 2)`
-- `(718885, 2)`
-- `(719263, 2)`
-- `(719278, 2)`
-- `(719291, 2)`
-- `(719465, 2)`
-- `(719552, 2)`
-- `(719655, 2)`
-- `(719724, 2)`
-- `(720237, 2)`
-- `(720275, 2)`
-- `(720296, 2)`
-- `(720700, 2)`
-- `(720954, 2)`
-- `(721069, 2)`
-- `(721340, 2)`
-- `(721354, 2)`
-- `(721547, 2)`
-- `(721549, 2)`
-- `(721579, 2)`
-- `(721587, 2)`
-- `(721832, 2)`
-- `(722998, 2)`
-- `(723183, 2)`
-- `(723238, 2)`
-- `(723334, 2)`
-- `(723408, 2)`
-- `(723435, 2)`
-- `(723509, 2)`
-- `(723543, 2)`
-- `(723868, 2)`
-- `(724057, 2)`
-- `(724383, 2)`
-- `(724460, 2)`
-- `(724991, 2)`
-- `(725191, 2)`
-- `(725761, 2)`
-- `(727144, 2)`
-- `(727209, 2)`
-- `(727416, 2)`
-- `(727923, 2)`
-- `(727948, 2)`
-- `(728131, 2)`
-- `(728296, 2)`
-- `(728819, 2)`
-- `(728829, 2)`
-- `(729163, 2)`
-- `(729209, 2)`
-- `(729740, 2)`
-- `(730322, 2)`
-- `(730459, 2)`
-- `(730526, 2)`
-- `(730567, 2)`
-- `(730685, 2)`
-- `(730768, 2)`
-- `(730878, 2)`
-- `(730908, 2)`
-- `(731064, 2)`
-- `(731284, 2)`
-- `(731825, 2)`
-- `(732018, 2)`
-- `(732076, 2)`
-- `(732500, 2)`
-- `(732534, 2)`
-- `(733172, 2)`
-- `(733184, 2)`
-- `(734970, 2)`
-- `(735631, 2)`
-- `(736282, 2)`
-- `(736365, 2)`
-- `(736709, 2)`
-- `(736764, 2)`
-- `(736936, 2)`
-- `(737005, 2)`
-- `(737011, 2)`
-- `(737065, 2)`
-- `(737308, 2)`
-- `(737564, 2)`
-- `(737752, 2)`
-- `(740835, 2)`
-- `(740839, 2)`
-- `(740876, 2)`
-- `(740937, 2)`
-- `(755334, 2)`
-- `(755487, 2)`
-- `(755659, 2)`
-- `(755661, 2)`
-- `(755831, 2)`
-- `(755964, 2)`
-- `(756089, 2)`
-- `(756208, 2)`
-- `(756399, 2)`
-- `(756461, 2)`
-- `(757291, 2)`
-- `(757557, 2)`
-- `(757716, 2)`
-- `(758028, 2)`
-- `(758293, 2)`
-- `(758632, 2)`
-- `(759287, 2)`
-- `(759831, 2)`
-- `(760777, 2)`
-- `(762574, 2)`
-- `(765289, 2)`
-- `(776520, 2)`
-- `(776873, 2)`
-- `(777008, 2)`
-- `(777614, 2)`
-- `(777889, 2)`
-- `(778362, 2)`
-- `(778515, 2)`
-- `(778565, 2)`
-- `(778656, 2)`
-- `(781184, 2)`
-- `(785715, 2)`
-- `(785963, 2)`
-- `(785966, 2)`
-- `(786679, 2)`
-- `(786704, 2)`
-- `(786962, 2)`
-- `(787291, 2)`
-- `(787811, 2)`
-- `(787813, 2)`
-- `(787899, 2)`
-- `(788098, 2)`
-- `(788126, 2)`
-- `(788281, 2)`
-- `(788380, 2)`
-- `(788529, 2)`
-- `(788641, 2)`
-- `(788883, 2)`
-- `(789086, 2)`
-- `(789088, 2)`
-- `(789444, 2)`
-- `(789764, 2)`
-- `(789972, 2)`
-- `(789995, 2)`
-- `(790374, 2)`
+- `(94, 2)`
+- `(380, 2)`
+- `(3493, 2)`
+- `(3635, 2)`
+- `(3662, 2)`
+- `(3946, 2)`
+- `(3952, 2)`
+- `(4033, 2)`
+- `(4331, 2)`
+- `(4332, 2)`
+- `(4725, 2)`
+- `(5447, 2)`
+- `(5656, 2)`
+- `(6239, 2)`
+- `(6570, 2)`
+- `(7268, 2)`
+- `(7281, 2)`
+- `(7405, 2)`
+- `(7529, 2)`
+- `(7784, 2)`
+- `(7794, 2)`
+- `(7827, 2)`
+- `(8475, 2)`
+- `(8530, 2)`
+- `(8659, 2)`
+- `(8789, 2)`
+- `(9141, 2)`
+- `(9152, 2)`
+- `(9283, 2)`
+- `(9285, 2)`
+- `(9293, 2)`
+- `(9314, 2)`
+- `(9317, 2)`
+- `(9425, 2)`
+- `(9796, 2)`
+- `(9886, 2)`
+- `(9909, 2)`
+- `(10307, 2)`
+- `(10382, 2)`
+- `(10462, 2)`
+- `(10626, 2)`
+- `(11225, 2)`
+- `(11445, 2)`
+- `(11639, 2)`
+- `(11645, 2)`
+- `(11697, 2)`
+- `(12437, 2)`
+- `(12439, 2)`
+- `(12526, 2)`
+- `(13247, 2)`
+- `(13278, 2)`
+- `(13879, 2)`
+- `(13938, 2)`
+- `(14219, 2)`
+- `(14402, 2)`
+- `(15313, 2)`
+- `(15409, 2)`
+- `(15457, 2)`
+- `(15872, 2)`
+- `(15903, 2)`
+- `(16119, 2)`
+- `(16132, 2)`
+- `(16566, 2)`
+- `(16786, 2)`
+- `(17180, 2)`
+- `(17195, 2)`
+- `(17213, 2)`
+- `(17389, 2)`
+- `(17488, 2)`
+- `(17591, 2)`
+- `(17660, 2)`
+- `(18193, 2)`
+- `(18231, 2)`
+- `(18252, 2)`
+- `(18664, 2)`
+- `(18950, 2)`
+- `(19082, 2)`
+- `(19364, 2)`
+- `(19395, 2)`
+- `(19649, 2)`
+- `(19651, 2)`
+- `(19681, 2)`
+- `(19689, 2)`
+- `(19934, 2)`
+- `(21116, 2)`
+- `(21327, 2)`
+- `(21382, 2)`
+- `(21478, 2)`
+- `(21552, 2)`
+- `(21581, 2)`
+- `(21662, 2)`
+- `(21696, 2)`
+- `(22021, 2)`
+- `(22243, 2)`
+- `(22596, 2)`
+- `(22673, 2)`
+- `(23271, 2)`
+- `(23905, 2)`
+- `(25046, 2)`
+- `(26763, 2)`
+- `(26862, 2)`
+- `(27275, 2)`
+- `(27870, 2)`
+- `(27895, 2)`
+- `(28132, 2)`
+- `(28332, 2)`
+- `(29104, 2)`
+- `(29114, 2)`
+- `(29468, 2)`
+- `(29567, 2)`
+- `(30141, 2)`
+- `(30773, 2)`
+- `(30927, 2)`
+- `(30999, 2)`
+- `(31040, 2)`
+- `(31160, 2)`
+- `(31320, 2)`
+- `(31435, 2)`
+- `(31465, 2)`
+- `(31735, 2)`
+- `(32005, 2)`
+- `(32647, 2)`
+- `(33000, 2)`
+- `(33093, 2)`
+- `(33745, 2)`
+- `(33779, 2)`
+- `(34422, 2)`
+- `(34434, 2)`
+- `(36269, 2)`
+- `(36930, 2)`
+- `(37722, 2)`
+- `(37881, 2)`
+- `(38046, 2)`
+- `(38308, 2)`
+- `(38368, 2)`
+- `(38544, 2)`
+- `(38621, 2)`
+- `(38627, 2)`
+- `(38681, 2)`
+- `(38938, 2)`
+- `(39107, 2)`
+- `(39239, 2)`
+- `(39659, 2)`
+- `(42883, 2)`
+- `(42887, 2)`
+- `(42924, 2)`
+- `(42985, 2)`
+- `(57580, 2)`
+- `(57784, 2)`
+- `(57956, 2)`
+- `(57958, 2)`
+- `(58128, 2)`
+- `(58266, 2)`
+- `(58392, 2)`
+- `(58511, 2)`
+- `(58702, 2)`
+- `(58764, 2)`
+- `(59642, 2)`
+- `(59908, 2)`
+- `(60069, 2)`
+- `(60378, 2)`
+- `(60648, 2)`
+- `(60987, 2)`
+- `(61665, 2)`
+- `(63358, 2)`
+- `(68309, 2)`
+- `(79876, 2)`
+- `(80304, 2)`
+- `(80447, 2)`
+- `(81147, 2)`
+- `(81475, 2)`
+- `(82156, 2)`
+- `(82311, 2)`
+- `(82361, 2)`
+- `(82452, 2)`
+- `(85962, 2)`
+- `(90662, 2)`
+- `(90890, 2)`
+- `(90912, 2)`
+- `(90915, 2)`
+- `(91711, 2)`
+- `(91739, 2)`
+- `(91780, 2)`
+- `(92050, 2)`
+- `(92474, 2)`
+- `(93333, 2)`
+- `(93335, 2)`
+- `(93422, 2)`
+- `(93632, 2)`
+- `(93662, 2)`
+- `(93821, 2)`
+- `(93925, 2)`
+- `(94084, 2)`
+- `(94196, 2)`
+- `(94602, 2)`
+- `(94845, 2)`
+- `(94847, 2)`
+- `(95276, 2)`
+- `(95631, 2)`
+- `(95881, 2)`
 
-_(truncated — 245 total)_
+_(truncated — 247 total)_
 
 ## Filesystem checks
 
@@ -317,17 +436,17 @@ OK — no issues found.
 
 ### entity_roots role distribution
 
-- `('manager', 1796)`
-- `('editor', 612)`
-- `('lister', 561)`
-- `('picker', 362)`
-- `('allowed_operations_handler', 160)`
-- `('entry_manager', 77)`
+- `('manager', 1766)`
+- `('editor', 605)`
+- `('lister', 555)`
+- `('picker', 360)`
+- `('allowed_operations_handler', 154)`
+- `('entry_manager', 79)`
 - `('form_editor', 67)`
-- `('pick_manager', 53)`
+- `('pick_manager', 52)`
 - `('pick_picker', 49)`
 - `('item_manager', 26)`
-- `('reverse_manager', 21)`
+- `('reverse_manager', 20)`
 - `('batch_manager', 8)`
 - `('approval_manager', 8)`
 - `('batch_picker', 6)`
@@ -341,13 +460,13 @@ OK — no issues found.
 
 ### ground truth summary (derived from entity_definitions + deterministic role weights)
 
-- `entities_with_expected_roots=1799`
-- `entities_with_perfect_match=1797`
-- `total_expected_symbols=3396`
-- `total_actual_symbols=3394`
-- `total_correct_symbols=3394`
+- `entities_with_expected_roots=1769`
+- `entities_with_perfect_match=1769`
+- `total_expected_symbols=3345`
+- `total_actual_symbols=3345`
+- `total_correct_symbols=3345`
 - `precision=1.0000`
-- `recall=0.9994`
+- `recall=1.0000`
 
 ### ground-truth entities missing in entity_nodes
 
@@ -355,8 +474,7 @@ OK — no issues found.
 
 ### entities missing expected >=0.75 roots
 
-- `('ApprovePurchases', ['approvepurchaseseditor'])`
-- `('Item', ['itemeditor'])`
+OK — no issues found.
 
 ### entities with unexpected >=0.75 extra roots
 

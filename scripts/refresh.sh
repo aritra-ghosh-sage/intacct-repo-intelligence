@@ -118,22 +118,9 @@ fi
 echo ""
 
 # ===================================================================
-# Phase 9: UI Companions Building
+# Phase 9: OpenAPI Specification Scanning
 # ===================================================================
-echo "🖼️  Phase 9: Building UI companion mappings..."
-echo "   Identifying UI editors, listers, and pickers"
-python scripts/build_ui_companions.py --db catalog/catalog.db
-if [ $? -ne 0 ]; then
-  echo "   ⚠️  UI companions building completed with warnings (non-fatal)"
-else
-  echo "   ✅ UI companions building complete"
-fi
-echo ""
-
-# ===================================================================
-# Phase 10: OpenAPI Specification Scanning
-# ===================================================================
-echo "📚 Phase 10: Scanning OpenAPI specifications..."
+echo "📚 Phase 9: Scanning OpenAPI specifications..."
 echo "   Indexing OpenAPI YAML specification files"
 python scripts/scan_openapispec.py scan --db catalog/catalog.db --repo-root "/home/aritraghosh/projects/main"
 if [ $? -ne 0 ]; then
@@ -144,9 +131,9 @@ fi
 echo ""
 
 # ===================================================================
-# Phase 11: REST Endpoints Extraction
+# Phase 10: REST Endpoints Extraction
 # ===================================================================
-echo "🌐 Phase 11: Extracting REST endpoints..."
+echo "🌐 Phase 10: Extracting REST endpoints..."
 echo "   Parsing OpenAPI files from openapispec_index to extract REST API paths and methods"
 python scripts/build_rest_endpoints.py build --db catalog/catalog.db --repo-root "/home/aritraghosh/projects/main"
 if [ $? -ne 0 ]; then
@@ -157,9 +144,9 @@ fi
 echo ""
 
 # ===================================================================
-# Phase 12: OpenAPI Specification Linking
+# Phase 11: OpenAPI Specification Linking
 # ===================================================================
-echo "🔗 Phase 12: Linking OpenAPI specifications to entities..."
+echo "🔗 Phase 11: Linking OpenAPI specifications to entities..."
 echo "   Connecting API entities to OpenAPI spec files (kinds: operations, schemas, etc.)"
 python scripts/link_openapispec.py link --db catalog/catalog.db
 if [ $? -ne 0 ]; then
@@ -193,8 +180,6 @@ tables = [
     ('entity_mappings', 'Entity-symbol mappings'),
     ('relationships', 'Symbol relationships'),
     ('workflows', 'Workflow definitions'),
-    ('workflow_steps', 'Workflow steps'),
-    ('ui_companions', 'UI layer mappings'),
     ('openapispec_index', 'OpenAPI specs indexed'),
     ('rest_endpoints', 'REST API endpoints'),
 ]

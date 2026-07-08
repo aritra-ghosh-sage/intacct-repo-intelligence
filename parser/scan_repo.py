@@ -142,20 +142,6 @@ def scan():
         except Exception as e:
             print(f"⚠️  Error on {filepath}: {e}")
 
-    completed = datetime.now(timezone.utc).isoformat()
-
-    cur.execute("""
-        INSERT INTO index_runs
-        (started_at, completed_at, files_scanned,
-         files_added, files_updated, files_skipped, git_commit)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (
-        started, completed,
-        files_scanned, files_added,
-        files_updated, files_skipped,
-        None
-    ))
-
     conn.commit()
     conn.close()
 

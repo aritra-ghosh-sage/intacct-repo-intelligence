@@ -52,29 +52,6 @@ def find(keyword, limit):
 
 
 @cli.command()
-def runs():
-    conn = get_connection()
-    cur = conn.cursor()
-
-    rows = cur.execute("""
-        SELECT started_at, completed_at,
-               files_scanned, files_added,
-               files_updated, files_skipped
-        FROM index_runs
-        ORDER BY id DESC
-        LIMIT 10
-    """).fetchall()
-
-    print(tabulate(
-        [tuple(r) for r in rows],
-        headers=[
-            "Started", "Completed", "Scanned",
-            "Added", "Updated", "Skipped"
-        ]
-    ))
-
-
-@cli.command()
 def toplevel():
     conn = get_connection()
     cur = conn.cursor()
