@@ -39,6 +39,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
 from tqdm import tqdm
+try:
+    import yaml
+except ModuleNotFoundError:
+    yaml = None
 
 from config import REPO_PATH
 from catalog.db import get_connection
@@ -53,6 +57,30 @@ REL_USES = "USES"
 REL_REFERENCES = "REFERENCES"
 REL_CALLS = "CALLS"
 REL_STATIC_CALLS = "STATIC_CALLS"
+REL_DECLARES = "DECLARES"
+REL_CONTAINS = "CONTAINS"
+REL_IMPLEMENTS_OPERATION = "IMPLEMENTS_OPERATION"
+REL_EXPOSES_PATH = "EXPOSES_PATH"
+
+YAML_REL_STATS = {
+    "files_seen": 0,
+    "parse_failures": 0,
+    "relationships_emitted": 0,
+}
+
+
+def reset_yaml_rel_stats() -> None:
+    YAML_REL_STATS["files_seen"] = 0
+    YAML_REL_STATS["parse_failures"] = 0
+    YAML_REL_STATS["relationships_emitted"] = 0
+
+
+def get_yaml_rel_stats() -> dict[str, int]:
+    return {
+        "files_seen": int(YAML_REL_STATS["files_seen"]),
+        "parse_failures": int(YAML_REL_STATS["parse_failures"]),
+        "relationships_emitted": int(YAML_REL_STATS["relationships_emitted"]),
+    }
 
 RESOLUTION_CLASS_PROJECT_RESOLVED = "project_resolved"
 RESOLUTION_CLASS_PROJECT_UNRESOLVED = "project_unresolved"
@@ -806,12 +834,176 @@ def extract_js_ts(
     return rels
 
 
+def extract_yaml(
+    text: str,
+    file_row: FileRow,
+    symbols_by_name: dict[str, list[SymbolRow]],
+    symbols_by_file: dict[int, list[SymbolRow]],
+    symbols_by_qualified_name: dict[str, list[SymbolRow]],
+) -> list[Relationship]:
+    YAML_REL_STATS["files_seen"] += 1
+
+    if yaml is None:
+        YAML_REL_STATS["parse_failures"] += 1
+        return []
+
+    try:
+        doc = yaml.safe_load(text)
+    except Exception:
+        YAML_REL_STATS["parse_failures"] += 1
+        return []
+
+    if not isinstance(doc, dict):
+        return []
+
+    rels: list[Relationship] = []
+    source = pick_source_symbol(symbols_by_file, file_row.id)
+
+    seen: set[tuple[str, str, str]] = set()
+
+    def add_rel(
+        rel_type: str,
+        target_name: str,
+        evidence: str,
+        confidence: float,
+        target_kind_hint: str | None = None,
+    ) -> None:
+        key = (rel_type, normalize_target_name(target_name), evidence)
+        if key in seen:
+            return
+        seen.add(key)
+        rels.append(
+            make_rel(
+                rel_type,
+                target_name,
+                file_row,
+                source,
+                symbols_by_name,
+                symbols_by_qualified_name,
+                evidence=evidence,
+                confidence=confidence,
+                target_kind_hint=target_kind_hint,
+            )
+        )
+
+    for top_key in doc.keys():
+        add_rel(
+            REL_DECLARES,
+            str(top_key),
+            evidence=f"top-level:{top_key}",
+            confidence=0.8,
+            target_kind_hint="yaml_keyspace",
+        )
+
+    paths = doc.get("paths")
+    if isinstance(paths, dict):
+        for endpoint, methods in paths.items():
+            if not isinstance(methods, dict):
+                continue
+            for method in methods.keys():
+                method_name = str(method).lower()
+                if method_name not in {"get", "post", "patch", "delete", "put", "head", "options", "trace", "connect"}:
+                    continue
+                op_name = f"{method_name.upper()} {endpoint}"
+                add_rel(
+                    REL_EXPOSES_PATH,
+                    op_name,
+                    evidence=f"paths.{endpoint}.{method_name}",
+                    confidence=0.92,
+                    target_kind_hint="yaml_operation",
+                )
+
+    operations = doc.get("operations")
+    if isinstance(operations, dict):
+        for op_name in operations.keys():
+            add_rel(
+                REL_IMPLEMENTS_OPERATION,
+                str(op_name),
+                evidence=f"operations.{op_name}",
+                confidence=0.85,
+                target_kind_hint="yaml_action",
+            )
+
+    allowed_ops = doc.get("allowed_operations") or doc.get("allowedOperations")
+    if isinstance(allowed_ops, list):
+        for op_name in allowed_ops:
+            add_rel(
+                REL_IMPLEMENTS_OPERATION,
+                str(op_name),
+                evidence=f"allowed_operations.{op_name}",
+                confidence=0.85,
+                target_kind_hint="yaml_action",
+            )
+
+    actions = doc.get("actions")
+    if isinstance(actions, list):
+        for action in actions:
+            if not isinstance(action, dict):
+                continue
+            action_name = action.get("name")
+            if not action_name:
+                continue
+            add_rel(
+                REL_IMPLEMENTS_OPERATION,
+                str(action_name),
+                evidence=f"actions.name.{action_name}",
+                confidence=0.85,
+                target_kind_hint="yaml_action",
+            )
+
+    def walk_refs(node: object, path_parts: list[str]) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                key_str = str(key)
+                next_path = path_parts + [key_str]
+
+                if key_str == "$ref" and isinstance(value, str):
+                    add_rel(
+                        REL_REFERENCES,
+                        value,
+                        evidence=".".join(next_path),
+                        confidence=0.95,
+                        target_kind_hint="yaml_schema",
+                    )
+
+                if key_str in {"x-mappedTo", "mappedTo"} and isinstance(value, str):
+                    add_rel(
+                        REL_REFERENCES,
+                        value,
+                        evidence=".".join(next_path),
+                        confidence=0.9,
+                        target_kind_hint="entity",
+                    )
+
+                if key_str in {"path", "resource"} and isinstance(value, str) and value.startswith("/"):
+                    add_rel(
+                        REL_CONTAINS,
+                        value,
+                        evidence=".".join(next_path),
+                        confidence=0.75,
+                        target_kind_hint="resource",
+                    )
+
+                walk_refs(value, next_path)
+            return
+
+        if isinstance(node, list):
+            for idx, item in enumerate(node):
+                walk_refs(item, path_parts + [str(idx)])
+
+    walk_refs(doc, [])
+
+    YAML_REL_STATS["relationships_emitted"] += len(rels)
+    return rels
+
+
 EXTRACTORS = {
     "php": extract_php,
     "java": extract_java,
     "xml": extract_xml,
     "javascript": extract_js_ts,
     "typescript": extract_js_ts,
+    "yaml": extract_yaml,
 }
 
 
@@ -912,6 +1104,9 @@ def extract_all(
         conn.close()
         return
 
+    if "yaml" in selected_languages:
+        reset_yaml_rel_stats()
+
     if reset:
         reset_relationships(conn)
 
@@ -958,6 +1153,11 @@ def extract_all(
 
     print(f"\n📊 Relationships extracted: {total_inserted}")
     print(f"   Errors:                  {errors}")
+    if "yaml" in selected_languages:
+        yaml_stats = get_yaml_rel_stats()
+        print(f"   YAML files seen:         {yaml_stats.get('files_seen', 0)}")
+        print(f"   YAML parse fail:         {yaml_stats.get('parse_failures', 0)}")
+        print(f"   YAML rels emitted:       {yaml_stats.get('relationships_emitted', 0)}")
 
 
 if __name__ == "__main__":

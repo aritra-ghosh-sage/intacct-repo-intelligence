@@ -10,6 +10,7 @@ from parser.extractors import (
     java_extractor,
     php_extractor,
     sql_extractor,
+    yaml_extractor,
     xslt_extractor,
 )
 
@@ -17,6 +18,7 @@ EXTRACTORS = {
     "java": java_extractor,
     "php":  php_extractor,
     "sql":  sql_extractor,
+    "yaml": yaml_extractor,
     "xslt": xslt_extractor,
 }
 
@@ -60,6 +62,9 @@ def extract_all(only_changed: bool = True, languages: list[str] | None = None):
 
     total_symbols = 0
     errors = 0
+
+    if "yaml" in selected_languages and hasattr(yaml_extractor, "reset_stats"):
+        yaml_extractor.reset_stats()
 
     for row in tqdm(rows, desc="Extracting"):
         file_id = row["id"]
@@ -114,6 +119,11 @@ def extract_all(only_changed: bool = True, languages: list[str] | None = None):
 
     print(f"\n📊 Symbols extracted: {total_symbols}")
     print(f"   Errors:            {errors}")
+    if "yaml" in selected_languages and hasattr(yaml_extractor, "get_stats"):
+        yaml_stats = yaml_extractor.get_stats()
+        print(f"   YAML files seen:   {yaml_stats.get('files_seen', 0)}")
+        print(f"   YAML parse fail:   {yaml_stats.get('parse_failures', 0)}")
+        print(f"   YAML emitted:      {yaml_stats.get('symbols_emitted', 0)}")
 
 
 if __name__ == "__main__":

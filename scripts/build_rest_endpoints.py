@@ -16,6 +16,7 @@ Expected output: ~2,000-3,000 REST endpoints across all OpenAPI specs.
 
 from __future__ import annotations
 
+import re
 import sqlite3
 import sys
 from dataclasses import dataclass
@@ -49,6 +50,8 @@ class BuildStats:
     endpoints_inserted: int = 0
     yaml_parse_failures: int = 0
     no_paths_found: int = 0
+    symbol_fallback_files: int = 0
+    symbol_fallback_endpoints: int = 0
 
 
 def _parse_yaml(file_path: Path) -> tuple[dict[str, Any], bool]:
@@ -87,6 +90,51 @@ def _extract_endpoints_from_yaml(
                 endpoints.append((method_lower.upper(), path_str))
 
     return endpoints
+
+
+def _extract_endpoints_from_symbols(
+    conn: sqlite3.Connection,
+    file_id: int,
+) -> list[tuple[str, str]]:
+    """
+    Reuse parser-emitted yaml_operation symbols as fallback endpoint evidence.
+
+    Expected symbol name format: "METHOD /path".
+    """
+    rows = conn.execute(
+        """
+        SELECT name
+        FROM symbols
+        WHERE file_id = ?
+          AND language = 'yaml'
+          AND kind = 'yaml_operation'
+        ORDER BY name
+        """,
+        (file_id,),
+    ).fetchall()
+
+    out: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    pattern = re.compile(r"^([A-Z]+)\s+(/.+)$")
+
+    for row in rows:
+        symbol_name = str(row["name"] or "").strip()
+        match = pattern.match(symbol_name)
+        if not match:
+            continue
+
+        method = match.group(1).upper()
+        path = match.group(2)
+        if method.lower() not in RECOGNIZED_METHODS:
+            continue
+
+        pair = (method, path)
+        if pair in seen:
+            continue
+        seen.add(pair)
+        out.append(pair)
+
+    return out
 
 
 def _insert_endpoints(
@@ -206,13 +254,24 @@ def build(
             doc, parsed_ok = _parse_yaml(yaml_file_path)
             if not parsed_ok:
                 stats.yaml_parse_failures += 1
-                continue
 
-            # Extract endpoints from the document
-            endpoints = _extract_endpoints_from_yaml(doc)
+            # Extract endpoints from the document first.
+            endpoints = _extract_endpoints_from_yaml(doc) if parsed_ok else []
+
+            # Reuse YAML parser symbols as deterministic fallback.
+            fallback_used = False
+            if not endpoints:
+                endpoints = _extract_endpoints_from_symbols(conn, int(file_id))
+                if endpoints:
+                    fallback_used = True
+
             if not endpoints:
                 stats.no_paths_found += 1
                 continue
+
+            if fallback_used:
+                stats.symbol_fallback_files += 1
+                stats.symbol_fallback_endpoints += len(endpoints)
 
             # Prepare data for insertion: (method, path, file_id, entity_id)
             # entity_id is populated only when file_id resolves deterministically.
@@ -277,6 +336,8 @@ def build_command(
     click.echo(f"✅ Specs processed:          {stats.specs_processed}")
     click.echo(f"✅ REST endpoints inserted:  {stats.endpoints_inserted}")
     click.echo(f"⚠️  No paths found:          {stats.no_paths_found}")
+    click.echo(f"♻️  Symbol fallback files:    {stats.symbol_fallback_files}")
+    click.echo(f"♻️  Symbol fallback endpoints:{stats.symbol_fallback_endpoints}")
     click.echo(f"❌ YAML parse failures:      {stats.yaml_parse_failures}")
 
 

@@ -185,6 +185,58 @@ def get_entity_yaml_paths(conn: sqlite3.Connection, entity_id: int) -> list[str]
 
     return [r["source_text"] for r in rows]
 
+
+def get_yaml_actions_from_symbols_for_path(
+    conn: sqlite3.Connection,
+    entity_id: int,
+    yaml_path: str,
+) -> list[tuple[str, str]]:
+    """
+    Reuse parser-emitted YAML symbols when direct YAML parsing is unavailable.
+
+    Returns normalized action candidates as (action_name, evidence).
+    """
+    rows = conn.execute(
+        """
+        SELECT DISTINCT s.name, s.kind
+        FROM entity_mappings em
+        JOIN files f
+          ON f.path = em.source_text
+        JOIN symbols s
+          ON s.file_id = f.id
+        WHERE em.entity_id = ?
+          AND em.source_text = ?
+          AND s.language = 'yaml'
+          AND s.kind IN ('yaml_action', 'yaml_operation')
+        ORDER BY s.kind, s.name
+        """,
+        (entity_id, yaml_path),
+    ).fetchall()
+
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    for row in rows:
+        name = str(row["name"] or "").strip()
+        kind = str(row["kind"] or "")
+        if not name:
+            continue
+
+        if kind == "yaml_operation" and " " in name:
+            # Operation names are stored as "METHOD /path".
+            method = name.split(" ", 1)[0].strip()
+            normalized = normalize_action(method)
+        else:
+            normalized = normalize_action(name)
+
+        if not normalized or normalized in seen:
+            continue
+
+        seen.add(normalized)
+        out.append((normalized, f"symbol:{kind}:{name}"))
+
+    return out
+
 def read_yaml_file(repo_root: Path, rel_path: str) -> dict[str, Any] | None:
     if not yaml:
         return None
@@ -327,11 +379,26 @@ def build_workflows_for_entity(
     yaml_paths = get_entity_yaml_paths(conn, entity_id)
 
     for yaml_path in yaml_paths:
-        doc = read_yaml_file(repo_root, yaml_path)
-        if not doc:
-            continue
+        actions: list[tuple[str, str]] = []
+        action_source = "yaml"
 
-        actions = extract_yaml_actions(doc)
+        try:
+            doc = read_yaml_file(repo_root, yaml_path)
+        except click.ClickException:
+            doc = None
+
+        if doc:
+            actions = extract_yaml_actions(doc)
+
+        if not actions:
+            actions = get_yaml_actions_from_symbols_for_path(
+                conn=conn,
+                entity_id=entity_id,
+                yaml_path=yaml_path,
+            )
+            if actions:
+                action_source = "yaml_symbols"
+
         if not actions:
             continue
 
@@ -340,10 +407,10 @@ def build_workflows_for_entity(
             entity_id=entity_id,
             name=f"{entity_name} allowed operations",
             workflow_type="allowed_operations",
-            source_kind="yaml",
+            source_kind="yaml" if action_source == "yaml" else "inference",
             source_file=yaml_path,
             source_symbol_id=None,
-            reason=f"Discovered from {yaml_path}",
+            reason=f"Discovered from {yaml_path} via {action_source}",
         )
 
         if wf_id is None:
