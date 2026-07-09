@@ -1,0 +1,39 @@
+{"category": "policy_eop_missing_operation", "file_path": "app/source/common/Policies/ap.pol", "policy_name": "Vendor visibility", "value_key": "add", "op_key": "ap/lists/vendorvisibility/create"}
+{"category": "policy_eop_missing_operation", "file_path": "app/source/common/Policies/gl.pol", "policy_name": "Budget Report", "value_key": "readonly", "op_key": "gl/reports/glbudgetitem"}
+{"category": "policy_eop_missing_operation", "file_path": "app/source/common/Policies/pa.pol", "policy_name": "Categories", "value_key": "list", "op_key": "pa/lists/category"}
+{"category": "policy_eop_missing_operation", "file_path": "app/source/common/Policies/pa.pol", "policy_name": "Categories", "value_key": "readonly", "op_key": "pa/lists/category/view"}
+{"category": "policy_eop_missing_operation", "file_path": "app/source/common/Policies/pa.pol", "policy_name": "Categories", "value_key": "add", "op_key": "pa/lists/category/create"}
+{"category": "policy_eop_missing_operation", "file_path": "app/source/common/Policies/pa.pol", "policy_name": "Categories", "value_key": "modify", "op_key": "pa/lists/category/edit"}
+{"category": "policy_eop_missing_operation", "file_path": "app/source/common/Policies/pa.pol", "policy_name": "Categories", "value_key": "delete", "op_key": "pa/lists/category/delete"}
+{"category": "policy_eop_missing_operation", "file_path": "app/source/common/Policies/pa.pol", "policy_name": "Category Groups", "value_key": "list", "op_key": "pa/lists/categorygroup"}
+{"category": "policy_eop_missing_operation", "file_path": "app/source/common/Policies/pa.pol", "policy_name": "Category Groups", "value_key": "readonly", "op_key": "pa/lists/categorygroup/view"}
+{"category": "policy_eop_missing_operation", "file_path": "app/source/common/Policies/pa.pol", "policy_name": "Category Groups", "value_key": "add", "op_key": "pa/lists/categorygroup/create"}
+{"category": "policy_eop_missing_operation", "file_path": "app/source/common/Policies/pa.pol", "policy_name": "Category Groups", "value_key": "modify", "op_key": "pa/lists/categorygroup/edit"}
+{"category": "policy_eop_missing_operation", "file_path": "app/source/common/Policies/pa.pol", "policy_name": "Category Groups", "value_key": "delete", "op_key": "pa/lists/categorygroup/delete"}
+{"category": "policy_eop_missing_operation", "file_path": "app/source/common/Policies/so.pol", "policy_name": "Project Contract Billing Invoice Summary", "value_key": "list", "op_key": "so/lists/pcbinvsummary"}
+{"category": "policy_eop_missing_operation", "file_path": "app/source/common/Policies/so.pol", "policy_name": "Project Contract Billing Invoice Detail", "value_key": "list", "op_key": "so/lists/pcbinvdetail"}
+{"category": "menu_key_missing_operation", "file_path": "app/source/common/Menus/ap_2011.menu", "item_path": "Tasks/Advances/Add", "op_key": "ap/activities/apadvance/create"}
+{"category": "menu_key_missing_operation", "file_path": "app/source/common/Menus/ap_2011.menu", "item_path": "Tasks/Advances/submenus/Add", "op_key": "ap/activities/apadvance/create"}
+{"category": "menu_key_missing_operation", "file_path": "app/source/common/Menus/ar_2011.menu", "item_path": "Setup/Tax Detail", "op_key": "ar/lists/taxdetail"}
+{"category": "menu_key_missing_operation", "file_path": "app/source/common/Menus/ar_2011.menu", "item_path": "Setup/Tax Schedule", "op_key": "ar/lists/taxschedule"}
+{"category": "menu_key_missing_operation", "file_path": "app/source/common/Menus/budg_2015.menu", "item_path": "BudgetTasks/Budgets/Budgets repository", "op_key": "GlBudgetHandler::getInstance()->getSecurityKeyForLists()"}
+{"category": "menu_key_missing_operation", "file_path": "app/source/common/Menus/budg_2015.menu", "item_path": "ReportTasks/Reports/Budget", "op_key": "GlBudgetHandler::getInstance()->getSecurityKeyForReports()"}
+{"category": "menu_key_missing_operation", "file_path": "app/source/common/Menus/cn_2011.menu", "item_path": "Setup/Renewal Templates", "op_key": "cn/lists/renewalmacro"}
+{"category": "menu_key_missing_operation", "file_path": "app/source/common/Menus/co_2011.menu", "item_path": "Shortcuts/Class", "op_key": "co/class/create"}
+{"category": "menu_key_missing_operation", "file_path": "app/source/common/Menus/co_2015.menu", "item_path": "Setup2/Dimensions/Assets", "op_key": "fa/lists/fixedasset"}
+{"category": "menu_key_missing_operation", "file_path": "app/source/common/Menus/gl_2011.menu", "item_path": "Reports/Budget", "op_key": "GlBudgetHandler::getInstance()->getSecurityKeyForReports()"}
+{"category": "menu_key_missing_operation", "file_path": "app/source/common/Menus/gl_2015.menu", "item_path": "Reports/ReportsList/Budget", "op_key": "GlBudgetHandler::getInstance()->getSecurityKeyForReports()"}
+{"category": "menu_key_missing_operation", "file_path": "app/source/common/Menus/inv_2011.menu", "item_path": "Reports/Landed Cost Adjustment", "op_key": "inv/reports/landedcostadjustment"}
+{"category": "menu_key_missing_operation", "file_path": "app/source/common/Menus/inv_2015.menu", "item_path": "Reports/ReportsList/Landed Cost Adjustment", "op_key": "inv/reports/landedcostadjustment"}
+{"category": "menu_key_missing_operation", "file_path": "app/source/common/Menus/po_2011.menu", "item_path": "Setup/Price Schedules", "op_key": "po/lists/priceschedule"}
+{"category": "menu_key_missing_operation", "file_path": "app/source/common/Menus/po_2011.menu", "item_path": "Setup/Tax Detail", "op_key": "po/lists/taxdetail"}
+{"category": "menu_key_missing_operation", "file_path": "app/source/common/Menus/po_2011.menu", "item_path": "Setup/Tax Schedule", "op_key": "po/lists/taxschedule"}
+{"category": "menu_key_missing_operation", "file_path": "app/source/common/Menus/po_2011.menu", "item_path": "Setup/Tax Schedule Map", "op_key": "po/lists/taxschedmap"}
+{"category": "menu_key_missing_operation", "file_path": "app/source/common/Menus/reportcenter_2015.menu", "item_path": "Setup2/Dimension groups/Project Groups", "op_key": "getKeyForReportProjectGroupsMenu()"}
+{"category": "menu_key_missing_operation", "file_path": "app/source/common/Menus/reportcenter_2015.menu", "item_path": "Setup2/Dimension groups/Loan account Groups", "op_key": "loan/lists/loanaccountgroup"}
+{"category": "menu_key_missing_operation", "file_path": "app/source/common/Menus/reportcenter_2015.menu", "item_path": "Setup3/More/Budgets", "op_key": "GlBudgetHandler::getInstance()->getSecurityKeyForLists()"}
+{"category": "menu_key_missing_operation", "file_path": "app/source/common/Menus/so_2011.menu", "item_path": "Setup/Price Schedules", "op_key": "so/lists/priceschedule"}
+{"category": "menu_key_missing_operation", "file_path": "app/source/common/Menus/so_2011.menu", "item_path": "Setup/Tax Detail", "op_key": "so/lists/taxdetail"}
+{"category": "menu_key_missing_operation", "file_path": "app/source/common/Menus/so_2011.menu", "item_path": "Setup/Tax Schedule", "op_key": "so/lists/taxschedule"}
+{"category": "menu_key_missing_operation", "file_path": "app/source/common/Menus/so_2011.menu", "item_path": "Setup/Tax Schedule Map", "op_key": "so/lists/taxschedmap"}
+{"category": "menu_key_missing_operation", "file_path": "app/source/common/Menus/tax_2015.menu", "item_path": "Setup/Tax groups/Item Tax Group", "op_key": "tax_2015_ItemTaxGroup()"}

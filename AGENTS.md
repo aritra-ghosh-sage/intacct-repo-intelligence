@@ -46,6 +46,7 @@ python scripts/build_entities.py build
 python scripts/build_entity_roots.py build
 python -m parser.extract_relationships --repo-root "/home/aritraghosh/projects/main"
 python scripts/build_workflows.py build --db catalog/catalog.db --repo-root "/home/aritraghosh/projects/main"
+python scripts/build_security_mappings.py build --db catalog/catalog.db --repo-root "/home/aritraghosh/projects/main"
 python scripts/build_ui_companions.py --db catalog/catalog.db
 python scripts/scan_openapispec.py scan --db catalog/catalog.db --repo-root "/home/aritraghosh/projects/main"
 python scripts/link_openapispec.py link --db catalog/catalog.db
@@ -67,6 +68,8 @@ OpenAPI linking order matters:
 python scripts/query_entity.py entity APBill
 python scripts/query_entity.py root-symbols APBill
 python scripts/query_relationships.py stats
+python scripts/query_security.py op ee/lists/employee
+python scripts/query_security.py menu ee/lists/employee
 ```
 
 ## Working Conventions
@@ -108,6 +111,7 @@ See [validation/phase2d1_remediation.md](validation/phase2d1_remediation.md) for
 python validation/validate_phase2b.py --db catalog/catalog.db
 python validation/validate_phase2c1.py --db catalog/catalog.db
 python validation/validate_phase2d.py --db catalog/catalog.db
+python validation/validate_security_mappings.py --db catalog/catalog.db
 ```
 
 ## Troubleshooting Queries
@@ -138,6 +142,14 @@ python scripts/query_catalog.py sql \
 # Relationship target_kind distribution to inspect unknown/cqry leakage.
 python scripts/query_catalog.py sql \
 	"SELECT target_kind, COUNT(*) AS cnt FROM relationships GROUP BY target_kind ORDER BY cnt DESC"
+
+# Security policy eops keys with no operation mapping.
+python scripts/query_catalog.py sql \
+	"SELECT DISTINCT op_key FROM security_policy_eops WHERE op_key NOT IN (SELECT op_key FROM security_operations) ORDER BY op_key LIMIT 200"
+
+# Menu keys with unresolved operation links.
+python scripts/query_catalog.py sql \
+	"SELECT m.source_file, i.item_path, i.menu_key FROM security_menu_items i JOIN security_menus m ON m.id = i.menu_id LEFT JOIN security_operations o ON o.op_key = i.menu_key WHERE i.menu_key IS NOT NULL AND o.id IS NULL ORDER BY m.source_file, i.item_path LIMIT 200"
 ```
 
 ## Next Customizations To Consider

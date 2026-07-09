@@ -248,6 +248,134 @@ CREATE INDEX IF NOT EXISTS idx_openapispec_slug ON openapispec_index(slug);
 
 CREATE INDEX IF NOT EXISTS idx_openapispec_x_mapped_to ON openapispec_index(x_mapped_to);
 
+CREATE TABLE IF NOT EXISTS security_operations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    op_key TEXT NOT NULL,
+    op_numeric_id INTEGER,
+    title TEXT,
+    action TEXT,
+    script TEXT,
+    force_mode TEXT,
+    secure_only INTEGER,
+    allow_dev_env_only INTEGER,
+    source_file TEXT NOT NULL,
+    source_line INTEGER,
+    source_kind TEXT NOT NULL,
+    raw_hash TEXT,
+    UNIQUE(op_key, op_numeric_id, source_file, source_kind)
+);
+
+CREATE INDEX IF NOT EXISTS idx_security_operations_key ON security_operations(op_key);
+CREATE INDEX IF NOT EXISTS idx_security_operations_id ON security_operations(op_numeric_id);
+
+CREATE TABLE IF NOT EXISTS security_operation_allowops (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    operation_id INTEGER NOT NULL,
+    allowed_op_key TEXT NOT NULL,
+    source_file TEXT NOT NULL,
+    source_line INTEGER,
+    FOREIGN KEY(operation_id) REFERENCES security_operations(id) ON DELETE CASCADE,
+    UNIQUE(operation_id, allowed_op_key, source_file)
+);
+
+CREATE INDEX IF NOT EXISTS idx_security_allowops_allowed_key
+    ON security_operation_allowops(allowed_op_key);
+
+CREATE TABLE IF NOT EXISTS security_policies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    policy_name TEXT NOT NULL,
+    module TEXT,
+    label TEXT,
+    source_file TEXT NOT NULL,
+    source_line INTEGER,
+    UNIQUE(policy_name, source_file)
+);
+
+CREATE INDEX IF NOT EXISTS idx_security_policies_name ON security_policies(policy_name);
+CREATE INDEX IF NOT EXISTS idx_security_policies_module ON security_policies(module);
+
+CREATE TABLE IF NOT EXISTS security_policy_values (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    policy_id INTEGER NOT NULL,
+    value_key TEXT NOT NULL,
+    display TEXT,
+    value_label TEXT,
+    source_line INTEGER,
+    FOREIGN KEY(policy_id) REFERENCES security_policies(id) ON DELETE CASCADE,
+    UNIQUE(policy_id, value_key)
+);
+
+CREATE TABLE IF NOT EXISTS security_policy_eops (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    policy_value_id INTEGER NOT NULL,
+    op_key TEXT NOT NULL,
+    source_line INTEGER,
+    FOREIGN KEY(policy_value_id) REFERENCES security_policy_values(id) ON DELETE CASCADE,
+    UNIQUE(policy_value_id, op_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_security_policy_eops_key ON security_policy_eops(op_key);
+
+CREATE TABLE IF NOT EXISTS security_menus (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    module TEXT,
+    menu_name TEXT,
+    source_file TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS security_menu_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    menu_id INTEGER NOT NULL,
+    item_path TEXT NOT NULL,
+    item_name TEXT NOT NULL,
+    menu_item_id TEXT,
+    menu_script TEXT,
+    menu_key TEXT,
+    source_line INTEGER,
+    FOREIGN KEY(menu_id) REFERENCES security_menus(id) ON DELETE CASCADE,
+    UNIQUE(menu_id, item_path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_security_menu_items_key ON security_menu_items(menu_key);
+
+CREATE TABLE IF NOT EXISTS security_menu_op_links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    menu_item_id INTEGER NOT NULL,
+    op_key TEXT NOT NULL,
+    operation_id INTEGER,
+    resolution_reason TEXT NOT NULL,
+    FOREIGN KEY(menu_item_id) REFERENCES security_menu_items(id) ON DELETE CASCADE,
+    FOREIGN KEY(operation_id) REFERENCES security_operations(id) ON DELETE SET NULL,
+    UNIQUE(menu_item_id, op_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_security_menu_op_links_op_key
+    ON security_menu_op_links(op_key);
+
+CREATE TABLE IF NOT EXISTS dbschema_tables (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    table_name TEXT NOT NULL,
+    primary_keys TEXT,
+    source_file TEXT NOT NULL,
+    source_line INTEGER,
+    raw_hash TEXT,
+    UNIQUE(table_name, source_file)
+);
+
+CREATE INDEX IF NOT EXISTS idx_dbschema_tables_name ON dbschema_tables(table_name);
+
+CREATE TABLE IF NOT EXISTS dbschema_fields (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dbschema_table_id INTEGER NOT NULL,
+    field_name TEXT NOT NULL,
+    field_type TEXT,
+    source_line INTEGER,
+    FOREIGN KEY(dbschema_table_id) REFERENCES dbschema_tables(id) ON DELETE CASCADE,
+    UNIQUE(dbschema_table_id, field_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_dbschema_fields_name ON dbschema_fields(field_name);
+
 
 DROP VIEW IF EXISTS graph_ready_entities;
 
