@@ -168,6 +168,23 @@ def _infer_title(doc: dict[str, Any] | None) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
+def _infer_x_mapped_to(doc: dict[str, Any] | None) -> str | None:
+    if not doc:
+        return None
+
+    direct = doc.get("x-mappedTo")
+    if isinstance(direct, str) and direct.strip():
+        return direct.strip()
+
+    intacct_def = doc.get("x-intacct-definition")
+    if isinstance(intacct_def, dict):
+        mapped_to = intacct_def.get("mappedTo")
+        if isinstance(mapped_to, str) and mapped_to.strip():
+            return mapped_to.strip()
+
+    return None
+
+
 def scan_openapispec(conn: sqlite3.Connection, repo_root: Path) -> ScanStats:
     if yaml is None:
         raise click.ClickException(
@@ -213,13 +230,14 @@ def scan_openapispec(conn: sqlite3.Connection, repo_root: Path) -> ScanStats:
                 slug,
                 version,
                 kind,
+                x_mapped_to,
                 canonical_name,
                 resource_path,
                 title,
                 state,
                 last_seen_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', CURRENT_TIMESTAMP)
             """,
             (
                 file_id,
@@ -228,6 +246,7 @@ def scan_openapispec(conn: sqlite3.Connection, repo_root: Path) -> ScanStats:
                 slug,
                 _infer_version(filename),
                 _infer_kind(filename),
+                _infer_x_mapped_to(doc),
                 _infer_canonical_name(doc, slug),
                 _infer_resource_path(doc),
                 _infer_title(doc),

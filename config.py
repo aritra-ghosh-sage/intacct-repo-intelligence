@@ -8,6 +8,7 @@ INCLUDE_EXTENSIONS = {
     ".php",
     ".ent",
     ".cqry",
+    ".qry",
     ".cls",
     ".inc",
     ".phtml",
@@ -32,5 +33,11 @@ EXCLUDE_DIRS = {
     "target",
     ".idea",
     ".vscode",
-    "coverage"
+    "coverage",
+    ".venv*",
+    "docs",
+    ".codegraph",
+    ".gemini",
+    ".github",
+    ".claude"
 }

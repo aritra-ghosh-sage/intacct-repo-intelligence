@@ -93,6 +93,7 @@ SUPPORTED_EXTENSIONS = {
     ".inc": "php",
     ".ent": "php",
     ".cqry": "php",
+    ".qry": "php",
     ".java": "java",
     ".xml": "xml",
     ".xsl": "xslt",

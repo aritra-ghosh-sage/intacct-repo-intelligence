@@ -3,8 +3,8 @@
 from tree_sitter_languages import get_parser
 from .base import Symbol
 
-# Path B: Delegate .cqry files to dedicated extractor.
-# .cqry files have a specific PHP structure (query definition arrays) that
+# Path B: Delegate .cqry/.qry files to dedicated extractor.
+# .cqry/.qry files have a specific PHP structure (query definition arrays) that
 # doesn't parse well with the standard PHP tree-sitter grammar.
 # See cqry_extractor.py for .cqry-specific extraction logic.
 
@@ -23,8 +23,8 @@ def _find_name(node, source: bytes) -> str | None:
 
 
 def extract(source: bytes, file_path: str = "") -> list:
-    # If this is a .cqry file, delegate to the dedicated extractor
-    if file_path.endswith(".cqry"):
+    # If this is a .cqry or .qry file, delegate to the dedicated extractor.
+    if file_path.endswith((".cqry", ".qry")):
         from . import cqry_extractor
         return cqry_extractor.extract(source)
     

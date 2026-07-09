@@ -22,10 +22,12 @@ import json
 import re
 from collections import Counter
 from dataclasses import dataclass, asdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
-CLASS_EXTS = (".cls", ".php", ".ent", ".inc", ".cqry", ".xslt", ".phtml", ".html", ".js")
+CLASS_EXTS = (".cls", ".php", ".ent", ".inc", ".cqry", ".qry", ".xslt", ".phtml", ".html", ".js")
+MISSING_METADATA_LOG_REL = Path("outputs/missing_metadata.jsonl")
 SCHEMA_FILE_RE = re.compile(
     r"^(?P<kind>objects|services)\.(?P<prefix>.+?)\.(?P<object>[^.]+)\.s1\.schema\.yaml$"
 )
@@ -58,6 +60,8 @@ class EntityDefinition:
     entity_name: str
     ent_file: Optional[str]
     module: Optional[str]
+    module_source: Optional[str]
+    module_path_hint: Optional[str]
     table: Optional[str]
     view: Optional[str]
     dummy: bool
@@ -701,21 +705,22 @@ def _find_schema_array_start(text: str) -> Optional[int]:
     return None
 
 
-def parse_top_level_ent_metadata(ent_path: Path) -> Tuple[Optional[str], Optional[str], bool]:
+def parse_top_level_ent_metadata(ent_path: Path) -> Tuple[Optional[str], Optional[str], Optional[str], bool]:
     """
-    Parse top-level 'table', 'view', and 'dummy' from .ent (PHP array syntax).
+    Parse top-level 'table', 'view', 'module', and 'dummy' from .ent (PHP array syntax).
     """
     try:
         text = ent_path.read_text(encoding="utf-8", errors="ignore")
     except OSError:
-        return None, None, False
+        return None, None, None, False
 
     start = _find_schema_array_start(text)
     if start is None:
-        return None, None, False
+        return None, None, None, False
 
     table: Optional[str] = None
     view: Optional[str] = None
+    module: Optional[str] = None
     dummy: bool = False
 
     i = start + 1
@@ -772,6 +777,8 @@ def parse_top_level_ent_metadata(ent_path: Path) -> Tuple[Optional[str], Optiona
                         table = rhs_value
                     elif key_low == "view" and rhs_value and view is None:
                         view = rhs_value
+                    elif key_low == "module" and rhs_value and module is None:
+                        module = rhs_value
                     elif key_low == "dummy":
                         if rhs_bool is not None:
                             dummy = rhs_bool
@@ -792,7 +799,14 @@ def parse_top_level_ent_metadata(ent_path: Path) -> Tuple[Optional[str], Optiona
 
         i += 1
 
-    return table, view, dummy
+    return table, view, module, dummy
+
+
+def _write_missing_metadata_log(log_path: Path, records: List[dict]) -> None:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("w", encoding="utf-8") as f:
+        for record in records:
+            f.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
 
 
 def scan(repo_root: Path, out_file: Path) -> int:
@@ -807,6 +821,7 @@ def scan(repo_root: Path, out_file: Path) -> int:
     workflow_index = build_workflow_index(repo_root)
     service_index, service_name_index, service_schema_index = build_service_indexes(repo_root)
     out_file.parent.mkdir(parents=True, exist_ok=True)
+    missing_metadata_records: List[dict] = []
 
     count = 0
     consumed_service_schema_files = set()
@@ -819,7 +834,25 @@ def scan(repo_root: Path, out_file: Path) -> int:
                 repo_root=repo_root,
                 prefix_acronyms=prefix_acronyms,
             )
-            table, view, dummy = parse_top_level_ent_metadata(ent_path)
+            table, view, module_from_ent, dummy = parse_top_level_ent_metadata(ent_path)
+            module_path_hint = find_module_from_ent_path(ent_path, repo_root)
+            module_value = module_from_ent
+            module_source = "ent_metadata" if module_from_ent else None
+
+            if not module_from_ent:
+                missing_metadata_records.append(
+                    {
+                        "context": {
+                            "module_path_hint": module_path_hint,
+                        },
+                        "entity_name": canonical_name,
+                        "file_path": to_repo_relative(ent_path, repo_root),
+                        "reason": "missing module key in top-level kSchemas definition",
+                        "source": "scan_ent_files",
+                        "stage": "module_extraction",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
 
             openapi_mapping = openapi_index.get(canonical_name.lower())
             if openapi_mapping is None:
@@ -916,7 +949,9 @@ def scan(repo_root: Path, out_file: Path) -> int:
             row = EntityDefinition(
                 entity_name=canonical_name,
                 ent_file=to_repo_relative(ent_path, repo_root),
-                module=find_module_from_ent_path(ent_path, repo_root),
+                module=module_value,
+                module_source=module_source,
+                module_path_hint=module_path_hint,
                 table=table,
                 view=view,
                 dummy=dummy,
@@ -966,6 +1001,8 @@ def scan(repo_root: Path, out_file: Path) -> int:
                 entity_name=synthetic_entity_name or object_token,
                 ent_file=None,
                 module=None,
+                module_source=None,
+                module_path_hint=None,
                 table=None,
                 view=None,
                 dummy=False,
@@ -1000,6 +1037,8 @@ def scan(repo_root: Path, out_file: Path) -> int:
             )
             f.write(json.dumps(asdict(row), ensure_ascii=False, sort_keys=True) + "\n")
             count += 1
+
+            _write_missing_metadata_log((repo_root / MISSING_METADATA_LOG_REL).resolve(), missing_metadata_records)
 
     return count
 

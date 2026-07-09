@@ -127,6 +127,17 @@ If multi-step orchestration evidence is discovered:
 
 Then Option B should be reconsidered with concrete source evidence.
 
+## Source-of-Truth Boundary
+
+OpenAPI linking is DB-first by design:
+
+- Runtime linker source: `entity_nodes` + `openapispec_index`
+- Deterministic priority: `x_mapped_to` match first, then heuristic name/module fallback
+- `entity_definitions.jsonl` role: diagnostics/reconciliation only (not runtime linkage)
+
+This keeps the linking path reproducible after scans/migrations and avoids coupling runtime
+link decisions to generated JSONL artifacts.
+
 ---
 
 **Document Status:** Final Decision Recorded  

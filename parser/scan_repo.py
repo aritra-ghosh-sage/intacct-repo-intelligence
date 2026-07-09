@@ -24,6 +24,7 @@ def detect_language(path: str) -> str:
         ".cls": "php",
         ".phtml": "php",
         ".cqry": "php",
+        ".qry": "php",
         ".js": "javascript",
         ".ts": "typescript",
         ".sql": "sql",

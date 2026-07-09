@@ -2,21 +2,26 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import sys
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 import click
 
 try:
     from catalog.db import get_connection
+    from config import REPO_PATH
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from catalog.db import get_connection
+    from config import REPO_PATH
 
 DEFAULT_DB = "catalog/catalog.db"
+MISSING_METADATA_LOG_REL = Path("outputs/missing_metadata.jsonl")
 OPENAPI_MAPPING_TYPES = [
     "openapispec_schema",
     "openapispec_operations",
@@ -76,6 +81,13 @@ MODULE_SCOPE_FALLBACKS: dict[str, list[str]] = {
 class LinkStats:
     mappings_inserted: int = 0
     unmatched_rows: int = 0
+    mapped_to_matches: int = 0
+    mapped_to_unresolved: int = 0
+    mapped_to_suppressed: int = 0
+    heuristic_total: int = 0
+    heuristic_suppressed_expected_missing_mapped_to: int = 0
+    heuristic_logged: int = 0
+    heuristic_suppressed_by_class: dict[str, int] = field(default_factory=dict)
 
 
 def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
@@ -102,6 +114,17 @@ def _get_entities_by_name(conn: sqlite3.Connection) -> dict[str, dict[str, list[
         key = _normalize_name(name)
         entities_by_module.setdefault(module, {}).setdefault(key, []).append(int(row["id"]))
     return entities_by_module
+
+
+def _get_entities_across_modules(
+    entities_by_module: dict[str, dict[str, list[int]]],
+) -> dict[str, list[tuple[int, str]]]:
+    by_name: dict[str, list[tuple[int, str]]] = {}
+    for module, names in entities_by_module.items():
+        for normalized_name, entity_ids in names.items():
+            for entity_id in entity_ids:
+                by_name.setdefault(normalized_name, []).append((entity_id, module))
+    return by_name
 
 
 def _normalize_name(value: str) -> str:
@@ -290,7 +313,191 @@ def _insert_mapping(
     return cur.rowcount > 0
 
 
-def _link_openapispec(conn: sqlite3.Connection) -> LinkStats:
+def _resolve_mapped_to_entity(
+    mapped_to: str,
+    module_keys: list[str],
+    entities_across_modules: dict[str, list[tuple[int, str]]],
+) -> int | None:
+    key = _normalize_name(mapped_to)
+    if not key:
+        return None
+
+    candidates = entities_across_modules.get(key, [])
+    if len(candidates) == 1:
+        return candidates[0][0]
+
+    if len(candidates) > 1:
+        scoped = [entity_id for entity_id, module in candidates if module in module_keys]
+        if len(scoped) == 1:
+            return scoped[0]
+
+    return None
+
+
+def _append_missing_metadata_records(repo_root: Path, records: list[dict]) -> None:
+    if not records:
+        return
+
+    log_path = (repo_root / MISSING_METADATA_LOG_REL).resolve()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("a", encoding="utf-8") as f:
+        for record in records:
+            f.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def _load_valid_ent_stems(repo_path: Path) -> set[str]:
+    app_source_dir = repo_path / "app" / "source"
+    if not app_source_dir.exists():
+        return set()
+
+    return {
+        _normalize_name(path.stem)
+        for path in app_source_dir.rglob("*.ent")
+        if path.stem
+    }
+
+
+def _expected_missing_mapped_to_class(file_path: str) -> str | None:
+    file_name = Path(file_path or "").name.lower()
+    if not file_name:
+        return None
+    if file_name.endswith(".uimeta.yaml"):
+        return "uimeta"
+    if file_name.endswith(".history.yaml"):
+        return "history"
+    if file_name.endswith(".api.yaml"):
+        return "api"
+    if file_name.endswith(".view.schema.yaml"):
+        return "view_schema"
+    if file_name.endswith(".view.yaml"):
+        return "view"
+    if file_name.startswith("workflows.") and file_name.endswith(".yaml"):
+        return "workflows"
+    if file_name.startswith("services.") and file_name.endswith(".yaml"):
+        return "services"
+    return None
+
+
+def _should_suppress_mapped_to_log(mapped_to: str, valid_ent_stems: set[str]) -> bool:
+    normalized_mapped_to = _normalize_name(mapped_to)
+    if mapped_to.strip().lower() == "__custom__":
+        return True
+    if not normalized_mapped_to:
+        return True
+    return normalized_mapped_to not in valid_ent_stems
+
+
+def _read_entity_definitions_jsonl(jsonl_path: Path) -> list[dict]:
+    rows: list[dict] = []
+    if not jsonl_path.exists():
+        return rows
+
+    with jsonl_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(data, dict):
+                rows.append(data)
+    return rows
+
+
+def _reconcile_with_entity_definitions(
+    conn: sqlite3.Connection,
+    jsonl_path: Path,
+) -> list[dict]:
+    diagnostics: list[dict] = []
+    now = datetime.now(timezone.utc).isoformat()
+    rows = _read_entity_definitions_jsonl(jsonl_path)
+
+    by_mapped_to_jsonl: dict[str, dict] = {}
+    for row in rows:
+        mapped_to = str(row.get("x_mapped_to") or "").strip().lower()
+        if mapped_to and mapped_to not in by_mapped_to_jsonl:
+            by_mapped_to_jsonl[mapped_to] = row
+
+    openapi_rows = conn.execute(
+        """
+        SELECT id, file_path, module, x_mapped_to
+        FROM openapispec_index
+        WHERE state = 'active' AND COALESCE(TRIM(x_mapped_to), '') <> ''
+        """
+    ).fetchall()
+
+    seen_db_mapped_to: set[str] = set()
+    for row in openapi_rows:
+        mapped_to = str(row["x_mapped_to"] or "").strip().lower()
+        if not mapped_to:
+            continue
+        seen_db_mapped_to.add(mapped_to)
+
+        jsonl_row = by_mapped_to_jsonl.get(mapped_to)
+        if not jsonl_row:
+            diagnostics.append(
+                {
+                    "context": {
+                        "jsonl_path": jsonl_path.as_posix(),
+                        "openapispec_file": row["file_path"],
+                        "openapispec_id": row["id"],
+                    },
+                    "entity_name": None,
+                    "file_path": row["file_path"],
+                    "reason": f"x_mapped_to '{mapped_to}' present in openapispec_index but missing in entity_definitions",
+                    "source": "link_openapispec",
+                    "stage": "reconcile_jsonl",
+                    "timestamp": now,
+                }
+            )
+            continue
+
+        jsonl_module = str(jsonl_row.get("openapi_module") or "").strip().lower()
+        db_module = str(row["module"] or "").strip().lower()
+        if jsonl_module and db_module and jsonl_module != db_module:
+            diagnostics.append(
+                {
+                    "context": {
+                        "jsonl_openapi_module": jsonl_module,
+                        "jsonl_path": jsonl_path.as_posix(),
+                        "openapispec_id": row["id"],
+                    },
+                    "entity_name": jsonl_row.get("entity_name"),
+                    "file_path": row["file_path"],
+                    "reason": f"module mismatch for x_mapped_to '{mapped_to}': db='{db_module}' jsonl='{jsonl_module}'",
+                    "source": "link_openapispec",
+                    "stage": "reconcile_jsonl",
+                    "timestamp": now,
+                }
+            )
+
+    for mapped_to, row in by_mapped_to_jsonl.items():
+        if mapped_to in seen_db_mapped_to:
+            continue
+        diagnostics.append(
+            {
+                "context": {
+                    "jsonl_path": jsonl_path.as_posix(),
+                },
+                "entity_name": row.get("entity_name"),
+                "file_path": row.get("ent_file"),
+                "reason": f"x_mapped_to '{mapped_to}' present in entity_definitions but missing in openapispec_index",
+                "source": "link_openapispec",
+                "stage": "reconcile_jsonl",
+                "timestamp": now,
+            }
+        )
+
+    return diagnostics
+
+
+def _link_openapispec(
+    conn: sqlite3.Connection,
+    repo_root: Path,
+    reconcile_jsonl_path: Path | None,
+) -> LinkStats:
     if not _table_exists(conn, "openapispec_index"):
         raise click.ClickException(
             "Required table openapispec_index is missing. Run scan_openapispec.py first."
@@ -299,40 +506,103 @@ def _link_openapispec(conn: sqlite3.Connection) -> LinkStats:
     rows = conn.execute(
         """
         SELECT
+            id,
             file_id,
             file_path,
             canonical_name,
             kind,
             slug,
             module,
-            resource_path
+            resource_path,
+            x_mapped_to
         FROM openapispec_index
         WHERE state = 'active'
         """
     ).fetchall()
 
     stats = LinkStats()
+    missing_records: list[dict] = []
+    now = datetime.now(timezone.utc).isoformat()
     entities_by_name = _get_entities_by_name(conn)
+    entities_across_modules = _get_entities_across_modules(entities_by_name)
+    valid_ent_stems = _load_valid_ent_stems(Path(REPO_PATH))
     for row in rows:
         module_keys = _module_candidates(str(row["module"] or ""))
+        mapped_to = str(row["x_mapped_to"] or "").strip()
+        entity_id = None
+
+        if mapped_to:
+            entity_id = _resolve_mapped_to_entity(
+                mapped_to=mapped_to,
+                module_keys=module_keys,
+                entities_across_modules=entities_across_modules,
+            )
+            if entity_id is not None:
+                stats.mapped_to_matches += 1
+            else:
+                stats.mapped_to_unresolved += 1
+                if _should_suppress_mapped_to_log(mapped_to, valid_ent_stems):
+                    stats.mapped_to_suppressed += 1
+                else:
+                    missing_records.append(
+                        {
+                            "context": {
+                                "module_candidates": module_keys,
+                                "openapispec_id": row["id"],
+                            },
+                            "entity_name": None,
+                            "file_path": row["file_path"],
+                            "reason": f"x_mapped_to '{mapped_to}' did not resolve to a unique entity",
+                            "source": "link_openapispec",
+                            "stage": "mapped_to_resolution",
+                            "timestamp": now,
+                        }
+                    )
+
+        # Fallback to heuristic matching only when mappedTo is absent or unresolved.
         candidate_names = _openapi_name_candidates(
             canonical_name=str(row["canonical_name"] or ""),
             slug=str(row["slug"] or ""),
             resource_path=str(row["resource_path"] or ""),
         )
-        entity_id: int | None = None
-        for module_key in module_keys:
-            module_entities = entities_by_name.get(module_key, {})
-            for candidate in candidate_names:
-                matches = module_entities.get(candidate, [])
-                if len(matches) == 1:
-                    entity_id = matches[0]
+        if entity_id is None:
+            for module_key in module_keys:
+                module_entities = entities_by_name.get(module_key, {})
+                for candidate in candidate_names:
+                    matches = module_entities.get(candidate, [])
+                    if len(matches) == 1:
+                        entity_id = matches[0]
+                        break
+                if entity_id is not None:
                     break
-            if entity_id is not None:
-                break
 
         if entity_id is None:
             stats.unmatched_rows += 1
+            if not mapped_to:
+                stats.heuristic_total += 1
+                expected_class = _expected_missing_mapped_to_class(str(row["file_path"] or ""))
+                if expected_class is not None:
+                    stats.heuristic_suppressed_expected_missing_mapped_to += 1
+                    stats.heuristic_suppressed_by_class[expected_class] = (
+                        stats.heuristic_suppressed_by_class.get(expected_class, 0) + 1
+                    )
+                else:
+                    stats.heuristic_logged += 1
+                    missing_records.append(
+                        {
+                            "context": {
+                                "candidate_names": candidate_names,
+                                "module_candidates": module_keys,
+                                "openapispec_id": row["id"],
+                            },
+                            "entity_name": None,
+                            "file_path": row["file_path"],
+                            "reason": "unable to match openapispec row via heuristic candidates",
+                            "source": "link_openapispec",
+                            "stage": "heuristic_resolution",
+                            "timestamp": now,
+                        }
+                    )
             continue
 
         file_id = row["file_id"]
@@ -351,6 +621,11 @@ def _link_openapispec(conn: sqlite3.Connection) -> LinkStats:
         if inserted:
             stats.mappings_inserted += 1
 
+    if reconcile_jsonl_path is not None:
+        missing_records.extend(_reconcile_with_entity_definitions(conn, reconcile_jsonl_path))
+
+    _append_missing_metadata_records(repo_root=repo_root, records=missing_records)
+
     return stats
 
 
@@ -362,7 +637,21 @@ def cli() -> None:
 @cli.command("link")
 @click.option("--db", default=DEFAULT_DB, show_default=True, help="Path to SQLite catalog database.")
 @click.option("--reset", is_flag=True, help="Delete OpenAPI-derived mappings before relinking.")
-def link_command(db: str, reset: bool) -> None:
+@click.option(
+    "--repo-root",
+    type=click.Path(path_type=Path, file_okay=False),
+    default=Path("."),
+    show_default=True,
+    help="Repository root used for diagnostics log output.",
+)
+@click.option(
+    "--reconcile-jsonl",
+    type=click.Path(path_type=Path, dir_okay=False),
+    default=None,
+    help="Optional path to entity_definitions.jsonl for drift diagnostics only.",
+)
+def link_command(db: str, reset: bool, repo_root: Path, reconcile_jsonl: Path | None) -> None:
+    repo_root = repo_root.resolve()
     conn = get_connection(db)
     try:
         if reset:
@@ -373,13 +662,30 @@ def link_command(db: str, reset: bool) -> None:
             )
             conn.commit()
 
-        stats = _link_openapispec(conn)
+        stats = _link_openapispec(
+            conn=conn,
+            repo_root=repo_root,
+            reconcile_jsonl_path=reconcile_jsonl.resolve() if reconcile_jsonl is not None else None,
+        )
         conn.commit()
     finally:
         conn.close()
 
     click.echo(f"OpenAPI mappings inserted:   {stats.mappings_inserted}")
     click.echo(f"Unmatched openapispec rows: {stats.unmatched_rows}")
+    click.echo(f"x_mapped_to matches:        {stats.mapped_to_matches}")
+    click.echo(f"x_mapped_to unresolved:     {stats.mapped_to_unresolved}")
+    click.echo(f"x_mapped_to suppressed:     {stats.mapped_to_suppressed}")
+    click.echo(f"heuristic_total:            {stats.heuristic_total}")
+    click.echo(
+        "heuristic_suppressed_expected_missing_mapped_to: "
+        f"{stats.heuristic_suppressed_expected_missing_mapped_to}"
+    )
+    click.echo(f"heuristic_logged:           {stats.heuristic_logged}")
+    if stats.heuristic_suppressed_by_class:
+        click.echo("heuristic_suppressed_by_class:")
+        for key in sorted(stats.heuristic_suppressed_by_class):
+            click.echo(f"  {key}: {stats.heuristic_suppressed_by_class[key]}")
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS openapispec_index (
     slug TEXT,
     version TEXT,
     kind TEXT,
+    x_mapped_to TEXT,
     canonical_name TEXT,
     resource_path TEXT,
     title TEXT,
@@ -16,3 +17,4 @@ CREATE TABLE IF NOT EXISTS openapispec_index (
 CREATE INDEX IF NOT EXISTS idx_openapispec_file_id ON openapispec_index(file_id);
 CREATE INDEX IF NOT EXISTS idx_openapispec_module ON openapispec_index(module);
 CREATE INDEX IF NOT EXISTS idx_openapispec_slug ON openapispec_index(slug);
+CREATE INDEX IF NOT EXISTS idx_openapispec_x_mapped_to ON openapispec_index(x_mapped_to);
