@@ -6,11 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from tqdm import tqdm
 
-from config import (
-    REPO_PATH,
-    INCLUDE_EXTENSIONS,
-    EXCLUDE_DIRS
-)
+from config import REPO_PATH, INCLUDE_EXTENSIONS, EXCLUDE_DIRS
 from catalog.db import get_connection
 
 
@@ -34,7 +30,7 @@ def detect_language(path: str) -> str:
         ".yaml": "yaml",
         ".html": "html",
         ".xsl": "xslt",
-        ".xslt": "xslt"
+        ".xslt": "xslt",
     }
     return mapping.get(ext, "unknown")
 
@@ -56,7 +52,7 @@ def walk_repo(root: str):
         for name in filenames:
             ext = Path(name).suffix.lower()
             if ext not in INCLUDE_EXTENSIONS:
-                #print(f'excluded file: ${ext}')
+                # print(f'excluded file: ${ext}')
                 continue
             yield os.path.join(dirpath, name)
 
@@ -81,14 +77,12 @@ def scan():
             rel_path = os.path.relpath(filepath, REPO_PATH)
             size = os.path.getsize(filepath)
             mtime = datetime.fromtimestamp(
-                os.path.getmtime(filepath),
-                tz=timezone.utc
+                os.path.getmtime(filepath), tz=timezone.utc
             ).isoformat()
 
             # Fetch existing row
             row = cur.execute(
-                "SELECT sha1, last_modified FROM files WHERE path = ?",
-                (rel_path,)
+                "SELECT sha1, last_modified FROM files WHERE path = ?", (rel_path,)
             ).fetchone()
 
             # Fast skip: same mtime + size heuristic
@@ -100,21 +94,18 @@ def scan():
             sha1 = compute_sha1(filepath)
 
             if row is None:
-                cur.execute("""
+                cur.execute(
+                    """
                     INSERT INTO files
                     (path, language, size_bytes, sha1, last_modified, last_indexed)
                     VALUES (?, ?, ?, ?, ?, ?)
-                """, (
-                    rel_path,
-                    detect_language(rel_path),
-                    size,
-                    sha1,
-                    mtime,
-                    started
-                ))
+                """,
+                    (rel_path, detect_language(rel_path), size, sha1, mtime, started),
+                )
                 files_added += 1
             elif row["sha1"] != sha1:
-                cur.execute("""
+                cur.execute(
+                    """
                     UPDATE files
                     SET language = ?,
                         size_bytes = ?,
@@ -122,14 +113,9 @@ def scan():
                         last_modified = ?,
                         last_indexed = ?
                     WHERE path = ?
-                """, (
-                    detect_language(rel_path),
-                    size,
-                    sha1,
-                    mtime,
-                    started,
-                    rel_path
-                ))
+                """,
+                    (detect_language(rel_path), size, sha1, mtime, started, rel_path),
+                )
                 files_updated += 1
             else:
                 files_skipped += 1

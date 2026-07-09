@@ -252,7 +252,8 @@ def normalize_entry(raw: dict) -> dict:
 # Validation
 # ---------------------------------------------------------------------
 
-def validate_required(entry: dict, line_no: int) -> listissues: list[str] = []
+def validate_required(entry: dict, line_no: int) -> list[str]:
+    issues: list[str] = []
 
     for k in REQUIRED_TOP_LEVEL_KEYS:
         if not entry.get(k):
@@ -267,7 +268,8 @@ def validate_required(entry: dict, line_no: int) -> listissues: list[str] = []
     return issues
 
 
-def verify_paths_on_disk(entry: dict, repo_root: Path) -> list"""
+def verify_paths_on_disk(entry: dict, repo_root: Path) -> list[str]:
+    """
     Confirms every referenced file exists.
     Updates entry.validation on mismatch.
     Returns notes describing any missing files.

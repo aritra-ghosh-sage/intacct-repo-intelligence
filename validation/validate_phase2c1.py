@@ -30,17 +30,22 @@ def q(conn, sql, params=()):
 def check_structural(conn):
     findings = []
 
-    orphan_workflows = q(conn, """
+    orphan_workflows = q(
+        conn,
+        """
         SELECT w.id
         FROM workflows w
         LEFT JOIN entity_nodes en ON en.id = w.entity_id
         WHERE en.id IS NULL
-    """)
+    """,
+    )
     findings.append(
         ("workflows with missing entity", [r["id"] for r in orphan_workflows])
     )
 
-    invalid_types = q(conn, """
+    invalid_types = q(
+        conn,
+        """
         SELECT DISTINCT workflow_type
         FROM workflows
         WHERE workflow_type NOT IN (
@@ -54,18 +59,21 @@ def check_structural(conn):
             'ui',
             'rest'
         )
-    """)
+    """,
+    )
     findings.append(
-        ("unknown workflow_type values",
-         [r["workflow_type"] for r in invalid_types])
+        ("unknown workflow_type values", [r["workflow_type"] for r in invalid_types])
     )
 
-    deprecated_types = q(conn, """
+    deprecated_types = q(
+        conn,
+        """
         SELECT workflow_type, COUNT(*) AS cnt
         FROM workflows
         WHERE workflow_type IN ('ui')
         GROUP BY workflow_type
-    """)
+    """,
+    )
     findings.append(
         (
             "deprecated workflow_type values",
@@ -78,23 +86,28 @@ def check_structural(conn):
 
 def check_distribution(conn):
     findings = []
-    rows = q(conn, """
+    rows = q(
+        conn,
+        """
         SELECT workflow_type, COUNT(*) AS cnt
         FROM workflows
         GROUP BY workflow_type
         ORDER BY cnt DESC
-    """)
+    """,
+    )
     findings.append(
-        ("workflow_type distribution",
-         [(r["workflow_type"], r["cnt"]) for r in rows])
+        ("workflow_type distribution", [(r["workflow_type"], r["cnt"]) for r in rows])
     )
 
-    rows = q(conn, """
+    rows = q(
+        conn,
+        """
         SELECT source_kind, COUNT(*) AS cnt
         FROM workflows
         GROUP BY source_kind
         ORDER BY cnt DESC
-    """)
+    """,
+    )
     findings.append(
         (
             "source_kind distribution",

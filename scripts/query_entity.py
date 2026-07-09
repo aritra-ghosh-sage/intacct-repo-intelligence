@@ -148,7 +148,9 @@ def get_incoming_relationships(
     ).fetchall()
 
 
-def get_symbol_files(conn: sqlite3.Connection, symbol_id: int, limit: int = 20) -> list[sqlite3.Row]:
+def get_symbol_files(
+    conn: sqlite3.Connection, symbol_id: int, limit: int = 20
+) -> list[sqlite3.Row]:
     return conn.execute(
         """
         SELECT DISTINCT file_path
@@ -221,7 +223,9 @@ def show_entity(conn: sqlite3.Connection, entity_name: str) -> int:
     return 0
 
 
-def show_root_symbols(conn: sqlite3.Connection, entity_name: str, min_weight: float) -> int:
+def show_root_symbols(
+    conn: sqlite3.Connection, entity_name: str, min_weight: float
+) -> int:
     entity = get_entity(conn, entity_name)
     if not entity:
         click.echo(f"Entity not found: {entity_name}")
@@ -279,7 +283,9 @@ def show_direct_impact(
 
     print_section("Seed Symbols")
     if not seed_symbols:
-        click.echo("No seed symbols found. Try lowering --min-weight or drop --core-only.")
+        click.echo(
+            "No seed symbols found. Try lowering --min-weight or drop --core-only."
+        )
         return 0
 
     for symbol in seed_symbols:
@@ -291,19 +297,19 @@ def show_direct_impact(
                 f"confidence={symbol['confidence']}"
             )
 
-        click.echo(
-            f"{symbol['kind']:<15} "
-            f"{symbol['name']:<60} "
-            f"{extras}"
-        )
+        click.echo(f"{symbol['kind']:<15} {symbol['name']:<60} {extras}")
 
     print_section("Symbol-Level Impact")
     for symbol in seed_symbols:
         click.echo("")
         click.echo(f"[{symbol['kind']}] {symbol['name']}")
 
-        outgoing = get_outgoing_relationships(conn, symbol["id"], min_confidence)[:per_symbol_limit]
-        incoming = get_incoming_relationships(conn, symbol["id"], min_confidence)[:per_symbol_limit]
+        outgoing = get_outgoing_relationships(conn, symbol["id"], min_confidence)[
+            :per_symbol_limit
+        ]
+        incoming = get_incoming_relationships(conn, symbol["id"], min_confidence)[
+            :per_symbol_limit
+        ]
         files = get_symbol_files(conn, symbol["id"], limit=10)
 
         if outgoing:
@@ -365,12 +371,16 @@ def bfs_impact(
         if include_outgoing:
             relationships.extend(
                 ("out", row)
-                for row in get_outgoing_relationships(conn, node.symbol_id, min_confidence)[:max_edges_per_node]
+                for row in get_outgoing_relationships(
+                    conn, node.symbol_id, min_confidence
+                )[:max_edges_per_node]
             )
         if include_incoming:
             relationships.extend(
                 ("in", row)
-                for row in get_incoming_relationships(conn, node.symbol_id, min_confidence)[:max_edges_per_node]
+                for row in get_incoming_relationships(
+                    conn, node.symbol_id, min_confidence
+                )[:max_edges_per_node]
             )
 
         for direction, row in relationships:
@@ -460,7 +470,9 @@ def show_bfs_impact(
                 click.echo(f"{node.kind:<15} {node.name:<60} [seed]")
             else:
                 arrow = "->" if node.direction == "out" else "<-"
-                click.echo(f"{node.kind:<15} {node.name:<60} {arrow} {node.via} from {node.from_symbol}")
+                click.echo(
+                    f"{node.kind:<15} {node.name:<60} {arrow} {node.via} from {node.from_symbol}"
+                )
 
     print_section("Summary")
     click.echo(f"Seed symbols: {len(seed_symbols)}")
@@ -472,7 +484,9 @@ def show_bfs_impact(
 
     click.echo("")
     click.echo("By kind:")
-    for kind, count in sorted(kind_counts.items(), key=lambda item: item[1], reverse=True):
+    for kind, count in sorted(
+        kind_counts.items(), key=lambda item: item[1], reverse=True
+    ):
         click.echo(f"  {kind:<15} {count}")
     return 0
 
@@ -540,7 +554,9 @@ def show_risk_summary(
     return 0
 
 
-def _resolve_direction_flags(incoming_only: bool, outgoing_only: bool) -> tuple[bool, bool]:
+def _resolve_direction_flags(
+    incoming_only: bool, outgoing_only: bool
+) -> tuple[bool, bool]:
     if incoming_only and outgoing_only:
         raise click.ClickException("Use only one of --incoming-only or --outgoing-only")
 
@@ -551,15 +567,28 @@ def _resolve_direction_flags(incoming_only: bool, outgoing_only: bool) -> tuple[
 
 @cli.command("entity")
 @click.argument("entity_name")
-@click.option("--db", default=DEFAULT_DB, show_default=True, help="Path to SQLite catalog database.")
-@click.option("--workflow", is_flag=True, help="Show discovered workflows for the entity.")
+@click.option(
+    "--db",
+    default=DEFAULT_DB,
+    show_default=True,
+    help="Path to SQLite catalog database.",
+)
+@click.option(
+    "--workflow", is_flag=True, help="Show discovered workflows for the entity."
+)
 @click.option("--flow", is_flag=True, help="Show end-to-end flow view for the entity.")
-@click.option("--openapispec", is_flag=True, help="Show openapispec mappings for the entity.")
-def entity(entity_name: str, db: str, workflow: bool, flow: bool, openapispec: bool) -> None:
+@click.option(
+    "--openapispec", is_flag=True, help="Show openapispec mappings for the entity."
+)
+def entity(
+    entity_name: str, db: str, workflow: bool, flow: bool, openapispec: bool
+) -> None:
     """Show mapped symbols for an entity."""
     selected_views = sum([workflow, flow, openapispec])
     if selected_views > 1:
-        raise click.ClickException("Use only one of --workflow, --flow, or --openapispec")
+        raise click.ClickException(
+            "Use only one of --workflow, --flow, or --openapispec"
+        )
 
     conn = get_connection(db)
     try:
@@ -579,7 +608,12 @@ def entity(entity_name: str, db: str, workflow: bool, flow: bool, openapispec: b
 
 @cli.command("root-symbols")
 @click.argument("entity_name")
-@click.option("--db", default=DEFAULT_DB, show_default=True, help="Path to SQLite catalog database.")
+@click.option(
+    "--db",
+    default=DEFAULT_DB,
+    show_default=True,
+    help="Path to SQLite catalog database.",
+)
 @click.option("--min-weight", type=float, default=0.75, show_default=True)
 def root_symbols(entity_name: str, db: str, min_weight: float) -> None:
     """Show canonical roots for an entity."""
@@ -592,9 +626,18 @@ def root_symbols(entity_name: str, db: str, min_weight: float) -> None:
 
 @cli.command("direct-impact")
 @click.argument("entity_name")
-@click.option("--db", default=DEFAULT_DB, show_default=True, help="Path to SQLite catalog database.")
+@click.option(
+    "--db",
+    default=DEFAULT_DB,
+    show_default=True,
+    help="Path to SQLite catalog database.",
+)
 @click.option("--min-confidence", type=float, default=0.0, show_default=True)
-@click.option("--core-only", is_flag=True, help="Use only canonical entity roots as traversal seeds.")
+@click.option(
+    "--core-only",
+    is_flag=True,
+    help="Use only canonical entity roots as traversal seeds.",
+)
 @click.option("--min-weight", type=float, default=0.75, show_default=True)
 @click.option(
     "--per-symbol-limit",
@@ -632,12 +675,25 @@ def direct_impact(
 
 @cli.command("impact")
 @click.argument("entity_name")
-@click.option("--db", default=DEFAULT_DB, show_default=True, help="Path to SQLite catalog database.")
-@click.option("--depth", type=int, default=1, show_default=True, help="Traversal depth.")
+@click.option(
+    "--db",
+    default=DEFAULT_DB,
+    show_default=True,
+    help="Path to SQLite catalog database.",
+)
+@click.option(
+    "--depth", type=int, default=1, show_default=True, help="Traversal depth."
+)
 @click.option("--min-confidence", type=float, default=0.0, show_default=True)
 @click.option("--incoming-only", is_flag=True, help="Only include incoming references.")
-@click.option("--outgoing-only", is_flag=True, help="Only include outgoing dependencies.")
-@click.option("--core-only", is_flag=True, help="Use only canonical entity roots as traversal seeds.")
+@click.option(
+    "--outgoing-only", is_flag=True, help="Only include outgoing dependencies."
+)
+@click.option(
+    "--core-only",
+    is_flag=True,
+    help="Use only canonical entity roots as traversal seeds.",
+)
 @click.option("--min-weight", type=float, default=0.75, show_default=True)
 @click.option(
     "--max-edges-per-node",
@@ -660,7 +716,9 @@ def impact(
     max_edges_per_node: int,
 ) -> None:
     """Show impact analysis; depth=1 uses direct impact, depth>1 uses BFS traversal."""
-    include_incoming, include_outgoing = _resolve_direction_flags(incoming_only, outgoing_only)
+    include_incoming, include_outgoing = _resolve_direction_flags(
+        incoming_only, outgoing_only
+    )
     conn = get_connection(db)
     try:
         if depth <= 1:
@@ -694,10 +752,19 @@ def impact(
 
 @cli.command("risk")
 @click.argument("entity_name")
-@click.option("--db", default=DEFAULT_DB, show_default=True, help="Path to SQLite catalog database.")
+@click.option(
+    "--db",
+    default=DEFAULT_DB,
+    show_default=True,
+    help="Path to SQLite catalog database.",
+)
 @click.option("--depth", type=int, default=2, show_default=True)
 @click.option("--min-confidence", type=float, default=0.0, show_default=True)
-@click.option("--core-only", is_flag=True, help="Use only canonical entity roots as traversal seeds.")
+@click.option(
+    "--core-only",
+    is_flag=True,
+    help="Use only canonical entity roots as traversal seeds.",
+)
 @click.option("--min-weight", type=float, default=0.75, show_default=True)
 @click.option("--max-edges-per-node", type=int, default=25, show_default=True)
 def risk(
@@ -725,6 +792,7 @@ def risk(
         )
     finally:
         conn.close()
+
 
 def get_workflows(
     conn: sqlite3.Connection,
@@ -815,6 +883,7 @@ def show_flow_view(conn: sqlite3.Connection, entity_name: str) -> int:
 
     return 0
 
+
 def show_openapispec_view(conn: sqlite3.Connection, entity_name: str) -> int:
     entity = get_entity(conn, entity_name)
     if not entity:
@@ -841,6 +910,7 @@ def show_openapispec_view(conn: sqlite3.Connection, entity_name: str) -> int:
     for r in rows:
         click.echo(f"[{r['mapping_type']:<25}] {r['source_text']}")
     return 0
+
 
 if __name__ == "__main__":
     cli()

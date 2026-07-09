@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import yaml
 
@@ -64,7 +63,9 @@ def _role_kind(role: str) -> str:
     return mapping.get(role, "yaml_document")
 
 
-def _add_unique(symbols: list[Symbol], seen: set[tuple[str, str, str | None]], symbol: Symbol) -> None:
+def _add_unique(
+    symbols: list[Symbol], seen: set[tuple[str, str, str | None]], symbol: Symbol
+) -> None:
     key = (symbol.name, symbol.kind, symbol.parent_symbol)
     if key in seen:
         return

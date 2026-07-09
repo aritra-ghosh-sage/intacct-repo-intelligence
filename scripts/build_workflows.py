@@ -80,6 +80,7 @@ def get_entities(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         """
     ).fetchall()
 
+
 def get_entity_roots(conn: sqlite3.Connection, entity_id: int) -> list[sqlite3.Row]:
     return conn.execute(
         """
@@ -160,6 +161,7 @@ def normalize_action(text: str | None) -> str | None:
     t = re.sub(r"[^a-zA-Z]+", "", text).lower()
     return t if t in KNOWN_ACTIONS else None
 
+
 def get_entity_yaml_paths(conn: sqlite3.Connection, entity_id: int) -> list[str]:
     """
     Return deterministic YAML candidates wired to this entity.
@@ -236,6 +238,7 @@ def get_yaml_actions_from_symbols_for_path(
         out.append((normalized, f"symbol:{kind}:{name}"))
 
     return out
+
 
 def read_yaml_file(repo_root: Path, rel_path: str) -> dict[str, Any] | None:
     if not yaml:
@@ -419,7 +422,6 @@ def build_workflows_for_entity(
         if workflow_inserted:
             wf_count += 1
 
-
     # ------------------------------------------------------------------
     # 2. AllowedOperationsHandler workflow (surface even if no YAML)
     # ------------------------------------------------------------------
@@ -514,7 +516,12 @@ def cli() -> None:
 
 
 @cli.command("build")
-@click.option("--db", default=DEFAULT_DB, show_default=True, help="Path to SQLite catalog database.")
+@click.option(
+    "--db",
+    default=DEFAULT_DB,
+    show_default=True,
+    help="Path to SQLite catalog database.",
+)
 @click.option(
     "--repo-root",
     type=click.Path(path_type=Path, exists=True, file_okay=False),
@@ -527,7 +534,6 @@ def build_command(db: str, repo_root: Path, reset: bool) -> None:
     stats = build(db=db, repo_root=repo_root.resolve(), reset=reset)
     click.echo(f"Processed entities:  {stats.entities_processed}")
     click.echo(f"Workflows inserted:  {stats.workflows_inserted}")
-
 
 
 if __name__ == "__main__":

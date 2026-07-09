@@ -113,8 +113,6 @@ def _build_yaml_slug_candidates(entity: dict[str, Any]) -> list[str]:
     return candidates
 
 
-
-
 def classify_yaml_mapping_type(path: str) -> str:
     lowered = path.lower()
     if "/openapispec/" not in lowered:
@@ -145,11 +143,6 @@ def classify_sql_mapping_type(path: str) -> str | None:
     if "/teardown/" in lowered:
         return None
     return "sql"
-
-
-
-
-
 
 
 def ensure_entity_columns(conn: sqlite3.Connection) -> None:
@@ -354,7 +347,11 @@ def insert_mapping(
             "SELECT file_id FROM symbols WHERE id = ? LIMIT 1",
             (symbol_id,),
         ).fetchone()
-        file_id = int(symbol_row["file_id"]) if symbol_row and symbol_row["file_id"] is not None else None
+        file_id = (
+            int(symbol_row["file_id"])
+            if symbol_row and symbol_row["file_id"] is not None
+            else None
+        )
     else:
         file_row = conn.execute(
             """
@@ -525,7 +522,9 @@ def build(db: str, entities: Path, reset: bool) -> BuildStats:
             related = entity.get("related_files") or {}
 
             for related_role in RELATED_FILE_ROLES:
-                related_path = related.get(related_role) if isinstance(related, dict) else None
+                related_path = (
+                    related.get(related_role) if isinstance(related, dict) else None
+                )
                 if not related_path:
                     continue
                 mapping_type = related_role
@@ -546,7 +545,6 @@ def build(db: str, entities: Path, reset: bool) -> BuildStats:
                 )
                 if inserted:
                     stats.mappings_inserted += 1
-
 
         conn.commit()
     finally:
@@ -570,7 +568,12 @@ def cli() -> None:
 
 
 @cli.command("build")
-@click.option("--db", default=DEFAULT_DB, show_default=True, help="Path to SQLite catalog database.")
+@click.option(
+    "--db",
+    default=DEFAULT_DB,
+    show_default=True,
+    help="Path to SQLite catalog database.",
+)
 @click.option(
     "--entities",
     type=click.Path(path_type=Path, exists=True, dir_okay=False),

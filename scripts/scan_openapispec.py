@@ -204,7 +204,9 @@ def scan_openapispec(conn: sqlite3.Connection, repo_root: Path) -> ScanStats:
     conn.execute("DELETE FROM openapispec_index")
 
     stats = ScanStats()
-    for yaml_path in tqdm(sorted(root.rglob("*.yaml")), desc="Scanning OpenAPI specs", unit="file"):
+    for yaml_path in tqdm(
+        sorted(root.rglob("*.yaml")), desc="Scanning OpenAPI specs", unit="file"
+    ):
         stats.files_processed += 1
         rel_path = yaml_path.relative_to(repo_root).as_posix()
         file_id = _get_file_id(conn, rel_path)
@@ -263,7 +265,12 @@ def cli() -> None:
 
 
 @cli.command("scan")
-@click.option("--db", default=DEFAULT_DB, show_default=True, help="Path to SQLite catalog database.")
+@click.option(
+    "--db",
+    default=DEFAULT_DB,
+    show_default=True,
+    help="Path to SQLite catalog database.",
+)
 @click.option(
     "--repo-root",
     type=click.Path(path_type=Path, exists=True, file_okay=False),

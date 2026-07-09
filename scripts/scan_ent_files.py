@@ -26,7 +26,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
-CLASS_EXTS = (".cls", ".php", ".ent", ".inc", ".cqry", ".qry", ".xslt", ".phtml", ".html", ".js")
+CLASS_EXTS = (
+    ".cls",
+    ".php",
+    ".ent",
+    ".inc",
+    ".cqry",
+    ".qry",
+    ".xslt",
+    ".phtml",
+    ".html",
+    ".js",
+)
 MISSING_METADATA_LOG_REL = Path("outputs/missing_metadata.jsonl")
 SCHEMA_FILE_RE = re.compile(
     r"^(?P<kind>objects|services)\.(?P<prefix>.+?)\.(?P<object>[^.]+)\.s1\.schema\.yaml$"
@@ -54,6 +65,7 @@ ALLOWED_COMPANION_ROLES = (
     "pick_manager",
     "pick_picker",
 )
+
 
 @dataclass
 class EntityDefinition:
@@ -134,7 +146,7 @@ def fallback_pascal_case(stem: str, prefix_acronyms: Dict[str, str]) -> str:
         matched_prefix = None
         for pfx, acr in sorted(prefix_acronyms.items(), key=lambda x: -len(x[0])):
             if low.startswith(pfx) and len(part) > len(pfx):
-                matched_prefix = f"{acr}{part[len(pfx):].capitalize()}"
+                matched_prefix = f"{acr}{part[len(pfx) :].capitalize()}"
                 break
 
         out.append(matched_prefix if matched_prefix else part.capitalize())
@@ -221,7 +233,9 @@ def discover_companions(
 
         canonical_candidates.append(cls_stem[:stem_len])
 
-    companions: Dict[str, Optional[str]] = {role: None for role in ALLOWED_COMPANION_ROLES}
+    companions: Dict[str, Optional[str]] = {
+        role: None for role in ALLOWED_COMPANION_ROLES
+    }
     for role, paths in sorted(companions_raw.items()):
         chosen = sorted(paths, key=lambda p: p.as_posix())[0]
         companions[role] = to_repo_relative(chosen, repo_root)
@@ -285,16 +299,20 @@ def _read_openapi_root_x_mapped_to(schema_path: Path) -> Optional[str]:
     if not match:
         return None
 
-    return match.group(1).strip().strip('"\'')
+    return match.group(1).strip().strip("\"'")
 
 
-def _iter_openapi_schema_infos(repo_root: Path) -> Iterable[Tuple[Path, re.Match[str], Optional[str]]]:
+def _iter_openapi_schema_infos(
+    repo_root: Path,
+) -> Iterable[Tuple[Path, re.Match[str], Optional[str]]]:
     openapi_root = repo_root / "app" / "source" / "openapispec"
     if not openapi_root.exists():
         return []
 
     items: List[Tuple[Path, re.Match[str], Optional[str]]] = []
-    for schema_path in sorted(openapi_root.rglob("*.schema.yaml"), key=lambda p: p.as_posix()):
+    for schema_path in sorted(
+        openapi_root.rglob("*.schema.yaml"), key=lambda p: p.as_posix()
+    ):
         schema_match = SCHEMA_FILE_RE.match(schema_path.name)
         if not schema_match:
             continue
@@ -329,12 +347,16 @@ def _build_openapi_mapping(
         for candidate in object_name_candidates
     ]
     history_paths = [
-        schema_path.parent.parent / "history" / f"{kind}.{prefix}.{candidate}.schema.history.yaml"
+        schema_path.parent.parent
+        / "history"
+        / f"{kind}.{prefix}.{candidate}.schema.history.yaml"
         for candidate in object_name_candidates
     ]
 
     api_path = next((path for path in api_paths if path.exists()), api_paths[0])
-    history_path = next((path for path in history_paths if path.exists()), history_paths[0])
+    history_path = next(
+        (path for path in history_paths if path.exists()), history_paths[0]
+    )
 
     api_exists = api_path.exists()
     history_exists = history_path.exists()
@@ -376,7 +398,9 @@ def build_openapi_index(repo_root: Path) -> Dict[str, OpenApiMapping]:
             # Keep the first discovered mapping for determinism.
             continue
 
-        index[key] = _build_openapi_mapping(repo_root, schema_path, schema_match, x_mapped_to)
+        index[key] = _build_openapi_mapping(
+            repo_root, schema_path, schema_match, x_mapped_to
+        )
 
     return index
 
@@ -387,7 +411,9 @@ def build_openapi_name_index(repo_root: Path) -> Dict[str, OpenApiMapping]:
     """
     index: Dict[str, OpenApiMapping] = {}
     for schema_path, schema_match, x_mapped_to in _iter_openapi_schema_infos(repo_root):
-        mapping = _build_openapi_mapping(repo_root, schema_path, schema_match, x_mapped_to or "")
+        mapping = _build_openapi_mapping(
+            repo_root, schema_path, schema_match, x_mapped_to or ""
+        )
         object_name = schema_match.group("object").lower()
         index.setdefault(object_name, mapping)
 
@@ -398,7 +424,9 @@ def build_openapi_name_index(repo_root: Path) -> Dict[str, OpenApiMapping]:
                     base_object_name = object_name[: -len(suffix)]
                     if base_object_name:
                         index.setdefault(base_object_name, mapping)
-                        index.setdefault(f"{mapping.openapi_module}-{base_object_name}", mapping)
+                        index.setdefault(
+                            f"{mapping.openapi_module}-{base_object_name}", mapping
+                        )
                     break
     return index
 
@@ -478,8 +506,12 @@ def _build_service_mapping(
         service_module=service_module,
         service_folder=service_folder,
         service_schema_file=to_repo_relative(schema_path, repo_root),
-        service_api_files=[to_repo_relative(path, repo_root) for path in deduped_api_paths],
-        service_history_file=to_repo_relative(history_path, repo_root) if history_path else None,
+        service_api_files=[
+            to_repo_relative(path, repo_root) for path in deduped_api_paths
+        ],
+        service_history_file=to_repo_relative(history_path, repo_root)
+        if history_path
+        else None,
         service_status=status,
         service_reason=reason,
     )
@@ -487,7 +519,9 @@ def _build_service_mapping(
 
 def build_service_indexes(
     repo_root: Path,
-) -> Tuple[Dict[str, ServiceMapping], Dict[str, ServiceMapping], Dict[str, ServiceMapping]]:
+) -> Tuple[
+    Dict[str, ServiceMapping], Dict[str, ServiceMapping], Dict[str, ServiceMapping]
+]:
     """
     Build service indexes:
       - by x-mappedTo (entity-centric)
@@ -502,7 +536,9 @@ def build_service_indexes(
         if schema_match.group("kind") != "services":
             continue
 
-        mapping = _build_service_mapping(repo_root, schema_path, schema_match, x_mapped_to)
+        mapping = _build_service_mapping(
+            repo_root, schema_path, schema_match, x_mapped_to
+        )
         by_schema.setdefault(mapping.service_schema_file, mapping)
 
         if x_mapped_to:
@@ -517,7 +553,9 @@ def build_service_indexes(
                 base_object_name = object_name[: -len(suffix)]
                 if base_object_name:
                     by_name.setdefault(base_object_name, mapping)
-                    by_name.setdefault(f"{mapping.service_module}-{base_object_name}", mapping)
+                    by_name.setdefault(
+                        f"{mapping.service_module}-{base_object_name}", mapping
+                    )
                 break
 
     return by_x_mapped, by_name, by_schema
@@ -532,7 +570,9 @@ def build_workflow_index(repo_root: Path) -> Dict[str, WorkflowMapping]:
     if not openapi_root.exists():
         return index
 
-    for schema_path in sorted(openapi_root.rglob("workflows.*.s1.schema.yaml"), key=lambda p: p.as_posix()):
+    for schema_path in sorted(
+        openapi_root.rglob("workflows.*.s1.schema.yaml"), key=lambda p: p.as_posix()
+    ):
         schema_match = WORKFLOW_SCHEMA_FILE_RE.match(schema_path.name)
         if not schema_match:
             continue
@@ -549,22 +589,36 @@ def build_workflow_index(repo_root: Path) -> Dict[str, WorkflowMapping]:
         paths_dir = schema_path.parent.parent / "paths"
         apis_dir = schema_path.parent.parent / "apis"
         history_dir = schema_path.parent.parent / "history"
-        history_path = history_dir / f"workflows.{prefix}.{workflow_name}.schema.history.yaml"
+        history_path = (
+            history_dir / f"workflows.{prefix}.{workflow_name}.schema.history.yaml"
+        )
 
         api_paths: List[Path] = []
         if paths_dir.exists():
             api_paths.extend(
-                sorted(paths_dir.glob(f"workflows.{prefix}.{workflow_name}.s1.api.yaml"), key=lambda p: p.as_posix())
+                sorted(
+                    paths_dir.glob(f"workflows.{prefix}.{workflow_name}.s1.api.yaml"),
+                    key=lambda p: p.as_posix(),
+                )
             )
             api_paths.extend(
-                sorted(paths_dir.glob(f"workflows.{prefix}.{workflow_name}.*.s1.api.yaml"), key=lambda p: p.as_posix())
+                sorted(
+                    paths_dir.glob(f"workflows.{prefix}.{workflow_name}.*.s1.api.yaml"),
+                    key=lambda p: p.as_posix(),
+                )
             )
         if apis_dir.exists():
             api_paths.extend(
-                sorted(apis_dir.glob(f"workflows.{prefix}.{workflow_name}.s1.api.yaml"), key=lambda p: p.as_posix())
+                sorted(
+                    apis_dir.glob(f"workflows.{prefix}.{workflow_name}.s1.api.yaml"),
+                    key=lambda p: p.as_posix(),
+                )
             )
             api_paths.extend(
-                sorted(apis_dir.glob(f"workflows.{prefix}.{workflow_name}.*.s1.api.yaml"), key=lambda p: p.as_posix())
+                sorted(
+                    apis_dir.glob(f"workflows.{prefix}.{workflow_name}.*.s1.api.yaml"),
+                    key=lambda p: p.as_posix(),
+                )
             )
 
         # De-duplicate while preserving deterministic order.
@@ -582,10 +636,14 @@ def build_workflow_index(repo_root: Path) -> Dict[str, WorkflowMapping]:
             api_name = api_path.name
             if not api_name.endswith(".s1.api.yaml"):
                 continue
-            action_history_name = api_name.replace(".s1.api.yaml", ".schema.history.yaml")
+            action_history_name = api_name.replace(
+                ".s1.api.yaml", ".schema.history.yaml"
+            )
             action_history_paths.append(history_dir / action_history_name)
 
-        has_all_action_histories = bool(action_history_paths) and all(path.exists() for path in action_history_paths)
+        has_all_action_histories = bool(action_history_paths) and all(
+            path.exists() for path in action_history_paths
+        )
 
         status = "ok"
         reason: Optional[str] = None
@@ -613,8 +671,12 @@ def build_workflow_index(repo_root: Path) -> Dict[str, WorkflowMapping]:
             workflow_module=workflow_module,
             workflow_folder=workflow_folder,
             workflow_schema_file=to_repo_relative(schema_path, repo_root),
-            workflow_api_files=[to_repo_relative(path, repo_root) for path in deduped_api_paths],
-            workflow_history_file=to_repo_relative(history_path, repo_root) if history_path.exists() else None,
+            workflow_api_files=[
+                to_repo_relative(path, repo_root) for path in deduped_api_paths
+            ],
+            workflow_history_file=to_repo_relative(history_path, repo_root)
+            if history_path.exists()
+            else None,
             workflow_status=status,
             workflow_reason=reason,
         )
@@ -705,7 +767,9 @@ def _find_schema_array_start(text: str) -> Optional[int]:
     return None
 
 
-def parse_top_level_ent_metadata(ent_path: Path) -> Tuple[Optional[str], Optional[str], Optional[str], bool]:
+def parse_top_level_ent_metadata(
+    ent_path: Path,
+) -> Tuple[Optional[str], Optional[str], Optional[str], bool]:
     """
     Parse top-level 'table', 'view', 'module', and 'dummy' from .ent (PHP array syntax).
     """
@@ -783,7 +847,12 @@ def parse_top_level_ent_metadata(ent_path: Path) -> Tuple[Optional[str], Optiona
                         if rhs_bool is not None:
                             dummy = rhs_bool
                         elif rhs_value is not None:
-                            dummy = rhs_value.strip().lower() in {"true", "1", "yes", "t"}
+                            dummy = rhs_value.strip().lower() in {
+                                "true",
+                                "1",
+                                "yes",
+                                "t",
+                            }
 
                     i = j
                     continue
@@ -819,7 +888,9 @@ def scan(repo_root: Path, out_file: Path) -> int:
     openapi_index = build_openapi_index(repo_root)
     openapi_name_index = build_openapi_name_index(repo_root)
     workflow_index = build_workflow_index(repo_root)
-    service_index, service_name_index, service_schema_index = build_service_indexes(repo_root)
+    service_index, service_name_index, service_schema_index = build_service_indexes(
+        repo_root
+    )
     out_file.parent.mkdir(parents=True, exist_ok=True)
     missing_metadata_records: List[dict] = []
 
@@ -969,7 +1040,9 @@ def scan(repo_root: Path, out_file: Path) -> int:
                 workflow_module=workflow_mapping.workflow_module,
                 workflow_folder=workflow_mapping.workflow_folder,
                 workflow_schema_file=workflow_mapping.workflow_schema_file,
-                workflow_api_files=workflow_mapping.workflow_api_files if workflow_mapping.workflow_api_files else None,
+                workflow_api_files=workflow_mapping.workflow_api_files
+                if workflow_mapping.workflow_api_files
+                else None,
                 workflow_history_file=workflow_mapping.workflow_history_file,
                 workflow_x_mapped_to=workflow_mapping.workflow_x_mapped_to,
                 workflow_status=workflow_mapping.workflow_status,
@@ -978,7 +1051,9 @@ def scan(repo_root: Path, out_file: Path) -> int:
                 service_module=service_mapping.service_module,
                 service_folder=service_mapping.service_folder,
                 service_schema_file=service_mapping.service_schema_file,
-                service_api_files=service_mapping.service_api_files if service_mapping.service_api_files else None,
+                service_api_files=service_mapping.service_api_files
+                if service_mapping.service_api_files
+                else None,
                 service_history_file=service_mapping.service_history_file,
                 service_x_mapped_to=service_mapping.service_x_mapped_to,
                 service_status=service_mapping.service_status,
@@ -992,7 +1067,9 @@ def scan(repo_root: Path, out_file: Path) -> int:
                 continue
 
             service_mapping = service_schema_index[schema_file]
-            object_token = Path(schema_file).name.replace(".s1.schema.yaml", "").split(".")[-1]
+            object_token = (
+                Path(schema_file).name.replace(".s1.schema.yaml", "").split(".")[-1]
+            )
             synthetic_key = f"{service_mapping.service_module}.{service_mapping.service_prefix}.{object_token}"
             synthetic_entity_name = slug_to_pascal(synthetic_key)
             companion_defaults = {role: None for role in ALLOWED_COMPANION_ROLES}
@@ -1029,7 +1106,9 @@ def scan(repo_root: Path, out_file: Path) -> int:
                 service_module=service_mapping.service_module,
                 service_folder=service_mapping.service_folder,
                 service_schema_file=service_mapping.service_schema_file,
-                service_api_files=service_mapping.service_api_files if service_mapping.service_api_files else None,
+                service_api_files=service_mapping.service_api_files
+                if service_mapping.service_api_files
+                else None,
                 service_history_file=service_mapping.service_history_file,
                 service_x_mapped_to=service_mapping.service_x_mapped_to,
                 service_status=service_mapping.service_status,
@@ -1038,7 +1117,10 @@ def scan(repo_root: Path, out_file: Path) -> int:
             f.write(json.dumps(asdict(row), ensure_ascii=False, sort_keys=True) + "\n")
             count += 1
 
-            _write_missing_metadata_log((repo_root / MISSING_METADATA_LOG_REL).resolve(), missing_metadata_records)
+            _write_missing_metadata_log(
+                (repo_root / MISSING_METADATA_LOG_REL).resolve(),
+                missing_metadata_records,
+            )
 
     return count
 

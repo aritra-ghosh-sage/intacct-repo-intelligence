@@ -39,6 +39,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
 from tqdm import tqdm
+
 try:
     import yaml
 except ModuleNotFoundError:
@@ -81,6 +82,7 @@ def get_yaml_rel_stats() -> dict[str, int]:
         "parse_failures": int(YAML_REL_STATS["parse_failures"]),
         "relationships_emitted": int(YAML_REL_STATS["relationships_emitted"]),
     }
+
 
 RESOLUTION_CLASS_PROJECT_RESOLVED = "project_resolved"
 RESOLUTION_CLASS_PROJECT_UNRESOLVED = "project_unresolved"
@@ -194,7 +196,9 @@ def load_files(
 
     where = [f"language IN ({placeholders})"]
     if only_changed:
-        where.append("(last_relationships_extracted IS NULL OR last_indexed > last_relationships_extracted)")
+        where.append(
+            "(last_relationships_extracted IS NULL OR last_indexed > last_relationships_extracted)"
+        )
 
     if file_filter:
         where.append("path LIKE ?")
@@ -224,7 +228,9 @@ def load_files(
 
 def load_symbols(
     conn: sqlite3.Connection,
-) -> tuple[dict[str, list[SymbolRow]], dict[int, list[SymbolRow]], dict[str, list[SymbolRow]]]:
+) -> tuple[
+    dict[str, list[SymbolRow]], dict[int, list[SymbolRow]], dict[str, list[SymbolRow]]
+]:
     cols = table_columns(conn, "symbols")
 
     id_col = pick_col(cols, ["id", "symbol_id"])
@@ -340,7 +346,11 @@ def prefer_symbol(candidates: list[SymbolRow]) -> SymbolRow:
     return sorted(candidates, key=lambda s: priority.get(str(s.kind).lower(), 99))[0]
 
 
-def pick_source_symbol(symbols_by_file: dict[int, list[SymbolRow]], file_id: int, preferred_name: Optional[str] = None) -> tuple[Optional[int], Optional[str], Optional[str]]:
+def pick_source_symbol(
+    symbols_by_file: dict[int, list[SymbolRow]],
+    file_id: int,
+    preferred_name: Optional[str] = None,
+) -> tuple[Optional[int], Optional[str], Optional[str]]:
     symbols = symbols_by_file.get(file_id, [])
 
     if preferred_name:
@@ -349,7 +359,11 @@ def pick_source_symbol(symbols_by_file: dict[int, list[SymbolRow]], file_id: int
                 return s.id, s.name, s.kind
 
     # Prefer class-like source symbol. If not found, use first symbol.
-    class_like = [s for s in symbols if str(s.kind).lower() in {"class", "interface", "trait", "enum"}]
+    class_like = [
+        s
+        for s in symbols
+        if str(s.kind).lower() in {"class", "interface", "trait", "enum"}
+    ]
     if class_like:
         s = class_like[0]
         return s.id, s.name, s.kind
@@ -412,7 +426,9 @@ def classify_relationship(
     if looks_builtin(normalized_target, relationship_type):
         return RESOLUTION_CLASS_BUILTIN, "builtin_symbol_pattern"
 
-    if relationship_type == REL_IMPORTS and ("/" in normalized_target or normalized_target.startswith("@")):
+    if relationship_type == REL_IMPORTS and (
+        "/" in normalized_target or normalized_target.startswith("@")
+    ):
         return RESOLUTION_CLASS_EXTERNAL, "module_path_import"
 
     return RESOLUTION_CLASS_PROJECT_UNRESOLVED, "unresolved_project_symbol"
@@ -490,9 +506,13 @@ def extract_php(
     symbols_by_file: dict[int, list[SymbolRow]],
     symbols_by_qualified_name: dict[str, list[SymbolRow]],
 ) -> list[Relationship]:
-    
+
     rels: list[Relationship] = []
-    class_declarations: list[tuple[int, str, Optional[str], tuple[Optional[int], Optional[str], Optional[str]]]] = []
+    class_declarations: list[
+        tuple[
+            int, str, Optional[str], tuple[Optional[int], Optional[str], Optional[str]]
+        ]
+    ] = []
 
     # class Foo extends Bar implements A, B
     class_pattern = re.compile(
@@ -509,75 +529,93 @@ def extract_php(
         class_declarations.append((m.start(), class_name, parent_class, source))
 
         if m.group(2):
-            rels.append(make_rel(
-                REL_INHERITS,
-                m.group(2),
-                file_row,
-                source,
-                symbols_by_name,
-                symbols_by_qualified_name,
-                evidence=m.group(0),
-                confidence=0.95,
-                target_kind_hint="class",
-            ))
+            rels.append(
+                make_rel(
+                    REL_INHERITS,
+                    m.group(2),
+                    file_row,
+                    source,
+                    symbols_by_name,
+                    symbols_by_qualified_name,
+                    evidence=m.group(0),
+                    confidence=0.95,
+                    target_kind_hint="class",
+                )
+            )
 
         if m.group(3):
             for iface in m.group(3).split(","):
                 iface = iface.strip()
                 if iface:
-                    rels.append(make_rel(
-                        REL_IMPLEMENTS,
-                        iface,
-                        file_row,
-                        source,
-                        symbols_by_name,
-                        symbols_by_qualified_name,
-                        evidence=m.group(0),
-                        confidence=0.95,
-                        target_kind_hint="interface",
-                    ))
+                    rels.append(
+                        make_rel(
+                            REL_IMPLEMENTS,
+                            iface,
+                            file_row,
+                            source,
+                            symbols_by_name,
+                            symbols_by_qualified_name,
+                            evidence=m.group(0),
+                            confidence=0.95,
+                            target_kind_hint="interface",
+                        )
+                    )
 
     source = pick_source_symbol(symbols_by_file, file_row.id)
 
-    def source_for_offset(offset: int) -> tuple[tuple[Optional[int], Optional[str], Optional[str]], Optional[str]]:
-        for start, class_name, parent_class, class_source in reversed(class_declarations):
+    def source_for_offset(
+        offset: int,
+    ) -> tuple[tuple[Optional[int], Optional[str], Optional[str]], Optional[str]]:
+        for start, class_name, parent_class, class_source in reversed(
+            class_declarations
+        ):
             if offset >= start:
                 return class_source, parent_class
         return source, None
 
     # use Namespace\ClassName;
-    for m in re.finditer(r"^\s*use\s+([\\A-Za-z_][\\A-Za-z0-9_]*(?:\s+as\s+[A-Za-z_][A-Za-z0-9_]*)?)\s*;", text, re.MULTILINE):
+    for m in re.finditer(
+        r"^\s*use\s+([\\A-Za-z_][\\A-Za-z0-9_]*(?:\s+as\s+[A-Za-z_][A-Za-z0-9_]*)?)\s*;",
+        text,
+        re.MULTILINE,
+    ):
         raw = m.group(1)
         target = raw.split(" as ")[0].strip()
-        rels.append(make_rel(
-            REL_IMPORTS,
-            target,
-            file_row,
-            source,
-            symbols_by_name,
-            symbols_by_qualified_name,
-            evidence=m.group(0),
-            confidence=0.9,
-            target_kind_hint="class",
-        ))
+        rels.append(
+            make_rel(
+                REL_IMPORTS,
+                target,
+                file_row,
+                source,
+                symbols_by_name,
+                symbols_by_qualified_name,
+                evidence=m.group(0),
+                confidence=0.9,
+                target_kind_hint="class",
+            )
+        )
 
     # new ClassName(
     for m in re.finditer(r"\bnew\s+([\\A-Za-z_][\\A-Za-z0-9_]*)\s*\(", text):
         target = m.group(1)
-        rels.append(make_rel(
-            REL_USES,
-            target,
-            file_row,
-            source,
-            symbols_by_name,
-            symbols_by_qualified_name,
-            evidence=m.group(0),
-            confidence=0.75,
-            target_kind_hint="class",
-        ))
+        rels.append(
+            make_rel(
+                REL_USES,
+                target,
+                file_row,
+                source,
+                symbols_by_name,
+                symbols_by_qualified_name,
+                evidence=m.group(0),
+                confidence=0.75,
+                target_kind_hint="class",
+            )
+        )
 
     # ClassName::method(
-    for m in re.finditer(r"\b([A-Za-z_][A-Za-z0-9_]*)::([A-Za-z_][A-Za-z0-9_]*)\s*\(", text):
+    for m in re.finditer(
+        r"\b([A-Za-z_][A-Za-z0-9_]*)::([A-Za-z_][A-Za-z0-9_]*)\s*\(", text
+    ):
         target_class = m.group(1)
         method = m.group(2)
         call_source, parent_class = source_for_offset(m.start())
@@ -597,28 +635,32 @@ def extract_php(
                 static_target = parent_target
                 reference_target = parent_class
 
-        rels.append(make_rel(
-            REL_STATIC_CALLS,
-            static_target,
-            file_row,
-            call_source,
-            symbols_by_name,
-            symbols_by_qualified_name,
-            evidence=m.group(0),
-            confidence=0.65,
-            target_kind_hint="method",
-        ))
-        rels.append(make_rel(
-            REL_REFERENCES,
-            reference_target,
-            file_row,
-            call_source,
-            symbols_by_name,
-            symbols_by_qualified_name,
-            evidence=m.group(0),
-            confidence=0.7,
-            target_kind_hint="class",
-        ))
+        rels.append(
+            make_rel(
+                REL_STATIC_CALLS,
+                static_target,
+                file_row,
+                call_source,
+                symbols_by_name,
+                symbols_by_qualified_name,
+                evidence=m.group(0),
+                confidence=0.65,
+                target_kind_hint="method",
+            )
+        )
+        rels.append(
+            make_rel(
+                REL_REFERENCES,
+                reference_target,
+                file_row,
+                call_source,
+                symbols_by_name,
+                symbols_by_qualified_name,
+                evidence=m.group(0),
+                confidence=0.7,
+                target_kind_hint="class",
+            )
+        )
 
     return rels
 
@@ -646,92 +688,108 @@ def extract_java(
         source = pick_source_symbol(symbols_by_file, file_row.id, class_name)
 
         if m.group(3):
-            rels.append(make_rel(
-                REL_INHERITS,
-                m.group(3),
-                file_row,
-                source,
-                symbols_by_name,
-                symbols_by_qualified_name,
-                evidence=m.group(0),
-                confidence=0.95,
-                target_kind_hint="class",
-            ))
+            rels.append(
+                make_rel(
+                    REL_INHERITS,
+                    m.group(3),
+                    file_row,
+                    source,
+                    symbols_by_name,
+                    symbols_by_qualified_name,
+                    evidence=m.group(0),
+                    confidence=0.95,
+                    target_kind_hint="class",
+                )
+            )
 
         if m.group(4):
             for iface in m.group(4).split(","):
                 iface = iface.strip()
                 if iface:
-                    rels.append(make_rel(
-                        REL_IMPLEMENTS,
-                        iface,
-                        file_row,
-                        source,
-                        symbols_by_name,
-                        symbols_by_qualified_name,
-                        evidence=m.group(0),
-                        confidence=0.95,
-                        target_kind_hint="interface",
-                    ))
+                    rels.append(
+                        make_rel(
+                            REL_IMPLEMENTS,
+                            iface,
+                            file_row,
+                            source,
+                            symbols_by_name,
+                            symbols_by_qualified_name,
+                            evidence=m.group(0),
+                            confidence=0.95,
+                            target_kind_hint="interface",
+                        )
+                    )
 
     source = pick_source_symbol(symbols_by_file, file_row.id)
 
     # import com.foo.Bar;
-    for m in re.finditer(r"^\s*import\s+([A-Za-z_][A-Za-z0-9_\.]*)(?:\.\*)?\s*;", text, re.MULTILINE):
+    for m in re.finditer(
+        r"^\s*import\s+([A-Za-z_][A-Za-z0-9_\.]*)(?:\.\*)?\s*;", text, re.MULTILINE
+    ):
         target = m.group(1).split(".")[-1]
-        rels.append(make_rel(
-            REL_IMPORTS,
-            target,
-            file_row,
-            source,
-            symbols_by_name,
-            symbols_by_qualified_name,
-            evidence=m.group(0),
-            confidence=0.85,
-            target_kind_hint="class",
-        ))
+        rels.append(
+            make_rel(
+                REL_IMPORTS,
+                target,
+                file_row,
+                source,
+                symbols_by_name,
+                symbols_by_qualified_name,
+                evidence=m.group(0),
+                confidence=0.85,
+                target_kind_hint="class",
+            )
+        )
 
     # new ClassName(
     for m in re.finditer(r"\bnew\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", text):
         target = m.group(1)
-        rels.append(make_rel(
-            REL_USES,
-            target,
-            file_row,
-            source,
-            symbols_by_name,
-            symbols_by_qualified_name,
-            evidence=m.group(0),
-            confidence=0.75,
-            target_kind_hint="class",
-        ))
+        rels.append(
+            make_rel(
+                REL_USES,
+                target,
+                file_row,
+                source,
+                symbols_by_name,
+                symbols_by_qualified_name,
+                evidence=m.group(0),
+                confidence=0.75,
+                target_kind_hint="class",
+            )
+        )
 
     # ClassName.method(
-    for m in re.finditer(r"\b([A-Z][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*\(", text):
+    for m in re.finditer(
+        r"\b([A-Z][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*\(", text
+    ):
         target_class = m.group(1)
         method = m.group(2)
-        rels.append(make_rel(
-            REL_CALLS,
-            f"{target_class}.{method}",
-            file_row,
-            source,
-            symbols_by_name,
-            symbols_by_qualified_name,
-            evidence=m.group(0),
-            confidence=0.6,
-            target_kind_hint="method",
-        ))
-        rels.append(make_rel(
-            REL_REFERENCES,
-            target_class,
-            file_row,
-            source,
-            symbols_by_name,
-            symbols_by_qualified_name,
-            evidence=m.group(0),
-            confidence=0.65,
-            target_kind_hint="class",
-        ))
+        rels.append(
+            make_rel(
+                REL_CALLS,
+                f"{target_class}.{method}",
+                file_row,
+                source,
+                symbols_by_name,
+                symbols_by_qualified_name,
+                evidence=m.group(0),
+                confidence=0.6,
+                target_kind_hint="method",
+            )
+        )
+        rels.append(
+            make_rel(
+                REL_REFERENCES,
+                target_class,
+                file_row,
+                source,
+                symbols_by_name,
+                symbols_by_qualified_name,
+                evidence=m.group(0),
+                confidence=0.65,
+                target_kind_hint="class",
+            )
+        )
 
     return rels
 
@@ -743,13 +801,13 @@ def extract_xml(
     symbols_by_file: dict[int, list[SymbolRow]],
     symbols_by_qualified_name: dict[str, list[SymbolRow]],
 ) -> list[Relationship]:
-    
+
     rels: list[Relationship] = []
     source = pick_source_symbol(symbols_by_file, file_row.id)
 
     # Conservative: capture class-like / manager-like references in XML attributes/text.
     patterns = [
-        r'\b([A-Za-z_][A-Za-z0-9_]*(?:Manager|Controller|Service|Validator|Factory))\b',
+        r"\b([A-Za-z_][A-Za-z0-9_]*(?:Manager|Controller|Service|Validator|Factory))\b",
         r'\b(entity|object|table|class|model|handler|manager)\s*=\s*"([^"]+)"',
         r"\b(entity|object|table|class|model|handler|manager)\s*=\s*'([^']+)'",
     ]
@@ -762,17 +820,19 @@ def extract_xml(
                 target = m.group(1)
 
             if target and len(target) > 2:
-                rels.append(make_rel(
-                    REL_REFERENCES,
-                    target,
-                    file_row,
-                    source,
-                    symbols_by_name,
-                    symbols_by_qualified_name,
-                    evidence=m.group(0),
-                    confidence=0.55,
-                    target_kind_hint="unknown",
-                ))
+                rels.append(
+                    make_rel(
+                        REL_REFERENCES,
+                        target,
+                        file_row,
+                        source,
+                        symbols_by_name,
+                        symbols_by_qualified_name,
+                        evidence=m.group(0),
+                        confidence=0.55,
+                        target_kind_hint="unknown",
+                    )
+                )
 
     return rels
 
@@ -784,52 +844,60 @@ def extract_js_ts(
     symbols_by_file: dict[int, list[SymbolRow]],
     symbols_by_qualified_name: dict[str, list[SymbolRow]],
 ) -> list[Relationship]:
-    
+
     rels: list[Relationship] = []
     source = pick_source_symbol(symbols_by_file, file_row.id)
 
     # import X from '...'
     for m in re.finditer(r"^\s*import\s+(.+?)\s+from\s+.+?['\"]", text, re.MULTILINE):
         imported = m.group(1).strip()
-        rels.append(make_rel(
-            REL_IMPORTS,
-            imported,
-            file_row,
-            source,
-            symbols_by_name,
-            symbols_by_qualified_name,
-            evidence=m.group(0),
-            confidence=0.65,
-            target_kind_hint="module",
-        ))
+        rels.append(
+            make_rel(
+                REL_IMPORTS,
+                imported,
+                file_row,
+                source,
+                symbols_by_name,
+                symbols_by_qualified_name,
+                evidence=m.group(0),
+                confidence=0.65,
+                target_kind_hint="module",
+            )
+        )
 
     # require('...')
     for m in re.finditer(r"\brequire\s*\(\s*['\"]([^'\"]+)['\"]\s*\)", text):
-        rels.append(make_rel(
-            REL_IMPORTS,
-            m.group(1),
-            file_row,
-            source,
-            symbols_by_name,
-            symbols_by_qualified_name,
-            evidence=m.group(0),
-            confidence=0.65,
-            target_kind_hint="module",
-        ))
+        rels.append(
+            make_rel(
+                REL_IMPORTS,
+                m.group(1),
+                file_row,
+                source,
+                symbols_by_name,
+                symbols_by_qualified_name,
+                evidence=m.group(0),
+                confidence=0.65,
+                target_kind_hint="module",
+            )
+        )
 
     # ClassName.method(
-    for m in re.finditer(r"\b([A-Z][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*\(", text):
-        rels.append(make_rel(
-            REL_CALLS,
-            f"{m.group(1)}.{m.group(2)}",
-            file_row,
-            source,
-            symbols_by_name,
-            symbols_by_qualified_name,
-            evidence=m.group(0),
-            confidence=0.55,
-            target_kind_hint="method",
-        ))
+    for m in re.finditer(
+        r"\b([A-Z][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*\(", text
+    ):
+        rels.append(
+            make_rel(
+                REL_CALLS,
+                f"{m.group(1)}.{m.group(2)}",
+                file_row,
+                source,
+                symbols_by_name,
+                symbols_by_qualified_name,
+                evidence=m.group(0),
+                confidence=0.55,
+                target_kind_hint="method",
+            )
+        )
 
     return rels
 
@@ -902,7 +970,17 @@ def extract_yaml(
                 continue
             for method in methods.keys():
                 method_name = str(method).lower()
-                if method_name not in {"get", "post", "patch", "delete", "put", "head", "options", "trace", "connect"}:
+                if method_name not in {
+                    "get",
+                    "post",
+                    "patch",
+                    "delete",
+                    "put",
+                    "head",
+                    "options",
+                    "trace",
+                    "connect",
+                }:
                     continue
                 op_name = f"{method_name.upper()} {endpoint}"
                 add_rel(
@@ -975,7 +1053,11 @@ def extract_yaml(
                         target_kind_hint="entity",
                     )
 
-                if key_str in {"path", "resource"} and isinstance(value, str) and value.startswith("/"):
+                if (
+                    key_str in {"path", "resource"}
+                    and isinstance(value, str)
+                    and value.startswith("/")
+                ):
                     add_rel(
                         REL_CONTAINS,
                         value,
@@ -1026,7 +1108,9 @@ def extract_relationships_for_file(
     if not extractor:
         return []
 
-    return extractor(text, file_row, symbols_by_name, symbols_by_file, symbols_by_qualified_name)
+    return extractor(
+        text, file_row, symbols_by_name, symbols_by_file, symbols_by_qualified_name
+    )
 
 
 def insert_relationships(conn: sqlite3.Connection, rels: Iterable[Relationship]) -> int:
@@ -1054,23 +1138,26 @@ def insert_relationships(conn: sqlite3.Connection, rels: Iterable[Relationship])
     """
 
     for r in rels:
-        cur = conn.execute(sql, (
-            r.source_symbol_id,
-            r.source_name,
-            r.source_kind,
-            r.target_symbol_id,
-            r.target_name,
-            r.target_kind,
-            r.relationship_type,
-            r.file_id,
-            r.file_path,
-            r.language,
-            r.confidence,
-            r.evidence,
-            r.resolution_class,
-            r.resolution_reason,
-            RELATIONSHIP_EXTRACTOR,
-        ))
+        cur = conn.execute(
+            sql,
+            (
+                r.source_symbol_id,
+                r.source_name,
+                r.source_kind,
+                r.target_symbol_id,
+                r.target_name,
+                r.target_kind,
+                r.relationship_type,
+                r.file_id,
+                r.file_path,
+                r.language,
+                r.confidence,
+                r.evidence,
+                r.resolution_class,
+                r.resolution_reason,
+                RELATIONSHIP_EXTRACTOR,
+            ),
+        )
         if cur.rowcount > 0:
             inserted += 1
 
@@ -1078,7 +1165,9 @@ def insert_relationships(conn: sqlite3.Connection, rels: Iterable[Relationship])
 
 
 def reset_relationships(conn: sqlite3.Connection) -> None:
-    conn.execute("DELETE FROM relationships WHERE extractor = ?", (RELATIONSHIP_EXTRACTOR,))
+    conn.execute(
+        "DELETE FROM relationships WHERE extractor = ?", (RELATIONSHIP_EXTRACTOR,)
+    )
     conn.commit()
 
 
@@ -1098,7 +1187,9 @@ def extract_all(
     ensure_relationship_tracking_schema(conn)
     ensure_relationship_classification_columns(conn)
 
-    selected_languages = [lang for lang in (languages or list(EXTRACTORS.keys())) if lang in EXTRACTORS]
+    selected_languages = [
+        lang for lang in (languages or list(EXTRACTORS.keys())) if lang in EXTRACTORS
+    ]
     if not selected_languages:
         print("⚠️  No valid extractors selected.")
         conn.close()
@@ -1157,7 +1248,9 @@ def extract_all(
         yaml_stats = get_yaml_rel_stats()
         print(f"   YAML files seen:         {yaml_stats.get('files_seen', 0)}")
         print(f"   YAML parse fail:         {yaml_stats.get('parse_failures', 0)}")
-        print(f"   YAML rels emitted:       {yaml_stats.get('relationships_emitted', 0)}")
+        print(
+            f"   YAML rels emitted:       {yaml_stats.get('relationships_emitted', 0)}"
+        )
 
 
 if __name__ == "__main__":
@@ -1177,7 +1270,9 @@ if __name__ == "__main__":
     )
     parser.add_argument("--repo-root", default=REPO_PATH)
     parser.add_argument("--limit", type=int)
-    parser.add_argument("--file", help="Only process files whose path contains this string")
+    parser.add_argument(
+        "--file", help="Only process files whose path contains this string"
+    )
     parser.add_argument(
         "--reset",
         action="store_true",

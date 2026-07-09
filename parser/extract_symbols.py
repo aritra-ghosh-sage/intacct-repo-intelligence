@@ -16,8 +16,8 @@ from parser.extractors import (
 
 EXTRACTORS = {
     "java": java_extractor,
-    "php":  php_extractor,
-    "sql":  sql_extractor,
+    "php": php_extractor,
+    "sql": sql_extractor,
     "yaml": yaml_extractor,
     "xslt": xslt_extractor,
 }
@@ -29,7 +29,9 @@ def extract_all(only_changed: bool = True, languages: list[str] | None = None):
 
     started = datetime.now(timezone.utc).isoformat()
 
-    selected_languages = [lang for lang in (languages or list(EXTRACTORS.keys())) if lang in EXTRACTORS]
+    selected_languages = [
+        lang for lang in (languages or list(EXTRACTORS.keys())) if lang in EXTRACTORS
+    ]
     if not selected_languages:
         print("⚠️  No valid extractors selected.")
         conn.close()
@@ -42,7 +44,8 @@ def extract_all(only_changed: bool = True, languages: list[str] | None = None):
         # A file needs (re-)extraction if:
         #   1. It has never been extracted, OR
         #   2. It's been re-scanned since the last extraction
-        rows = cur.execute(f"""
+        rows = cur.execute(
+            f"""
             SELECT id, path, language
             FROM files
             WHERE language IN ({placeholders})
@@ -50,13 +53,18 @@ def extract_all(only_changed: bool = True, languages: list[str] | None = None):
                     last_symbols_extracted IS NULL
                  OR last_indexed > last_symbols_extracted
               )
-        """, lang_tuple).fetchall()
+        """,
+            lang_tuple,
+        ).fetchall()
     else:
-        rows = cur.execute(f"""
+        rows = cur.execute(
+            f"""
             SELECT id, path, language
             FROM files
             WHERE language IN ({placeholders})
-        """, lang_tuple).fetchall()
+        """,
+            lang_tuple,
+        ).fetchall()
 
     print(f"🔎 Extracting symbols from {len(rows)} files")
 
@@ -84,27 +92,39 @@ def extract_all(only_changed: bool = True, languages: list[str] | None = None):
             cur.execute("DELETE FROM symbols WHERE file_id = ?", (file_id,))
 
             # Pass file path to extractor for format-specific delegation (e.g., .cqry -> cqry_extractor)
-            if hasattr(extractor, 'extract') and extractor.extract.__code__.co_argcount > 1:
+            if (
+                hasattr(extractor, "extract")
+                and extractor.extract.__code__.co_argcount > 1
+            ):
                 symbols = extractor.extract(source, rel_path)
             else:
                 symbols = extractor.extract(source)
             for s in symbols:
-                cur.execute("""
+                cur.execute(
+                    """
                     INSERT INTO symbols
                     (file_id, name, kind, parent_symbol,
                      start_line, end_line, signature, language)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    file_id, s.name, s.kind, s.parent_symbol,
-                    s.start_line, s.end_line, s.signature, s.language
-                ))
+                """,
+                    (
+                        file_id,
+                        s.name,
+                        s.kind,
+                        s.parent_symbol,
+                        s.start_line,
+                        s.end_line,
+                        s.signature,
+                        s.language,
+                    ),
+                )
                 total_symbols += 1
 
             # ✅ Only stamp on success — failed files remain unmarked
             #     so they'll be retried on the next incremental run.
             cur.execute(
                 "UPDATE files SET last_symbols_extracted = ? WHERE id = ?",
-                (started, file_id)
+                (started, file_id),
             )
 
             if total_symbols % 5000 == 0:
@@ -130,7 +150,11 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--full", action="store_true", help="Extract symbols for all files, not only changed files.")
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Extract symbols for all files, not only changed files.",
+    )
     parser.add_argument(
         "--language",
         action="append",

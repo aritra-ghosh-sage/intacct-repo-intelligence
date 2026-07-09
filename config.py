@@ -21,7 +21,7 @@ INCLUDE_EXTENSIONS = {
     ".json",
     ".py",
     ".xsl",
-    ".xslt"
+    ".xslt",
 }
 
 EXCLUDE_DIRS = {
@@ -39,5 +39,5 @@ EXCLUDE_DIRS = {
     ".codegraph",
     ".gemini",
     ".github",
-    ".claude"
+    ".claude",
 }

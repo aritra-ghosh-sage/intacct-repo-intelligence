@@ -59,13 +59,14 @@ def check_entity_recall_v2(conn):
         "matched": len(matched_norm),
         "matched_names": matched_names,
         "missing_names": missing_names,
-        "renamed_matches": match_details,   # gold_name -> discovered_name
+        "renamed_matches": match_details,  # gold_name -> discovered_name
         "recall_percent": round(recall * 100, 2),
     }
 
 
 import sqlite3
-path = '../catalog/catalog.db'
+
+path = "../catalog/catalog.db"
 conn = sqlite3.connect(path)
 conn.row_factory = sqlite3.Row
 

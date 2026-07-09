@@ -49,7 +49,9 @@ def table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {r["name"] for r in rows}
 
 
-def missing_columns(conn: sqlite3.Connection, table: str, required: set[str]) -> list[str]:
+def missing_columns(
+    conn: sqlite3.Connection, table: str, required: set[str]
+) -> list[str]:
     return sorted(list(required - table_columns(conn, table)))
 
 
@@ -63,7 +65,9 @@ def load_entities_jsonl(path: str) -> list[dict]:
             try:
                 rows.append(json.loads(payload))
             except json.JSONDecodeError as exc:
-                raise ValueError(f"Invalid JSON in {path} at line {idx}: {exc}") from exc
+                raise ValueError(
+                    f"Invalid JSON in {path} at line {idx}: {exc}"
+                ) from exc
     return rows
 
 
@@ -93,7 +97,9 @@ def check_scan_output_roles(entities_rows: list[dict]) -> list:
     return findings
 
 
-def check_entities_jsonl_vs_db(conn: sqlite3.Connection, entities_rows: list[dict]) -> list:
+def check_entities_jsonl_vs_db(
+    conn: sqlite3.Connection, entities_rows: list[dict]
+) -> list:
     findings = []
 
     required = {"id", "name", "ent_file", "module", "table_name", "view_name", "dummy"}
@@ -103,7 +109,10 @@ def check_entities_jsonl_vs_db(conn: sqlite3.Connection, entities_rows: list[dic
         return findings
 
     file_entities = {r["entity_name"]: r for r in entities_rows if r.get("entity_name")}
-    db_rows = q(conn, "SELECT id, name, ent_file, module, table_name, view_name, dummy FROM entity_nodes")
+    db_rows = q(
+        conn,
+        "SELECT id, name, ent_file, module, table_name, view_name, dummy FROM entity_nodes",
+    )
     db_entities = {r["name"]: r for r in db_rows}
 
     missing_in_db = sorted(set(file_entities) - set(db_entities))
@@ -131,7 +140,12 @@ def check_entities_jsonl_vs_db(conn: sqlite3.Connection, entities_rows: list[dic
         if mismatches:
             metadata_mismatches.append((name, mismatches))
 
-    findings.append(("entity metadata mismatches between JSONL and entity_nodes", metadata_mismatches))
+    findings.append(
+        (
+            "entity metadata mismatches between JSONL and entity_nodes",
+            metadata_mismatches,
+        )
+    )
     return findings
 
 
@@ -172,7 +186,7 @@ def check_mapping_roles_and_roots(conn: sqlite3.Connection) -> list:
             ON er.entity_id = em.entity_id
            AND er.symbol_id = em.symbol_id
         WHERE em.symbol_id IS NOT NULL
-        """
+        """,
     )
 
     missing_roots = []
@@ -188,7 +202,11 @@ def check_mapping_roles_and_roots(conn: sqlite3.Connection) -> list:
             missing_roots.append((r["entity_id"], r["symbol_id"], role))
             continue
 
-        if r["role"] != role or float(r["weight"]) != float(expected_weight) or r["reason"] != expected_reason:
+        if (
+            r["role"] != role
+            or float(r["weight"]) != float(expected_weight)
+            or r["reason"] != expected_reason
+        ):
             mismatched_roots.append(
                 (
                     r["entity_id"],
@@ -202,7 +220,9 @@ def check_mapping_roles_and_roots(conn: sqlite3.Connection) -> list:
                 )
             )
 
-    findings.append(("entity_mappings missing corresponding entity_roots rows", missing_roots))
+    findings.append(
+        ("entity_mappings missing corresponding entity_roots rows", missing_roots)
+    )
     findings.append(("entity_roots role/weight/reason mismatches", mismatched_roots))
     return findings
 
@@ -216,7 +236,9 @@ def check_structural(conn: sqlite3.Connection) -> list:
     if missing:
         return findings
 
-    missing_ent = q(conn, """
+    missing_ent = q(
+        conn,
+        """
         SELECT name
         FROM entity_nodes
         WHERE (ent_file IS NULL OR ent_file = '')
@@ -225,38 +247,50 @@ def check_structural(conn: sqlite3.Connection) -> list:
               FROM entity_mappings
               WHERE mapping_type IN ({roles})
           )
-    """.format(roles=", ".join(["?"] * len(ROLE_WEIGHT))), tuple(ROLE_WEIGHT.keys()))
-    findings.append(
-        ("entity_nodes without ent_file", [r["name"] for r in missing_ent])
+    """.format(roles=", ".join(["?"] * len(ROLE_WEIGHT))),
+        tuple(ROLE_WEIGHT.keys()),
     )
+    findings.append(("entity_nodes without ent_file", [r["name"] for r in missing_ent]))
 
-    orphan_mappings = q(conn, """
+    orphan_mappings = q(
+        conn,
+        """
         SELECT em.entity_id, em.symbol_id
         FROM entity_mappings em
         LEFT JOIN symbols s
             ON s.id = em.symbol_id
         WHERE em.symbol_id IS NOT NULL
           AND s.id IS NULL
-    """)
+    """,
+    )
     findings.append(
-        ("entity_mappings pointing to missing symbols",
-         [(r["entity_id"], r["symbol_id"]) for r in orphan_mappings])
+        (
+            "entity_mappings pointing to missing symbols",
+            [(r["entity_id"], r["symbol_id"]) for r in orphan_mappings],
+        )
     )
 
-    orphan_roots = q(conn, """
+    orphan_roots = q(
+        conn,
+        """
         SELECT er.entity_id, er.symbol_id
         FROM entity_roots er
         LEFT JOIN entity_mappings em
             ON em.entity_id = er.entity_id
            AND em.symbol_id = er.symbol_id
         WHERE em.id IS NULL
-    """)
+    """,
+    )
     findings.append(
-        ("entity_roots not backed by entity_mappings",
-         [(r["entity_id"], r["symbol_id"]) for r in orphan_roots])
+        (
+            "entity_roots not backed by entity_mappings",
+            [(r["entity_id"], r["symbol_id"]) for r in orphan_roots],
+        )
     )
 
-    no_seed_at_075 = q(conn, """
+    no_seed_at_075 = q(
+        conn,
+        """
         SELECT en.name
         FROM entity_nodes en
         WHERE en.entity_type IN ('business_entity', 'domain_object')
@@ -266,13 +300,18 @@ def check_structural(conn: sqlite3.Connection) -> list:
               WHERE entity_id = en.id
                 AND weight >= 0.75
           )
-    """)
+    """,
+    )
     findings.append(
-        ("domain entities with 0 seed roots at weight >= 0.75",
-         [r["name"] for r in no_seed_at_075])
+        (
+            "domain entities with 0 seed roots at weight >= 0.75",
+            [r["name"] for r in no_seed_at_075],
+        )
     )
 
-    non_domain_no_seed = q(conn, """
+    non_domain_no_seed = q(
+        conn,
+        """
         SELECT en.name, en.entity_type
         FROM entity_nodes en
         WHERE en.entity_type NOT IN ('business_entity', 'domain_object')
@@ -283,13 +322,18 @@ def check_structural(conn: sqlite3.Connection) -> list:
                 AND weight >= 0.75
           )
         ORDER BY en.entity_type, en.name
-    """)
+    """,
+    )
     findings.append(
-        ("non-domain entities with 0 seed roots at weight >= 0.75",
-         [(r["name"], r["entity_type"]) for r in non_domain_no_seed])
+        (
+            "non-domain entities with 0 seed roots at weight >= 0.75",
+            [(r["name"], r["entity_type"]) for r in non_domain_no_seed],
+        )
     )
 
-    unclassified_no_seed = q(conn, """
+    unclassified_no_seed = q(
+        conn,
+        """
         SELECT en.name
         FROM entity_nodes en
         WHERE (en.entity_type IS NULL OR en.entity_type = '')
@@ -300,25 +344,35 @@ def check_structural(conn: sqlite3.Connection) -> list:
                 AND weight >= 0.75
           )
         ORDER BY en.name
-    """)
+    """,
+    )
     findings.append(
-        ("unclassified entities with 0 seed roots at weight >= 0.75",
-         [r["name"] for r in unclassified_no_seed])
+        (
+            "unclassified entities with 0 seed roots at weight >= 0.75",
+            [r["name"] for r in unclassified_no_seed],
+        )
     )
 
-    non_domain_present = q(conn, """
+    non_domain_present = q(
+        conn,
+        """
         SELECT en.entity_type, COUNT(*) AS c
         FROM entity_nodes en
         WHERE en.entity_type NOT IN ('business_entity', 'domain_object')
         GROUP BY en.entity_type
         ORDER BY c DESC, en.entity_type
-    """)
+    """,
+    )
     findings.append(
-        ("non-domain entity counts",
-         [(r["entity_type"], r["c"]) for r in non_domain_present])
+        (
+            "non-domain entity counts",
+            [(r["entity_type"], r["c"]) for r in non_domain_present],
+        )
     )
 
-    domain_without_type = q(conn, """
+    domain_without_type = q(
+        conn,
+        """
         SELECT en.name
         FROM entity_nodes en
         WHERE en.entity_type IN ('business_entity', 'domain_object')
@@ -328,22 +382,31 @@ def check_structural(conn: sqlite3.Connection) -> list:
               FROM entity_mappings
               WHERE mapping_type IN ({roles})
           )
-    """.format(roles=", ".join(["?"] * len(ROLE_WEIGHT))), tuple(ROLE_WEIGHT.keys()))
+    """.format(roles=", ".join(["?"] * len(ROLE_WEIGHT))),
+        tuple(ROLE_WEIGHT.keys()),
+    )
     if domain_without_type:
         findings.append(
-            ("domain entities missing ent_file despite classification",
-             [r["name"] for r in domain_without_type])
+            (
+                "domain entities missing ent_file despite classification",
+                [r["name"] for r in domain_without_type],
+            )
         )
 
-    dup_root_symbols = q(conn, """
+    dup_root_symbols = q(
+        conn,
+        """
         SELECT symbol_id, COUNT(DISTINCT entity_id) AS entities
         FROM entity_roots
         GROUP BY symbol_id
         HAVING entities > 1
-    """)
+    """,
+    )
     findings.append(
-        ("symbols acting as root for multiple entities",
-         [(r["symbol_id"], r["entities"]) for r in dup_root_symbols])
+        (
+            "symbols acting as root for multiple entities",
+            [(r["symbol_id"], r["entities"]) for r in dup_root_symbols],
+        )
     )
 
     return findings
@@ -372,7 +435,9 @@ def check_filesystem(
     findings.append(("entity_nodes with .ent files missing on disk", missing_ent_files))
 
     missing_class_files = []
-    rows = q(conn, """
+    rows = q(
+        conn,
+        """
         SELECT
             en.name AS entity_name,
             em.mapping_type,
@@ -381,7 +446,9 @@ def check_filesystem(
         JOIN entity_nodes en ON en.id = em.entity_id
         WHERE em.source_text IS NOT NULL
           AND em.mapping_type IN ({roles})
-    """.format(roles=", ".join(["?"] * len(COMPANION_ROLES))), tuple(COMPANION_ROLES))
+    """.format(roles=", ".join(["?"] * len(COMPANION_ROLES))),
+        tuple(COMPANION_ROLES),
+    )
 
     for r in rows:
         candidate = os.path.join(repo_root, r["source_text"])
@@ -391,8 +458,10 @@ def check_filesystem(
             )
 
     findings.append(
-        ("companion class files referenced in entity_mappings missing on disk",
-         missing_class_files)
+        (
+            "companion class files referenced in entity_mappings missing on disk",
+            missing_class_files,
+        )
     )
 
     return findings
@@ -438,23 +507,34 @@ def check_repo_vs_db(
 def check_role_distribution(conn: sqlite3.Connection) -> list:
     findings = []
 
-    rows = q(conn, """
+    rows = q(
+        conn,
+        """
         SELECT role, COUNT(*) AS cnt
         FROM entity_roots
         GROUP BY role
         ORDER BY cnt DESC
-    """)
-    findings.append(("entity_roots role distribution",
-                     [(r["role"], r["cnt"]) for r in rows]))
+    """,
+    )
+    findings.append(
+        ("entity_roots role distribution", [(r["role"], r["cnt"]) for r in rows])
+    )
 
-    core_low_weight = q(conn, """
+    core_low_weight = q(
+        conn,
+        """
         SELECT er.symbol_id, er.role, er.weight
         FROM entity_roots er
         WHERE role = 'manager'
           AND weight < 0.9
-    """)
-    findings.append(("manager roles with unexpectedly low weight",
-                     [(r["symbol_id"], r["role"], r["weight"]) for r in core_low_weight]))
+    """,
+    )
+    findings.append(
+        (
+            "manager roles with unexpectedly low weight",
+            [(r["symbol_id"], r["role"], r["weight"]) for r in core_low_weight],
+        )
+    )
 
     return findings
 
@@ -505,13 +585,17 @@ def check_ground_truth(conn: sqlite3.Connection, entities_rows: list[dict]) -> l
             missing_entities.append(entity_name)
             continue
 
-        got_rows = q(conn, """
+        got_rows = q(
+            conn,
+            """
             SELECT s.name
             FROM entity_roots er
             JOIN symbols s ON s.id = er.symbol_id
             WHERE er.entity_id = ?
               AND er.weight >= 0.75
-        """, (row["id"],))
+        """,
+            (row["id"],),
+        )
         got = {r["name"].lower() for r in got_rows}
         correct = expected_set & got
         missing = expected_set - got
@@ -591,14 +675,14 @@ def main() -> None:
     entities_rows = load_entities_jsonl(args.entities)
 
     all_findings = [
-        ("Scan output checks",   check_scan_output_roles(entities_rows)),
-        ("JSONL vs DB checks",   check_entities_jsonl_vs_db(conn, entities_rows)),
+        ("Scan output checks", check_scan_output_roles(entities_rows)),
+        ("JSONL vs DB checks", check_entities_jsonl_vs_db(conn, entities_rows)),
         ("Mapping/roots checks", check_mapping_roles_and_roots(conn)),
-        ("Structural checks",     check_structural(conn)),
-        ("Filesystem checks",     check_filesystem(conn, args.repo_root)),
-        ("Repo vs DB coverage",   check_repo_vs_db(conn, args.repo_root)),
-        ("Role distribution",     check_role_distribution(conn)),
-        ("Ground truth checks",   check_ground_truth(conn, entities_rows)),
+        ("Structural checks", check_structural(conn)),
+        ("Filesystem checks", check_filesystem(conn, args.repo_root)),
+        ("Repo vs DB coverage", check_repo_vs_db(conn, args.repo_root)),
+        ("Role distribution", check_role_distribution(conn)),
+        ("Ground truth checks", check_ground_truth(conn, entities_rows)),
     ]
 
     write_report(all_findings, args.report)

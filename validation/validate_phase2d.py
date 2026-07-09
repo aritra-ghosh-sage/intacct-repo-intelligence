@@ -127,12 +127,13 @@ def check_entity_recall_v2(conn: sqlite3.Connection) -> dict[str, Any]:
     }
 
     gold_by_norm = {_normalize_name(name): name for name in gold_names}
-    discovered_norm = {_normalize_name(name) for name in discovered_names if _normalize_name(name)}
+    discovered_norm = {
+        _normalize_name(name) for name in discovered_names if _normalize_name(name)
+    }
 
     matched_norm = set(gold_by_norm.keys()) & discovered_norm
     missing = sorted(
-        gold_by_norm[norm]
-        for norm in (set(gold_by_norm.keys()) - discovered_norm)
+        gold_by_norm[norm] for norm in (set(gold_by_norm.keys()) - discovered_norm)
     )
     recall = (len(matched_norm) / len(gold_names) * 100) if gold_names else 0.0
 
@@ -173,8 +174,7 @@ def main() -> None:
     write_report(args.report, checks)
 
     failing = [
-        name for name, payload in checks.items()
-        if payload.get("status") == "FAIL"
+        name for name, payload in checks.items() if payload.get("status") == "FAIL"
     ]
     if failing:
         print(f"Phase 2D validation failed checks: {', '.join(failing)}")

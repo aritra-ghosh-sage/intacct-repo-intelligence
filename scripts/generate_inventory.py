@@ -32,7 +32,7 @@ def get_verified_state(conn):
         "phases": {
             "phase2d": {
                 "status": "verified",
-                "description": "Phase 2D regenerated from database state"
+                "description": "Phase 2D regenerated from database state",
             }
         },
         "database": {
@@ -44,27 +44,33 @@ def get_verified_state(conn):
             "workflow_types": [],
         },
     }
-    
+
     # Get table list and row counts
     cursor = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
     )
     tables = [row["name"] for row in cursor.fetchall()]
-    
+
     for table in tables:
         verified["database"]["tables"][table] = {
             "status": "present",
-            "rows": conn.execute(f"SELECT COUNT(*) as cnt FROM {table}").fetchone()["cnt"],
+            "rows": conn.execute(f"SELECT COUNT(*) as cnt FROM {table}").fetchone()[
+                "cnt"
+            ],
         }
-    
+
     # Get distinct symbol kinds
     cursor = conn.execute("SELECT DISTINCT kind FROM symbols ORDER BY kind")
     verified["database"]["symbol_kinds"] = [row["kind"] for row in cursor.fetchall()]
-    
+
     # Get distinct mapping types
-    cursor = conn.execute("SELECT DISTINCT mapping_type FROM entity_mappings ORDER BY mapping_type")
-    verified["database"]["mapping_types"] = [row["mapping_type"] for row in cursor.fetchall()]
-    
+    cursor = conn.execute(
+        "SELECT DISTINCT mapping_type FROM entity_mappings ORDER BY mapping_type"
+    )
+    verified["database"]["mapping_types"] = [
+        row["mapping_type"] for row in cursor.fetchall()
+    ]
+
     # Get distinct relationship types
     cursor = conn.execute(
         "SELECT DISTINCT relationship_type FROM relationships ORDER BY relationship_type"
@@ -72,11 +78,15 @@ def get_verified_state(conn):
     verified["database"]["relationship_types"] = [
         row["relationship_type"] for row in cursor.fetchall()
     ]
-    
+
     # Get distinct workflow types
-    cursor = conn.execute("SELECT DISTINCT workflow_type FROM workflows ORDER BY workflow_type")
-    verified["database"]["workflow_types"] = [row["workflow_type"] for row in cursor.fetchall()]
-    
+    cursor = conn.execute(
+        "SELECT DISTINCT workflow_type FROM workflows ORDER BY workflow_type"
+    )
+    verified["database"]["workflow_types"] = [
+        row["workflow_type"] for row in cursor.fetchall()
+    ]
+
     return verified
 
 
@@ -89,32 +99,32 @@ def get_filesystem_state():
         "scripts": [],
         "validators": [],
     }
-    
+
     # Migrations
     migrations_dir = repo_root / "migrations"
     if migrations_dir.exists():
         for f in sorted(migrations_dir.glob("*.sql")):
             filesystem["migrations"].append(f.name)
-    
+
     # Parsers
     parsers_dir = repo_root / "parser" / "extractors"
     if parsers_dir.exists():
         for f in sorted(parsers_dir.glob("*_extractor.py")):
             filesystem["parsers"].append(f.name)
-    
+
     # Scripts
     scripts_dir = repo_root / "scripts"
     if scripts_dir.exists():
         for f in sorted(scripts_dir.glob("*.py")):
             if f.name not in ["__pycache__"]:
                 filesystem["scripts"].append(f.name)
-    
+
     # Validators
     validators_dir = repo_root / "validation"
     if validators_dir.exists():
         for f in sorted(validators_dir.glob("validate_*.py")):
             filesystem["validators"].append(f.name)
-    
+
     return filesystem
 
 
@@ -177,35 +187,47 @@ def compute_drift(verified, declared):
         "extra_extractors": [],
         "extra_validators": [],
     }
-    
+
     # Check tables
     declared_tables = set(declared["phases"]["phase2d"]["target_tables"])
     verified_tables = set(verified["database"]["tables"].keys())
-    
+
     drift["missing_tables"] = sorted(list(declared_tables - verified_tables))
-    drift["extra_tables"] = sorted(list(verified_tables - declared_tables))[:20]  # Show first 20
-    
+    drift["extra_tables"] = sorted(list(verified_tables - declared_tables))[
+        :20
+    ]  # Show first 20
+
     # Check mapping types
-    declared_mapping_types = set(declared["phases"]["phase2d"]["expected_mapping_types"])
+    declared_mapping_types = set(
+        declared["phases"]["phase2d"]["expected_mapping_types"]
+    )
     verified_mapping_types = set(verified["database"]["mapping_types"])
-    
-    drift["missing_mapping_types"] = sorted(list(declared_mapping_types - verified_mapping_types))
-    drift["extra_mapping_types"] = sorted(list(verified_mapping_types - declared_mapping_types))[:20]
-    
+
+    drift["missing_mapping_types"] = sorted(
+        list(declared_mapping_types - verified_mapping_types)
+    )
+    drift["extra_mapping_types"] = sorted(
+        list(verified_mapping_types - declared_mapping_types)
+    )[:20]
+
     # Check extractors
     declared_extractors = set(declared["phases"]["phase2d"]["required_extractors"])
     verified_extractors = set(verified["filesystem"]["parsers"])
-    
-    drift["missing_extractors"] = sorted(list(declared_extractors - verified_extractors))
+
+    drift["missing_extractors"] = sorted(
+        list(declared_extractors - verified_extractors)
+    )
     drift["extra_extractors"] = sorted(list(verified_extractors - declared_extractors))
-    
+
     # Check validators
     declared_validators = set(declared["phases"]["phase2d"]["required_validators"])
     verified_validators = set(verified["filesystem"]["validators"])
-    
-    drift["missing_validators"] = sorted(list(declared_validators - verified_validators))
+
+    drift["missing_validators"] = sorted(
+        list(declared_validators - verified_validators)
+    )
     drift["extra_validators"] = sorted(list(verified_validators - declared_validators))
-    
+
     # Remove empty drift entries
     return {k: v for k, v in drift.items() if v}
 
@@ -216,14 +238,14 @@ def generate_inventory():
         conn = get_connection()
         verified = get_verified_state(conn)
         conn.close()
-        
+
         filesystem = get_filesystem_state()
         verified["filesystem"] = filesystem
-        
+
         declared = get_declared_state()
-        
+
         drift = compute_drift(verified, declared)
-        
+
         # Assemble final inventory
         inventory = {
             "project_name": "intacct-repo-intelligence",
@@ -233,12 +255,13 @@ def generate_inventory():
             "declared_state": declared,
             "drift": drift if drift else None,
         }
-        
+
         return inventory
-    
+
     except Exception as e:
         print(f"❌ Failed to generate inventory: {e}", file=sys.stderr)
         import traceback
+
         traceback.print_exc()
         return None
 
@@ -246,22 +269,22 @@ def generate_inventory():
 def main():
     """Generate and write project_inventory.json."""
     inventory = generate_inventory()
-    
+
     if not inventory:
         return 1
-    
+
     output_path = Path(__file__).parent.parent / "project_inventory.json"
-    
+
     try:
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(inventory, f, indent=2)
-        
+
         print(f"✅ Generated {output_path}")
-        
+
         # Print summary
         print("\n## Summary")
         print(f"Generated at: {inventory['generated_at']}")
-        
+
         verified = inventory["verified_state"]["database"]
         print(f"Database state:")
         print(f"  - Tables: {len(verified['tables'])}")
@@ -269,14 +292,14 @@ def main():
         print(f"  - Mapping types: {len(verified['mapping_types'])}")
         print(f"  - Relationship types: {len(verified['relationship_types'])}")
         print(f"  - Workflow types: {len(verified['workflow_types'])}")
-        
+
         filesystem = inventory["verified_state"]["filesystem"]
         print(f"Filesystem state:")
         print(f"  - Migrations: {len(filesystem['migrations'])}")
         print(f"  - Extractors: {len(filesystem['parsers'])}")
         print(f"  - Scripts: {len(filesystem['scripts'])}")
         print(f"  - Validators: {len(filesystem['validators'])}")
-        
+
         drift = inventory.get("drift")
         if drift:
             print(f"\n⚠️  Drift detected:")
@@ -288,9 +311,9 @@ def main():
                             print(f"    * {v}")
         else:
             print("\n✅ No drift detected - verified and declared states align")
-        
+
         return 0
-    
+
     except Exception as e:
         print(f"❌ Failed to write {output_path}: {e}", file=sys.stderr)
         return 1

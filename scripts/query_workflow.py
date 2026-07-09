@@ -122,8 +122,7 @@ def show_entity_workflows(entity_name, db, workflow_type):
         for _, wf_name, source_kind, source_file in grouped[wf_type]:
             print(f"  {wf_name}")
             print(
-                f"    source: {source_kind}"
-                f"{' | ' + source_file if source_file else ''}"
+                f"    source: {source_kind}{' | ' + source_file if source_file else ''}"
             )
 
     conn.close()

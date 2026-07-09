@@ -63,7 +63,9 @@ def show_stats(conn: sqlite3.Connection) -> None:
         print(f"{(r['resolution_class'] or 'unknown'):16} {r['c']}")
 
 
-def show_deps(conn: sqlite3.Connection, name: str, limit: int, classes: list[str]) -> None:
+def show_deps(
+    conn: sqlite3.Connection, name: str, limit: int, classes: list[str]
+) -> None:
     # Outgoing edges where the source symbol (or file path) matches the search term.
     sql = """
         SELECT
@@ -103,15 +105,23 @@ def show_deps(conn: sqlite3.Connection, name: str, limit: int, classes: list[str
     for rel_type, items in grouped.items():
         print(f"{rel_type}")
         for r in items:
-            cls = f" class={r['resolution_class']}" if "resolution_class" in r.keys() and r["resolution_class"] else ""
-            print(f"  -> {r['target_name']} [{r['target_kind'] or 'unknown'}] confidence={r['confidence']}{cls}")
+            cls = (
+                f" class={r['resolution_class']}"
+                if "resolution_class" in r.keys() and r["resolution_class"]
+                else ""
+            )
+            print(
+                f"  -> {r['target_name']} [{r['target_kind'] or 'unknown'}] confidence={r['confidence']}{cls}"
+            )
             print(f"     file: {r['file_path']}")
             if r["evidence"]:
                 print(f"     evidence: {r['evidence'][:160]}")
         print()
 
 
-def show_rdeps(conn: sqlite3.Connection, name: str, limit: int, classes: list[str]) -> None:
+def show_rdeps(
+    conn: sqlite3.Connection, name: str, limit: int, classes: list[str]
+) -> None:
     # Incoming edges where the requested symbol appears as a relationship target.
     sql = """
         SELECT
@@ -149,15 +159,23 @@ def show_rdeps(conn: sqlite3.Connection, name: str, limit: int, classes: list[st
     for rel_type, items in grouped.items():
         print(f"{rel_type}")
         for r in items:
-            cls = f" class={r['resolution_class']}" if "resolution_class" in r.keys() and r["resolution_class"] else ""
-            print(f"  <- {r['source_name']} [{r['source_kind'] or 'unknown'}] confidence={r['confidence']}{cls}")
+            cls = (
+                f" class={r['resolution_class']}"
+                if "resolution_class" in r.keys() and r["resolution_class"]
+                else ""
+            )
+            print(
+                f"  <- {r['source_name']} [{r['source_kind'] or 'unknown'}] confidence={r['confidence']}{cls}"
+            )
             print(f"     file: {r['file_path']}")
             if r["evidence"]:
                 print(f"     evidence: {r['evidence'][:160]}")
         print()
 
 
-def show_unresolved(conn: sqlite3.Connection, name: str | None, limit: int, classes: list[str]) -> None:
+def show_unresolved(
+    conn: sqlite3.Connection, name: str | None, limit: int, classes: list[str]
+) -> None:
     # Relationships that could not be linked to a concrete target symbol id.
     class_sql = ""
     class_params: list[object] = []
@@ -167,7 +185,8 @@ def show_unresolved(conn: sqlite3.Connection, name: str | None, limit: int, clas
         class_params.extend(classes)
 
     if name:
-        rows = conn.execute(f"""
+        rows = conn.execute(
+            f"""
             SELECT relationship_type, source_name, target_name, file_path, evidence, resolution_class
             FROM relationships
             WHERE target_symbol_id IS NULL
@@ -175,30 +194,43 @@ def show_unresolved(conn: sqlite3.Connection, name: str | None, limit: int, clas
               {class_sql}
             ORDER BY target_name
             LIMIT ?
-        """, [f"%{name}%", *class_params, limit]).fetchall()
+        """,
+            [f"%{name}%", *class_params, limit],
+        ).fetchall()
     else:
-        rows = conn.execute(f"""
+        rows = conn.execute(
+            f"""
             SELECT relationship_type, source_name, target_name, file_path, evidence, resolution_class
             FROM relationships
             WHERE target_symbol_id IS NULL
             {class_sql}
             ORDER BY target_name
             LIMIT ?
-        """, [*class_params, limit]).fetchall()
+        """,
+            [*class_params, limit],
+        ).fetchall()
 
     print(f"Unresolved relationships: {len(rows)} shown")
     print()
 
     for r in rows:
-        cls = f" class={r['resolution_class']}" if "resolution_class" in r.keys() and r["resolution_class"] else ""
-        print(f"{r['relationship_type']:14} {r['source_name']} -> {r['target_name']}{cls}")
+        cls = (
+            f" class={r['resolution_class']}"
+            if "resolution_class" in r.keys() and r["resolution_class"]
+            else ""
+        )
+        print(
+            f"{r['relationship_type']:14} {r['source_name']} -> {r['target_name']}{cls}"
+        )
         print(f"  file: {r['file_path']}")
         if r["evidence"]:
             print(f"  evidence: {r['evidence'][:160]}")
         print()
 
 
-def show_files(conn: sqlite3.Connection, name: str, limit: int, classes: list[str]) -> None:
+def show_files(
+    conn: sqlite3.Connection, name: str, limit: int, classes: list[str]
+) -> None:
     # Distinct files associated with matching source/target symbols or path text.
     sql = """
         SELECT DISTINCT file_path
@@ -229,7 +261,12 @@ def cli() -> None:
 
 
 @cli.command("stats")
-@click.option("--db", default=DEFAULT_DB, show_default=True, help="Path to SQLite catalog database.")
+@click.option(
+    "--db",
+    default=DEFAULT_DB,
+    show_default=True,
+    help="Path to SQLite catalog database.",
+)
 def stats(db: str) -> None:
     conn = get_connection(db)
     show_stats(conn)
@@ -238,7 +275,12 @@ def stats(db: str) -> None:
 
 @cli.command("deps")
 @click.argument("name")
-@click.option("--db", default=DEFAULT_DB, show_default=True, help="Path to SQLite catalog database.")
+@click.option(
+    "--db",
+    default=DEFAULT_DB,
+    show_default=True,
+    help="Path to SQLite catalog database.",
+)
 @click.option("--limit", type=int, default=100, show_default=True)
 @click.option("--classes", default="", help="Comma-separated resolution_class filters.")
 def deps(name: str, db: str, limit: int, classes: str) -> None:
@@ -249,7 +291,12 @@ def deps(name: str, db: str, limit: int, classes: str) -> None:
 
 @cli.command("rdeps")
 @click.argument("name")
-@click.option("--db", default=DEFAULT_DB, show_default=True, help="Path to SQLite catalog database.")
+@click.option(
+    "--db",
+    default=DEFAULT_DB,
+    show_default=True,
+    help="Path to SQLite catalog database.",
+)
 @click.option("--limit", type=int, default=100, show_default=True)
 @click.option("--classes", default="", help="Comma-separated resolution_class filters.")
 def rdeps(name: str, db: str, limit: int, classes: str) -> None:
@@ -260,7 +307,12 @@ def rdeps(name: str, db: str, limit: int, classes: str) -> None:
 
 @cli.command("unresolved")
 @click.argument("name", required=False)
-@click.option("--db", default=DEFAULT_DB, show_default=True, help="Path to SQLite catalog database.")
+@click.option(
+    "--db",
+    default=DEFAULT_DB,
+    show_default=True,
+    help="Path to SQLite catalog database.",
+)
 @click.option("--limit", type=int, default=100, show_default=True)
 @click.option("--classes", default="", help="Comma-separated resolution_class filters.")
 def unresolved(name: str | None, db: str, limit: int, classes: str) -> None:
@@ -271,7 +323,12 @@ def unresolved(name: str | None, db: str, limit: int, classes: str) -> None:
 
 @cli.command("files")
 @click.argument("name")
-@click.option("--db", default=DEFAULT_DB, show_default=True, help="Path to SQLite catalog database.")
+@click.option(
+    "--db",
+    default=DEFAULT_DB,
+    show_default=True,
+    help="Path to SQLite catalog database.",
+)
 @click.option("--limit", type=int, default=200, show_default=True)
 @click.option("--classes", default="", help="Comma-separated resolution_class filters.")
 def files(name: str, db: str, limit: int, classes: str) -> None:

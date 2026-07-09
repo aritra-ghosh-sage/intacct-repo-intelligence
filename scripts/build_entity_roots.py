@@ -39,8 +39,7 @@ ROLE_WEIGHT: dict[str, float] = {
 }
 
 ROLE_REASON: dict[str, str] = {
-    role: f"Deterministic role: {role.replace('_', ' ')}"
-    for role in ROLE_WEIGHT
+    role: f"Deterministic role: {role.replace('_', ' ')}" for role in ROLE_WEIGHT
 }
 
 
@@ -49,7 +48,10 @@ def q(conn: Any, sql: str, params: tuple[Any, ...] = ()) -> list[Any]:
 
 
 def ensure_entity_roots_columns(conn: Any) -> None:
-    cols = {row["name"] for row in conn.execute("PRAGMA table_info(entity_roots)").fetchall()}
+    cols = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(entity_roots)").fetchall()
+    }
     if "is_shared" not in cols:
         conn.execute("ALTER TABLE entity_roots ADD COLUMN is_shared INTEGER DEFAULT 0")
         conn.commit()
@@ -121,7 +123,9 @@ def build_entity_roots(conn: Any, reset: bool) -> int:
         """
     )
 
-    shared_rows = conn.execute("SELECT COUNT(*) AS c FROM entity_roots WHERE is_shared = 1").fetchone()["c"]
+    shared_rows = conn.execute(
+        "SELECT COUNT(*) AS c FROM entity_roots WHERE is_shared = 1"
+    ).fetchone()["c"]
     shared_symbols = conn.execute(
         """
         SELECT COUNT(*) AS c
@@ -203,7 +207,10 @@ def check_structural(conn: Any) -> list[tuple[str, list[Any]]]:
         """,
     )
     findings.append(
-        ("entities with 0 seed roots at weight >= 0.75", [r["name"] for r in no_seed_at_075])
+        (
+            "entities with 0 seed roots at weight >= 0.75",
+            [r["name"] for r in no_seed_at_075],
+        )
     )
 
     dup_root_symbols = q(
@@ -252,7 +259,9 @@ def check_filesystem(conn: Any, repo_root: str) -> list[tuple[str, list[Any]]]:
     for row in rows:
         candidate = os.path.join(repo_root, row["source_text"])
         if not os.path.exists(candidate):
-            missing_class_files.append((row["entity_name"], row["mapping_type"], row["source_text"]))
+            missing_class_files.append(
+                (row["entity_name"], row["mapping_type"], row["source_text"])
+            )
 
     findings.append(
         (
@@ -276,7 +285,11 @@ def check_repo_vs_db(conn: Any, repo_root: str) -> list[tuple[str, list[Any]]]:
             rel = os.path.relpath(os.path.join(root, name), repo_root)
             repo_ents.add(rel.replace(os.sep, "/"))
 
-    db_ents = {r["ent_file"] for r in q(conn, "SELECT ent_file FROM entity_nodes") if r["ent_file"]}
+    db_ents = {
+        r["ent_file"]
+        for r in q(conn, "SELECT ent_file FROM entity_nodes")
+        if r["ent_file"]
+    }
     only_in_repo = sorted(repo_ents - db_ents)
     only_in_db = sorted(db_ents - repo_ents)
 
@@ -297,7 +310,9 @@ def check_role_distribution(conn: Any) -> list[tuple[str, list[Any]]]:
         ORDER BY cnt DESC
         """,
     )
-    findings.append(("entity_roots role distribution", [(r["role"], r["cnt"]) for r in rows]))
+    findings.append(
+        ("entity_roots role distribution", [(r["role"], r["cnt"]) for r in rows])
+    )
 
     core_low_weight = q(
         conn,
@@ -329,7 +344,9 @@ def check_ground_truth(conn: Any) -> list[tuple[str, list[str]]]:
     }
 
     for entity_name, expected in ground_truth.items():
-        row = conn.execute("SELECT id FROM entity_nodes WHERE name = ?", (entity_name,)).fetchone()
+        row = conn.execute(
+            "SELECT id FROM entity_nodes WHERE name = ?", (entity_name,)
+        ).fetchone()
         if not row:
             findings.append((f"{entity_name} not found in entity_nodes", []))
             continue
@@ -368,7 +385,9 @@ def check_ground_truth(conn: Any) -> list[tuple[str, list[str]]]:
     return findings
 
 
-def write_report(all_findings: list[tuple[str, list[tuple[str, list[Any]]]]], path: str) -> None:
+def write_report(
+    all_findings: list[tuple[str, list[tuple[str, list[Any]]]]], path: str
+) -> None:
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
 
@@ -397,8 +416,15 @@ def cli() -> None:
 
 
 @cli.command("build")
-@click.option("--db", default=DEFAULT_DB, show_default=True, help="Path to SQLite catalog database.")
-@click.option("--reset", is_flag=True, help="Reset entity_roots table before rebuilding.")
+@click.option(
+    "--db",
+    default=DEFAULT_DB,
+    show_default=True,
+    help="Path to SQLite catalog database.",
+)
+@click.option(
+    "--reset", is_flag=True, help="Reset entity_roots table before rebuilding."
+)
 def build_command(db: str, reset: bool) -> None:
     conn = get_connection(db)
     try:
@@ -408,9 +434,24 @@ def build_command(db: str, reset: bool) -> None:
 
 
 @cli.command("validate")
-@click.option("--db", default=DEFAULT_DB, show_default=True, help="Path to SQLite catalog database.")
-@click.option("--repo-root", default=DEFAULT_REPO_ROOT, show_default=True, help="Repository root path.")
-@click.option("--report", default=DEFAULT_REPORT, show_default=True, help="Output report markdown path.")
+@click.option(
+    "--db",
+    default=DEFAULT_DB,
+    show_default=True,
+    help="Path to SQLite catalog database.",
+)
+@click.option(
+    "--repo-root",
+    default=DEFAULT_REPO_ROOT,
+    show_default=True,
+    help="Repository root path.",
+)
+@click.option(
+    "--report",
+    default=DEFAULT_REPORT,
+    show_default=True,
+    help="Output report markdown path.",
+)
 def validate_command(db: str, repo_root: str, report: str) -> None:
     conn = get_connection(db)
     try:

@@ -25,10 +25,12 @@ def stats():
         ORDER BY c DESC
     """).fetchall()
 
-    print(tabulate(
-        [(r["language"], r["c"], r["bytes"]) for r in rows],
-        headers=["Language", "Files", "Bytes"]
-    ))
+    print(
+        tabulate(
+            [(r["language"], r["c"], r["bytes"]) for r in rows],
+            headers=["Language", "Files", "Bytes"],
+        )
+    )
 
 
 @cli.command()
@@ -38,17 +40,22 @@ def find(keyword, limit):
     conn = get_connection()
     cur = conn.cursor()
 
-    rows = cur.execute("""
+    rows = cur.execute(
+        """
         SELECT path, language, size_bytes
         FROM files
         WHERE path LIKE ?
         LIMIT ?
-    """, (f"%{keyword}%", limit)).fetchall()
+    """,
+        (f"%{keyword}%", limit),
+    ).fetchall()
 
-    print(tabulate(
-        [(r["path"], r["language"], r["size_bytes"]) for r in rows],
-        headers=["Path", "Lang", "Size"]
-    ))
+    print(
+        tabulate(
+            [(r["path"], r["language"], r["size_bytes"]) for r in rows],
+            headers=["Path", "Lang", "Size"],
+        )
+    )
 
 
 @cli.command()
@@ -65,10 +72,12 @@ def toplevel():
         ORDER BY c DESC
     """).fetchall()
 
-    print(tabulate(
-        [(r["top_dir"], r["c"]) for r in rows],
-        headers=["Top-level dir", "Files"]
-    ))
+    print(
+        tabulate(
+            [(r["top_dir"], r["c"]) for r in rows], headers=["Top-level dir", "Files"]
+        )
+    )
+
 
 @cli.command()
 @click.argument("keyword")
@@ -97,12 +106,22 @@ def symbols(keyword, kind, limit):
 
     rows = cur.execute(query, params).fetchall()
 
-    print(tabulate(
-        [(r["name"], r["kind"], r["language"],
-          r["parent_symbol"] or "", r["path"], r["start_line"])
-         for r in rows],
-        headers=["Symbol", "Kind", "Lang", "Parent", "File", "Line"]
-    ))
+    print(
+        tabulate(
+            [
+                (
+                    r["name"],
+                    r["kind"],
+                    r["language"],
+                    r["parent_symbol"] or "",
+                    r["path"],
+                    r["start_line"],
+                )
+                for r in rows
+            ],
+            headers=["Symbol", "Kind", "Lang", "Parent", "File", "Line"],
+        )
+    )
 
 
 @cli.command()
@@ -118,10 +137,12 @@ def symbol_stats():
         ORDER BY language, c DESC
     """).fetchall()
 
-    print(tabulate(
-        [(r["language"], r["kind"], r["c"]) for r in rows],
-        headers=["Language", "Kind", "Count"]
-    ))
+    print(
+        tabulate(
+            [(r["language"], r["kind"], r["c"]) for r in rows],
+            headers=["Language", "Kind", "Count"],
+        )
+    )
 
 
 @cli.command()
@@ -134,24 +155,36 @@ def entity(entity_prefix):
     conn = get_connection()
     cur = conn.cursor()
 
-    rows = cur.execute("""
+    rows = cur.execute(
+        """
         SELECT s.name, s.kind, s.language,
                s.parent_symbol, f.path
         FROM symbols s
         JOIN files f ON f.id = s.file_id
         WHERE s.name LIKE ? OR s.parent_symbol LIKE ?
         ORDER BY s.language, s.kind, s.name
-    """, (f"{entity_prefix}%", f"{entity_prefix}%")).fetchall()
+    """,
+        (f"{entity_prefix}%", f"{entity_prefix}%"),
+    ).fetchall()
 
     print(f"Entity: {entity_prefix}")
     print(f"Symbols found: {len(rows)}\n")
 
-    print(tabulate(
-        [(r["name"], r["kind"], r["language"],
-          r["parent_symbol"] or "", r["path"])
-         for r in rows],
-        headers=["Name", "Kind", "Lang", "Parent", "File"]
-    ))
+    print(
+        tabulate(
+            [
+                (
+                    r["name"],
+                    r["kind"],
+                    r["language"],
+                    r["parent_symbol"] or "",
+                    r["path"],
+                )
+                for r in rows
+            ],
+            headers=["Name", "Kind", "Lang", "Parent", "File"],
+        )
+    )
 
 
 if __name__ == "__main__":

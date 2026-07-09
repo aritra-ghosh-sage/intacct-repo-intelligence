@@ -112,7 +112,9 @@ def _get_entities_by_name(conn: sqlite3.Connection) -> dict[str, dict[str, list[
             continue
         module = _normalize_module(str(row["module"] or ""))
         key = _normalize_name(name)
-        entities_by_module.setdefault(module, {}).setdefault(key, []).append(int(row["id"]))
+        entities_by_module.setdefault(module, {}).setdefault(key, []).append(
+            int(row["id"])
+        )
     return entities_by_module
 
 
@@ -189,9 +191,22 @@ def _openapi_name_candidates(
     # Example: "accounts-payable.ap-bill.s1.api.yaml" -> "apbill".
     slug_parts = _split_slug_parts(slug)
     metadata_parts = {
-        "api", "schema", "history", "yaml", "view", "uimeta",
-        "s1", "s2", "systemfw1", "systemfw2", "objects",
-        "services", "workflows", "actions", "events", "components",
+        "api",
+        "schema",
+        "history",
+        "yaml",
+        "view",
+        "uimeta",
+        "s1",
+        "s2",
+        "systemfw1",
+        "systemfw2",
+        "objects",
+        "services",
+        "workflows",
+        "actions",
+        "events",
+        "components",
     }
     if len(slug_parts) >= 2:
         for part in slug_parts[1:]:
@@ -327,7 +342,9 @@ def _resolve_mapped_to_entity(
         return candidates[0][0]
 
     if len(candidates) > 1:
-        scoped = [entity_id for entity_id, module in candidates if module in module_keys]
+        scoped = [
+            entity_id for entity_id, module in candidates if module in module_keys
+        ]
         if len(scoped) == 1:
             return scoped[0]
 
@@ -580,7 +597,9 @@ def _link_openapispec(
             stats.unmatched_rows += 1
             if not mapped_to:
                 stats.heuristic_total += 1
-                expected_class = _expected_missing_mapped_to_class(str(row["file_path"] or ""))
+                expected_class = _expected_missing_mapped_to_class(
+                    str(row["file_path"] or "")
+                )
                 if expected_class is not None:
                     stats.heuristic_suppressed_expected_missing_mapped_to += 1
                     stats.heuristic_suppressed_by_class[expected_class] = (
@@ -622,7 +641,9 @@ def _link_openapispec(
             stats.mappings_inserted += 1
 
     if reconcile_jsonl_path is not None:
-        missing_records.extend(_reconcile_with_entity_definitions(conn, reconcile_jsonl_path))
+        missing_records.extend(
+            _reconcile_with_entity_definitions(conn, reconcile_jsonl_path)
+        )
 
     _append_missing_metadata_records(repo_root=repo_root, records=missing_records)
 
@@ -635,8 +656,15 @@ def cli() -> None:
 
 
 @cli.command("link")
-@click.option("--db", default=DEFAULT_DB, show_default=True, help="Path to SQLite catalog database.")
-@click.option("--reset", is_flag=True, help="Delete OpenAPI-derived mappings before relinking.")
+@click.option(
+    "--db",
+    default=DEFAULT_DB,
+    show_default=True,
+    help="Path to SQLite catalog database.",
+)
+@click.option(
+    "--reset", is_flag=True, help="Delete OpenAPI-derived mappings before relinking."
+)
 @click.option(
     "--repo-root",
     type=click.Path(path_type=Path, file_okay=False),
@@ -650,7 +678,9 @@ def cli() -> None:
     default=None,
     help="Optional path to entity_definitions.jsonl for drift diagnostics only.",
 )
-def link_command(db: str, reset: bool, repo_root: Path, reconcile_jsonl: Path | None) -> None:
+def link_command(
+    db: str, reset: bool, repo_root: Path, reconcile_jsonl: Path | None
+) -> None:
     repo_root = repo_root.resolve()
     conn = get_connection(db)
     try:
@@ -665,7 +695,9 @@ def link_command(db: str, reset: bool, repo_root: Path, reconcile_jsonl: Path | 
         stats = _link_openapispec(
             conn=conn,
             repo_root=repo_root,
-            reconcile_jsonl_path=reconcile_jsonl.resolve() if reconcile_jsonl is not None else None,
+            reconcile_jsonl_path=reconcile_jsonl.resolve()
+            if reconcile_jsonl is not None
+            else None,
         )
         conn.commit()
     finally:
