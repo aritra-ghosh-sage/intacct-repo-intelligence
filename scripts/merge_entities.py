@@ -156,6 +156,7 @@ DEFAULT_ENTITY_SHAPE: dict[str, Any] = {
 # IO helpers
 # ---------------------------------------------------------------------
 
+
 def read_jsonl(path: Path) -> list[tuple[int, dict]]:
     """
     Returns list of (line_number, parsed_json).
@@ -200,6 +201,7 @@ def read_jsonl(path: Path) -> list[tuple[int, dict]]:
 # Normalization
 # ---------------------------------------------------------------------
 
+
 def normalize_entry(raw: dict) -> dict:
     """
     Force the entry into the fixed schema.
@@ -227,7 +229,9 @@ def normalize_entry(raw: dict) -> dict:
     if isinstance(companions, dict):
         for k in COMPANION_KEYS:
             v = companions.get(k)
-            out["companion_classes"][k] = v if isinstance(v, str) and v.strip() else None
+            out["companion_classes"][k] = (
+                v if isinstance(v, str) and v.strip() else None
+            )
 
     related = raw.get("related_files") or {}
     if isinstance(related, dict):
@@ -252,6 +256,7 @@ def normalize_entry(raw: dict) -> dict:
 # Validation
 # ---------------------------------------------------------------------
 
+
 def validate_required(entry: dict, line_no: int) -> list[str]:
     issues: list[str] = []
 
@@ -261,9 +266,7 @@ def validate_required(entry: dict, line_no: int) -> list[str]:
 
     ent_file = entry.get("ent_file") or ""
     if ent_file and not ent_file.endswith(".ent"):
-        issues.append(
-            f"line {line_no}: ent_file does not end with .ent: {ent_file}"
-        )
+        issues.append(f"line {line_no}: ent_file does not end with .ent: {ent_file}")
 
     return issues
 
@@ -314,6 +317,7 @@ def verify_paths_on_disk(entry: dict, repo_root: Path) -> list[str]:
 # Deduplication
 # ---------------------------------------------------------------------
 
+
 def canonical_key(entry: dict) -> str:
     """
     Canonical key for storage.
@@ -339,6 +343,7 @@ def choose_better(a: dict, b: dict) -> dict:
     3. More non-null related_files
     4. ent_exists == True
     """
+
     def score(x: dict) -> tuple:
         companions = sum(1 for v in x["companion_classes"].values() if v)
         related = sum(1 for v in x["related_files"].values() if v)
@@ -355,6 +360,7 @@ def choose_better(a: dict, b: dict) -> dict:
 # ---------------------------------------------------------------------
 # Main merge
 # ---------------------------------------------------------------------
+
 
 def merge_entities(
     input_path: Path,
@@ -452,6 +458,7 @@ def merge_entities(
 # ---------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(

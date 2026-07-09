@@ -15,11 +15,7 @@ import click
 from tqdm import tqdm
 from tree_sitter_languages import get_parser
 
-try:
-    from catalog.db import get_connection
-except ModuleNotFoundError:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from catalog.db import get_connection
+from catalog.db import get_connection
 
 DEFAULT_DB = "catalog/catalog.db"
 DEFAULT_REPO_ROOT = "/home/aritraghosh/projects/main"
@@ -147,8 +143,6 @@ def _tree_sitter_to_value(node: Any, source: bytes) -> Any:
         if first_str is not None:
             return first_str
     return text
-
-
 
 
 @dataclass
@@ -369,7 +363,7 @@ def parse_all_assigned_arrays(
     file_path: str | None = None,
 ) -> dict[str, PhpArray]:
     """Parse all PHP variable assignments to arrays using tree-sitter.
-    
+
     Falls back to regex-based discovery if tree-sitter parse fails.
     All extracted values are tree-sitter-based (no legacy PhpArrayParser fallback).
     """
@@ -438,9 +432,9 @@ def sha1_jsonable(value: Any) -> str:
             return [_to_jsonable(v) for v in obj]
         return obj
 
-    encoded = json.dumps(
-        _to_jsonable(value), sort_keys=True, ensure_ascii=True
-    ).encode("utf-8")
+    encoded = json.dumps(_to_jsonable(value), sort_keys=True, ensure_ascii=True).encode(
+        "utf-8"
+    )
     return hashlib.sha1(encoded).hexdigest()
 
 
@@ -775,7 +769,9 @@ def parse_policy_files(
                     value_id = int(row["id"])
                 stats.policy_values_inserted += 1
 
-                eops_values = [normalize_string(v) for v in array_to_list(value_map.get("eops"))]
+                eops_values = [
+                    normalize_string(v) for v in array_to_list(value_map.get("eops"))
+                ]
                 for op_key in [item for item in eops_values if item]:
                     cur_eop = conn.execute(
                         """
@@ -1028,7 +1024,9 @@ def parse_dbschema(
         if not table_name:
             continue
         table_map = array_to_map(table_node)
-        pkeys = [normalize_string(v) for v in array_to_list(table_map.get("primarykey"))]
+        pkeys = [
+            normalize_string(v) for v in array_to_list(table_map.get("primarykey"))
+        ]
         primary_keys = ",".join([v for v in pkeys if v]) if any(pkeys) else None
 
         cur = conn.execute(
@@ -1152,7 +1150,9 @@ def cli() -> None:
 
 
 @cli.command("build")
-@click.option("--db", default=DEFAULT_DB, show_default=True, help="Catalog database path.")
+@click.option(
+    "--db", default=DEFAULT_DB, show_default=True, help="Catalog database path."
+)
 @click.option(
     "--repo-root",
     type=click.Path(path_type=Path, exists=True, file_okay=False),
