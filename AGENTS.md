@@ -48,9 +48,13 @@ python -m parser.extract_relationships --repo-root "/home/aritraghosh/projects/m
 python scripts/build_workflows.py build --db catalog/catalog.db --repo-root "/home/aritraghosh/projects/main"
 python scripts/build_ui_companions.py --db catalog/catalog.db
 python scripts/scan_openapispec.py scan --db catalog/catalog.db --repo-root "/home/aritraghosh/projects/main"
-python scripts/build_rest_endpoints.py build --db catalog/catalog.db --repo-root "/home/aritraghosh/projects/main"
 python scripts/link_openapispec.py link --db catalog/catalog.db
+python scripts/build_rest_endpoints.py build --db catalog/catalog.db --repo-root "/home/aritraghosh/projects/main"
 ```
+
+OpenAPI linking order matters:
+- Run `scan_openapispec.py` first to refresh `openapispec_index`.
+- Run `link_openapispec.py` before `build_rest_endpoints.py` so entity mappings are present when endpoints are materialized.
 
 ## Primary Entry Points
 
@@ -80,6 +84,17 @@ python scripts/query_relationships.py stats
 - `parser.extract_symbols` is incremental unless `--full` is passed.
 - Validation documents may be more operationally accurate than the README for current edge cases and failure modes.
 
+## Data Quality Hotspots
+
+- `openapispec_index.canonical_name` can incorrectly include path-like values (for example, `accounts-payable/account-label`) when slug/path inference leaks into canonical labels.
+- `openapispec_index.x_mapped_to` must match a valid `.ent` stem from `app/source/**/*.ent`; treat values outside this set as invalid metadata.
+- `openapispec_index.module` should exclude template-only files (`template*`) from graph/index flows unless explicitly modeled.
+- `openapispec_index.kind='unknown'` should be treated as triage-required and not silently considered equivalent to known kinds.
+- `entity_nodes.module` must represent normalized business module semantics, not raw folder names.
+- `relationships.target_kind` values like `unknown` and `cqry` require explicit evidence and should be audited for extraction misclassification.
+
+See [validation/phase2d1_remediation.md](validation/phase2d1_remediation.md) for current remediation rules and acceptance boundaries.
+
 ## When Editing
 
 - Keep changes evidence-backed and minimal.
@@ -93,6 +108,36 @@ python scripts/query_relationships.py stats
 python validation/validate_phase2b.py --db catalog/catalog.db
 python validation/validate_phase2c1.py --db catalog/catalog.db
 python validation/validate_phase2d.py --db catalog/catalog.db
+```
+
+## Troubleshooting Queries
+
+Use these focused checks before broad rebuilds.
+
+```bash
+# OpenAPI rows that look path-like in canonical_name.
+python scripts/query_catalog.py sql \
+	"SELECT id, file_path, canonical_name FROM openapispec_index WHERE canonical_name LIKE '%/%' ORDER BY id LIMIT 200"
+
+# OpenAPI rows with x_mapped_to values that fail valid .ent stem checks.
+python scripts/query_catalog.py sql \
+	"SELECT id, file_path, x_mapped_to FROM openapispec_index WHERE COALESCE(TRIM(x_mapped_to), '') <> '' ORDER BY id LIMIT 200"
+
+# Template-classified OpenAPI files still present in active index rows.
+python scripts/query_catalog.py sql \
+	"SELECT id, file_path, module, kind FROM openapispec_index WHERE LOWER(file_path) LIKE '%template%' ORDER BY id LIMIT 200"
+
+# Unknown kind rows in OpenAPI index.
+python scripts/query_catalog.py sql \
+	"SELECT id, file_path, module, kind FROM openapispec_index WHERE kind = 'unknown' ORDER BY id LIMIT 200"
+
+# Entity module normalization spot-check.
+python scripts/query_catalog.py sql \
+	"SELECT id, name, module FROM entity_nodes ORDER BY id LIMIT 200"
+
+# Relationship target_kind distribution to inspect unknown/cqry leakage.
+python scripts/query_catalog.py sql \
+	"SELECT target_kind, COUNT(*) AS cnt FROM relationships GROUP BY target_kind ORDER BY cnt DESC"
 ```
 
 ## Next Customizations To Consider
