@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
 import click
+
 from catalog.db import get_connection
 
 DEFAULT_DB = "catalog/catalog.db"
