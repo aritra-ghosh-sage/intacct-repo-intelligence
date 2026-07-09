@@ -7,12 +7,7 @@ import sys
 from pathlib import Path
 
 import click
-
-try:
-    from catalog.db import get_connection
-except ModuleNotFoundError:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from catalog.db import get_connection
+from catalog.db import get_connection
 
 DEFAULT_DB = "catalog/catalog.db"
 PARSE_FAILURES_LOG = Path("outputs/security_parse_failures.jsonl")
