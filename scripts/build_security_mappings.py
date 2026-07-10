@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import sqlite3
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -14,7 +15,11 @@ import click
 from tqdm import tqdm
 from tree_sitter_languages import get_parser
 
-from catalog.db import get_connection
+try:
+    from catalog.db import get_connection
+except ModuleNotFoundError:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from catalog.db import get_connection
 
 DEFAULT_DB = "catalog/catalog.db"
 DEFAULT_REPO_ROOT = "/home/aritraghosh/projects/main"
@@ -22,6 +27,7 @@ OUTPUT_DIR = Path("outputs")
 PARSE_FAILURES_LOG = OUTPUT_DIR / "security_parse_failures.jsonl"
 UNRESOLVED_LOG = OUTPUT_DIR / "security_unresolved_keys.jsonl"
 CONFLICTS_LOG = OUTPUT_DIR / "security_conflicts.jsonl"
+UNRESOLVED_FILE_IDS_LOG = OUTPUT_DIR / "security_unresolved_file_ids.jsonl"
 
 
 @dataclass
@@ -164,6 +170,8 @@ class BuildStats:
     unresolved_menu_keys: int = 0
     conflicts_detected: int = 0
     missing_includes: int = 0
+    file_ids_backfilled: int = 0
+    unresolved_source_files: int = 0
 
     @property
     def unresolved_total(self) -> int:
@@ -184,6 +192,7 @@ def ensure_security_tables(conn: sqlite3.Connection) -> None:
             secure_only INTEGER,
             allow_dev_env_only INTEGER,
             source_file TEXT NOT NULL,
+            file_id INTEGER,
             source_line INTEGER,
             source_kind TEXT NOT NULL,
             raw_hash TEXT,
@@ -194,6 +203,7 @@ def ensure_security_tables(conn: sqlite3.Connection) -> None:
             operation_id INTEGER NOT NULL,
             allowed_op_key TEXT NOT NULL,
             source_file TEXT NOT NULL,
+            file_id INTEGER,
             source_line INTEGER,
             FOREIGN KEY(operation_id) REFERENCES security_operations(id) ON DELETE CASCADE,
             UNIQUE(operation_id, allowed_op_key, source_file)
@@ -204,6 +214,7 @@ def ensure_security_tables(conn: sqlite3.Connection) -> None:
             module TEXT,
             label TEXT,
             source_file TEXT NOT NULL,
+            file_id INTEGER,
             source_line INTEGER,
             UNIQUE(policy_name, source_file)
         );
@@ -229,7 +240,8 @@ def ensure_security_tables(conn: sqlite3.Connection) -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             module TEXT,
             menu_name TEXT,
-            source_file TEXT NOT NULL UNIQUE
+            source_file TEXT NOT NULL UNIQUE,
+            file_id INTEGER
         );
         CREATE TABLE IF NOT EXISTS security_menu_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -273,7 +285,109 @@ def ensure_security_tables(conn: sqlite3.Connection) -> None:
         );
         """
     )
+
+    # Backward-compatible schema evolution for existing databases.
+    file_id_targets = (
+        "security_operations",
+        "security_operation_allowops",
+        "security_policies",
+        "security_menus",
+    )
+    for table_name in file_id_targets:
+        cols = {
+            row["name"]
+            for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+        }
+        if "file_id" not in cols:
+            conn.execute(f"ALTER TABLE {table_name} ADD COLUMN file_id INTEGER")
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_security_operations_file_id ON security_operations(file_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_security_allowops_file_id ON security_operation_allowops(file_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_security_policies_file_id ON security_policies(file_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_security_menus_file_id ON security_menus(file_id)"
+    )
     conn.commit()
+
+
+def _resolve_file_id(conn: sqlite3.Connection, source_file: str) -> tuple[int | None, str]:
+    row = conn.execute(
+        "SELECT id FROM files WHERE path = ? LIMIT 1",
+        (source_file,),
+    ).fetchone()
+    if row:
+        return int(row["id"]), "exact_path"
+
+    row = conn.execute(
+        "SELECT id FROM files WHERE LOWER(path) = LOWER(?) ORDER BY id LIMIT 1",
+        (source_file,),
+    ).fetchone()
+    if row:
+        return int(row["id"]), "case_insensitive_path"
+
+    return None, "exact_path,case_insensitive_path"
+
+
+def _remediation_hint(source_file: str) -> str:
+    suffix = Path(source_file).suffix.lower()
+    if suffix in {".menu", ".pol"}:
+        return "likely missing files table coverage for this extension"
+    return "path missing from files table or requires normalization fix"
+
+
+def backfill_security_file_ids(
+    conn: sqlite3.Connection,
+    stats: BuildStats,
+    unresolved_sources: list[dict[str, Any]],
+) -> None:
+    targets = (
+        ("security_operations", "id"),
+        ("security_operation_allowops", "id"),
+        ("security_policies", "id"),
+        ("security_menus", "id"),
+    )
+
+    for table_name, pk_col in targets:
+        rows = conn.execute(
+            f"""
+            SELECT {pk_col} AS row_id, source_file
+            FROM {table_name}
+            WHERE source_file IS NOT NULL
+              AND (file_id IS NULL OR file_id = 0)
+            """
+        ).fetchall()
+
+        for row in rows:
+            row_id = int(row["row_id"])
+            source_file = str(row["source_file"] or "").strip()
+            if not source_file:
+                continue
+
+            file_id, strategy = _resolve_file_id(conn, source_file)
+            if file_id is not None:
+                conn.execute(
+                    f"UPDATE {table_name} SET file_id = ? WHERE {pk_col} = ?",
+                    (file_id, row_id),
+                )
+                stats.file_ids_backfilled += 1
+                continue
+
+            stats.unresolved_source_files += 1
+            unresolved_sources.append(
+                {
+                    "table_name": table_name,
+                    "row_id": row_id,
+                    "source_file": source_file,
+                    "attempted_match_strategy": strategy,
+                    "remediation_hint": _remediation_hint(source_file),
+                }
+            )
 
 
 def reset_security_tables(conn: sqlite3.Connection) -> None:
@@ -1095,6 +1209,7 @@ def build(
     conn = get_connection(db)
     parse_failures: list[dict[str, Any]] = []
     unresolved: list[dict[str, Any]] = []
+    unresolved_sources: list[dict[str, Any]] = []
     conflicts: list[dict[str, Any]] = []
     stats = BuildStats()
 
@@ -1123,6 +1238,7 @@ def build(
             op_key_to_operation_id=op_key_map,
         )
         parse_dbschema(conn, repo_root, stats, parse_failures)
+        backfill_security_file_ids(conn, stats, unresolved_sources)
         conn.commit()
     finally:
         conn.close()
@@ -1130,6 +1246,7 @@ def build(
     write_jsonl(PARSE_FAILURES_LOG, parse_failures)
     write_jsonl(UNRESOLVED_LOG, unresolved)
     write_jsonl(CONFLICTS_LOG, conflicts)
+    write_jsonl(UNRESOLVED_FILE_IDS_LOG, unresolved_sources)
 
     if max_parse_failures >= 0 and len(parse_failures) > max_parse_failures:
         raise click.ClickException(
@@ -1209,9 +1326,12 @@ def build_command(
     click.echo(f"Unresolved menu keys:         {stats.unresolved_menu_keys}")
     click.echo(f"Mapping conflicts detected:   {stats.conflicts_detected}")
     click.echo(f"Missing include references:   {stats.missing_includes}")
+    click.echo(f"file_id rows backfilled:      {stats.file_ids_backfilled}")
+    click.echo(f"Unresolved source_file rows:  {stats.unresolved_source_files}")
     click.echo(f"Parse failure log:            {PARSE_FAILURES_LOG.as_posix()}")
     click.echo(f"Unresolved key log:           {UNRESOLVED_LOG.as_posix()}")
     click.echo(f"Conflict log:                 {CONFLICTS_LOG.as_posix()}")
+    click.echo(f"Unresolved file_id log:       {UNRESOLVED_FILE_IDS_LOG.as_posix()}")
 
 
 if __name__ == "__main__":

@@ -166,6 +166,7 @@ CREATE TABLE IF NOT EXISTS workflows (
     workflow_type TEXT NOT NULL,     -- allowed_operations | approval | posting | reverse | batch | item | ui | rest
     source_kind TEXT NOT NULL,       -- yaml | class | inference
     source_file TEXT,
+    file_id INTEGER,
     source_symbol_id INTEGER,
 
     confidence REAL DEFAULT 1.0,
@@ -182,6 +183,7 @@ CREATE TABLE IF NOT EXISTS workflows (
 CREATE INDEX IF NOT EXISTS idx_workflows_entity  ON workflows(entity_id);
 CREATE INDEX IF NOT EXISTS idx_workflows_type    ON workflows(workflow_type);
 CREATE INDEX IF NOT EXISTS idx_workflows_source  ON workflows(source_kind);
+CREATE INDEX IF NOT EXISTS idx_workflows_file_id ON workflows(file_id);
 
 CREATE TABLE IF NOT EXISTS workflow_nodes (
     id INTEGER PRIMARY KEY,
@@ -259,6 +261,7 @@ CREATE TABLE IF NOT EXISTS security_operations (
     secure_only INTEGER,
     allow_dev_env_only INTEGER,
     source_file TEXT NOT NULL,
+    file_id INTEGER,
     source_line INTEGER,
     source_kind TEXT NOT NULL,
     raw_hash TEXT,
@@ -267,12 +270,14 @@ CREATE TABLE IF NOT EXISTS security_operations (
 
 CREATE INDEX IF NOT EXISTS idx_security_operations_key ON security_operations(op_key);
 CREATE INDEX IF NOT EXISTS idx_security_operations_id ON security_operations(op_numeric_id);
+CREATE INDEX IF NOT EXISTS idx_security_operations_file_id ON security_operations(file_id);
 
 CREATE TABLE IF NOT EXISTS security_operation_allowops (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     operation_id INTEGER NOT NULL,
     allowed_op_key TEXT NOT NULL,
     source_file TEXT NOT NULL,
+    file_id INTEGER,
     source_line INTEGER,
     FOREIGN KEY(operation_id) REFERENCES security_operations(id) ON DELETE CASCADE,
     UNIQUE(operation_id, allowed_op_key, source_file)
@@ -280,6 +285,8 @@ CREATE TABLE IF NOT EXISTS security_operation_allowops (
 
 CREATE INDEX IF NOT EXISTS idx_security_allowops_allowed_key
     ON security_operation_allowops(allowed_op_key);
+CREATE INDEX IF NOT EXISTS idx_security_allowops_file_id
+    ON security_operation_allowops(file_id);
 
 CREATE TABLE IF NOT EXISTS security_policies (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -287,12 +294,14 @@ CREATE TABLE IF NOT EXISTS security_policies (
     module TEXT,
     label TEXT,
     source_file TEXT NOT NULL,
+    file_id INTEGER,
     source_line INTEGER,
     UNIQUE(policy_name, source_file)
 );
 
 CREATE INDEX IF NOT EXISTS idx_security_policies_name ON security_policies(policy_name);
 CREATE INDEX IF NOT EXISTS idx_security_policies_module ON security_policies(module);
+CREATE INDEX IF NOT EXISTS idx_security_policies_file_id ON security_policies(file_id);
 
 CREATE TABLE IF NOT EXISTS security_policy_values (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -320,7 +329,8 @@ CREATE TABLE IF NOT EXISTS security_menus (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     module TEXT,
     menu_name TEXT,
-    source_file TEXT NOT NULL UNIQUE
+    source_file TEXT NOT NULL UNIQUE,
+    file_id INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS security_menu_items (
@@ -337,6 +347,7 @@ CREATE TABLE IF NOT EXISTS security_menu_items (
 );
 
 CREATE INDEX IF NOT EXISTS idx_security_menu_items_key ON security_menu_items(menu_key);
+CREATE INDEX IF NOT EXISTS idx_security_menus_file_id ON security_menus(file_id);
 
 CREATE TABLE IF NOT EXISTS security_menu_op_links (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

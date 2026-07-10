@@ -16,6 +16,8 @@ def detect_language(path: str) -> str:
         ".java": "java",
         ".php": "php",
         ".inc": "php",
+        ".menu": "php",
+        ".pol": "php",
         ".ent": "php",
         ".cls": "php",
         ".phtml": "php",

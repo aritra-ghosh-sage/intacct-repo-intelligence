@@ -35,6 +35,26 @@ class ScanStats:
     rows_indexed: int = 0
     files_missing_in_catalog: int = 0
     yaml_parse_failures: int = 0
+    template_files_skipped: int = 0
+
+
+def _is_template_file(rel_path: str) -> bool:
+    lowered = rel_path.lower()
+    filename = Path(lowered).name
+    if "template" in lowered:
+        return True
+    return filename.startswith("template")
+
+
+def _normalize_canonical_name(value: str | None) -> str | None:
+    if not value:
+        return None
+    normalized = value.strip().strip("/")
+    if not normalized:
+        return None
+    if "/" in normalized:
+        normalized = normalized.split("/")[-1].strip()
+    return normalized or None
 
 
 def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
@@ -122,26 +142,26 @@ def _infer_version(filename: str) -> str | None:
 
 def _infer_canonical_name(doc: dict[str, Any] | None, slug: str) -> str | None:
     if not doc:
-        return slug.split(".")[-1] if slug else None
+        return _normalize_canonical_name(slug.split(".")[-1] if slug else None)
 
     for key in ("object", "name"):
         value = doc.get(key)
         if isinstance(value, str) and value.strip():
-            return value.strip()
+            return _normalize_canonical_name(value)
 
     resource = doc.get("resource")
     if isinstance(resource, dict):
         resource_name = resource.get("name")
         if isinstance(resource_name, str) and resource_name.strip():
-            return resource_name.strip()
+            return _normalize_canonical_name(resource_name)
         resource_path = resource.get("path") or resource.get("resource")
         if isinstance(resource_path, str) and resource_path.strip():
-            return resource_path.strip("/").split("/")[-1]
+            return _normalize_canonical_name(resource_path)
 
     if isinstance(resource, str) and resource.strip():
-        return resource.strip("/").split("/")[-1]
+        return _normalize_canonical_name(resource)
 
-    return slug.split(".")[-1] if slug else None
+    return _normalize_canonical_name(slug.split(".")[-1] if slug else None)
 
 
 def _infer_resource_path(doc: dict[str, Any] | None) -> str | None:
@@ -209,6 +229,10 @@ def scan_openapispec(conn: sqlite3.Connection, repo_root: Path) -> ScanStats:
     ):
         stats.files_processed += 1
         rel_path = yaml_path.relative_to(repo_root).as_posix()
+        if _is_template_file(rel_path):
+            stats.template_files_skipped += 1
+            continue
+
         file_id = _get_file_id(conn, rel_path)
         if file_id is None:
             stats.files_missing_in_catalog += 1
@@ -289,6 +313,7 @@ def scan_command(db: str, repo_root: Path) -> None:
     click.echo(f"Processed openapispec files: {stats.files_processed}")
     click.echo(f"Indexed openapispec files:   {stats.rows_indexed}")
     click.echo(f"Missing in files table:      {stats.files_missing_in_catalog}")
+    click.echo(f"Template files skipped:      {stats.template_files_skipped}")
     click.echo(f"YAML parse failures:         {stats.yaml_parse_failures}")
 
 

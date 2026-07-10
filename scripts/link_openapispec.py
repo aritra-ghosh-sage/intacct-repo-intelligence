@@ -84,6 +84,7 @@ class LinkStats:
     mapped_to_matches: int = 0
     mapped_to_unresolved: int = 0
     mapped_to_suppressed: int = 0
+    mapped_to_invalid: int = 0
     heuristic_total: int = 0
     heuristic_suppressed_expected_missing_mapped_to: int = 0
     heuristic_logged: int = 0
@@ -547,8 +548,31 @@ def _link_openapispec(
         module_keys = _module_candidates(str(row["module"] or ""))
         mapped_to = str(row["x_mapped_to"] or "").strip()
         entity_id = None
+        mapped_to_normalized = _normalize_name(mapped_to) if mapped_to else ""
 
         if mapped_to:
+            # Hard gate: x_mapped_to must reference a known .ent stem.
+            if mapped_to_normalized not in valid_ent_stems:
+                stats.mapped_to_invalid += 1
+                stats.mapped_to_suppressed += 1
+                stats.unmatched_rows += 1
+                missing_records.append(
+                    {
+                        "context": {
+                            "module_candidates": module_keys,
+                            "openapispec_id": row["id"],
+                        },
+                        "entity_name": None,
+                        "file_path": row["file_path"],
+                        "reason": f"invalid x_mapped_to '{mapped_to}' (not a valid .ent stem)",
+                        "source": "link_openapispec",
+                        "stage": "mapped_to_validation",
+                        "timestamp": now,
+                    }
+                )
+                # Do not allow heuristic fallback when explicit mappedTo is invalid.
+                continue
+
             entity_id = _resolve_mapped_to_entity(
                 mapped_to=mapped_to,
                 module_keys=module_keys,
@@ -708,6 +732,7 @@ def link_command(
     click.echo(f"x_mapped_to matches:        {stats.mapped_to_matches}")
     click.echo(f"x_mapped_to unresolved:     {stats.mapped_to_unresolved}")
     click.echo(f"x_mapped_to suppressed:     {stats.mapped_to_suppressed}")
+    click.echo(f"x_mapped_to invalid:        {stats.mapped_to_invalid}")
     click.echo(f"heuristic_total:            {stats.heuristic_total}")
     click.echo(
         "heuristic_suppressed_expected_missing_mapped_to: "

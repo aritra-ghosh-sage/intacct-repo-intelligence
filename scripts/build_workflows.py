@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 import sys
@@ -25,6 +26,8 @@ except ModuleNotFoundError:
 
 DEFAULT_DB = "catalog/catalog.db"
 DEFAULT_REPO_ROOT = "/home/aritraghosh/projects/main"
+OUTPUT_DIR = Path("outputs")
+UNRESOLVED_WORKFLOW_FILE_IDS_LOG = OUTPUT_DIR / "workflows_unresolved_file_ids.jsonl"
 
 # Only these mapping_type values are used to discover behavioral workflows.
 BEHAVIORAL_ROLES: dict[str, str] = {
@@ -69,6 +72,102 @@ OPENAPI_MAPPING_PREFIX = "openapispec_"
 class BuildStats:
     entities_processed: int = 0
     workflows_inserted: int = 0
+    file_ids_backfilled: int = 0
+    unresolved_source_files: int = 0
+
+
+def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=True) + "\n")
+
+
+def ensure_workflows_file_id_column(conn: sqlite3.Connection) -> None:
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(workflows)").fetchall()}
+    if "file_id" not in cols:
+        conn.execute("ALTER TABLE workflows ADD COLUMN file_id INTEGER")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_workflows_file_id ON workflows(file_id)"
+    )
+    conn.commit()
+
+
+def _resolve_file_id(conn: sqlite3.Connection, source_file: str) -> tuple[int | None, str]:
+    row = conn.execute(
+        "SELECT id FROM files WHERE path = ? LIMIT 1",
+        (source_file,),
+    ).fetchone()
+    if row:
+        return int(row["id"]), "exact_path"
+
+    row = conn.execute(
+        "SELECT id FROM files WHERE LOWER(path) = LOWER(?) ORDER BY id LIMIT 1",
+        (source_file,),
+    ).fetchone()
+    if row:
+        return int(row["id"]), "case_insensitive_path"
+
+    return None, "exact_path,case_insensitive_path"
+
+
+def backfill_workflow_file_ids(
+    conn: sqlite3.Connection,
+    stats: BuildStats,
+    unresolved_sources: list[dict[str, Any]],
+) -> None:
+    # First backfill from source_file using files.path as source of truth.
+    rows = conn.execute(
+        """
+        SELECT id, source_file
+        FROM workflows
+        WHERE source_file IS NOT NULL
+          AND (file_id IS NULL OR file_id = 0)
+        """
+    ).fetchall()
+
+    for row in rows:
+        workflow_id = int(row["id"])
+        source_file = str(row["source_file"] or "").strip()
+        if not source_file:
+            continue
+        file_id, strategy = _resolve_file_id(conn, source_file)
+        if file_id is not None:
+            conn.execute(
+                "UPDATE workflows SET file_id = ? WHERE id = ?",
+                (file_id, workflow_id),
+            )
+            stats.file_ids_backfilled += 1
+            continue
+
+        stats.unresolved_source_files += 1
+        unresolved_sources.append(
+            {
+                "table_name": "workflows",
+                "row_id": workflow_id,
+                "source_file": source_file,
+                "attempted_match_strategy": strategy,
+                "remediation_hint": "path missing from files table or requires normalization fix",
+            }
+        )
+
+    # Then backfill from source_symbol_id for class/inference rows without source_file.
+    symbol_rows = conn.execute(
+        """
+        SELECT w.id AS workflow_id, s.file_id AS symbol_file_id
+        FROM workflows w
+        JOIN symbols s ON s.id = w.source_symbol_id
+        WHERE w.source_symbol_id IS NOT NULL
+          AND (w.file_id IS NULL OR w.file_id = 0)
+          AND s.file_id IS NOT NULL
+        """
+    ).fetchall()
+    for row in symbol_rows:
+        conn.execute(
+            "UPDATE workflows SET file_id = ? WHERE id = ?",
+            (int(row["symbol_file_id"]), int(row["workflow_id"])),
+        )
+        stats.file_ids_backfilled += 1
 
 
 def get_entities(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -107,6 +206,7 @@ def insert_workflow(
     workflow_type: str,
     source_kind: str,
     source_file: str | None,
+    file_id: int | None,
     source_symbol_id: int | None,
     reason: str,
 ) -> tuple[int | None, bool]:
@@ -119,10 +219,11 @@ def insert_workflow(
                 workflow_type,
                 source_kind,
                 source_file,
+                file_id,
                 source_symbol_id,
                 reason
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 entity_id,
@@ -130,6 +231,7 @@ def insert_workflow(
                 workflow_type,
                 source_kind,
                 source_file,
+                file_id,
                 source_symbol_id,
                 reason,
             ),
@@ -412,6 +514,7 @@ def build_workflows_for_entity(
             workflow_type="allowed_operations",
             source_kind="yaml" if action_source == "yaml" else "inference",
             source_file=yaml_path,
+            file_id=None,
             source_symbol_id=None,
             reason=f"Discovered from {yaml_path} via {action_source}",
         )
@@ -436,6 +539,7 @@ def build_workflows_for_entity(
             workflow_type="allowed_operations",
             source_kind="class",
             source_file=None,
+            file_id=int(r["symbol_file_id"]) if r["symbol_file_id"] is not None else None,
             source_symbol_id=r["symbol_id"],
             reason=f"AllowedOperationsHandler class present: {r['symbol_name']}",
         )
@@ -462,6 +566,7 @@ def build_workflows_for_entity(
             workflow_type=wf_type,
             source_kind="class",
             source_file=None,
+            file_id=int(r["symbol_file_id"]) if r["symbol_file_id"] is not None else None,
             source_symbol_id=r["symbol_id"],
             reason=f"Discovered from role={r['mapping_type']} symbol={r['symbol_name']}",
         )
@@ -474,6 +579,7 @@ def build_workflows_for_entity(
 
 def build(db: str, repo_root: Path, reset: bool) -> BuildStats:
     stats = BuildStats()
+    unresolved_sources: list[dict[str, Any]] = []
 
     if yaml is None:
         click.echo(
@@ -484,6 +590,8 @@ def build(db: str, repo_root: Path, reset: bool) -> BuildStats:
 
     conn = get_connection(db)
     try:
+        ensure_workflows_file_id_column(conn)
+
         if reset:
             conn.execute("DELETE FROM workflows")
             conn.commit()
@@ -503,9 +611,13 @@ def build(db: str, repo_root: Path, reset: bool) -> BuildStats:
             if stats.entities_processed % 500 == 0:
                 conn.commit()
 
+        backfill_workflow_file_ids(conn, stats, unresolved_sources)
+
         conn.commit()
     finally:
         conn.close()
+
+    write_jsonl(UNRESOLVED_WORKFLOW_FILE_IDS_LOG, unresolved_sources)
 
     return stats
 
@@ -534,6 +646,9 @@ def build_command(db: str, repo_root: Path, reset: bool) -> None:
     stats = build(db=db, repo_root=repo_root.resolve(), reset=reset)
     click.echo(f"Processed entities:  {stats.entities_processed}")
     click.echo(f"Workflows inserted:  {stats.workflows_inserted}")
+    click.echo(f"file_id backfilled:  {stats.file_ids_backfilled}")
+    click.echo(f"Unresolved sources:  {stats.unresolved_source_files}")
+    click.echo(f"Unresolved file log: {UNRESOLVED_WORKFLOW_FILE_IDS_LOG.as_posix()}")
 
 
 if __name__ == "__main__":

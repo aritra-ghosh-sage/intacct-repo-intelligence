@@ -11,6 +11,8 @@ INCLUDE_EXTENSIONS = {
     ".qry",
     ".cls",
     ".inc",
+    ".menu",
+    ".pol",
     ".phtml",
     ".html",
     ".yaml",

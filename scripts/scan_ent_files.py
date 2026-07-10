@@ -26,6 +26,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
+from tqdm import tqdm
+
 CLASS_EXTS = (
     ".cls",
     ".php",
@@ -897,7 +899,7 @@ def scan(repo_root: Path, out_file: Path) -> int:
     count = 0
     consumed_service_schema_files = set()
     with out_file.open("w", encoding="utf-8") as f:
-        for ent_path in ent_paths:
+        for ent_path in tqdm(ent_paths, desc="Scanning .ent files", unit="file"):
             ent_stem = ent_path.stem
             canonical_name, companions = discover_companions(
                 ent_stem=ent_stem,
@@ -1062,7 +1064,11 @@ def scan(repo_root: Path, out_file: Path) -> int:
             f.write(json.dumps(asdict(row), ensure_ascii=False, sort_keys=True) + "\n")
             count += 1
 
-        for schema_file in sorted(service_schema_index.keys()):
+        for schema_file in tqdm(
+            sorted(service_schema_index.keys()),
+            desc="Emitting service-only rows",
+            unit="schema",
+        ):
             if schema_file in consumed_service_schema_files:
                 continue
 

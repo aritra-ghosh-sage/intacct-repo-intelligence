@@ -14,6 +14,11 @@ def connect(db_path: str) -> sqlite3.Connection:
     return conn
 
 
+def column_exists(conn: sqlite3.Connection, table_name: str, column_name: str) -> bool:
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return any(str(row["name"]) == column_name for row in rows)
+
+
 def check_conflicting_key_to_id(conn: sqlite3.Connection) -> dict:
     row = conn.execute(
         """
@@ -83,6 +88,62 @@ def check_orphan_dbschema_fields(conn: sqlite3.Connection) -> dict:
     return {"ok": row["cnt"] == 0, "count": int(row["cnt"])}
 
 
+def check_unresolved_security_operations_file_ids(conn: sqlite3.Connection) -> dict:
+    if not column_exists(conn, "security_operations", "file_id"):
+        return {"ok": False, "count": -1, "error": "missing_column:file_id"}
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS cnt
+        FROM security_operations
+        WHERE source_file IS NOT NULL
+          AND (file_id IS NULL OR file_id = 0)
+        """
+    ).fetchone()
+    return {"ok": row["cnt"] == 0, "count": int(row["cnt"])}
+
+
+def check_unresolved_security_allowops_file_ids(conn: sqlite3.Connection) -> dict:
+    if not column_exists(conn, "security_operation_allowops", "file_id"):
+        return {"ok": False, "count": -1, "error": "missing_column:file_id"}
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS cnt
+        FROM security_operation_allowops
+        WHERE source_file IS NOT NULL
+          AND (file_id IS NULL OR file_id = 0)
+        """
+    ).fetchone()
+    return {"ok": row["cnt"] == 0, "count": int(row["cnt"])}
+
+
+def check_unresolved_security_policies_file_ids(conn: sqlite3.Connection) -> dict:
+    if not column_exists(conn, "security_policies", "file_id"):
+        return {"ok": False, "count": -1, "error": "missing_column:file_id"}
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS cnt
+        FROM security_policies
+        WHERE source_file IS NOT NULL
+          AND (file_id IS NULL OR file_id = 0)
+        """
+    ).fetchone()
+    return {"ok": row["cnt"] == 0, "count": int(row["cnt"])}
+
+
+def check_unresolved_security_menus_file_ids(conn: sqlite3.Connection) -> dict:
+    if not column_exists(conn, "security_menus", "file_id"):
+        return {"ok": False, "count": -1, "error": "missing_column:file_id"}
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS cnt
+        FROM security_menus
+        WHERE source_file IS NOT NULL
+          AND (file_id IS NULL OR file_id = 0)
+        """
+    ).fetchone()
+    return {"ok": row["cnt"] == 0, "count": int(row["cnt"])}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", default="catalog/catalog.db")
@@ -117,6 +178,30 @@ def main() -> None:
         default=0,
         help="Fail when orphan dbschema fields exceed this threshold.",
     )
+    parser.add_argument(
+        "--max-unresolved-security-operations-file-ids",
+        type=int,
+        default=-1,
+        help="Fail when security_operations unresolved file_ids exceed this threshold (-1 disables).",
+    )
+    parser.add_argument(
+        "--max-unresolved-security-allowops-file-ids",
+        type=int,
+        default=-1,
+        help="Fail when security_operation_allowops unresolved file_ids exceed this threshold (-1 disables).",
+    )
+    parser.add_argument(
+        "--max-unresolved-security-policies-file-ids",
+        type=int,
+        default=-1,
+        help="Fail when security_policies unresolved file_ids exceed this threshold (-1 disables).",
+    )
+    parser.add_argument(
+        "--max-unresolved-security-menus-file-ids",
+        type=int,
+        default=-1,
+        help="Fail when security_menus unresolved file_ids exceed this threshold (-1 disables).",
+    )
     args = parser.parse_args()
 
     conn = connect(args.db)
@@ -127,6 +212,18 @@ def main() -> None:
             "unresolved_policy_keys": check_unresolved_policy_keys(conn),
             "unresolved_menu_keys": check_unresolved_menu_keys(conn),
             "orphan_dbschema_fields": check_orphan_dbschema_fields(conn),
+            "unresolved_security_operations_file_ids": check_unresolved_security_operations_file_ids(
+                conn
+            ),
+            "unresolved_security_allowops_file_ids": check_unresolved_security_allowops_file_ids(
+                conn
+            ),
+            "unresolved_security_policies_file_ids": check_unresolved_security_policies_file_ids(
+                conn
+            ),
+            "unresolved_security_menus_file_ids": check_unresolved_security_menus_file_ids(
+                conn
+            ),
         }
     finally:
         conn.close()
@@ -142,6 +239,10 @@ def main() -> None:
         "unresolved_policy_keys": args.max_unresolved_policy_keys,
         "unresolved_menu_keys": args.max_unresolved_menu_keys,
         "orphan_dbschema_fields": args.max_orphan_dbschema_fields,
+        "unresolved_security_operations_file_ids": args.max_unresolved_security_operations_file_ids,
+        "unresolved_security_allowops_file_ids": args.max_unresolved_security_allowops_file_ids,
+        "unresolved_security_policies_file_ids": args.max_unresolved_security_policies_file_ids,
+        "unresolved_security_menus_file_ids": args.max_unresolved_security_menus_file_ids,
     }
     for key, threshold in threshold_map.items():
         count = checks[key]["count"]
