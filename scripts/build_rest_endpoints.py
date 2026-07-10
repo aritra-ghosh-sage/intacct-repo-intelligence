@@ -53,6 +53,8 @@ class BuildStats:
     no_paths_found: int = 0
     symbol_fallback_files: int = 0
     symbol_fallback_endpoints: int = 0
+    schema_bridge_hits: int = 0
+    schema_bridge_overrides: int = 0
 
 
 def _parse_yaml(file_path: Path) -> tuple[dict[str, Any], bool]:
@@ -231,6 +233,52 @@ def _resolve_entity_ids_by_file(conn: sqlite3.Connection) -> dict[int, int]:
     return resolved
 
 
+def _openapi_family_from_path(file_path: str) -> str:
+    stem = Path(file_path).name
+    token = stem.split(".", 1)[0].strip().lower()
+    return token
+
+
+def _build_schema_entity_bridge(
+    conn: sqlite3.Connection,
+) -> dict[tuple[str, str, str], int]:
+    """
+    Build deterministic (module, canonical_name, family) -> entity_id mapping from schema rows.
+
+    Only keys resolving to exactly one distinct entity_id are retained.
+    """
+    rows = conn.execute(
+        """
+        SELECT
+            oi.file_path,
+            LOWER(TRIM(oi.module)) AS module_key,
+            LOWER(TRIM(oi.canonical_name)) AS canonical_key,
+            em.entity_id
+        FROM openapispec_index oi
+        JOIN entity_mappings em
+          ON em.file_id = oi.file_id
+        WHERE oi.kind = 'schema'
+          AND COALESCE(oi.state, 'active') = 'active'
+          AND COALESCE(TRIM(oi.module), '') <> ''
+          AND COALESCE(TRIM(oi.canonical_name), '') <> ''
+          AND em.entity_id IS NOT NULL
+          AND em.mapping_type LIKE 'openapispec_%'
+        """
+    ).fetchall()
+
+    grouped: dict[tuple[str, str, str], set[int]] = {}
+    for row in rows:
+        family = _openapi_family_from_path(str(row["file_path"] or ""))
+        key = (str(row["module_key"]), str(row["canonical_key"]), family)
+        grouped.setdefault(key, set()).add(int(row["entity_id"]))
+
+    bridge: dict[tuple[str, str, str], int] = {}
+    for key, entity_ids in grouped.items():
+        if len(entity_ids) == 1:
+            bridge[key] = next(iter(entity_ids))
+    return bridge
+
+
 def _normalize_name(value: str) -> str:
     return re.sub(r"[^a-z0-9]", "", value.lower())
 
@@ -270,10 +318,15 @@ def _resolve_entity_fallback(
     spec_row: sqlite3.Row,
     by_ent_stem: dict[str, int],
     by_normalized_name: dict[str, list[int]],
+    schema_entity_bridge: dict[tuple[str, str, str], int],
 ) -> int | None:
     mapped_to = str(spec_row["x_mapped_to"] or "").strip().lower()
     if mapped_to and mapped_to in by_ent_stem:
         return by_ent_stem[mapped_to]
+
+    bridged = _resolve_entity_schema_bridge(spec_row, schema_entity_bridge)
+    if bridged is not None:
+        return bridged
 
     canonical_name = str(spec_row["canonical_name"] or "").strip()
     if canonical_name:
@@ -283,6 +336,18 @@ def _resolve_entity_fallback(
             return ids[0]
 
     return None
+
+
+def _resolve_entity_schema_bridge(
+    spec_row: sqlite3.Row,
+    schema_entity_bridge: dict[tuple[str, str, str], int],
+) -> int | None:
+    module_key = str(spec_row["module"] or "").strip().lower()
+    canonical_key = str(spec_row["canonical_name"] or "").strip().lower()
+    family = _openapi_family_from_path(str(spec_row["file_path"] or ""))
+    if not module_key or not canonical_key:
+        return None
+    return schema_entity_bridge.get((module_key, canonical_key, family))
 
 
 def _resolve_handler_symbol_ids(
@@ -352,12 +417,14 @@ def build(
         stats = BuildStats()
         entity_by_file_id = _resolve_entity_ids_by_file(conn)
         entity_by_ent_stem, entity_by_name = _build_entity_indexes(conn)
+        schema_entity_bridge = _build_schema_entity_bridge(conn)
 
         # Get all OpenAPI spec files from openapispec_index
         # Focus on files in paths directories which contain REST endpoint definitions
         specs = conn.execute(
             """
             SELECT id, file_id, file_path, kind, canonical_name, x_mapped_to
+                 , module
             FROM openapispec_index
             WHERE file_path LIKE '%/paths/%' OR kind = 'operations'
             ORDER BY file_path
@@ -409,11 +476,26 @@ def build(
             # Prepare data for insertion: (method, path, file_id, entity_id, handler_symbol_id)
             # entity_id is populated only when deterministic evidence resolves to one entity.
             resolved_entity_id = entity_by_file_id.get(int(file_id))
+            bridged_candidate = _resolve_entity_schema_bridge(
+                spec_row=spec_row,
+                schema_entity_bridge=schema_entity_bridge,
+            )
+
+            if bridged_candidate is not None:
+                if resolved_entity_id is None:
+                    resolved_entity_id = bridged_candidate
+                    stats.schema_bridge_hits += 1
+                elif resolved_entity_id != bridged_candidate:
+                    # Per precedence policy, prefer unique schema-bridge evidence.
+                    resolved_entity_id = bridged_candidate
+                    stats.schema_bridge_overrides += 1
+
             if resolved_entity_id is None:
                 resolved_entity_id = _resolve_entity_fallback(
                     spec_row,
                     by_ent_stem=entity_by_ent_stem,
                     by_normalized_name=entity_by_name,
+                    schema_entity_bridge=schema_entity_bridge,
                 )
 
             handler_by_endpoint = _resolve_handler_symbol_ids(conn, int(file_id))
@@ -487,6 +569,8 @@ def build_command(
     click.echo(f"⚠️  No paths found:          {stats.no_paths_found}")
     click.echo(f"♻️  Symbol fallback files:    {stats.symbol_fallback_files}")
     click.echo(f"♻️  Symbol fallback endpoints:{stats.symbol_fallback_endpoints}")
+    click.echo(f"🔗 Schema bridge hits:       {stats.schema_bridge_hits}")
+    click.echo(f"🔀 Schema bridge overrides:  {stats.schema_bridge_overrides}")
     click.echo(f"❌ YAML parse failures:      {stats.yaml_parse_failures}")
 
 
