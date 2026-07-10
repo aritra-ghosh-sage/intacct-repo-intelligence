@@ -163,6 +163,9 @@ def get_declared_state():
                     "pick_picker",
                     "picker",
                     "reverse_manager",
+                    "workflow_schema_file",
+                    "workflow_history_file",
+                    "workflow_api_files",
                 ],
                 "required_extractors": [
                     "java_extractor.py",
