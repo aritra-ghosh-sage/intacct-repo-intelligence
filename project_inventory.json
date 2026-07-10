@@ -1,9 +1,9 @@
 {
   "project_name": "intacct-repo-intelligence",
-  "generated_at": "2026-07-08T15:34:28.028559+00:00",
+  "generated_at": "2026-07-10T05:04:12.409320+00:00",
   "generator": "scripts/generate_inventory.py",
   "verified_state": {
-    "generated_at": "2026-07-08T15:34:28.003919+00:00",
+    "generated_at": "2026-07-10T05:04:12.386552+00:00",
     "phases": {
       "phase2d": {
         "status": "verified",
@@ -12,9 +12,17 @@
     },
     "database": {
       "tables": {
+        "dbschema_fields": {
+          "status": "present",
+          "rows": 16377
+        },
+        "dbschema_tables": {
+          "status": "present",
+          "rows": 1148
+        },
         "entity_mappings": {
           "status": "present",
-          "rows": 5214
+          "rows": 5619
         },
         "entity_nodes": {
           "status": "present",
@@ -26,7 +34,7 @@
         },
         "files": {
           "status": "present",
-          "rows": 46242
+          "rows": 46319
         },
         "knowledge_items": {
           "status": "present",
@@ -34,11 +42,11 @@
         },
         "openapispec_index": {
           "status": "present",
-          "rows": 3959
+          "rows": 3731
         },
         "relationships": {
           "status": "present",
-          "rows": 238488
+          "rows": 296214
         },
         "repos": {
           "status": "present",
@@ -46,15 +54,47 @@
         },
         "rest_endpoints": {
           "status": "present",
-          "rows": 3020
+          "rows": 2804
+        },
+        "security_menu_items": {
+          "status": "present",
+          "rows": 1499
+        },
+        "security_menu_op_links": {
+          "status": "present",
+          "rows": 1497
+        },
+        "security_menus": {
+          "status": "present",
+          "rows": 42
+        },
+        "security_operation_allowops": {
+          "status": "present",
+          "rows": 5279
+        },
+        "security_operations": {
+          "status": "present",
+          "rows": 4797
+        },
+        "security_policies": {
+          "status": "present",
+          "rows": 703
+        },
+        "security_policy_eops": {
+          "status": "present",
+          "rows": 2831
+        },
+        "security_policy_values": {
+          "status": "present",
+          "rows": 2444
         },
         "sqlite_sequence": {
           "status": "present",
-          "rows": 8
+          "rows": 18
         },
         "symbols": {
           "status": "present",
-          "rows": 130705
+          "rows": 162587
         },
         "workflow_edges": {
           "status": "present",
@@ -83,7 +123,15 @@
         "table",
         "template",
         "template_match",
-        "view"
+        "view",
+        "yaml_api",
+        "yaml_document",
+        "yaml_history",
+        "yaml_keyspace",
+        "yaml_operation",
+        "yaml_schema",
+        "yaml_uimeta",
+        "yaml_view"
       ],
       "mapping_types": [
         "allowed_operations_handler",
@@ -101,7 +149,7 @@
         "openapispec_operations",
         "openapispec_schema",
         "openapispec_uimeta",
-        "openapispec_unknown",
+        "openapispec_view",
         "pick_manager",
         "pick_picker",
         "picker",
@@ -109,6 +157,9 @@
       ],
       "relationship_types": [
         "CALLS",
+        "CONTAINS",
+        "DECLARES",
+        "EXPOSES_PATH",
         "IMPLEMENTS",
         "IMPORTS",
         "INHERITS",
@@ -139,20 +190,25 @@
         "009_phase2c_repos.sql",
         "010_phase2c_knowledge.sql",
         "011_openapispec_index.sql",
-        "012_purge_sql_drop_mappings.sql"
+        "012_purge_sql_drop_mappings.sql",
+        "013_openapispec_x_mapped_to.sql",
+        "014_file_id_provenance.sql",
+        "015_relationship_target_kind_normalization.sql"
       ],
       "parsers": [
         "cqry_extractor.py",
         "java_extractor.py",
         "php_extractor.py",
         "sql_extractor.py",
-        "xslt_extractor.py"
+        "xslt_extractor.py",
+        "yaml_extractor.py"
       ],
       "scripts": [
         "benchmark_score.py",
         "build_entities.py",
         "build_entity_roots.py",
         "build_rest_endpoints.py",
+        "build_security_mappings.py",
         "build_workflows.py",
         "generate_inventory.py",
         "link_openapispec.py",
@@ -161,6 +217,7 @@
         "query_entity.py",
         "query_relationships.py",
         "query_rest.py",
+        "query_security.py",
         "query_workflow.py",
         "scan_ent_files.py",
         "scan_openapispec.py"
@@ -169,7 +226,7 @@
         "validate_phase2b.py",
         "validate_phase2c1.py",
         "validate_phase2d.py",
-        "validate_phase2d1.py"
+        "validate_security_mappings.py"
       ]
     }
   },
@@ -186,73 +243,64 @@
           "openapispec_index"
         ],
         "expected_mapping_types": [
-          "manager",
+          "allowed_operations_handler",
+          "approval_manager",
+          "batch_manager",
+          "batch_picker",
           "editor",
+          "entity_manager",
+          "entry_manager",
+          "form_editor",
+          "item_manager",
           "lister",
-          "picker",
-          "cqry",
-          "inc",
-          "yaml",
-          "sql",
-          "html",
-          "phtml",
+          "manager",
           "openapispec_schema",
           "openapispec_operations",
           "openapispec_history",
+          "openapispec_view",
           "openapispec_uimeta",
-          "openapispec_viewmeta"
+          "pick_manager",
+          "pick_picker",
+          "picker",
+          "reverse_manager"
         ],
         "required_extractors": [
           "java_extractor.py",
           "php_extractor.py",
           "sql_extractor.py",
           "xslt_extractor.py",
-          "cqry_extractor.py"
+          "cqry_extractor.py",
+          "yaml_extractor.py"
         ],
         "required_validators": [
-          "validate_phase2d.py"
+          "validate_phase2b.py",
+          "validate_phase2c1.py",
+          "validate_phase2d.py",
+          "validate_security_mappings.py"
         ]
       }
     }
   },
   "drift": {
-    "missing_mapping_types": [
-      "cqry",
-      "html",
-      "inc",
-      "openapispec_viewmeta",
-      "phtml",
-      "sql",
-      "yaml"
-    ],
     "extra_tables": [
+      "dbschema_fields",
+      "dbschema_tables",
       "entity_mappings",
       "entity_nodes",
       "entity_roots",
       "files",
       "relationships",
+      "security_menu_items",
+      "security_menu_op_links",
+      "security_menus",
+      "security_operation_allowops",
+      "security_operations",
+      "security_policies",
+      "security_policy_eops",
+      "security_policy_values",
       "sqlite_sequence",
       "symbols",
       "workflows"
-    ],
-    "extra_mapping_types": [
-      "allowed_operations_handler",
-      "approval_manager",
-      "batch_manager",
-      "batch_picker",
-      "entity_manager",
-      "entry_manager",
-      "form_editor",
-      "item_manager",
-      "openapispec_unknown",
-      "pick_manager",
-      "pick_picker",
-      "reverse_manager"
-    ],
-    "extra_validators": [
-      "validate_phase2b.py",
-      "validate_phase2c1.py",
-      "validate_phase2d1.py"
     ]
   }
 }
