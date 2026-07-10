@@ -270,6 +270,7 @@ def ensure_security_tables(conn: sqlite3.Connection) -> None:
             table_name TEXT NOT NULL,
             primary_keys TEXT,
             source_file TEXT NOT NULL,
+            file_id INTEGER,
             source_line INTEGER,
             raw_hash TEXT,
             UNIQUE(table_name, source_file)
@@ -292,6 +293,7 @@ def ensure_security_tables(conn: sqlite3.Connection) -> None:
         "security_operation_allowops",
         "security_policies",
         "security_menus",
+        "dbschema_tables",
     )
     for table_name in file_id_targets:
         cols = {
@@ -312,6 +314,9 @@ def ensure_security_tables(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_security_menus_file_id ON security_menus(file_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_dbschema_tables_file_id ON dbschema_tables(file_id)"
     )
     conn.commit()
 
@@ -351,6 +356,7 @@ def backfill_security_file_ids(
         ("security_operation_allowops", "id"),
         ("security_policies", "id"),
         ("security_menus", "id"),
+        ("dbschema_tables", "id"),
     )
 
     for table_name, pk_col in targets:
@@ -1132,6 +1138,7 @@ def parse_dbschema(
         return
 
     stats.files_parsed += 1
+    dbschema_file_id, _ = _resolve_file_id(conn, rel)
     for table_name_raw, table_node in k_tables.items:
         table_name = normalize_string(table_name_raw)
         if not table_name:
@@ -1145,14 +1152,15 @@ def parse_dbschema(
         cur = conn.execute(
             """
             INSERT INTO dbschema_tables (
-                table_name, primary_keys, source_file, source_line, raw_hash
+                table_name, primary_keys, source_file, file_id, source_line, raw_hash
             )
-            VALUES (?, ?, ?, NULL, ?)
+            VALUES (?, ?, ?, ?, NULL, ?)
             ON CONFLICT(table_name, source_file) DO UPDATE SET
                 primary_keys = excluded.primary_keys,
+                file_id = excluded.file_id,
                 raw_hash = excluded.raw_hash
             """,
-            (table_name, primary_keys, rel, sha1_jsonable(table_map)),
+            (table_name, primary_keys, rel, dbschema_file_id, sha1_jsonable(table_map)),
         )
         if cur.lastrowid:
             table_id = int(cur.lastrowid)

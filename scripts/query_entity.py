@@ -2,12 +2,18 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import sys
 from collections import defaultdict, deque
 from dataclasses import dataclass
+from pathlib import Path
 
 import click
 
-from catalog.db import get_connection
+try:
+    from catalog.db import get_connection
+except ModuleNotFoundError:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from catalog.db import get_connection
 
 DEFAULT_DB = os.environ.get("CATALOG_DB", "catalog/catalog.db")
 
@@ -580,14 +586,20 @@ def _resolve_direction_flags(
 @click.option(
     "--openapispec", is_flag=True, help="Show openapispec mappings for the entity."
 )
+@click.option("--access", is_flag=True, help="Show linked entity access graph records.")
 def entity(
-    entity_name: str, db: str, workflow: bool, flow: bool, openapispec: bool
+    entity_name: str,
+    db: str,
+    workflow: bool,
+    flow: bool,
+    openapispec: bool,
+    access: bool,
 ) -> None:
     """Show mapped symbols for an entity."""
-    selected_views = sum([workflow, flow, openapispec])
+    selected_views = sum([workflow, flow, openapispec, access])
     if selected_views > 1:
         raise click.ClickException(
-            "Use only one of --workflow, --flow, or --openapispec"
+            "Use only one of --workflow, --flow, --openapispec, or --access"
         )
 
     conn = get_connection(db)
@@ -600,6 +612,9 @@ def entity(
 
         if openapispec:
             raise SystemExit(show_openapispec_view(conn, entity_name))
+
+        if access:
+            raise SystemExit(show_access_view(conn, entity_name))
 
         raise SystemExit(show_entity(conn, entity_name))
     finally:
@@ -880,6 +895,132 @@ def show_flow_view(conn: sqlite3.Connection, entity_name: str) -> int:
     else:
         print_section("Workflows")
         click.echo("  none discovered yet")
+
+    return 0
+
+
+def show_access_view(conn: sqlite3.Connection, entity_name: str) -> int:
+    entity = get_entity(conn, entity_name)
+    if not entity:
+        click.echo(f"Entity not found: {entity_name}")
+        return 1
+
+    rows = conn.execute(
+        """
+        SELECT
+            eal.surface,
+            eal.record_id,
+            eal.link_type,
+            eal.evidence_file_id,
+            ef.path AS evidence_file,
+            eal.notes,
+            CASE
+                WHEN eal.surface = 'security_operation' THEN (
+                    SELECT so.op_key
+                    FROM security_operations so
+                    WHERE so.id = eal.record_id
+                )
+                WHEN eal.surface = 'security_policy' THEN (
+                    SELECT sp.policy_name
+                    FROM security_policies sp
+                    WHERE sp.id = eal.record_id
+                )
+                WHEN eal.surface = 'security_menu' THEN (
+                    SELECT COALESCE(sm.menu_name, sm.module, '(menu)')
+                    FROM security_menus sm
+                    WHERE sm.id = eal.record_id
+                )
+                WHEN eal.surface = 'security_menu_item' THEN (
+                    SELECT smi.item_path
+                    FROM security_menu_items smi
+                    WHERE smi.id = eal.record_id
+                )
+                WHEN eal.surface = 'dbschema_table' THEN (
+                    SELECT dt.table_name
+                    FROM dbschema_tables dt
+                    WHERE dt.id = eal.record_id
+                )
+                WHEN eal.surface = 'workflow' THEN (
+                    SELECT wf.name
+                    FROM workflows wf
+                    WHERE wf.id = eal.record_id
+                )
+                WHEN eal.surface = 'rest_endpoint' THEN (
+                    SELECT re.method || ' ' || re.path
+                    FROM rest_endpoints re
+                    WHERE re.id = eal.record_id
+                )
+                ELSE '(unknown)'
+            END AS label,
+            CASE
+                WHEN eal.surface = 'security_operation' THEN (
+                    SELECT so.source_file
+                    FROM security_operations so
+                    WHERE so.id = eal.record_id
+                )
+                WHEN eal.surface = 'security_policy' THEN (
+                    SELECT sp.source_file
+                    FROM security_policies sp
+                    WHERE sp.id = eal.record_id
+                )
+                WHEN eal.surface = 'security_menu' THEN (
+                    SELECT sm.source_file
+                    FROM security_menus sm
+                    WHERE sm.id = eal.record_id
+                )
+                WHEN eal.surface = 'security_menu_item' THEN (
+                    SELECT sm.source_file
+                    FROM security_menu_items smi
+                    JOIN security_menus sm ON sm.id = smi.menu_id
+                    WHERE smi.id = eal.record_id
+                )
+                WHEN eal.surface = 'dbschema_table' THEN (
+                    SELECT dt.source_file
+                    FROM dbschema_tables dt
+                    WHERE dt.id = eal.record_id
+                )
+                WHEN eal.surface = 'workflow' THEN (
+                    SELECT wf.source_file
+                    FROM workflows wf
+                    WHERE wf.id = eal.record_id
+                )
+                WHEN eal.surface = 'rest_endpoint' THEN (
+                    SELECT f.path
+                    FROM rest_endpoints re
+                    JOIN files f ON f.id = re.file_id
+                    WHERE re.id = eal.record_id
+                )
+                ELSE NULL
+            END AS source_file
+        FROM entity_access_links eal
+        LEFT JOIN files ef
+          ON ef.id = eal.evidence_file_id
+        WHERE eal.entity_id = ?
+        ORDER BY eal.surface, eal.link_type, label
+        """,
+        (entity["id"],),
+    ).fetchall()
+
+    print_header(f"ENTITY ACCESS GRAPH: {entity_name}")
+
+    if not rows:
+        click.echo(
+            "No entity access links found. Run build_entity_access_links.py build first."
+        )
+        return 0
+
+    current_surface = None
+    for row in rows:
+        if current_surface != row["surface"]:
+            current_surface = row["surface"]
+            print_section(current_surface.upper())
+
+        source_file = row["source_file"] or ""
+        evidence_file = row["evidence_file"] or ""
+        click.echo(
+            f"  [{row['link_type']:<15}] {row['label']} "
+            f"(record_id={row['record_id']}, source={source_file}, evidence={evidence_file})"
+        )
 
     return 0
 

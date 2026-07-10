@@ -170,6 +170,19 @@ fi
 echo ""
 
 # ===================================================================
+# Phase 13: Entity Access Graph Linking
+# ===================================================================
+echo "🔗 Phase 13: Building entity access graph links..."
+echo "   Creating deterministic entity bridges for security/menu/dbschema/workflow/rest evidence"
+python scripts/build_entity_access_links.py build --db catalog/catalog.db --reset
+if [ $? -ne 0 ]; then
+  echo "   ⚠️  Entity access linking completed with warnings (non-fatal)"
+else
+  echo "   ✅ Entity access linking complete"
+fi
+echo ""
+
+# ===================================================================
 # Summary
 # ===================================================================
 END_TIME=$(date +%s)
@@ -199,6 +212,7 @@ tables = [
     ('dbschema_fields', 'dbschema table fields'),
     ('openapispec_index', 'OpenAPI specs indexed'),
     ('rest_endpoints', 'REST API endpoints'),
+    ('entity_access_links', 'Entity access graph links'),
 ]
 for table, desc in tables:
     try:
