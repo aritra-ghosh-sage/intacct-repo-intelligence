@@ -20,6 +20,19 @@ except ModuleNotFoundError:
 DEFAULT_DB = os.environ.get("CATALOG_DB", "catalog/catalog.db")
 
 
+def get_exact_symbol_ids(conn: sqlite3.Connection, name: str) -> list[int]:
+    rows = conn.execute(
+        """
+        SELECT id
+        FROM symbols
+        WHERE name = ?
+        ORDER BY id
+        """,
+        (name,),
+    ).fetchall()
+    return [r["id"] for r in rows]
+
+
 def has_resolution_classification(conn: sqlite3.Connection) -> bool:
     cols = conn.execute("PRAGMA table_info(relationships)").fetchall()
     names = {r["name"] for r in cols}
@@ -123,20 +136,40 @@ def show_rdeps(
     conn: sqlite3.Connection, name: str, limit: int, classes: list[str]
 ) -> None:
     # Incoming edges where the requested symbol appears as a relationship target.
-    sql = """
-        SELECT
-            relationship_type,
-            source_name,
-            source_kind,
-            target_name,
-            confidence,
-            file_path,
-            evidence,
-            resolution_class
-        FROM relationships
-        WHERE target_name LIKE ?
-    """
-    params: list[object] = [f"%{name}%"]
+    symbol_ids = get_exact_symbol_ids(conn, name)
+
+    if symbol_ids:
+        placeholders = ",".join(["?"] * len(symbol_ids))
+        sql = f"""
+            SELECT
+                relationship_type,
+                source_name,
+                source_kind,
+                target_name,
+                confidence,
+                file_path,
+                evidence,
+                resolution_class
+            FROM relationships
+            WHERE target_symbol_id IN ({placeholders})
+        """
+        params: list[object] = [*symbol_ids]
+    else:
+        sql = """
+            SELECT
+                relationship_type,
+                source_name,
+                source_kind,
+                target_name,
+                confidence,
+                file_path,
+                evidence,
+                resolution_class
+            FROM relationships
+            WHERE target_name LIKE ?
+        """
+        params = [f"%{name}%"]
+
     if classes and has_resolution_classification(conn):
         placeholders = ",".join(["?"] * len(classes))
         sql += f" AND resolution_class IN ({placeholders})"
