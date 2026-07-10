@@ -48,6 +48,7 @@ RECOGNIZED_METHODS = {"get", "post", "patch", "delete", "put"}
 class BuildStats:
     specs_processed: int = 0
     endpoints_inserted: int = 0
+    endpoints_updated: int = 0
     yaml_parse_failures: int = 0
     no_paths_found: int = 0
     symbol_fallback_files: int = 0
@@ -139,13 +140,13 @@ def _extract_endpoints_from_symbols(
 
 def _insert_endpoints(
     conn: sqlite3.Connection,
-    endpoints: list[tuple[str, str, int, int | None]],
+    endpoints: list[tuple[str, str, int, int | None, int | None]],
 ) -> int:
     """
     Insert REST endpoints into the database.
     Args:
         conn: Database connection
-        endpoints: List of (method, path, file_id, entity_id) tuples
+        endpoints: List of (method, path, file_id, entity_id, handler_symbol_id) tuples
     Returns:
         Count of inserted endpoints
     """
@@ -155,20 +156,52 @@ def _insert_endpoints(
             method,
             path,
             file_id,
-            entity_id
+            entity_id,
+            handler_symbol_id
         )
-        VALUES (?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?)
     """
 
-    for method, path, file_id, entity_id in endpoints:
+    for method, path, file_id, entity_id, handler_symbol_id in endpoints:
         try:
-            cur = conn.execute(sql, (method, path, file_id, entity_id))
+            cur = conn.execute(
+                sql,
+                (method, path, file_id, entity_id, handler_symbol_id),
+            )
             if cur.rowcount > 0:
                 inserted += 1
         except sqlite3.IntegrityError:
             pass
 
     return inserted
+
+
+def _update_endpoints(
+    conn: sqlite3.Connection,
+    endpoints: list[tuple[str, str, int, int | None, int | None]],
+) -> int:
+    """
+    Backfill nullable columns for endpoints that already exist.
+    """
+    updated = 0
+    sql = """
+        UPDATE rest_endpoints
+        SET entity_id = COALESCE(entity_id, ?),
+            handler_symbol_id = COALESCE(handler_symbol_id, ?)
+        WHERE method = ?
+          AND path = ?
+          AND file_id = ?
+    """
+
+    for method, path, file_id, entity_id, handler_symbol_id in endpoints:
+        cur = conn.execute(
+            sql,
+            (entity_id, handler_symbol_id, method, path, file_id),
+        )
+        if cur.rowcount > 0:
+            updated += 1
+
+    return updated
 
 
 def _resolve_entity_ids_by_file(conn: sqlite3.Connection) -> dict[int, int]:
@@ -196,6 +229,97 @@ def _resolve_entity_ids_by_file(conn: sqlite3.Connection) -> dict[int, int]:
         if row["entity_count"] == 1:
             resolved[int(row["file_id"])] = int(row["entity_id"])
     return resolved
+
+
+def _normalize_name(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", value.lower())
+
+
+def _build_entity_indexes(
+    conn: sqlite3.Connection,
+) -> tuple[dict[str, int], dict[str, list[int]]]:
+    rows = conn.execute(
+        """
+        SELECT id, name, ent_file
+        FROM entity_nodes
+        """
+    ).fetchall()
+
+    by_ent_stem: dict[str, int] = {}
+    by_normalized_name: dict[str, list[int]] = {}
+
+    for row in rows:
+        entity_id = int(row["id"])
+        entity_name = str(row["name"] or "").strip()
+        ent_file = str(row["ent_file"] or "").strip()
+
+        if ent_file:
+            stem = Path(ent_file).stem.lower()
+            if stem and stem not in by_ent_stem:
+                by_ent_stem[stem] = entity_id
+
+        if entity_name:
+            normalized = _normalize_name(entity_name)
+            if normalized:
+                by_normalized_name.setdefault(normalized, []).append(entity_id)
+
+    return by_ent_stem, by_normalized_name
+
+
+def _resolve_entity_fallback(
+    spec_row: sqlite3.Row,
+    by_ent_stem: dict[str, int],
+    by_normalized_name: dict[str, list[int]],
+) -> int | None:
+    mapped_to = str(spec_row["x_mapped_to"] or "").strip().lower()
+    if mapped_to and mapped_to in by_ent_stem:
+        return by_ent_stem[mapped_to]
+
+    canonical_name = str(spec_row["canonical_name"] or "").strip()
+    if canonical_name:
+        normalized = _normalize_name(canonical_name)
+        ids = by_normalized_name.get(normalized, [])
+        if len(ids) == 1:
+            return ids[0]
+
+    return None
+
+
+def _resolve_handler_symbol_ids(
+    conn: sqlite3.Connection,
+    file_id: int,
+) -> dict[tuple[str, str], int]:
+    rows = conn.execute(
+        """
+        SELECT id, name
+        FROM symbols
+        WHERE file_id = ?
+          AND language = 'yaml'
+          AND kind = 'yaml_operation'
+        """,
+        (file_id,),
+    ).fetchall()
+
+    out: dict[tuple[str, str], int] = {}
+    pattern = re.compile(r"^([A-Z]+)\s+(/.+)$")
+
+    for row in rows:
+        symbol_id = int(row["id"])
+        symbol_name = str(row["name"] or "").strip()
+        match = pattern.match(symbol_name)
+        if not match:
+            continue
+
+        method = match.group(1).upper()
+        path = match.group(2)
+        if method.lower() not in RECOGNIZED_METHODS:
+            continue
+
+        key = (method, path)
+        if key not in out:
+            out[key] = symbol_id
+
+    return out
 
 
 def build(
@@ -227,12 +351,13 @@ def build(
 
         stats = BuildStats()
         entity_by_file_id = _resolve_entity_ids_by_file(conn)
+        entity_by_ent_stem, entity_by_name = _build_entity_indexes(conn)
 
         # Get all OpenAPI spec files from openapispec_index
         # Focus on files in paths directories which contain REST endpoint definitions
         specs = conn.execute(
             """
-            SELECT id, file_id, file_path, kind
+            SELECT id, file_id, file_path, kind, canonical_name, x_mapped_to
             FROM openapispec_index
             WHERE file_path LIKE '%/paths/%' OR kind = 'operations'
             ORDER BY file_path
@@ -242,8 +367,16 @@ def build(
         click.echo(f"📊 Found {len(specs)} OpenAPI specification files with paths")
 
         for spec_row in tqdm(specs, desc="Building REST endpoints", unit="spec"):
-            spec_id, file_id, file_path, kind = spec_row
+            spec_id, file_id, file_path, kind = (
+                spec_row["id"],
+                spec_row["file_id"],
+                spec_row["file_path"],
+                spec_row["kind"],
+            )
             stats.specs_processed += 1
+
+            if file_id is None:
+                continue
 
             # Construct full path to the YAML file
             yaml_file_path = repo_root / file_path
@@ -273,17 +406,32 @@ def build(
                 stats.symbol_fallback_files += 1
                 stats.symbol_fallback_endpoints += len(endpoints)
 
-            # Prepare data for insertion: (method, path, file_id, entity_id)
-            # entity_id is populated only when file_id resolves deterministically.
+            # Prepare data for insertion: (method, path, file_id, entity_id, handler_symbol_id)
+            # entity_id is populated only when deterministic evidence resolves to one entity.
             resolved_entity_id = entity_by_file_id.get(int(file_id))
+            if resolved_entity_id is None:
+                resolved_entity_id = _resolve_entity_fallback(
+                    spec_row,
+                    by_ent_stem=entity_by_ent_stem,
+                    by_normalized_name=entity_by_name,
+                )
+
+            handler_by_endpoint = _resolve_handler_symbol_ids(conn, int(file_id))
             endpoints_to_insert = [
-                (method, path, file_id, resolved_entity_id)
+                (
+                    method,
+                    path,
+                    int(file_id),
+                    resolved_entity_id,
+                    handler_by_endpoint.get((method, path)),
+                )
                 for method, path in endpoints
             ]
 
             # Insert into database
             inserted = _insert_endpoints(conn, endpoints_to_insert)
             stats.endpoints_inserted += inserted
+            stats.endpoints_updated += _update_endpoints(conn, endpoints_to_insert)
 
             # Commit periodically to avoid holding locks
             if stats.specs_processed % 100 == 0:
@@ -335,6 +483,7 @@ def build_command(
 
     click.echo(f"✅ Specs processed:          {stats.specs_processed}")
     click.echo(f"✅ REST endpoints inserted:  {stats.endpoints_inserted}")
+    click.echo(f"✅ REST endpoints updated:   {stats.endpoints_updated}")
     click.echo(f"⚠️  No paths found:          {stats.no_paths_found}")
     click.echo(f"♻️  Symbol fallback files:    {stats.symbol_fallback_files}")
     click.echo(f"♻️  Symbol fallback endpoints:{stats.symbol_fallback_endpoints}")

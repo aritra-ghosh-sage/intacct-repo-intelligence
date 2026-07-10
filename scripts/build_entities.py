@@ -52,6 +52,14 @@ OPENAPI_SCHEMA_MAPPING_TYPE = "openapispec_schema"
 OPENAPI_OPERATIONS_MAPPING_TYPE = "openapispec_operations"
 OPENAPI_HISTORY_MAPPING_TYPE = "openapispec_history"
 
+MODULE_ALIASES: dict[str, str] = {
+    "inventory": "inv",
+    "company": "co",
+    "expenses": "ee",
+    "generalledger": "gl",
+    "general-ledger": "gl",
+}
+
 
 @dataclass
 class BuildStats:
@@ -164,7 +172,40 @@ def ensure_entity_columns(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _normalize_entity_module(entity: dict[str, Any]) -> str | None:
+    raw_module = str(entity.get("module") or "").strip().lower()
+    if not raw_module:
+        return None
+
+    if raw_module in MODULE_ALIASES:
+        return MODULE_ALIASES[raw_module]
+
+    if raw_module == "apar":
+        candidates: set[str] = set()
+
+        module_path_hint = str(entity.get("module_path_hint") or "").strip().lower()
+        if module_path_hint in {"ap", "ar"}:
+            candidates.add(module_path_hint)
+
+        for source_key in ("ent_file", "table", "entity_name"):
+            value = str(entity.get(source_key) or "").strip().lower()
+            if value.startswith("ap"):
+                candidates.add("ap")
+            if value.startswith("ar"):
+                candidates.add("ar")
+
+        if len(candidates) == 1:
+            return next(iter(candidates))
+
+        # Preserve ambiguous module rather than forcing a potentially wrong mapping.
+        return raw_module
+
+    return raw_module
+
+
 def get_or_create_entity(conn: sqlite3.Connection, entity: dict[str, Any]) -> int:
+    normalized_module = _normalize_entity_module(entity)
+
     row = conn.execute(
         "SELECT id FROM entity_nodes WHERE name = ?",
         (entity["entity_name"],),
@@ -185,7 +226,7 @@ def get_or_create_entity(conn: sqlite3.Connection, entity: dict[str, Any]) -> in
             """,
             (
                 entity.get("ent_file"),
-                entity.get("module"),
+                normalized_module,
                 entity.get("table"),
                 entity.get("view"),
                 1 if entity.get("dummy") else 0,
@@ -213,7 +254,7 @@ def get_or_create_entity(conn: sqlite3.Connection, entity: dict[str, Any]) -> in
             "business_entity",
             1.0,
             entity.get("ent_file"),
-            entity.get("module"),
+            normalized_module,
             entity.get("table"),
             entity.get("view"),
             1 if entity.get("dummy") else 0,

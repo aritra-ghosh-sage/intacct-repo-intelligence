@@ -481,13 +481,31 @@ def make_rel(
         target.id if target else None,
     )
 
+    normalized_target_kind: Optional[str]
+    if target is not None:
+        resolved_kind = str(target.kind or "").strip().lower()
+        if resolved_kind in {"cqry", "qry"}:
+            normalized_target_kind = "query"
+        elif resolved_kind in {"unknown", ""}:
+            normalized_target_kind = None
+        else:
+            normalized_target_kind = target.kind
+    else:
+        hint = str(target_kind_hint or "").strip().lower()
+        if hint in {"unknown", ""}:
+            normalized_target_kind = None
+        elif hint in {"cqry", "qry"}:
+            normalized_target_kind = "query"
+        else:
+            normalized_target_kind = target_kind_hint
+
     return Relationship(
         source_symbol_id=source[0],
         source_name=source[1],
         source_kind=source[2],
         target_symbol_id=target.id if target else None,
         target_name=target.name if target else target_name,
-        target_kind=target.kind if target else target_kind_hint,
+        target_kind=normalized_target_kind,
         relationship_type=rel_type,
         file_id=file_row.id,
         file_path=file_row.path,

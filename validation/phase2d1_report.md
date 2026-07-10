@@ -15,9 +15,9 @@
 
 ```json
 {
-  "total_openapispec_files": 3959,
-  "linked_files": 1925,
-  "linkage_percent": 48.623389744885074,
+  "total_openapispec_files": 3731,
+  "linked_files": 1859,
+  "linkage_percent": 49.825783972125436,
   "threshold_percent": 30.0,
   "status": "PASS"
 }
