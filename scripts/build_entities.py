@@ -9,6 +9,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from collections import defaultdict
 
 import click
 from tqdm import tqdm
@@ -40,6 +41,12 @@ COMPANION_ROLES: list[str] = [
     "pick_picker",
 ]
 
+WORKFLOW_FILE_ROLES: list[str] = [
+    "workflow_schema_file",
+    "workflow_history_file",
+    "workflow_api_files",
+]
+
 RELATED_FILE_ROLES: list[str] = [
     "yaml",
     "xslt",
@@ -60,12 +67,14 @@ MODULE_ALIASES: dict[str, str] = {
     "general-ledger": "gl",
 }
 
+_cache: defaultdict[str, dict[str, tuple]] = defaultdict(dict)
 
 @dataclass
 class BuildStats:
     entities_upserted: int = 0
     mappings_inserted: int = 0
     missing_symbols: int = 0
+    openapispec_mappings_inserted: int = 0
 
 
 def _role_to_suffix(role: str) -> str:
@@ -284,6 +293,11 @@ def resolve_companion_symbol(
     if not class_file_path:
         return None, "no_path"
 
+    key = f"{class_file_path.lower()}::{expected_class_name.lower()}"
+    if key in _cache:
+        cached_symbol_id, cached_reason = _cache[key]
+        return cached_symbol_id, cached_reason
+
     file_row = conn.execute(
         """
         SELECT id
@@ -295,6 +309,7 @@ def resolve_companion_symbol(
     ).fetchone()
     file_id = int(file_row["id"]) if file_row else None
 
+    symbol_id, resolution_reason = None, "file_only_companion"
     row = conn.execute(
         """
         SELECT s.id
@@ -307,7 +322,9 @@ def resolve_companion_symbol(
         (expected_class_name,),
     ).fetchone()
     if row:
-        return int(row["id"]), "class_name_match"
+        symbol_id, resolution_reason = int(row["id"]), "class_name_match"
+        _cache[key] = (symbol_id, resolution_reason)
+        return symbol_id, resolution_reason
 
     if file_id is not None:
         row = conn.execute(
@@ -322,7 +339,9 @@ def resolve_companion_symbol(
             (file_id,),
         ).fetchone()
         if row:
-            return int(row["id"]), "class_in_file"
+            symbol_id, resolution_reason = int(row["id"]), "class_in_file"
+            _cache[key] = (symbol_id, resolution_reason)
+            return symbol_id, resolution_reason
 
     file_stem = Path(class_file_path).stem
     file_stem_lower = file_stem.lower()
@@ -341,7 +360,9 @@ def resolve_companion_symbol(
             (file_stem_lower, file_id),
         ).fetchone()
         if row:
-            return int(row["id"]), "function_stem_match"
+            symbol_id, resolution_reason = int(row["id"]), "function_stem_match"
+            _cache[key] = (symbol_id, resolution_reason)
+            return symbol_id, resolution_reason
 
         row = conn.execute(
             """
@@ -356,7 +377,9 @@ def resolve_companion_symbol(
             (file_stem_lower, file_id),
         ).fetchone()
         if row:
-            return int(row["id"]), "object_stem_match"
+            symbol_id, resolution_reason = int(row["id"]), "object_stem_match"
+            _cache[key] = (symbol_id, resolution_reason)
+            return symbol_id, resolution_reason
 
         row = conn.execute(
             """
@@ -369,9 +392,12 @@ def resolve_companion_symbol(
             (file_id,),
         ).fetchone()
         if row:
-            return int(row["id"]), "any_symbol_in_file"
+            symbol_id, resolution_reason = int(row["id"]), "any_symbol_in_file"
+            _cache[key] = (symbol_id, resolution_reason)
+            return symbol_id, resolution_reason
 
-    return None, "file_only_companion"
+
+    return symbol_id, resolution_reason
 
 
 def insert_mapping(
@@ -383,27 +409,38 @@ def insert_mapping(
     source_text: str,
 ) -> bool:
     file_id: int | None = None
+    key_file_id = f"file_id::{source_text.lower()}"
+    key_symbol_id = f"symbol_id::{symbol_id}" if symbol_id is not None else "symbol_id::None"
+
     if symbol_id is not None:
-        symbol_row = conn.execute(
-            "SELECT file_id FROM symbols WHERE id = ? LIMIT 1",
-            (symbol_id,),
-        ).fetchone()
-        file_id = (
-            int(symbol_row["file_id"])
-            if symbol_row and symbol_row["file_id"] is not None
-            else None
-        )
+        if key_symbol_id in _cache:
+            file_id = _cache[key_symbol_id]
+        else:
+            symbol_row = conn.execute(
+                "SELECT file_id FROM symbols WHERE id = ? LIMIT 1",
+                (symbol_id,),
+            ).fetchone()
+            file_id = (
+                int(symbol_row["file_id"])
+                if symbol_row and symbol_row["file_id"] is not None
+                else None
+            )
+            _cache[key_symbol_id] = file_id
     else:
-        file_row = conn.execute(
-            """
-            SELECT id
-            FROM files
-            WHERE LOWER(path) = LOWER(?)
-            LIMIT 1
-            """,
-            (source_text,),
-        ).fetchone()
-        file_id = int(file_row["id"]) if file_row else None
+        if key_file_id in _cache:
+            file_id = _cache[key_file_id]
+        else:
+            file_row = conn.execute(
+                """
+                SELECT id
+                FROM files
+                WHERE LOWER(path) = LOWER(?)
+                LIMIT 1
+                """,
+                (source_text,),
+            ).fetchone()
+            file_id = int(file_row["id"]) if file_row else None
+            _cache[key_file_id] = file_id
 
     source_key = source_text if symbol_id is None else None
     cur = conn.execute(
@@ -502,6 +539,14 @@ def build(db: str, entities: Path, reset: bool) -> BuildStats:
             conn.execute("DELETE FROM entity_mappings")
             conn.execute("DELETE FROM entity_nodes")
             conn.commit()
+        
+        openapispec_mappings = [
+            ("workflow_schema_file", WORKFLOW_FILE_ROLES[0]),
+            ("workflow_history_file", WORKFLOW_FILE_ROLES[1]),
+            ("openapi_schema_file", OPENAPI_SCHEMA_MAPPING_TYPE),
+            ("openapi_api_file", OPENAPI_OPERATIONS_MAPPING_TYPE),
+            ("openapi_history_file", OPENAPI_HISTORY_MAPPING_TYPE),
+        ]
 
         for entity in tqdm(rows, desc="Building entity mappings", unit="entity"):
             entity_name = entity["entity_name"]
@@ -556,36 +601,74 @@ def build(db: str, entities: Path, reset: bool) -> BuildStats:
                 )
                 if inserted:
                     stats.mappings_inserted += 1
-            # ---- Phase 2C.1 enhancement ----
-            # Ingest related files (yaml, xslt, inc, xml, sql) as file-only mappings.
-            # Related files are sourced from entity_definitions.jsonl, not discovered heuristically.
+                
+        # Ingest workflow and OpenAPI files from top-level fields in entity_definitions.jsonl.
+        # These are file-backed mappings, not companion class symbols.
+      
+        
+            for field_name, mapping_type in openapispec_mappings:
+                file_path = entity.get(field_name)
+                if isinstance(file_path, str) and file_path.strip():
+                    inserted = insert_mapping(
+                        conn=conn,
+                        entity_id=entity_id,
+                        symbol_id=None,
+                        mapping_type=mapping_type,
+                        confidence=0.9,
+                        source_text=file_path.strip(),
+                    )
+                    if inserted:
+                        stats.openapispec_mappings_inserted += 1
 
-            related = entity.get("related_files") or {}
-
-            for related_role in RELATED_FILE_ROLES:
-                related_path = (
-                    related.get(related_role) if isinstance(related, dict) else None
-                )
-                if not related_path:
-                    continue
-                mapping_type = related_role
-                if related_role == "yaml":
-                    mapping_type = classify_yaml_mapping_type(str(related_path))
-                elif related_role == "sql":
-                    mapping_type = classify_sql_mapping_type(str(related_path))
-                    if mapping_type is None:
+            workflow_api_files = entity.get("workflow_api_files")
+            if isinstance(workflow_api_files, list):
+                for workflow_api_path in workflow_api_files:
+                    if not isinstance(workflow_api_path, str) or not workflow_api_path.strip():
                         continue
+                    inserted = insert_mapping(
+                        conn=conn,
+                        entity_id=entity_id,
+                        symbol_id=None,
+                        mapping_type=WORKFLOW_FILE_ROLES[2],
+                        confidence=0.9,
+                        source_text=workflow_api_path.strip(),
+                    )
+                    if inserted:
+                        stats.openapispec_mappings_inserted += 1
 
-                inserted = insert_mapping(
-                    conn,
-                    entity_id,
-                    symbol_id=None,
-                    mapping_type=mapping_type,
-                    confidence=0.9,
-                    source_text=related_path,
-                )
-                if inserted:
-                    stats.mappings_inserted += 1
+
+
+                # ---- Phase 2C.1 enhancement ----
+                # Ingest related files (yaml, xslt, inc, xml, sql) as file-only mappings.
+                # Related files are sourced from entity_definitions.jsonl, not discovered heuristically.
+
+                # THIS IS DEAD CODE NOW entity_definitions.jsonl no longer has a "related_files" field, so this block is commented out.
+                # related = entity.get("related_files") or {}
+
+                # for related_role in RELATED_FILE_ROLES:
+                #     related_path = (
+                #         related.get(related_role) if isinstance(related, dict) else None
+                #     )
+                #     if not related_path:
+                #         continue
+                #     mapping_type = related_role
+                #     if related_role == "yaml":
+                #         mapping_type = classify_yaml_mapping_type(str(related_path))
+                #     elif related_role == "sql":
+                #         mapping_type = classify_sql_mapping_type(str(related_path))
+                #         if mapping_type is None:
+                #             continue
+
+                #     inserted = insert_mapping(
+                #         conn=conn,
+                #         entity_id=entity_id,
+                #         symbol_id=None,
+                #         mapping_type=mapping_type,
+                #         confidence=0.9,
+                #         source_text=related_path,
+                #     )
+                #     if inserted:
+                #         stats.mappings_inserted += 1
 
         conn.commit()
     finally:
@@ -628,6 +711,7 @@ def build_command(db: str, entities: Path, reset: bool) -> None:
     click.echo(f"Entities upserted:   {stats.entities_upserted}")
     click.echo(f"Mappings inserted:   {stats.mappings_inserted}")
     click.echo(f"Missing symbols:     {stats.missing_symbols}")
+    click.echo(f"OpenAPI mappings inserted: {stats.openapispec_mappings_inserted}")
 
 
 if __name__ == "__main__":
