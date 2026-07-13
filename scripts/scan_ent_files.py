@@ -48,6 +48,10 @@ WORKFLOW_SCHEMA_FILE_RE = re.compile(
     r"^workflows\.(?P<prefix>[^.]+)\.(?P<workflow>.+)\.s1\.schema\.yaml$"
 )
 
+REQUIRE_ENT_RE = re.compile(
+    r"""(?m)^\s*require(?:_once)?\s*\(?\s*['"]([^'"]+\.ent)['"]\s*\)?\s*;?"""
+)
+
 ALLOWED_COMPANION_ROLES = (
     # CORE
     "manager",
@@ -879,6 +883,86 @@ def _write_missing_metadata_log(log_path: Path, records: List[dict]) -> None:
         for record in records:
             f.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
 
+def extract_required_ent_paths(text: str) -> List[str]:
+    return [match.group(1) for match in REQUIRE_ENT_RE.finditer(text)]
+
+def load_entity_definition_index(repo_root: Path) -> Dict[str, dict]:
+    index: Dict[str, dict] = {}
+    jsonl_path = repo_root / "config" / "entity_definitions.jsonl"
+    if not jsonl_path.exists():
+        return index
+
+    try:
+        lines = jsonl_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return index
+
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict):
+            continue
+
+        ent_file = row.get("ent_file")
+        if isinstance(ent_file, str) and ent_file:
+            rel_key = ent_file.replace("\\", "/").lstrip("./").lower()
+            index.setdefault(rel_key, row)
+            index.setdefault(Path(ent_file).name.lower(), row)
+            index.setdefault(Path(ent_file).stem.lower(), row)
+
+        entity_name = row.get("entity_name")
+        if isinstance(entity_name, str) and entity_name:
+            index.setdefault(entity_name.lower(), row)
+
+    return index
+
+
+def _resolve_required_ent_path(
+    require_value: str,
+    current_ent_path: Path,
+    repo_root: Path,
+    entity_index: Dict[str, dict],
+) -> Optional[Path]:
+    require_name = Path(require_value).name
+    candidates: List[Path] = []
+
+    direct_candidate = (current_ent_path.parent / require_value).resolve()
+    candidates.append(direct_candidate)
+
+    lookup_keys = [
+        require_value.replace("\\", "/").lstrip("./").lower(),
+        require_name.lower(),
+        Path(require_name).stem.lower(),
+    ]
+    for key in lookup_keys:
+        row = entity_index.get(key)
+        if not row:
+            continue
+        ent_file = row.get("ent_file")
+        if isinstance(ent_file, str) and ent_file:
+            candidates.append((repo_root / ent_file).resolve())
+
+    source_dir = repo_root / "app" / "source"
+    if source_dir.exists():
+        candidates.extend(
+            sorted(source_dir.rglob(require_name), key=lambda p: p.as_posix())
+        )
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        candidate_key = candidate.as_posix()
+        if candidate_key in seen:
+            continue
+        seen.add(candidate_key)
+        if candidate.exists():
+            return candidate
+
+    return None
+
 
 def scan(repo_root: Path, out_file: Path) -> int:
     app_dir = repo_root / "app"
@@ -898,6 +982,8 @@ def scan(repo_root: Path, out_file: Path) -> int:
 
     count = 0
     consumed_service_schema_files = set()
+    entity_index = load_entity_definition_index(repo_root)
+
     with out_file.open("w", encoding="utf-8") as f:
         for ent_path in tqdm(ent_paths, desc="Scanning .ent files", unit="file"):
             ent_stem = ent_path.stem
@@ -907,12 +993,17 @@ def scan(repo_root: Path, out_file: Path) -> int:
                 repo_root=repo_root,
                 prefix_acronyms=prefix_acronyms,
             )
-            table, view, module_from_ent, dummy = parse_top_level_ent_metadata(ent_path)
+            # table, view, module_from_ent, dummy = parse_top_level_ent_metadata(ent_path)
+            table, view, module_from_ent, dummy, module_source = resolve_ent_metadata(
+                ent_path=ent_path,
+                repo_root=repo_root,
+                entity_index=entity_index,
+                visited=set())
+
             module_path_hint = find_module_from_ent_path(ent_path, repo_root)
             module_value = module_from_ent
-            module_source = "ent_metadata" if module_from_ent else None
 
-            if not module_from_ent:
+            if not module_from_ent or not table:
                 missing_metadata_records.append(
                     {
                         "context": {
@@ -920,7 +1011,7 @@ def scan(repo_root: Path, out_file: Path) -> int:
                         },
                         "entity_name": canonical_name,
                         "file_path": to_repo_relative(ent_path, repo_root),
-                        "reason": "missing module key in top-level kSchemas definition",
+                        "reason": "missing module key in top-level kSchemas definition" if not module_from_ent else "missing table key in top-level kSchemas definition",
                         "source": "scan_ent_files",
                         "stage": "module_extraction",
                         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -1123,13 +1214,64 @@ def scan(repo_root: Path, out_file: Path) -> int:
             f.write(json.dumps(asdict(row), ensure_ascii=False, sort_keys=True) + "\n")
             count += 1
 
-            _write_missing_metadata_log(
-                (repo_root / MISSING_METADATA_LOG_REL).resolve(),
-                missing_metadata_records,
-            )
+    _write_missing_metadata_log(
+        (repo_root / MISSING_METADATA_LOG_REL).resolve(),
+        missing_metadata_records,
+    )
 
     return count
 
+def resolve_ent_metadata(
+    ent_path: Path | None,
+    repo_root: Path | None,
+    entity_index: dict[str, dict[str, str | None]],
+    visited: set[str],
+) -> tuple[Optional[str], Optional[str], Optional[str], bool, Optional[str]]:
+    if ent_path is None or str(ent_path) in visited:
+        return None, None, None, False, None
+
+    visited.add(str(ent_path))
+    try:
+        try:
+            text = ent_path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            return None, None, None, False, None
+
+        table, view, module, dummy = parse_top_level_ent_metadata(ent_path)
+        module_source = "ent_metadata" if module else None
+
+        if table is not None and module is not None:
+            return table, view, module, dummy, module_source
+        
+        for require_value in extract_required_ent_paths(text):
+            required_ent_path = _resolve_required_ent_path(
+                require_value=require_value,
+                current_ent_path=ent_path,
+                repo_root=repo_root,
+                entity_index=entity_index
+            )
+            if required_ent_path is None:
+                continue
+
+            parent_table, parent_view, parent_module, parent_dummy, module_source = resolve_ent_metadata(
+                required_ent_path,
+                repo_root,
+                entity_index,
+                visited,
+            )
+
+            if table is None and parent_table is not None:
+                table = parent_table
+            if module is None and parent_module is not None:
+                module = parent_module
+                module_source = f"required:{to_repo_relative(required_ent_path, repo_root)}"
+
+            if table is not None and module is not None:
+                return table, view, module, dummy, module_source
+
+        return table, view, module, dummy, module_source
+    finally:
+        visited.remove(str(ent_path))
 
 def main() -> None:
     parser = argparse.ArgumentParser(
