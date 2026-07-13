@@ -186,21 +186,90 @@ CREATE INDEX IF NOT EXISTS idx_workflows_source  ON workflows(source_kind);
 CREATE INDEX IF NOT EXISTS idx_workflows_file_id ON workflows(file_id);
 
 CREATE TABLE IF NOT EXISTS workflow_nodes (
-    id INTEGER PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    workflow_id INTEGER NOT NULL,
+    entity_id INTEGER NOT NULL,
+    node_kind TEXT NOT NULL,                 -- workflow | action | class | file | symbol | endpoint | openapi_ref
+    node_key TEXT NOT NULL,                  -- deterministic key within workflow
     name TEXT,
-    workflow_type TEXT,        -- approval | posting | reverse | payment | sync
-    entity_id INTEGER,
-    source_file TEXT
+    ordinal INTEGER,                         -- sequence position when applicable
+    action TEXT,                             -- normalized action token when node_kind='action'
+    source_kind TEXT,                        -- yaml | class | inference
+    file_id INTEGER,
+    symbol_id INTEGER,
+    metadata_json TEXT,                      -- optional structured evidence
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(workflow_id) REFERENCES workflows(id) ON DELETE CASCADE,
+    FOREIGN KEY(entity_id) REFERENCES entity_nodes(id) ON DELETE CASCADE,
+    FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE SET NULL,
+    FOREIGN KEY(symbol_id) REFERENCES symbols(id) ON DELETE SET NULL,
+    UNIQUE(workflow_id, node_kind, node_key)
 );
 
+CREATE INDEX IF NOT EXISTS idx_workflow_nodes_workflow
+    ON workflow_nodes(workflow_id);
+CREATE INDEX IF NOT EXISTS idx_workflow_nodes_entity
+    ON workflow_nodes(entity_id);
+CREATE INDEX IF NOT EXISTS idx_workflow_nodes_kind
+    ON workflow_nodes(node_kind);
+CREATE INDEX IF NOT EXISTS idx_workflow_nodes_ordinal
+    ON workflow_nodes(workflow_id, ordinal);
+CREATE INDEX IF NOT EXISTS idx_workflow_nodes_file
+    ON workflow_nodes(file_id);
+CREATE INDEX IF NOT EXISTS idx_workflow_nodes_symbol
+    ON workflow_nodes(symbol_id);
+
+
 CREATE TABLE IF NOT EXISTS workflow_edges (
-    workflow_id INTEGER,
-    ordinal INTEGER,
-    step_name TEXT,
-    symbol_id INTEGER,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    workflow_id INTEGER NOT NULL,
+    from_node_id INTEGER NOT NULL,
+    to_node_id INTEGER NOT NULL,
+    edge_kind TEXT NOT NULL,                 -- workflow_contains | step_next | step_uses_file | step_uses_symbol | step_exposes_endpoint | step_references_openapi_ref
+    ordinal INTEGER NOT NULL DEFAULT -1,     -- sequence marker for ordered edges
+    evidence TEXT NOT NULL DEFAULT '',
+    confidence REAL NOT NULL DEFAULT 1.0,
     file_id INTEGER,
-    action TEXT
+    symbol_id INTEGER,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(workflow_id) REFERENCES workflows(id) ON DELETE CASCADE,
+    FOREIGN KEY(from_node_id) REFERENCES workflow_nodes(id) ON DELETE CASCADE,
+    FOREIGN KEY(to_node_id) REFERENCES workflow_nodes(id) ON DELETE CASCADE,
+    FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE SET NULL,
+    FOREIGN KEY(symbol_id) REFERENCES symbols(id) ON DELETE SET NULL,
+    UNIQUE(workflow_id, from_node_id, to_node_id, edge_kind, ordinal, evidence)
 );
+
+CREATE INDEX IF NOT EXISTS idx_workflow_edges_workflow
+    ON workflow_edges(workflow_id);
+CREATE INDEX IF NOT EXISTS idx_workflow_edges_from
+    ON workflow_edges(from_node_id);
+CREATE INDEX IF NOT EXISTS idx_workflow_edges_to
+    ON workflow_edges(to_node_id);
+CREATE INDEX IF NOT EXISTS idx_workflow_edges_kind
+    ON workflow_edges(edge_kind);
+CREATE INDEX IF NOT EXISTS idx_workflow_edges_ordinal
+    ON workflow_edges(workflow_id, ordinal);
+
+
+-- Shared OpenAPI file-level graph edges for reusable refs.
+CREATE TABLE IF NOT EXISTS openapi_file_ref_edges (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_file_id INTEGER NOT NULL,
+    target_file_id INTEGER NOT NULL,
+    ref_value TEXT NOT NULL,                 -- raw $ref
+    ref_path TEXT,                           -- YAML location evidence
+    confidence REAL NOT NULL DEFAULT 1.0,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(source_file_id) REFERENCES files(id) ON DELETE CASCADE,
+    FOREIGN KEY(target_file_id) REFERENCES files(id) ON DELETE CASCADE,
+    UNIQUE(source_file_id, target_file_id, ref_value, ref_path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_openapi_ref_source
+    ON openapi_file_ref_edges(source_file_id);
+CREATE INDEX IF NOT EXISTS idx_openapi_ref_target
+    ON openapi_file_ref_edges(target_file_id);
 
 CREATE TABLE IF NOT EXISTS rest_endpoints (
     id INTEGER PRIMARY KEY,

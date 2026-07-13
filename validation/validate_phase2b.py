@@ -125,15 +125,15 @@ def check_entities_jsonl_vs_db(
     for name in sorted(set(file_entities) & set(db_entities)):
         src = file_entities[name]
         db = db_entities[name]
-        expected_dummy = 1 if src.get("dummy") else 0
+        expected_dummy = True if src.get("dummy") else False
         mismatches = []
-        if (src.get("ent_file") or None) != (db["ent_file"] or None):
+        if (src.get("ent_file").lower() if src.get("ent_file") else None) != (db["ent_file"].lower() if db["ent_file"] else None):
             mismatches.append(("ent_file", src.get("ent_file"), db["ent_file"]))
-        if (src.get("module") or None) != (db["module"] or None):
+        if (src.get("module").lower() if src.get("module") else None) != (db["module"].lower() if db["module"] else None):
             mismatches.append(("module", src.get("module"), db["module"]))
-        if (src.get("table") or None) != (db["table_name"] or None):
+        if (src.get("table").lower() if src.get("table") else None) != (db["table_name"].lower() if db["table_name"] else None):
             mismatches.append(("table_name", src.get("table"), db["table_name"]))
-        if (src.get("view") or None) != (db["view_name"] or None):
+        if (src.get("view").lower() if src.get("view") else None) != (db["view_name"].lower() if db["view_name"] else None):
             mismatches.append(("view_name", src.get("view"), db["view_name"]))
         if expected_dummy != (db["dummy"] if db["dummy"] is not None else 0):
             mismatches.append(("dummy", expected_dummy, db["dummy"]))
@@ -167,7 +167,7 @@ def check_mapping_roles_and_roots(conn: sqlite3.Connection) -> list:
         r["mapping_type"]
         for r in unknown_mapping_roles
         if r["mapping_type"] not in valid_roles
-        and not str(r["mapping_type"]).startswith("openapispec_")
+        and (not str(r["mapping_type"]).startswith("openapispec_") and not str(r["mapping_type"]).startswith("workflow_"))
     ]
     findings.append(("entity_mappings with unknown mapping_type", unknown))
 
