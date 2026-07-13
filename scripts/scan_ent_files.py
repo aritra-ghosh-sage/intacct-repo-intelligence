@@ -48,8 +48,8 @@ WORKFLOW_SCHEMA_FILE_RE = re.compile(
     r"^workflows\.(?P<prefix>[^.]+)\.(?P<workflow>.+)\.s1\.schema\.yaml$"
 )
 
-REQUIRE_ENT_RE = re.compile(
-    r"""(?m)^\s*require(?:_once)?\s*\(?\s*['"]([^'"]+\.ent)['"]\s*\)?\s*;?"""
+REQUIRE_INCLUDE_ENT_RE = re.compile(
+    r"""(?im)^\s*(?:include|require)(?:_once)?\s*(?:\(\s*)?['"]([^'"]+\.ent)['"]\s*(?:\)\s*)?;?"""
 )
 
 ALLOWED_COMPANION_ROLES = (
@@ -884,7 +884,20 @@ def _write_missing_metadata_log(log_path: Path, records: List[dict]) -> None:
             f.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
 
 def extract_required_ent_paths(text: str) -> List[str]:
-    return [match.group(1) for match in REQUIRE_ENT_RE.finditer(text)]
+    seen: set[str] = set()
+    out: List[str] = []
+
+    for match in REQUIRE_INCLUDE_ENT_RE.finditer(text):
+        value = match.group(1).strip()
+        if not value:
+            continue
+        norm = value.replace("\\", "/")
+        if norm in seen:
+            continue
+        seen.add(norm)
+        out.append(norm)
+
+    return out
 
 def load_entity_definition_index(repo_root: Path) -> Dict[str, dict]:
     index: Dict[str, dict] = {}
@@ -1002,6 +1015,9 @@ def scan(repo_root: Path, out_file: Path) -> int:
 
             module_path_hint = find_module_from_ent_path(ent_path, repo_root)
             module_value = module_from_ent
+
+            if table and table.strip().lower() == "dummy":
+                dummy = True
 
             if not module_from_ent or not table:
                 missing_metadata_records.append(
