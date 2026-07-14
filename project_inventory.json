@@ -1,9 +1,9 @@
 {
   "project_name": "intacct-repo-intelligence",
-  "generated_at": "2026-07-10T05:04:12.409320+00:00",
+  "generated_at": "2026-07-14T05:36:17.518935+00:00",
   "generator": "scripts/generate_inventory.py",
   "verified_state": {
-    "generated_at": "2026-07-10T05:04:12.386552+00:00",
+    "generated_at": "2026-07-14T05:36:16.910099+00:00",
     "phases": {
       "phase2d": {
         "status": "verified",
@@ -20,9 +20,13 @@
           "status": "present",
           "rows": 1148
         },
+        "entity_access_links": {
+          "status": "present",
+          "rows": 8843
+        },
         "entity_mappings": {
           "status": "present",
-          "rows": 5619
+          "rows": 6635
         },
         "entity_nodes": {
           "status": "present",
@@ -39,6 +43,10 @@
         "knowledge_items": {
           "status": "present",
           "rows": 0
+        },
+        "openapi_file_ref_edges": {
+          "status": "present",
+          "rows": 13285
         },
         "openapispec_index": {
           "status": "present",
@@ -90,7 +98,7 @@
         },
         "sqlite_sequence": {
           "status": "present",
-          "rows": 18
+          "rows": 22
         },
         "symbols": {
           "status": "present",
@@ -98,15 +106,15 @@
         },
         "workflow_edges": {
           "status": "present",
-          "rows": 0
+          "rows": 3100
         },
         "workflow_nodes": {
           "status": "present",
-          "rows": 0
+          "rows": 2523
         },
         "workflows": {
           "status": "present",
-          "rows": 295
+          "rows": 763
         }
       },
       "total_rows_by_table": {},
@@ -153,7 +161,10 @@
         "pick_manager",
         "pick_picker",
         "picker",
-        "reverse_manager"
+        "reverse_manager",
+        "workflow_api_files",
+        "workflow_history_file",
+        "workflow_schema_file"
       ],
       "relationship_types": [
         "CALLS",
@@ -193,7 +204,8 @@
         "012_purge_sql_drop_mappings.sql",
         "013_openapispec_x_mapped_to.sql",
         "014_file_id_provenance.sql",
-        "015_relationship_target_kind_normalization.sql"
+        "015_relationship_target_kind_normalization.sql",
+        "016_entity_access_links.sql"
       ],
       "parsers": [
         "cqry_extractor.py",
@@ -206,6 +218,7 @@
       "scripts": [
         "benchmark_score.py",
         "build_entities.py",
+        "build_entity_access_links.py",
         "build_entity_roots.py",
         "build_rest_endpoints.py",
         "build_security_mappings.py",
@@ -262,7 +275,10 @@
           "pick_manager",
           "pick_picker",
           "picker",
-          "reverse_manager"
+          "reverse_manager",
+          "workflow_schema_file",
+          "workflow_history_file",
+          "workflow_api_files"
         ],
         "required_extractors": [
           "java_extractor.py",
@@ -285,10 +301,12 @@
     "extra_tables": [
       "dbschema_fields",
       "dbschema_tables",
+      "entity_access_links",
       "entity_mappings",
       "entity_nodes",
       "entity_roots",
       "files",
+      "openapi_file_ref_edges",
       "relationships",
       "security_menu_items",
       "security_menu_op_links",

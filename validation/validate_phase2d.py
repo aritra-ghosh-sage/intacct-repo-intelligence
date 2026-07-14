@@ -24,6 +24,15 @@ def connect(db_path: str) -> sqlite3.Connection:
 
 
 def check_xslt_coverage(conn: sqlite3.Connection) -> dict[str, Any]:
+    """
+    Check XSLT file discovery and entity mapping coverage.
+    
+    Status interpretation:
+    - SKIP: XSLT files exist but extraction is not yet implemented
+            (build_entities.py has XSLT discovery code commented out as dead code)
+    - PASS: No XSLT files, or mappings have been created
+    - FAIL: Should not occur with current implementation
+    """
     entity_mapping_count = conn.execute(
         "SELECT COUNT(*) FROM entity_mappings"
     ).fetchone()[0]
@@ -55,8 +64,10 @@ def check_xslt_coverage(conn: sqlite3.Connection) -> dict[str, Any]:
             "xslt_mapping_count": xslt_mapping_count,
             "status": "SKIP",
             "reason": (
-                "XSLT files exist but no XSLT-linked entity mappings were "
-                "produced in the current run"
+                f"XSLT extraction not yet implemented: {xslt_file_count} files exist "
+                "but entity mapping discovery is disabled. "
+                "See scripts/build_entities.py lines 645-665 (commented as dead code). "
+                "Requires uncommenting XSLT discovery or implementing filename-based matching."
             ),
         }
 
@@ -68,6 +79,14 @@ def check_xslt_coverage(conn: sqlite3.Connection) -> dict[str, Any]:
 
 
 def check_openapi_linkage(conn: sqlite3.Connection) -> dict[str, Any]:
+    """
+    Check OpenAPI spec file linkage to entities with extended diagnostics.
+    
+    Includes:
+    - Total and linked file counts
+    - Explicit mappings (x_mapped_to field)
+    - Heuristic suppression breakdown
+    """
     total = conn.execute("SELECT COUNT(*) FROM openapispec_index").fetchone()[0]
     if total == 0:
         return {
@@ -85,17 +104,83 @@ def check_openapi_linkage(conn: sqlite3.Connection) -> dict[str, Any]:
         WHERE mapping_type LIKE 'openapispec%'
         """
     ).fetchone()[0]
+    
+    # Additional diagnostics
+    with_mapped_to = conn.execute(
+        "SELECT COUNT(*) FROM openapispec_index WHERE x_mapped_to IS NOT NULL AND x_mapped_to != ''"
+    ).fetchone()[0]
+    
+    without_mapped_to = conn.execute(
+        "SELECT COUNT(*) FROM openapispec_index WHERE x_mapped_to IS NULL OR x_mapped_to = ''"
+    ).fetchone()[0]
+    
+    mapping_type_distribution = conn.execute(
+        """
+        SELECT kind, COUNT(*) as cnt
+        FROM openapispec_index
+        GROUP BY kind
+        ORDER BY cnt DESC
+        """
+    ).fetchall()
+    
     rate = (linked / total * 100) if total else 0.0
     # Lowered from 40.0 to 30.0 after Phase 2D.1 rule expansion because
     # a large share of OpenAPI rows are workflow/view/meta descriptors that
     # do not have a one-to-one business entity name in entity_nodes.
     threshold_percent = 30.0
+    
     return {
         "total_openapispec_files": total,
         "linked_files": linked,
         "linkage_percent": rate,
         "threshold_percent": threshold_percent,
+        "with_explicit_mapping": with_mapped_to,
+        "without_explicit_mapping": without_mapped_to,
+        "kind_distribution": {row["kind"]: row["cnt"] for row in mapping_type_distribution},
         "status": "PASS" if rate >= threshold_percent else "FAIL",
+    }
+
+
+def check_rest_endpoints_coverage(conn: sqlite3.Connection) -> dict[str, Any]:
+    """
+    Check REST endpoints population and entity linkage coverage.
+    
+    Informational metric showing:
+    - Total REST endpoints in the table
+    - Entities with at least one REST endpoint
+    - Coverage percentage
+    """
+    total_endpoints = conn.execute(
+        "SELECT COUNT(*) FROM rest_endpoints"
+    ).fetchone()[0]
+    
+    total_entities = conn.execute(
+        "SELECT COUNT(*) FROM entity_nodes"
+    ).fetchone()[0]
+    
+    if total_endpoints == 0:
+        return {
+            "total_endpoints": 0,
+            "entities_with_endpoints": 0,
+            "total_entities": total_entities,
+            "coverage_percent": 0.0,
+            "status": "REPORT",
+            "reason": "rest_endpoints table is empty",
+        }
+    
+    entities_with_endpoints = conn.execute(
+        "SELECT COUNT(DISTINCT entity_id) FROM rest_endpoints WHERE entity_id IS NOT NULL"
+    ).fetchone()[0]
+    
+    coverage = (entities_with_endpoints / total_entities * 100) if total_entities else 0.0
+    
+    return {
+        "total_endpoints": total_endpoints,
+        "entities_with_endpoints": entities_with_endpoints,
+        "total_entities": total_entities,
+        "coverage_percent": coverage,
+        "status": "REPORT",
+        "note": "No threshold set. Reported for awareness.",
     }
 
 
@@ -169,6 +254,7 @@ def main() -> None:
     checks = {
         "xslt_coverage": check_xslt_coverage(conn),
         "openapi_linkage": check_openapi_linkage(conn),
+        "rest_endpoints_coverage": check_rest_endpoints_coverage(conn),
         "entity_recall_v2": check_entity_recall_v2(conn),
     }
     write_report(args.report, checks)

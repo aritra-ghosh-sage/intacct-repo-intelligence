@@ -1,74 +1,77 @@
-# Phase 2D Validation Report
-**Generated:** 2026-07-07T07:42:23.188486
-## Summary
-- **Passed:** 4
-- **Failed:** 0
-- **Reported (informational):** 4
+# Phase 2D.1 Validation Report
 
-**Status: ✅ PASSED** - All assertions passed.
+## xslt_coverage
 
----
-## Detailed Results
+```json
+{
+  "xslt_file_count": 301,
+  "xslt_mapping_count": 0,
+  "status": "SKIP",
+  "reason": "XSLT extraction not yet implemented: 301 files exist but entity mapping discovery is disabled. See scripts/build_entities.py lines 645-665 (commented as dead code). Requires uncommenting XSLT discovery or implementing filename-based matching."
+}
+```
 
-### ✅ tables_exist
-**Status:** PASS
-- Required: 8
-- Present: 8
-- Assertion: All required Phase 2D tables must exist.
+## openapi_linkage
 
-### ✅ cqry_coverage
-**Status:** PASS
-- .cqry symbols: 7747
-- .cqry mappings: 311
-- Assertion: Both counts must be > 0
-- Note: Both counts should be > 0 per ISSUE-001
+```json
+{
+  "total_openapispec_files": 3731,
+  "linked_files": 2603,
+  "linkage_percent": 69.76681854730636,
+  "threshold_percent": 30.0,
+  "with_explicit_mapping": 779,
+  "without_explicit_mapping": 2952,
+  "kind_distribution": {
+    "operations": 935,
+    "history": 923,
+    "schema": 918,
+    "view": 575,
+    "uimeta": 371,
+    "unknown": 8,
+    "actions": 1
+  },
+  "status": "PASS"
+}
+```
 
-### ✅ declared_vs_actual_mapping_types
-**Status:** PASS
-**Declared vs Actual Mapping Types:**
-- .ent (HIGH): ✓ found (expected: manager)
-- .cls (HIGH): ✓ found (expected: editor)
-- .inc (HIGH): ✓ found (expected: inc)
-- .cqry (HIGH): ✓ found (expected: cqry)
-- .yaml (HIGH): ✓ found (expected: openapispec_schema, openapispec_operations, openapispec_history, yaml)
-- .sql (MEDIUM): ✓ found (expected: sql)
-- .xslt (MEDIUM): ⊘ out of scope (0 files found in repository)
-- .html (MEDIUM): ✓ found (expected: html)
-- .phtml (MEDIUM): ✓ found (expected: phtml)
+## rest_endpoints_coverage
 
-### ✅ mapping_provenance
-**Status:** PASS
-- Total mappings: 8032
-- Orphan mappings (no source_text/file_id): 0
-- Assertion: All mappings must have provenance (orphan_count == 0)
+```json
+{
+  "total_endpoints": 2804,
+  "entities_with_endpoints": 680,
+  "total_entities": 1897,
+  "coverage_percent": 35.84607274644175,
+  "status": "REPORT",
+  "note": "No threshold set. Reported for awareness."
+}
+```
 
-### ℹ️ workflow_step_ratio
-**Status:** REPORT
-- Workflows: 302
-- Workflow steps: 302
-- Avg steps per workflow: 1.0
-- Note: This is a modeling decision (see ISSUE-004). No assertion threshold.
+## entity_recall_v2
 
-### ℹ️ rest_endpoint_coverage
-**Status:** REPORT
-- Total entities: 1807
-- Entities with REST endpoints: 0
-- Coverage: 0.0%
-- Note: No threshold set. Reported for awareness.
+```json
+{
+  "gold_size": 54,
+  "discovered_size": 1897,
+  "matched": 40,
+  "missing": [
+    "Account",
+    "AccountAllocation",
+    "AccountAllocationBasis",
+    "AccountAllocationBasisAdjustmentBook",
+    "AccountAllocationGroup",
+    "AccountAllocationGroupMember",
+    "AccountAllocationReverse",
+    "AccountAllocationRun",
+    "AccountAllocationSource",
+    "AccountAllocationSourceAdjustmentBook",
+    "AccountAllocationTarget",
+    "AccountBalance",
+    "AccountBalanceByDimension",
+    "AccountCategory"
+  ],
+  "recall_percent": 74.07407407407408,
+  "status": "PASS"
+}
+```
 
-### ℹ️ ui_companion_coverage
-**Status:** REPORT
-- Total entities: 1807
-- Entities with UI companions: 938
-- Coverage: 51.91%
-- Note: No threshold set. Reported for awareness.
-
-### ℹ️ entity_recall
-**Status:** REPORT
-- Gold standard entities: 39
-- Discovered entities: 1807
-- Matched: 39
-- **Recall: 100.0%** (1.0 ratio)
-- **Precision: 2.16%** (0.0216 ratio)
-- Sample matched: APPayment, Aisle, CheckRun, GLJournal, PODocument
-- Note: Recall measures coverage of gold set in discovered entities
