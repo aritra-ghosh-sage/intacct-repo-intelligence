@@ -51,26 +51,13 @@
 
 ```json
 {
-  "gold_size": 54,
+  "gold_size": 27,
   "discovered_size": 1897,
-  "matched": 40,
+  "matched": 26,
   "missing": [
-    "Account",
-    "AccountAllocation",
-    "AccountAllocationBasis",
-    "AccountAllocationBasisAdjustmentBook",
-    "AccountAllocationGroup",
-    "AccountAllocationGroupMember",
-    "AccountAllocationReverse",
-    "AccountAllocationRun",
-    "AccountAllocationSource",
-    "AccountAllocationSourceAdjustmentBook",
-    "AccountAllocationTarget",
-    "AccountBalance",
-    "AccountBalanceByDimension",
-    "AccountCategory"
+    "APAgingsetup"
   ],
-  "recall_percent": 74.07407407407408,
+  "recall_percent": 96.29629629629629,
   "status": "PASS"
 }
 ```
