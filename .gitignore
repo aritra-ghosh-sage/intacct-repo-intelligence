@@ -12,8 +12,6 @@ wheels/
 uv.lock
 
 # Local catalog database
-catalog/catalog.db
-catalog.db
 all_tables_row_count.txt
 code_files.txt
 entity_mapping.txt
@@ -25,8 +23,7 @@ validation/*.txt
 docs/*.txt
 docs/*.csv
 docs/*.json
-outputs/missing_metadata.jsonl
 catalog/catalog - Copy.db:Zone.Identifier
 
 # Local phase databases
-catalog/catalog_phase_3.db
+catalog/*.db
