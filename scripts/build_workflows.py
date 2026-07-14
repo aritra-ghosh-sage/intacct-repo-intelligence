@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import posixpath
 import re
 import sqlite3
 import sys
@@ -28,6 +29,7 @@ DEFAULT_DB = "catalog/catalog.db"
 DEFAULT_REPO_ROOT = "/home/aritraghosh/projects/main"
 OUTPUT_DIR = Path("outputs")
 UNRESOLVED_WORKFLOW_FILE_IDS_LOG = OUTPUT_DIR / "workflows_unresolved_file_ids.jsonl"
+WORKFLOW_PARSE_FAILURES_LOG = OUTPUT_DIR / "workflows_parse_failures.jsonl"
 
 # Only these mapping_type values are used to discover behavioral workflows.
 BEHAVIORAL_ROLES: dict[str, str] = {
@@ -66,6 +68,7 @@ KNOWN_ACTIONS = {
 }
 
 OPENAPI_MAPPING_PREFIX = "openapispec_"
+WORKFLOW_MAPPING_PREFIX = "workflow_"
 
 
 @dataclass
@@ -74,6 +77,46 @@ class BuildStats:
     workflows_inserted: int = 0
     file_ids_backfilled: int = 0
     unresolved_source_files: int = 0
+    workflow_nodes_inserted: int = 0
+    workflow_edges_inserted: int = 0
+    openapi_ref_edges_inserted: int = 0
+    parse_failures_p0: int = 0
+    parse_failures_p1: int = 0
+    parse_failures_p2: int = 0
+
+
+def record_parse_failure(
+    parse_failures: list[dict[str, Any]],
+    stats: BuildStats,
+    *,
+    severity: str,
+    entity_id: int,
+    entity_name: str,
+    source_file: str,
+    reason: str,
+    detail: str | None = None,
+) -> None:
+    sev = severity.upper().strip()
+    if sev not in {"P0", "P1", "P2"}:
+        sev = "P2"
+
+    parse_failures.append(
+        {
+            "severity": sev,
+            "entity_id": entity_id,
+            "entity_name": entity_name,
+            "source_file": source_file,
+            "reason": reason,
+            "detail": detail or "",
+        }
+    )
+
+    if sev == "P0":
+        stats.parse_failures_p0 += 1
+    elif sev == "P1":
+        stats.parse_failures_p1 += 1
+    else:
+        stats.parse_failures_p2 += 1
 
 
 def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -84,7 +127,9 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def ensure_workflows_file_id_column(conn: sqlite3.Connection) -> None:
-    cols = {row["name"] for row in conn.execute("PRAGMA table_info(workflows)").fetchall()}
+    cols = {
+        row["name"] for row in conn.execute("PRAGMA table_info(workflows)").fetchall()
+    }
     if "file_id" not in cols:
         conn.execute("ALTER TABLE workflows ADD COLUMN file_id INTEGER")
     conn.execute(
@@ -93,7 +138,9 @@ def ensure_workflows_file_id_column(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _resolve_file_id(conn: sqlite3.Connection, source_file: str) -> tuple[int | None, str]:
+def _resolve_file_id(
+    conn: sqlite3.Connection, source_file: str
+) -> tuple[int | None, str]:
     row = conn.execute(
         "SELECT id FROM files WHERE path = ? LIMIT 1",
         (source_file,),
@@ -109,6 +156,136 @@ def _resolve_file_id(conn: sqlite3.Connection, source_file: str) -> tuple[int | 
         return int(row["id"]), "case_insensitive_path"
 
     return None, "exact_path,case_insensitive_path"
+
+def _resolve_ref_target_path(source_file_path: str, ref_value: str) -> str | None:
+    ref_value = (ref_value or "").strip()
+    if not ref_value:
+        return None
+
+    # Skip remote references.
+    if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", ref_value):
+        return None
+
+    # Split fragment from file part.
+    ref_file_part = ref_value.split("#", 1)[0].strip()
+
+    # Internal ref like "#/components/..." -> points to same file.
+    if ref_file_part == "":
+        return source_file_path
+
+    # Treat leading "/" as repo-relative.
+    if ref_file_part.startswith("/"):
+        return posixpath.normpath(ref_file_part.lstrip("/"))
+
+    # Relative to source file directory.
+    source_dir = posixpath.dirname(source_file_path)
+    return posixpath.normpath(posixpath.join(source_dir, ref_file_part))
+
+
+def materialize_openapi_ref_edges(
+    conn: sqlite3.Connection,
+    stats: BuildStats,
+) -> None:
+    """
+    Materialize shared YAML $ref edges from relationships into openapi_file_ref_edges.
+
+    Source rows:
+    - relationships.relationship_type = 'REFERENCES'
+    - relationships.language = 'yaml'
+    - relationships.evidence path ending in '$ref'
+
+    Target resolution:
+    - '#/...' => same file
+    - 'relative/path.yaml#/...' => source-dir relative
+    - '/repo/relative/path.yaml#/...' => repo-relative
+    - external URLs are skipped
+    """
+    # Cache files table paths for quick id<->path resolution.
+    file_rows = conn.execute(
+        """
+        SELECT id, path
+        FROM files
+        WHERE path IS NOT NULL
+        """
+    ).fetchall()
+
+    id_to_path: dict[int, str] = {}
+    path_to_id: dict[str, int] = {}
+    lower_path_to_id: dict[str, int] = {}
+
+    for row in file_rows:
+        fid = int(row["id"])
+        fpath = str(row["path"])
+        id_to_path[fid] = fpath
+        path_to_id[fpath] = fid
+        lower_path_to_id[fpath.lower()] = fid
+
+    rel_rows = conn.execute(
+        """
+        SELECT
+            file_id,
+            file_path,
+            target_name AS ref_value,
+            evidence
+        FROM relationships
+        WHERE relationship_type = 'REFERENCES'
+          AND LOWER(COALESCE(language, '')) = 'yaml'
+          AND COALESCE(TRIM(target_name), '') <> ''
+          AND COALESCE(evidence, '') LIKE '%$ref'
+        """
+    ).fetchall()
+
+    for row in rel_rows:
+        source_file_id = int(row["file_id"]) if row["file_id"] is not None else None
+        source_file_path = str(row["file_path"] or "").strip()
+        ref_value = str(row["ref_value"] or "").strip()
+        ref_path = str(row["evidence"] or "").strip()
+
+        if source_file_id is None and source_file_path:
+            source_file_id = path_to_id.get(source_file_path)
+            if source_file_id is None:
+                source_file_id = lower_path_to_id.get(source_file_path.lower())
+
+        if source_file_id is None:
+            continue
+
+        if not source_file_path:
+            source_file_path = id_to_path.get(source_file_id, "")
+        if not source_file_path:
+            continue
+
+        target_path = _resolve_ref_target_path(source_file_path, ref_value)
+        if not target_path:
+            continue
+
+        target_file_id = path_to_id.get(target_path)
+        if target_file_id is None:
+            target_file_id = lower_path_to_id.get(target_path.lower())
+        if target_file_id is None:
+            continue
+
+        before = conn.total_changes
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO openapi_file_ref_edges(
+                source_file_id,
+                target_file_id,
+                ref_value,
+                ref_path,
+                confidence
+            )
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                source_file_id,
+                target_file_id,
+                ref_value,
+                ref_path,
+                1.0,
+            ),
+        )
+        if conn.total_changes > before:
+            stats.openapi_ref_edges_inserted += 1
 
 
 def backfill_workflow_file_ids(
@@ -362,9 +539,9 @@ def read_yaml_file(repo_root: Path, rel_path: str) -> dict[str, Any] | None:
     return loaded
 
 
-def extract_yaml_actions(doc: dict[str, Any]) -> list[tuple[str, str]]:
+def extract_yaml_actions(doc: dict[str, Any]) -> list[tuple[int, str, str]]:
     """
-    Return a list of (action_name, evidence_snippet).
+    Return a list of (ordinal, action_name, evidence_snippet).
 
     Extraction is deterministic and conservative.
     We look at common Intacct YAML structures:
@@ -401,14 +578,17 @@ def extract_yaml_actions(doc: dict[str, Any]) -> list[tuple[str, str]]:
     Actions are deduplicated — first evidence wins.
     Only names present in KNOWN_ACTIONS are emitted.
     """
-    results: list[tuple[str, str]] = []
+    results: list[tuple[int, str, str]] = []
     seen_actions: set[str] = set()
+    idx = 0
 
     def add(name: str | None, evidence: str) -> None:
+        nonlocal idx
+        idx += 1
         norm = normalize_action(name or "")
         if norm and norm not in seen_actions:
             seen_actions.add(norm)
-            results.append((norm, evidence))
+            results.append((idx, norm, evidence))
 
     if not isinstance(doc, dict):
         return results
@@ -464,11 +644,438 @@ def extract_yaml_actions(doc: dict[str, Any]) -> list[tuple[str, str]]:
     return results
 
 
+def insert_workflow_node(
+    # Insert or reuse by unique key (workflow_id, node_kind, node_key).
+    # Args: workflow_id, entity_id, node_kind, node_key, name, ordinal, action, source_kind, file_id, symbol_id, metadata_json.
+    # Return node_id, inserted_flag.
+    conn: sqlite3.Connection,
+    workflow_id: int,
+    entity_id: int | None,
+    node_kind: str,
+    node_key: str,
+    name: str,
+    ordinal: int,
+    action: str,
+    source_kind: str | None,
+    file_id: int | None,
+    symbol_id: int | None,
+    metadata_json: str,
+) -> tuple[int | None, bool]:
+    # insert workflow, if workflow_id, node_kind, node_key
+    # does not already exist
+    row = conn.execute(
+        """
+        SELECT id FROM workflow_nodes
+        WHERE workflow_id = ? AND node_kind = ? AND node_key = ?
+        """,
+        (workflow_id, node_kind, node_key),
+    ).fetchone()
+
+    if row:
+        return int(row["id"]), False
+
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO workflow_nodes (
+                workflow_id, entity_id, node_kind, node_key, name, ordinal, action, source_kind, file_id, symbol_id, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                workflow_id,
+                entity_id,
+                node_kind,
+                node_key,
+                name,
+                ordinal,
+                action,
+                source_kind,
+                file_id,
+                symbol_id,
+                metadata_json,
+            ),
+        )
+    except sqlite3.IntegrityError:
+        return None, False
+
+    return (int(cur.lastrowid), True) if cur.lastrowid is not None else (None, False)
+
+
+def insert_workflow_edge(
+    # Insert or ignore by unique key.
+    # Args: workflow_id, from_node_id, to_node_id, edge_kind, ordinal, evidence, confidence, file_id, symbol_id
+    # Return inserted_flag: bool
+    conn: sqlite3.Connection,
+    workflow_id: int,
+    from_node_id: int,
+    to_node_id: int,
+    edge_kind: str,
+    ordinal: int,
+    evidence: str,
+    confidence: float,
+    file_id: int | None,
+    symbol_id: int | None,
+) -> bool:
+    # Insert or ignore by unique key (workflow_id, from_node_id, to_node_id, edge_kind, ordinal, evidence)
+    row = conn.execute(
+        """
+        SELECT id FROM workflow_edges
+        WHERE workflow_id = ? AND from_node_id = ? AND to_node_id = ? AND edge_kind = ? AND ordinal = ? AND evidence = ?
+        """,
+        (workflow_id, from_node_id, to_node_id, edge_kind, ordinal, evidence),
+    ).fetchone()
+
+    if row:
+        return False
+
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO workflow_edges (
+                workflow_id, from_node_id, to_node_id, edge_kind, ordinal, evidence, confidence, file_id, symbol_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                workflow_id,
+                from_node_id,
+                to_node_id,
+                edge_kind,
+                ordinal,
+                evidence,
+                confidence,
+                file_id,
+                symbol_id,
+            ),
+        )
+    except sqlite3.IntegrityError:
+        return False
+
+    return True if cur.lastrowid else False
+
+
+def build_action_chain_for_workflow(
+    # Args:  workflow_id, entity_id, source_file, source_kind, actions[(int, action,evidence)].
+    # Return: None
+    conn: sqlite3.Connection,
+    workflow_id: int,
+    entity_id: int,
+    source_file: str | None,
+    source_kind: str,
+    actions: list[tuple[int, str, str]],
+) -> tuple[int, int]:
+    # Steps:
+    #   Create one workflow node (node_kind=workflow, node_key=workflow:{workflow_id}).
+    #   For each action in ordinal order:
+    #     Create action node (node_kind=action, node_key=action:{ordinal}:{action}).
+    #     Edge workflow_contains from workflow node to action node.
+    #     Edge step_next from previous action node to current action node.
+    #   If source_file resolved:
+    #     Create file node once.
+    #     Link each action node with step_uses_file edge.
+    workflow_node_id, _ = insert_workflow_node(
+        conn=conn,
+        workflow_id=workflow_id,
+        entity_id=entity_id,
+        node_kind="workflow",
+        node_key=f"workflow:{workflow_id}",
+        name=f"Workflow {workflow_id}",
+        ordinal=0,
+        action="",
+        source_kind=source_kind,
+        file_id=None,
+        symbol_id=None,
+        metadata_json="{}",
+    )
+    if workflow_node_id is None:
+        return 0, 0
+
+    nodes_inserted = 0
+    edges_inserted = 0
+
+    source_file_id: int | None = None
+    file_node_id: int | None = None
+    if source_file:
+        source_file_id, _ = _resolve_file_id(conn, source_file)
+        file_node_id, _ = insert_workflow_node(
+            conn=conn,
+            workflow_id=workflow_id,
+            entity_id=entity_id,
+            node_kind="file",
+            node_key=f"file:{source_file}",
+            name=source_file,
+            ordinal=0,
+            action="",
+            source_kind="file",
+            file_id=source_file_id,
+            symbol_id=None,
+            metadata_json=json.dumps({"source_file": source_file}, ensure_ascii=True),
+        )
+
+        if file_node_id is not None:
+            nodes_inserted += 1
+
+    prev_action_node_id: int | None = None
+    ordered_actions = sorted(actions, key=lambda item: item[0])
+
+    for ordinal, action, evidence in ordered_actions:
+        action_node_id, _ = insert_workflow_node(
+            conn=conn,
+            workflow_id=workflow_id,
+            entity_id=entity_id,
+            node_kind="action",
+            node_key=f"action:{ordinal}:{action}",
+            name=action,
+            ordinal=ordinal,
+            action=action,
+            source_kind=source_kind,
+            file_id=source_file_id,
+            symbol_id=None,
+            metadata_json=json.dumps({"evidence": evidence}, ensure_ascii=True),
+        )
+        if action_node_id is None:
+            continue
+
+        nodes_inserted += 1
+
+        edge_inserted = insert_workflow_edge(
+            conn=conn,
+            workflow_id=workflow_id,
+            from_node_id=workflow_node_id,
+            to_node_id=action_node_id,
+            edge_kind="workflow_contains",
+            ordinal=ordinal,
+            evidence=evidence,
+            confidence=1.0,
+            file_id=source_file_id,
+            symbol_id=None,
+        )
+        if edge_inserted:
+            edges_inserted += 1
+
+        if prev_action_node_id is not None:
+            edge_inserted = insert_workflow_edge(
+                conn=conn,
+                workflow_id=workflow_id,
+                from_node_id=prev_action_node_id,
+                to_node_id=action_node_id,
+                edge_kind="step_next",
+                ordinal=ordinal,
+                evidence=evidence,
+                confidence=1.0,
+                file_id=source_file_id,
+                symbol_id=None,
+            )
+            if edge_inserted:
+                edges_inserted += 1
+
+        if file_node_id is not None:
+            edge_inserted = insert_workflow_edge(
+                conn=conn,
+                workflow_id=workflow_id,
+                from_node_id=action_node_id,
+                to_node_id=file_node_id,
+                edge_kind="step_uses_file",
+                ordinal=ordinal,
+                evidence=evidence,
+                confidence=1.0,
+                file_id=source_file_id,
+                symbol_id=None,
+            )
+            if edge_inserted:
+                edges_inserted += 1
+
+        prev_action_node_id = action_node_id
+
+    return nodes_inserted, edges_inserted
+
+
+def link_workflow_to_symbol_roots(
+    conn: sqlite3.Connection,
+    workflow_id: int,
+    entity_id: int,
+    workflow_type: str,
+    roots: list[sqlite3.Row],
+    source_symbol_id: int | None = None,
+    source_kind: str = "class",
+) -> tuple[int, int]:
+    """
+    Link a workflow graph to root symbols.
+
+    Behavior:
+    - Reuses/creates the workflow node.
+    - Selects relevant roots:
+      - If source_symbol_id is provided: only that symbol.
+      - Else if workflow_type maps to a root mapping_type: only matching roots.
+      - Else: all roots with symbol_id.
+    - Creates symbol nodes (node_kind='symbol').
+    - Adds workflow_contains edges from workflow -> symbol.
+    - Adds step_uses_symbol edges from action -> symbol when action nodes exist;
+      otherwise from workflow -> symbol.
+
+    Returns:
+        (workflow_nodes_inserted, workflow_edges_inserted)
+    """
+    workflow_node_id, _ = insert_workflow_node(
+        conn=conn,
+        workflow_id=workflow_id,
+        entity_id=entity_id,
+        node_kind="workflow",
+        node_key=f"workflow:{workflow_id}",
+        name=f"Workflow {workflow_id}",
+        ordinal=0,
+        action="",
+        source_kind=source_kind,
+        file_id=None,
+        symbol_id=None,
+        metadata_json="{}",
+    )
+    if workflow_node_id is None:
+        return 0, 0
+
+    nodes_inserted = 0
+    edges_inserted = 0
+
+    workflow_to_mapping_type = {
+        "allowed_operations": "allowed_operations_handler",
+        "approval": "approval_manager",
+        "reverse": "reverse_manager",
+        "batch": "batch_manager",
+        "item": "item_manager",
+        "entry": "entry_manager",
+    }
+
+    expected_mapping_type = workflow_to_mapping_type.get(workflow_type)
+
+    selected_roots: list[sqlite3.Row] = []
+    seen_symbol_ids: set[int] = set()
+
+    for r in roots:
+        if r["symbol_id"] is None:
+            continue
+        sid = int(r["symbol_id"])
+        if sid in seen_symbol_ids:
+            continue
+
+        mapping_type = str(r["mapping_type"] or "")
+
+        if source_symbol_id is not None and sid != int(source_symbol_id):
+            continue
+
+        if (
+            source_symbol_id is None
+            and expected_mapping_type
+            and mapping_type != expected_mapping_type
+        ):
+            continue
+
+        seen_symbol_ids.add(sid)
+        selected_roots.append(r)
+
+    action_nodes = conn.execute(
+        """
+        SELECT id, ordinal
+        FROM workflow_nodes
+        WHERE workflow_id = ?
+          AND node_kind = 'action'
+        ORDER BY COALESCE(ordinal, 0), id
+        """,
+        (workflow_id,),
+    ).fetchall()
+
+    ordinal_base = 10_000
+
+    for i, r in enumerate(selected_roots, start=1):
+        symbol_id = int(r["symbol_id"])
+        symbol_name = str(r["symbol_name"] or f"symbol:{symbol_id}")
+        symbol_kind = str(r["symbol_kind"] or "")
+        mapping_type = str(r["mapping_type"] or "")
+        symbol_file_id = (
+            int(r["symbol_file_id"]) if r["symbol_file_id"] is not None else None
+        )
+
+        symbol_node_id, symbol_node_inserted = insert_workflow_node(
+            conn=conn,
+            workflow_id=workflow_id,
+            entity_id=entity_id,
+            node_kind="symbol",
+            node_key=f"symbol:{symbol_id}",
+            name=symbol_name,
+            ordinal=ordinal_base + i,
+            action="",
+            source_kind=source_kind,
+            file_id=symbol_file_id,
+            symbol_id=symbol_id,
+            metadata_json=json.dumps(
+                {
+                    "mapping_type": mapping_type,
+                    "symbol_kind": symbol_kind,
+                },
+                ensure_ascii=True,
+            ),
+        )
+        if symbol_node_id is None:
+            continue
+
+        if symbol_node_inserted:
+            nodes_inserted += 1
+
+        evidence = f"root:{mapping_type}:{symbol_name}"
+
+        if insert_workflow_edge(
+            conn=conn,
+            workflow_id=workflow_id,
+            from_node_id=workflow_node_id,
+            to_node_id=symbol_node_id,
+            edge_kind="workflow_contains",
+            ordinal=ordinal_base + i,
+            evidence=evidence,
+            confidence=1.0,
+            file_id=symbol_file_id,
+            symbol_id=symbol_id,
+        ):
+            edges_inserted += 1
+
+        if action_nodes:
+            for a in action_nodes:
+                action_node_id = int(a["id"])
+                action_ordinal = int(a["ordinal"] or 0)
+                if insert_workflow_edge(
+                    conn=conn,
+                    workflow_id=workflow_id,
+                    from_node_id=action_node_id,
+                    to_node_id=symbol_node_id,
+                    edge_kind="step_uses_symbol",
+                    ordinal=action_ordinal,
+                    evidence=evidence,
+                    confidence=1.0,
+                    file_id=symbol_file_id,
+                    symbol_id=symbol_id,
+                ):
+                    edges_inserted += 1
+        else:
+            if insert_workflow_edge(
+                conn=conn,
+                workflow_id=workflow_id,
+                from_node_id=workflow_node_id,
+                to_node_id=symbol_node_id,
+                edge_kind="step_uses_symbol",
+                ordinal=ordinal_base + i,
+                evidence=evidence,
+                confidence=1.0,
+                file_id=symbol_file_id,
+                symbol_id=symbol_id,
+            ):
+                edges_inserted += 1
+    return nodes_inserted, edges_inserted
+
+
 def build_workflows_for_entity(
     conn: sqlite3.Connection,
     repo_root: Path,
     entity: sqlite3.Row,
     roots: list[sqlite3.Row],
+    stats: BuildStats,
+    parse_failures: list[dict[str, Any]],
 ) -> int:
     """
     Returns workflows_inserted for this entity.
@@ -484,24 +1091,81 @@ def build_workflows_for_entity(
     yaml_paths = get_entity_yaml_paths(conn, entity_id)
 
     for yaml_path in yaml_paths:
-        actions: list[tuple[str, str]] = []
+        actions: list[tuple[int, str, str]] = []
         action_source = "yaml"
 
-        try:
-            doc = read_yaml_file(repo_root, yaml_path)
-        except click.ClickException:
-            doc = None
+        doc: dict[str, Any] | None = None
+        yaml_file = repo_root / yaml_path
+
+        if yaml is None:
+            record_parse_failure(
+                parse_failures,
+                stats,
+                severity="P2",
+                entity_id=int(entity_id),
+                entity_name=str(entity_name),
+                source_file=yaml_path,
+                reason="yaml_parser_unavailable",
+                detail="PyYAML not installed",
+            )
+        elif not yaml_file.exists():
+            record_parse_failure(
+                parse_failures,
+                stats,
+                severity="P2",
+                entity_id=int(entity_id),
+                entity_name=str(entity_name),
+                source_file=yaml_path,
+                reason="source_file_missing",
+                detail=str(yaml_file),
+            )
+        else:
+            with yaml_file.open("r", encoding="utf-8") as handle:
+                try:
+                    loaded = yaml.safe_load(handle)
+                except yaml.YAMLError as exc:
+                    record_parse_failure(
+                        parse_failures,
+                        stats,
+                        severity="P0",
+                        entity_id=int(entity_id),
+                        entity_name=str(entity_name),
+                        source_file=yaml_path,
+                        reason="invalid_yaml_syntax",
+                        detail=str(exc),
+                    )
+                    loaded = None
+
+            if loaded is None:
+                doc = {}
+            elif not isinstance(loaded, dict):
+                record_parse_failure(
+                    parse_failures,
+                    stats,
+                    severity="P1",
+                    entity_id=int(entity_id),
+                    entity_name=str(entity_name),
+                    source_file=yaml_path,
+                    reason="invalid_top_level_type",
+                    detail=type(loaded).__name__,
+                )
+            else:
+                doc = loaded
 
         if doc:
             actions = extract_yaml_actions(doc)
 
         if not actions:
-            actions = get_yaml_actions_from_symbols_for_path(
+            fallback_actions = get_yaml_actions_from_symbols_for_path(
                 conn=conn,
                 entity_id=entity_id,
                 yaml_path=yaml_path,
             )
-            if actions:
+            if fallback_actions:
+                actions = [
+                    (idx, action, evidence)
+                    for idx, (action, evidence) in enumerate(fallback_actions, start=1)
+                ]
                 action_source = "yaml_symbols"
 
         if not actions:
@@ -522,8 +1186,31 @@ def build_workflows_for_entity(
         if wf_id is None:
             continue
 
+        chain_nodes, chain_edges = build_action_chain_for_workflow(
+            conn=conn,
+            workflow_id=wf_id,
+            entity_id=entity_id,
+            source_file=yaml_path,
+            source_kind="yaml" if action_source == "yaml" else "inference",
+            actions=actions,
+        )
+        stats.workflow_nodes_inserted += chain_nodes
+        stats.workflow_edges_inserted += chain_edges
+
         if workflow_inserted:
             wf_count += 1
+
+        nodes_added, edges_added = link_workflow_to_symbol_roots(
+            conn=conn,
+            workflow_id=wf_id,
+            entity_id=entity_id,
+            workflow_type="allowed_operations",
+            roots=roots,
+            source_symbol_id=None,
+            source_kind="yaml" if action_source == "yaml" else "inference",
+        )
+        stats.workflow_nodes_inserted += nodes_added
+        stats.workflow_edges_inserted += edges_added
 
     # ------------------------------------------------------------------
     # 2. AllowedOperationsHandler workflow (surface even if no YAML)
@@ -539,13 +1226,39 @@ def build_workflows_for_entity(
             workflow_type="allowed_operations",
             source_kind="class",
             source_file=None,
-            file_id=int(r["symbol_file_id"]) if r["symbol_file_id"] is not None else None,
+            file_id=int(r["symbol_file_id"])
+            if r["symbol_file_id"] is not None
+            else None,
             source_symbol_id=r["symbol_id"],
             reason=f"AllowedOperationsHandler class present: {r['symbol_name']}",
         )
 
         if wf_id is not None and workflow_inserted:
             wf_count += 1
+
+        if wf_id is not None:
+            chain_nodes, chain_edges = build_action_chain_for_workflow(
+                conn=conn,
+                workflow_id=wf_id,
+                entity_id=entity_id,
+                source_file=None,
+                source_kind="class",
+                actions=[],
+            )
+            stats.workflow_nodes_inserted += chain_nodes
+            stats.workflow_edges_inserted += chain_edges
+
+            nodes_added, edges_added = link_workflow_to_symbol_roots(
+                conn=conn,
+                workflow_id=wf_id,
+                entity_id=entity_id,
+                workflow_type="allowed_operations",
+                roots=roots,
+                source_symbol_id=r["symbol_id"],
+                source_kind="class",
+            )
+            stats.workflow_nodes_inserted += nodes_added
+            stats.workflow_edges_inserted += edges_added
 
     # ------------------------------------------------------------------
     # 3. Behavioral workflows from Manager subclasses
@@ -566,7 +1279,9 @@ def build_workflows_for_entity(
             workflow_type=wf_type,
             source_kind="class",
             source_file=None,
-            file_id=int(r["symbol_file_id"]) if r["symbol_file_id"] is not None else None,
+            file_id=int(r["symbol_file_id"])
+            if r["symbol_file_id"] is not None
+            else None,
             source_symbol_id=r["symbol_id"],
             reason=f"Discovered from role={r['mapping_type']} symbol={r['symbol_name']}",
         )
@@ -574,12 +1289,37 @@ def build_workflows_for_entity(
         if wf_id is not None and workflow_inserted:
             wf_count += 1
 
+        if wf_id is not None:
+            chain_nodes, chain_edges = build_action_chain_for_workflow(
+                conn=conn,
+                workflow_id=wf_id,
+                entity_id=entity_id,
+                source_file=None,
+                source_kind="class",
+                actions=[],
+            )
+            stats.workflow_nodes_inserted += chain_nodes
+            stats.workflow_edges_inserted += chain_edges
+
+            nodes_added, edges_added = link_workflow_to_symbol_roots(
+                conn=conn,
+                workflow_id=wf_id,
+                entity_id=entity_id,
+                workflow_type=wf_type,
+                roots=roots,
+                source_symbol_id=r["symbol_id"],
+                source_kind="class",
+            )
+            stats.workflow_nodes_inserted += nodes_added
+            stats.workflow_edges_inserted += edges_added
+
     return wf_count
 
 
 def build(db: str, repo_root: Path, reset: bool) -> BuildStats:
     stats = BuildStats()
     unresolved_sources: list[dict[str, Any]] = []
+    parse_failures: list[dict[str, Any]] = []
 
     if yaml is None:
         click.echo(
@@ -593,7 +1333,10 @@ def build(db: str, repo_root: Path, reset: bool) -> BuildStats:
         ensure_workflows_file_id_column(conn)
 
         if reset:
+            conn.execute("DELETE FROM workflow_edges")
+            conn.execute("DELETE FROM workflow_nodes")
             conn.execute("DELETE FROM workflows")
+            conn.execute("DELETE FROM openapi_file_ref_edges")
             conn.commit()
 
         entities = get_entities(conn)
@@ -604,6 +1347,8 @@ def build(db: str, repo_root: Path, reset: bool) -> BuildStats:
                 repo_root=repo_root,
                 entity=entity,
                 roots=roots,
+                stats=stats,
+                parse_failures=parse_failures,
             )
             stats.workflows_inserted += wf
             stats.entities_processed += 1
@@ -611,6 +1356,7 @@ def build(db: str, repo_root: Path, reset: bool) -> BuildStats:
             if stats.entities_processed % 500 == 0:
                 conn.commit()
 
+        materialize_openapi_ref_edges(conn, stats)
         backfill_workflow_file_ids(conn, stats, unresolved_sources)
 
         conn.commit()
@@ -618,6 +1364,7 @@ def build(db: str, repo_root: Path, reset: bool) -> BuildStats:
         conn.close()
 
     write_jsonl(UNRESOLVED_WORKFLOW_FILE_IDS_LOG, unresolved_sources)
+    write_jsonl(WORKFLOW_PARSE_FAILURES_LOG, parse_failures)
 
     return stats
 
@@ -646,9 +1393,17 @@ def build_command(db: str, repo_root: Path, reset: bool) -> None:
     stats = build(db=db, repo_root=repo_root.resolve(), reset=reset)
     click.echo(f"Processed entities:  {stats.entities_processed}")
     click.echo(f"Workflows inserted:  {stats.workflows_inserted}")
+    click.echo(f"Workflow nodes inserted:  {stats.workflow_nodes_inserted}")
+    click.echo(f"Workflow edges inserted:  {stats.workflow_edges_inserted}")
+    click.echo(f"OpenAPI ref edges:  {stats.openapi_ref_edges_inserted}")
     click.echo(f"file_id backfilled:  {stats.file_ids_backfilled}")
     click.echo(f"Unresolved sources:  {stats.unresolved_source_files}")
+    click.echo(
+        "Parse failures (P0/P1/P2):  "
+        f"{stats.parse_failures_p0}/{stats.parse_failures_p1}/{stats.parse_failures_p2}"
+    )
     click.echo(f"Unresolved file log: {UNRESOLVED_WORKFLOW_FILE_IDS_LOG.as_posix()}")
+    click.echo(f"Parse failure log:  {WORKFLOW_PARSE_FAILURES_LOG.as_posix()}")
 
 
 if __name__ == "__main__":
