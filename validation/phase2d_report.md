@@ -53,11 +53,9 @@
 {
   "gold_size": 27,
   "discovered_size": 1897,
-  "matched": 26,
-  "missing": [
-    "APAgingsetup"
-  ],
-  "recall_percent": 96.29629629629629,
+  "matched": 27,
+  "missing": [],
+  "recall_percent": 100.0,
   "status": "PASS"
 }
 ```
