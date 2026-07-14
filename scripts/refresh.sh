@@ -145,28 +145,28 @@ fi
 echo ""
 
 # ===================================================================
-# Phase 11: REST Endpoints Extraction
+# Phase 11: OpenAPI Specification Linking
 # ===================================================================
-echo "🌐 Phase 11: Extracting REST endpoints..."
-echo "   Parsing OpenAPI files from openapispec_index to extract REST API paths and methods"
-python scripts/build_rest_endpoints.py build --db catalog/catalog.db --repo-root "/home/aritraghosh/projects/main"
-if [ $? -ne 0 ]; then
-  echo "   ⚠️  REST endpoints extraction completed with warnings (non-fatal)"
-else
-  echo "   ✅ REST endpoints extraction complete"
-fi
-echo ""
-
-# ===================================================================
-# Phase 12: OpenAPI Specification Linking
-# ===================================================================
-echo "🔗 Phase 12: Linking OpenAPI specifications to entities..."
+echo "🔗 Phase 11: Linking OpenAPI specifications to entities..."
 echo "   Connecting API entities to OpenAPI spec files (kinds: operations, schemas, etc.)"
 python scripts/link_openapispec.py link --db catalog/catalog.db
 if [ $? -ne 0 ]; then
   echo "   ⚠️  OpenAPI linking completed with warnings (non-fatal)"
 else
   echo "   ✅ OpenAPI linking complete"
+fi
+echo ""
+
+# ===================================================================
+# Phase 12: REST Endpoints Extraction
+# ===================================================================
+echo "🌐 Phase 12: Extracting REST endpoints..."
+echo "   Parsing OpenAPI files from openapispec_index to extract REST API paths and methods"
+python scripts/build_rest_endpoints.py build --db catalog/catalog.db --repo-root "/home/aritraghosh/projects/main"
+if [ $? -ne 0 ]; then
+  echo "   ⚠️  REST endpoints extraction completed with warnings (non-fatal)"
+else
+  echo "   ✅ REST endpoints extraction complete"
 fi
 echo ""
 
