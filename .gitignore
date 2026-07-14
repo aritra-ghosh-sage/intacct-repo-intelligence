@@ -27,3 +27,4 @@ catalog/catalog - Copy.db:Zone.Identifier
 
 # Local phase databases
 catalog/*.db
+catalog.db

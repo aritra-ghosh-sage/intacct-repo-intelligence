@@ -381,6 +381,43 @@ def link_by_entity_fk(conn: sqlite3.Connection) -> int:
     return total
 
 
+def link_by_table_name_match(conn: sqlite3.Connection) -> int:
+    """
+    Link entities to dbschema_tables by matching entity_nodes.table_name
+    to dbschema_tables.table_name (case-insensitive).
+
+    This is the primary tracing path for dbschema: a single shared source
+    file (dbschema.inc) means file_id overlap never fires for this surface.
+    """
+    return _run_insert(
+        conn,
+        """
+        INSERT OR IGNORE INTO entity_access_links (
+            entity_id,
+            surface,
+            record_id,
+            link_type,
+            evidence_file_id,
+            confidence_mode,
+            notes
+        )
+        SELECT DISTINCT
+            en.id,
+            'dbschema_table',
+            dt.id,
+            'table_name_match',
+            dt.file_id,
+            'deterministic_exact',
+            'entity_nodes.table_name = dbschema_tables.table_name'
+        FROM entity_nodes en
+        JOIN dbschema_tables dt
+          ON LOWER(dt.table_name) = LOWER(en.table_name)
+        WHERE en.table_name IS NOT NULL
+          AND TRIM(en.table_name) <> ''
+        """,
+    )
+
+
 def build(db: str, reset: bool) -> BuildStats:
     conn = get_connection(db)
     stats = BuildStats()
@@ -393,6 +430,7 @@ def build(db: str, reset: bool) -> BuildStats:
 
         stats.rows_inserted += link_by_file_overlap(conn)
         stats.rows_inserted += link_by_entity_fk(conn)
+        stats.rows_inserted += link_by_table_name_match(conn)
 
         conn.commit()
     finally:

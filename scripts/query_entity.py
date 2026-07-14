@@ -879,6 +879,29 @@ def show_flow_view(conn: sqlite3.Connection, entity_name: str) -> int:
     for r in roots:
         click.echo(f"  {r['role']:<28} {r['name']}")
 
+    db_tables = conn.execute(
+        """
+        SELECT dt.table_name, dt.primary_keys,
+               COUNT(df.id) AS field_count
+        FROM entity_nodes en
+        JOIN dbschema_tables dt ON LOWER(dt.table_name) = LOWER(en.table_name)
+        LEFT JOIN dbschema_fields df ON df.dbschema_table_id = dt.id
+        WHERE en.id = ?
+        GROUP BY dt.id
+        ORDER BY dt.table_name
+        """,
+        (entity["id"],),
+    ).fetchall()
+
+    print_section("DB Schema")
+    if db_tables:
+        for t in db_tables:
+            pkeys = t["primary_keys"] or ""
+            pkey_str = f"  pk=[{pkeys}]" if pkeys else ""
+            click.echo(f"  {t['table_name']:<40} {t['field_count']} fields{pkey_str}")
+    else:
+        click.echo("  no db table mapped (entity_nodes.table_name is NULL or not in dbschema)")
+
     wfs = get_workflows(conn, entity["id"])
 
     if wfs:
@@ -1021,6 +1044,21 @@ def show_access_view(conn: sqlite3.Connection, entity_name: str) -> int:
             f"  [{row['link_type']:<15}] {row['label']} "
             f"(record_id={row['record_id']}, source={source_file}, evidence={evidence_file})"
         )
+
+        if row["surface"] == "dbschema_table":
+            fields = conn.execute(
+                """
+                SELECT field_name, field_type
+                FROM dbschema_fields
+                WHERE dbschema_table_id = ?
+                ORDER BY field_name
+                """,
+                (row["record_id"],),
+            ).fetchall()
+            if fields:
+                for f in fields:
+                    ftype = f["field_type"] or "?"
+                    click.echo(f"    {f['field_name']:<40} {ftype}")
 
     return 0
 
