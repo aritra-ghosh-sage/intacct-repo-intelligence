@@ -41,16 +41,16 @@ bash scripts/refresh.sh
 ```bash
 python -m parser.scan_repo
 python -m parser.extract_symbols --full
-python scripts/scan_ent_files.py scan --repo-root "/home/aritraghosh/projects/main"
-python scripts/build_entities.py build
+python scripts/scan_ent_files.py --repo-root "/home/aritraghosh/projects/main" --out catalog/entity_definitions.jsonl
+python scripts/build_entities.py build --entities catalog/entity_definitions.jsonl --db catalog/catalog.db
 python scripts/build_entity_roots.py build
 python -m parser.extract_relationships --repo-root "/home/aritraghosh/projects/main"
 python scripts/build_workflows.py build --db catalog/catalog.db --repo-root "/home/aritraghosh/projects/main"
 python scripts/build_security_mappings.py build --db catalog/catalog.db --repo-root "/home/aritraghosh/projects/main"
-python scripts/build_ui_companions.py --db catalog/catalog.db
 python scripts/scan_openapispec.py scan --db catalog/catalog.db --repo-root "/home/aritraghosh/projects/main"
 python scripts/link_openapispec.py link --db catalog/catalog.db
 python scripts/build_rest_endpoints.py build --db catalog/catalog.db --repo-root "/home/aritraghosh/projects/main"
+python scripts/build_entity_access_links.py build --db catalog/catalog.db --reset
 ```
 
 OpenAPI linking order matters:
@@ -70,6 +70,9 @@ python scripts/query_entity.py root-symbols APBill
 python scripts/query_relationships.py stats
 python scripts/query_security.py op ee/lists/employee
 python scripts/query_security.py menu ee/lists/employee
+python scripts/query_rest.py
+python scripts/query_workflow.py
+python scripts/query_catalog.py sql "SELECT COUNT(*) FROM files"
 ```
 
 ## Working Conventions

@@ -26,3 +26,7 @@ docs/*.txt
 docs/*.csv
 docs/*.json
 outputs/missing_metadata.jsonl
+catalog/catalog - Copy.db:Zone.Identifier
+
+# Local phase databases
+catalog/catalog_phase_3.db
