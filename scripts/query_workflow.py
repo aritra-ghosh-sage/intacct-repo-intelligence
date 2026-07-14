@@ -1,6 +1,7 @@
 # scripts/query_workflow.py
 
 from collections import defaultdict
+import json
 import click
 import sys
 from pathlib import Path
@@ -16,6 +17,10 @@ except ModuleNotFoundError:
 @click.group()
 def cli():
     pass
+
+
+def _emit_json(payload: dict[str, object]) -> None:
+    click.echo(json.dumps(payload, ensure_ascii=True))
 
 
 def get_entity(conn, entity_name):
@@ -74,12 +79,51 @@ def build_grouped_workflows(conn, entity_name, workflow_type):
 @click.argument("entity_name")
 @click.option("--db", default=None, help="Path to SQLite catalog database")
 @click.option("--type", "workflow_type", default=None, help="Filter by workflow type")
-def list_workflows(entity_name, db, workflow_type):
+@click.option("--json", "json_output", is_flag=True, help="Emit JSON output.")
+def list_workflows(entity_name, db, workflow_type, json_output):
     conn = get_connection(db)
     grouped = build_grouped_workflows(conn, entity_name, workflow_type)
 
     if grouped is None:
+        if json_output:
+            _emit_json(
+                {
+                    "query": {
+                        "command": "list",
+                        "entity_name": entity_name,
+                        "workflow_type": workflow_type,
+                    },
+                    "error": "entity_not_found",
+                }
+            )
+            conn.close()
+            return
         print(f"Entity not found: {entity_name}")
+        conn.close()
+        return
+
+    if json_output:
+        _emit_json(
+            {
+                "query": {
+                    "command": "list",
+                    "entity_name": entity_name,
+                    "workflow_type": workflow_type,
+                },
+                "workflows": {
+                    wf_type: [
+                        {
+                            "id": wf_id,
+                            "name": wf_name,
+                            "source_kind": source_kind,
+                            "source_file": source_file,
+                        }
+                        for wf_id, wf_name, source_kind, source_file in items
+                    ]
+                    for wf_type, items in sorted(grouped.items())
+                },
+            }
+        )
         conn.close()
         return
 
@@ -95,12 +139,51 @@ def list_workflows(entity_name, db, workflow_type):
 @click.argument("entity_name")
 @click.option("--db", default=None, help="Path to SQLite catalog database")
 @click.option("--type", "workflow_type", default=None, help="Filter by workflow type")
-def show_entity_workflows(entity_name, db, workflow_type):
+@click.option("--json", "json_output", is_flag=True, help="Emit JSON output.")
+def show_entity_workflows(entity_name, db, workflow_type, json_output):
     conn = get_connection(db)
     grouped = build_grouped_workflows(conn, entity_name, workflow_type)
 
     if grouped is None:
+        if json_output:
+            _emit_json(
+                {
+                    "query": {
+                        "command": "entity",
+                        "entity_name": entity_name,
+                        "workflow_type": workflow_type,
+                    },
+                    "error": "entity_not_found",
+                }
+            )
+            conn.close()
+            return
         print(f"Entity not found: {entity_name}")
+        conn.close()
+        return
+
+    if json_output:
+        _emit_json(
+            {
+                "query": {
+                    "command": "entity",
+                    "entity_name": entity_name,
+                    "workflow_type": workflow_type,
+                },
+                "workflows": {
+                    wf_type: [
+                        {
+                            "id": wf_id,
+                            "name": wf_name,
+                            "source_kind": source_kind,
+                            "source_file": source_file,
+                        }
+                        for wf_id, wf_name, source_kind, source_file in items
+                    ]
+                    for wf_type, items in sorted(grouped.items())
+                },
+            }
+        )
         conn.close()
         return
 

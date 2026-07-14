@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import sys
@@ -18,6 +19,200 @@ except ModuleNotFoundError:
 
 
 DEFAULT_DB = os.environ.get("CATALOG_DB", "catalog/catalog.db")
+
+
+def _emit_json(payload: dict[str, object]) -> None:
+    click.echo(json.dumps(payload, ensure_ascii=True))
+
+
+def _relationship_row_to_dict(row: sqlite3.Row) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "relationship_type": row["relationship_type"],
+        "confidence": row["confidence"] if "confidence" in row.keys() else None,
+        "file_path": row["file_path"] if "file_path" in row.keys() else None,
+        "resolution_class": (
+            row["resolution_class"] if "resolution_class" in row.keys() else None
+        ),
+        "evidence": row["evidence"] if "evidence" in row.keys() else None,
+    }
+    for key in (
+        "source_name",
+        "source_kind",
+        "target_name",
+        "target_kind",
+    ):
+        if key in row.keys():
+            payload[key] = row[key]
+    return payload
+
+
+def _fetch_stats_payload(conn: sqlite3.Connection) -> dict[str, object]:
+    total = conn.execute("SELECT COUNT(*) AS c FROM relationships").fetchone()["c"]
+    rel_rows = conn.execute(
+        """
+        SELECT relationship_type, COUNT(*) AS c
+        FROM relationships
+        GROUP BY relationship_type
+        ORDER BY c DESC
+        """
+    ).fetchall()
+
+    payload: dict[str, object] = {
+        "total_relationships": total,
+        "by_relationship_type": [
+            {"relationship_type": r["relationship_type"], "count": r["c"]}
+            for r in rel_rows
+        ],
+    }
+
+    if has_resolution_classification(conn):
+        class_rows = conn.execute(
+            """
+            SELECT resolution_class, COUNT(*) AS c
+            FROM relationships
+            GROUP BY resolution_class
+            ORDER BY c DESC
+            """
+        ).fetchall()
+        payload["by_resolution_class"] = [
+            {"resolution_class": r["resolution_class"], "count": r["c"]}
+            for r in class_rows
+        ]
+
+    return payload
+
+
+def _fetch_deps_rows(
+    conn: sqlite3.Connection, name: str, limit: int, classes: list[str]
+) -> list[sqlite3.Row]:
+    sql = """
+        SELECT
+            relationship_type,
+            source_name,
+            target_name,
+            target_kind,
+            confidence,
+            file_path,
+            evidence,
+            resolution_class
+        FROM relationships
+        WHERE (source_name LIKE ?
+           OR file_path LIKE ?)
+    """
+    params: list[object] = [f"%{name}%", f"%{name}%"]
+    if classes and has_resolution_classification(conn):
+        placeholders = ",".join(["?"] * len(classes))
+        sql += f" AND resolution_class IN ({placeholders})"
+        params.extend(classes)
+    sql += " ORDER BY relationship_type, target_name LIMIT ?"
+    params.append(limit)
+    return conn.execute(sql, params).fetchall()
+
+
+def _fetch_rdeps_rows(
+    conn: sqlite3.Connection, name: str, limit: int, classes: list[str]
+) -> list[sqlite3.Row]:
+    symbol_ids = get_exact_symbol_ids(conn, name)
+
+    if symbol_ids:
+        placeholders = ",".join(["?"] * len(symbol_ids))
+        sql = f"""
+            SELECT
+                relationship_type,
+                source_name,
+                source_kind,
+                target_name,
+                confidence,
+                file_path,
+                evidence,
+                resolution_class
+            FROM relationships
+            WHERE target_symbol_id IN ({placeholders})
+        """
+        params: list[object] = [*symbol_ids]
+    else:
+        sql = """
+            SELECT
+                relationship_type,
+                source_name,
+                source_kind,
+                target_name,
+                confidence,
+                file_path,
+                evidence,
+                resolution_class
+            FROM relationships
+            WHERE target_name LIKE ?
+        """
+        params = [f"%{name}%"]
+
+    if classes and has_resolution_classification(conn):
+        placeholders = ",".join(["?"] * len(classes))
+        sql += f" AND resolution_class IN ({placeholders})"
+        params.extend(classes)
+    sql += " ORDER BY relationship_type, source_name LIMIT ?"
+    params.append(limit)
+    return conn.execute(sql, params).fetchall()
+
+
+def _fetch_unresolved_rows(
+    conn: sqlite3.Connection,
+    name: str | None,
+    limit: int,
+    classes: list[str],
+) -> list[sqlite3.Row]:
+    class_sql = ""
+    class_params: list[object] = []
+    if classes and has_resolution_classification(conn):
+        placeholders = ",".join(["?"] * len(classes))
+        class_sql = f" AND resolution_class IN ({placeholders})"
+        class_params.extend(classes)
+
+    if name:
+        return conn.execute(
+            f"""
+            SELECT relationship_type, source_name, target_name, file_path, evidence, resolution_class
+            FROM relationships
+            WHERE target_symbol_id IS NULL
+              AND target_name LIKE ?
+              {class_sql}
+            ORDER BY target_name
+            LIMIT ?
+            """,
+            [f"%{name}%", *class_params, limit],
+        ).fetchall()
+
+    return conn.execute(
+        f"""
+        SELECT relationship_type, source_name, target_name, file_path, evidence, resolution_class
+        FROM relationships
+        WHERE target_symbol_id IS NULL
+        {class_sql}
+        ORDER BY target_name
+        LIMIT ?
+        """,
+        [*class_params, limit],
+    ).fetchall()
+
+
+def _fetch_files_rows(
+    conn: sqlite3.Connection, name: str, limit: int, classes: list[str]
+) -> list[sqlite3.Row]:
+    sql = """
+        SELECT DISTINCT file_path
+        FROM relationships
+        WHERE (source_name LIKE ?
+           OR target_name LIKE ?
+           OR file_path LIKE ?)
+    """
+    params: list[object] = [f"%{name}%", f"%{name}%", f"%{name}%"]
+    if classes and has_resolution_classification(conn):
+        placeholders = ",".join(["?"] * len(classes))
+        sql += f" AND resolution_class IN ({placeholders})"
+        params.extend(classes)
+    sql += " ORDER BY file_path LIMIT ?"
+    params.append(limit)
+    return conn.execute(sql, params).fetchall()
 
 
 def get_exact_symbol_ids(conn: sqlite3.Connection, name: str) -> list[int]:
@@ -300,8 +495,13 @@ def cli() -> None:
     show_default=True,
     help="Path to SQLite catalog database.",
 )
-def stats(db: str) -> None:
+@click.option("--json", "json_output", is_flag=True, help="Emit JSON output.")
+def stats(db: str, json_output: bool) -> None:
     conn = get_connection(db)
+    if json_output:
+        _emit_json({"query": {"command": "stats"}, **_fetch_stats_payload(conn)})
+        conn.close()
+        return
     show_stats(conn)
     conn.close()
 
@@ -316,8 +516,26 @@ def stats(db: str) -> None:
 )
 @click.option("--limit", type=int, default=100, show_default=True)
 @click.option("--classes", default="", help="Comma-separated resolution_class filters.")
-def deps(name: str, db: str, limit: int, classes: str) -> None:
+@click.option("--json", "json_output", is_flag=True, help="Emit JSON output.")
+def deps(name: str, db: str, limit: int, classes: str, json_output: bool) -> None:
     conn = get_connection(db)
+    parsed_classes = parse_resolution_classes(classes)
+    if json_output:
+        rows = _fetch_deps_rows(conn, name, limit, parsed_classes)
+        _emit_json(
+            {
+                "query": {
+                    "command": "deps",
+                    "name": name,
+                    "limit": limit,
+                    "classes": parsed_classes,
+                },
+                "count": len(rows),
+                "relationships": [_relationship_row_to_dict(r) for r in rows],
+            }
+        )
+        conn.close()
+        return
     show_deps(conn, name, limit, parse_resolution_classes(classes))
     conn.close()
 
@@ -332,8 +550,26 @@ def deps(name: str, db: str, limit: int, classes: str) -> None:
 )
 @click.option("--limit", type=int, default=100, show_default=True)
 @click.option("--classes", default="", help="Comma-separated resolution_class filters.")
-def rdeps(name: str, db: str, limit: int, classes: str) -> None:
+@click.option("--json", "json_output", is_flag=True, help="Emit JSON output.")
+def rdeps(name: str, db: str, limit: int, classes: str, json_output: bool) -> None:
     conn = get_connection(db)
+    parsed_classes = parse_resolution_classes(classes)
+    if json_output:
+        rows = _fetch_rdeps_rows(conn, name, limit, parsed_classes)
+        _emit_json(
+            {
+                "query": {
+                    "command": "rdeps",
+                    "name": name,
+                    "limit": limit,
+                    "classes": parsed_classes,
+                },
+                "count": len(rows),
+                "relationships": [_relationship_row_to_dict(r) for r in rows],
+            }
+        )
+        conn.close()
+        return
     show_rdeps(conn, name, limit, parse_resolution_classes(classes))
     conn.close()
 
@@ -348,8 +584,28 @@ def rdeps(name: str, db: str, limit: int, classes: str) -> None:
 )
 @click.option("--limit", type=int, default=100, show_default=True)
 @click.option("--classes", default="", help="Comma-separated resolution_class filters.")
-def unresolved(name: str | None, db: str, limit: int, classes: str) -> None:
+@click.option("--json", "json_output", is_flag=True, help="Emit JSON output.")
+def unresolved(
+    name: str | None, db: str, limit: int, classes: str, json_output: bool
+) -> None:
     conn = get_connection(db)
+    parsed_classes = parse_resolution_classes(classes)
+    if json_output:
+        rows = _fetch_unresolved_rows(conn, name, limit, parsed_classes)
+        _emit_json(
+            {
+                "query": {
+                    "command": "unresolved",
+                    "name": name,
+                    "limit": limit,
+                    "classes": parsed_classes,
+                },
+                "count": len(rows),
+                "relationships": [_relationship_row_to_dict(r) for r in rows],
+            }
+        )
+        conn.close()
+        return
     show_unresolved(conn, name, limit, parse_resolution_classes(classes))
     conn.close()
 
@@ -364,8 +620,26 @@ def unresolved(name: str | None, db: str, limit: int, classes: str) -> None:
 )
 @click.option("--limit", type=int, default=200, show_default=True)
 @click.option("--classes", default="", help="Comma-separated resolution_class filters.")
-def files(name: str, db: str, limit: int, classes: str) -> None:
+@click.option("--json", "json_output", is_flag=True, help="Emit JSON output.")
+def files(name: str, db: str, limit: int, classes: str, json_output: bool) -> None:
     conn = get_connection(db)
+    parsed_classes = parse_resolution_classes(classes)
+    if json_output:
+        rows = _fetch_files_rows(conn, name, limit, parsed_classes)
+        _emit_json(
+            {
+                "query": {
+                    "command": "files",
+                    "name": name,
+                    "limit": limit,
+                    "classes": parsed_classes,
+                },
+                "count": len(rows),
+                "files": [r["file_path"] for r in rows],
+            }
+        )
+        conn.close()
+        return
     show_files(conn, name, limit, parse_resolution_classes(classes))
     conn.close()
 

@@ -162,6 +162,72 @@ def classify_sql_mapping_type(path: str) -> str | None:
     return "sql"
 
 
+def _collect_related_file_mappings(entity: dict[str, Any]) -> list[tuple[str, str]]:
+    """
+    Collect related-file mappings from both legacy and flattened JSONL shapes.
+
+    Supported inputs:
+    - related_files.{yaml,xslt,inc,xml,sql}
+    - top-level {yaml,xslt,inc,xml,sql}
+    - top-level aliases such as {yaml_file,xslt_file,inc_file,xml_file,sql_file}
+    """
+    alias_map: dict[str, list[str]] = {
+        "yaml": ["yaml_file", "yaml_files"],
+        "xslt": ["xslt_file", "xslt_files"],
+        "inc": ["inc_file", "inc_files"],
+        "xml": ["xml_file", "xml_files"],
+        "sql": ["sql_file", "sql_files"],
+    }
+
+    role_to_paths: defaultdict[str, list[str]] = defaultdict(list)
+
+    def _append(role: str, value: Any) -> None:
+        if role not in RELATED_FILE_ROLES:
+            return
+        if isinstance(value, str):
+            path = value.strip()
+            if path:
+                role_to_paths[role].append(path)
+            return
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, str):
+                    path = item.strip()
+                    if path:
+                        role_to_paths[role].append(path)
+
+    related = entity.get("related_files") or {}
+    if isinstance(related, dict):
+        for role in RELATED_FILE_ROLES:
+            _append(role, related.get(role))
+
+    for role in RELATED_FILE_ROLES:
+        _append(role, entity.get(role))
+        for alias in alias_map.get(role, []):
+            _append(role, entity.get(alias))
+
+    results: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for role in RELATED_FILE_ROLES:
+        for related_path in role_to_paths.get(role, []):
+            mapping_type = role
+            if role == "yaml":
+                mapping_type = classify_yaml_mapping_type(related_path)
+            elif role == "sql":
+                mapping_type = classify_sql_mapping_type(related_path)
+                if mapping_type is None:
+                    continue
+
+            dedupe_key = (mapping_type, related_path.lower())
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            results.append((mapping_type, related_path))
+
+    return results
+
+
 def ensure_entity_columns(conn: sqlite3.Connection) -> None:
     cols = {
         row["name"]
@@ -636,39 +702,19 @@ def build(db: str, entities: Path, reset: bool) -> BuildStats:
                     if inserted:
                         stats.openapispec_mappings_inserted += 1
 
-
-
-                # ---- Phase 2C.1 enhancement ----
-                # Ingest related files (yaml, xslt, inc, xml, sql) as file-only mappings.
-                # Related files are sourced from entity_definitions.jsonl, not discovered heuristically.
-
-                # THIS IS DEAD CODE NOW entity_definitions.jsonl no longer has a "related_files" field, so this block is commented out.
-                # related = entity.get("related_files") or {}
-
-                # for related_role in RELATED_FILE_ROLES:
-                #     related_path = (
-                #         related.get(related_role) if isinstance(related, dict) else None
-                #     )
-                #     if not related_path:
-                #         continue
-                #     mapping_type = related_role
-                #     if related_role == "yaml":
-                #         mapping_type = classify_yaml_mapping_type(str(related_path))
-                #     elif related_role == "sql":
-                #         mapping_type = classify_sql_mapping_type(str(related_path))
-                #         if mapping_type is None:
-                #             continue
-
-                #     inserted = insert_mapping(
-                #         conn=conn,
-                #         entity_id=entity_id,
-                #         symbol_id=None,
-                #         mapping_type=mapping_type,
-                #         confidence=0.9,
-                #         source_text=related_path,
-                #     )
-                #     if inserted:
-                #         stats.mappings_inserted += 1
+            # Ingest related files (yaml, xslt, inc, xml, sql) as file-backed mappings.
+            # Accept both legacy related_files and flattened top-level fields.
+            for mapping_type, related_path in _collect_related_file_mappings(entity):
+                inserted = insert_mapping(
+                    conn=conn,
+                    entity_id=entity_id,
+                    symbol_id=None,
+                    mapping_type=mapping_type,
+                    confidence=0.9,
+                    source_text=related_path,
+                )
+                if inserted:
+                    stats.mappings_inserted += 1
 
         conn.commit()
     finally:

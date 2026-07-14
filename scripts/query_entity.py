@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from contextlib import redirect_stdout
+import io
+import json
 import os
 import sqlite3
 import sys
@@ -32,6 +35,17 @@ class GraphNode:
 @click.group()
 def cli() -> None:
     pass
+
+
+def _emit_json(payload: dict[str, object]) -> None:
+    click.echo(json.dumps(payload, ensure_ascii=True))
+
+
+def _capture_report_output(fn) -> tuple[int, str]:
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        exit_code = fn()
+    return int(exit_code), buffer.getvalue()
 
 
 def get_entity(conn: sqlite3.Connection, entity_name: str) -> sqlite3.Row | None:
@@ -587,6 +601,7 @@ def _resolve_direction_flags(
     "--openapispec", is_flag=True, help="Show openapispec mappings for the entity."
 )
 @click.option("--access", is_flag=True, help="Show linked entity access graph records.")
+@click.option("--json", "json_output", is_flag=True, help="Emit JSON output.")
 def entity(
     entity_name: str,
     db: str,
@@ -594,6 +609,7 @@ def entity(
     flow: bool,
     openapispec: bool,
     access: bool,
+    json_output: bool,
 ) -> None:
     """Show mapped symbols for an entity."""
     selected_views = sum([workflow, flow, openapispec, access])
@@ -604,6 +620,49 @@ def entity(
 
     conn = get_connection(db)
     try:
+        if json_output:
+            selected = "entity"
+            if workflow:
+                selected = "workflow"
+            elif flow:
+                selected = "flow"
+            elif openapispec:
+                selected = "openapispec"
+            elif access:
+                selected = "access"
+
+            if workflow:
+                code, output = _capture_report_output(
+                    lambda: show_workflow_view(conn, entity_name)
+                )
+            elif flow:
+                code, output = _capture_report_output(
+                    lambda: show_flow_view(conn, entity_name)
+                )
+            elif openapispec:
+                code, output = _capture_report_output(
+                    lambda: show_openapispec_view(conn, entity_name)
+                )
+            elif access:
+                code, output = _capture_report_output(
+                    lambda: show_access_view(conn, entity_name)
+                )
+            else:
+                code, output = _capture_report_output(lambda: show_entity(conn, entity_name))
+
+            _emit_json(
+                {
+                    "query": {
+                        "command": "entity",
+                        "entity_name": entity_name,
+                        "view": selected,
+                    },
+                    "exit_code": code,
+                    "report": output,
+                }
+            )
+            return
+
         if workflow:
             raise SystemExit(show_workflow_view(conn, entity_name))
 
@@ -630,10 +689,27 @@ def entity(
     help="Path to SQLite catalog database.",
 )
 @click.option("--min-weight", type=float, default=0.75, show_default=True)
-def root_symbols(entity_name: str, db: str, min_weight: float) -> None:
+@click.option("--json", "json_output", is_flag=True, help="Emit JSON output.")
+def root_symbols(entity_name: str, db: str, min_weight: float, json_output: bool) -> None:
     """Show canonical roots for an entity."""
     conn = get_connection(db)
     try:
+        if json_output:
+            code, output = _capture_report_output(
+                lambda: show_root_symbols(conn, entity_name, min_weight)
+            )
+            _emit_json(
+                {
+                    "query": {
+                        "command": "root-symbols",
+                        "entity_name": entity_name,
+                        "min_weight": min_weight,
+                    },
+                    "exit_code": code,
+                    "report": output,
+                }
+            )
+            return
         raise SystemExit(show_root_symbols(conn, entity_name, min_weight))
     finally:
         conn.close()
@@ -663,6 +739,7 @@ def root_symbols(entity_name: str, db: str, min_weight: float) -> None:
     show_default=True,
     help="Maximum relationships per symbol.",
 )
+@click.option("--json", "json_output", is_flag=True, help="Emit JSON output.")
 def direct_impact(
     entity_name: str,
     db: str,
@@ -670,10 +747,37 @@ def direct_impact(
     core_only: bool,
     min_weight: float,
     per_symbol_limit: int,
+    json_output: bool,
 ) -> None:
     """Show direct symbol-level incoming/outgoing relationships."""
     conn = get_connection(db)
     try:
+        if json_output:
+            code, output = _capture_report_output(
+                lambda: show_direct_impact(
+                    conn=conn,
+                    entity_name=entity_name,
+                    min_confidence=min_confidence,
+                    per_symbol_limit=per_symbol_limit,
+                    core_only=core_only,
+                    min_weight=min_weight,
+                )
+            )
+            _emit_json(
+                {
+                    "query": {
+                        "command": "direct-impact",
+                        "entity_name": entity_name,
+                        "min_confidence": min_confidence,
+                        "core_only": core_only,
+                        "min_weight": min_weight,
+                        "per_symbol_limit": per_symbol_limit,
+                    },
+                    "exit_code": code,
+                    "report": output,
+                }
+            )
+            return
         raise SystemExit(
             show_direct_impact(
                 conn=conn,
@@ -719,6 +823,7 @@ def direct_impact(
     show_default=True,
     help="Maximum traversed relationships per symbol.",
 )
+@click.option("--json", "json_output", is_flag=True, help="Emit JSON output.")
 def impact(
     entity_name: str,
     db: str,
@@ -729,6 +834,7 @@ def impact(
     core_only: bool,
     min_weight: float,
     max_edges_per_node: int,
+    json_output: bool,
 ) -> None:
     """Show impact analysis; depth=1 uses direct impact, depth>1 uses BFS traversal."""
     include_incoming, include_outgoing = _resolve_direction_flags(
@@ -736,6 +842,50 @@ def impact(
     )
     conn = get_connection(db)
     try:
+        if json_output:
+            if depth <= 1:
+                code, output = _capture_report_output(
+                    lambda: show_direct_impact(
+                        conn=conn,
+                        entity_name=entity_name,
+                        min_confidence=min_confidence,
+                        per_symbol_limit=max_edges_per_node,
+                        core_only=core_only,
+                        min_weight=min_weight,
+                    )
+                )
+            else:
+                code, output = _capture_report_output(
+                    lambda: show_bfs_impact(
+                        conn=conn,
+                        entity_name=entity_name,
+                        depth=depth,
+                        min_confidence=min_confidence,
+                        include_incoming=include_incoming,
+                        include_outgoing=include_outgoing,
+                        max_edges_per_node=max_edges_per_node,
+                        core_only=core_only,
+                        min_weight=min_weight,
+                    )
+                )
+            _emit_json(
+                {
+                    "query": {
+                        "command": "impact",
+                        "entity_name": entity_name,
+                        "depth": depth,
+                        "min_confidence": min_confidence,
+                        "incoming_only": incoming_only,
+                        "outgoing_only": outgoing_only,
+                        "core_only": core_only,
+                        "min_weight": min_weight,
+                        "max_edges_per_node": max_edges_per_node,
+                    },
+                    "exit_code": code,
+                    "report": output,
+                }
+            )
+            return
         if depth <= 1:
             raise SystemExit(
                 show_direct_impact(
@@ -782,6 +932,7 @@ def impact(
 )
 @click.option("--min-weight", type=float, default=0.75, show_default=True)
 @click.option("--max-edges-per-node", type=int, default=25, show_default=True)
+@click.option("--json", "json_output", is_flag=True, help="Emit JSON output.")
 def risk(
     entity_name: str,
     db: str,
@@ -790,10 +941,39 @@ def risk(
     core_only: bool,
     min_weight: float,
     max_edges_per_node: int,
+    json_output: bool,
 ) -> None:
     """Show compact risk summary for transitive impact."""
     conn = get_connection(db)
     try:
+        if json_output:
+            code, output = _capture_report_output(
+                lambda: show_risk_summary(
+                    conn=conn,
+                    entity_name=entity_name,
+                    depth=depth,
+                    min_confidence=min_confidence,
+                    max_edges_per_node=max_edges_per_node,
+                    core_only=core_only,
+                    min_weight=min_weight,
+                )
+            )
+            _emit_json(
+                {
+                    "query": {
+                        "command": "risk",
+                        "entity_name": entity_name,
+                        "depth": depth,
+                        "min_confidence": min_confidence,
+                        "core_only": core_only,
+                        "min_weight": min_weight,
+                        "max_edges_per_node": max_edges_per_node,
+                    },
+                    "exit_code": code,
+                    "report": output,
+                }
+            )
+            return
         raise SystemExit(
             show_risk_summary(
                 conn=conn,
