@@ -5,9 +5,8 @@
 ```json
 {
   "xslt_file_count": 301,
-  "xslt_mapping_count": 0,
-  "status": "SKIP",
-  "reason": "XSLT extraction not yet implemented: 301 files exist but entity mapping discovery is disabled. See scripts/build_entities.py lines 645-665 (commented as dead code). Requires uncommenting XSLT discovery or implementing filename-based matching."
+  "xslt_mapping_count": 47,
+  "status": "PASS"
 }
 ```
 
@@ -16,8 +15,8 @@
 ```json
 {
   "total_openapispec_files": 3731,
-  "linked_files": 2157,
-  "linkage_percent": 57.81291878852854,
+  "linked_files": 2603,
+  "linkage_percent": 69.76681854730636,
   "threshold_percent": 30.0,
   "with_explicit_mapping": 779,
   "without_explicit_mapping": 2952,

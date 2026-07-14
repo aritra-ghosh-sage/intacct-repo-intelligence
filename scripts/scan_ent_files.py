@@ -111,6 +111,7 @@ class EntityDefinition:
     service_x_mapped_to: Optional[str]
     service_status: str
     service_reason: Optional[str]
+    xslt_files: Optional[List[str]]
 
 
 def to_repo_relative(path: Path, repo_root: Path) -> str:
@@ -175,6 +176,19 @@ def find_module_from_ent_path(ent_path: Path, repo_root: Path) -> Optional[str]:
         return rel_parts[module_idx]
     return None
 
+def discover_xslt_files(ent_stem: str, entity_dir: Path, repo_root: Path) -> List[str]:
+    """
+    Discover XSLT files in the entity directory that match the entity stem.
+    """
+    xslt_files: List[str] = []
+    stem_low = ent_stem.lower()
+
+    for xslt_file in sorted(entity_dir.glob("*.xsl")):
+        xslt_stem = xslt_file.stem
+        if xslt_stem.lower().startswith(stem_low):
+            xslt_files.append(to_repo_relative(xslt_file, repo_root))
+
+    return xslt_files
 
 def iter_class_files(entity_dir: Path) -> Iterable[Path]:
     for p in sorted(entity_dir.iterdir()):
@@ -1126,6 +1140,7 @@ def scan(repo_root: Path, out_file: Path) -> int:
             if service_mapping.service_schema_file:
                 consumed_service_schema_files.add(service_mapping.service_schema_file)
 
+            discovered_xslts = discover_xslt_files(ent_stem=canonical_name, entity_dir=ent_path.parent, repo_root=repo_root)
             row = EntityDefinition(
                 entity_name=canonical_name,
                 ent_file=to_repo_relative(ent_path, repo_root),
@@ -1167,6 +1182,7 @@ def scan(repo_root: Path, out_file: Path) -> int:
                 service_x_mapped_to=service_mapping.service_x_mapped_to,
                 service_status=service_mapping.service_status,
                 service_reason=service_mapping.service_reason,
+                xslt_files=discovered_xslts if discovered_xslts else None
             )
             f.write(json.dumps(asdict(row), ensure_ascii=False, sort_keys=True) + "\n")
             count += 1
@@ -1226,6 +1242,7 @@ def scan(repo_root: Path, out_file: Path) -> int:
                 service_x_mapped_to=service_mapping.service_x_mapped_to,
                 service_status=service_mapping.service_status,
                 service_reason="service-only synthetic row (no .ent mapping)",
+                xslt_files=None
             )
             f.write(json.dumps(asdict(row), ensure_ascii=False, sort_keys=True) + "\n")
             count += 1
