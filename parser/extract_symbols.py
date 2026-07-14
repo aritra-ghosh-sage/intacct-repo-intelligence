@@ -1,4 +1,4 @@
-# parser/extract_symbols.py
+import json
 
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +21,16 @@ EXTRACTORS = {
     "yaml": yaml_extractor,
     "xslt": xslt_extractor,
 }
+
+OUTPUT_DIR = Path("outputs")
+YAML_PARSE_FAILURES_LOG = OUTPUT_DIR / "yaml_parse_failures.jsonl"
+
+
+def write_jsonl(path: Path, rows: list[dict[str, str]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=True) + "\n")
 
 
 def extract_all(only_changed: bool = True, languages: list[str] | None = None):
@@ -144,6 +154,12 @@ def extract_all(only_changed: bool = True, languages: list[str] | None = None):
         print(f"   YAML files seen:   {yaml_stats.get('files_seen', 0)}")
         print(f"   YAML parse fail:   {yaml_stats.get('parse_failures', 0)}")
         print(f"   YAML emitted:      {yaml_stats.get('symbols_emitted', 0)}")
+
+        parse_failures: list[dict[str, str]] = []
+        if hasattr(yaml_extractor, "get_parse_failures"):
+            parse_failures = yaml_extractor.get_parse_failures()
+        write_jsonl(YAML_PARSE_FAILURES_LOG, parse_failures)
+        print(f"   YAML parse fail log: {YAML_PARSE_FAILURES_LOG.as_posix()}")
 
 
 if __name__ == "__main__":

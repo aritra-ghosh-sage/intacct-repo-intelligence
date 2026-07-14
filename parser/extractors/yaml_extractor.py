@@ -13,12 +13,14 @@ _STATS = {
     "parse_failures": 0,
     "symbols_emitted": 0,
 }
+_PARSE_FAILURES: list[dict[str, str]] = []
 
 
 def reset_stats() -> None:
     _STATS["files_seen"] = 0
     _STATS["parse_failures"] = 0
     _STATS["symbols_emitted"] = 0
+    _PARSE_FAILURES.clear()
 
 
 def get_stats() -> dict[str, int]:
@@ -27,6 +29,10 @@ def get_stats() -> dict[str, int]:
         "parse_failures": int(_STATS["parse_failures"]),
         "symbols_emitted": int(_STATS["symbols_emitted"]),
     }
+
+
+def get_parse_failures() -> list[dict[str, str]]:
+    return list(_PARSE_FAILURES)
 
 
 def _line_for_fragment(text: str, fragment: str) -> int:
@@ -79,8 +85,15 @@ def extract(source: bytes, file_path: str = "") -> list[Symbol]:
 
     try:
         doc = yaml.safe_load(text)
-    except yaml.YAMLError:
+    except yaml.YAMLError as exc:
         _STATS["parse_failures"] += 1
+        _PARSE_FAILURES.append(
+            {
+                "source_file": file_path or "unknown.yaml",
+                "reason": "invalid_yaml_syntax",
+                "detail": str(exc),
+            }
+        )
         return []
 
     file_name = Path(file_path).name if file_path else "unknown.yaml"
