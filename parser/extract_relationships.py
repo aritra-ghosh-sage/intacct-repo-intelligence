@@ -134,6 +134,7 @@ SUPPORTED_EXTENSIONS = {
     ".ts": "typescript",
     ".tsx": "typescript",
     ".sql": "sql",
+    ".rpt": "php",
 }
 
 

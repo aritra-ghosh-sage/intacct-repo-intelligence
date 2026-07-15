@@ -24,6 +24,7 @@ INCLUDE_EXTENSIONS = {
     ".py",
     ".xsl",
     ".xslt",
+    ".rpt",
 }
 
 EXCLUDE_DIRS = {

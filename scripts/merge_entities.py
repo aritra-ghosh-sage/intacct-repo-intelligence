@@ -131,6 +131,7 @@ RELATED_KEYS = [
     "xslt",
     "yaml",
     "xml",
+    "rpt",
 ]
 
 DEFAULT_ENTITY_SHAPE: dict[str, Any] = {

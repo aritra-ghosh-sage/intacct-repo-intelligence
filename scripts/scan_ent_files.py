@@ -39,6 +39,7 @@ CLASS_EXTS = (
     ".phtml",
     ".html",
     ".js",
+    ".rpt",
 )
 MISSING_METADATA_LOG_REL = Path("outputs/missing_metadata.jsonl")
 SCHEMA_FILE_RE = re.compile(
@@ -112,6 +113,7 @@ class EntityDefinition:
     service_status: str
     service_reason: Optional[str]
     xslt_files: Optional[List[str]]
+    rpt_files: Optional[List[str]]
 
 
 def to_repo_relative(path: Path, repo_root: Path) -> str:
@@ -175,6 +177,47 @@ def find_module_from_ent_path(ent_path: Path, repo_root: Path) -> Optional[str]:
     if module_idx < len(rel_parts):
         return rel_parts[module_idx]
     return None
+
+def discover_rpt_files(ent_stem: str, entity_dir: Path, repo_root: Path) -> List[str]:
+    """
+    Discover RPT files in the entity directory that match the entity stem.
+    """
+    rpt_files: List[str] = []
+    stem_low = ent_stem.lower()
+
+    for rpt_file in sorted(entity_dir.glob("*.rpt")):
+        rpt_stem = rpt_file.stem
+        if rpt_stem.lower().startswith(stem_low):
+            rpt_files.append(to_repo_relative(rpt_file, repo_root))
+
+    return rpt_files
+
+def discover_rpt_files_with_fallback(
+    ent_stem: str, entity_dir: Path, repo_root: Path
+) -> List[str]:
+    """
+    Prefer strict stem-prefix matching, then fallback for single-entity folders.
+
+    Fallback rule:
+    - only when strict match returns nothing
+    - only when the folder contains exactly one .ent file
+    - only when that .ent stem equals ent_stem
+    """
+    strict_matches = discover_rpt_files(ent_stem, entity_dir, repo_root)
+    if strict_matches:
+        return strict_matches
+
+    ent_files = sorted(entity_dir.glob("*.ent"))
+    if len(ent_files) != 1:
+        return strict_matches
+
+    if ent_files[0].stem.lower() != ent_stem.lower():
+        return strict_matches
+
+    return [
+        to_repo_relative(rpt_file, repo_root)
+        for rpt_file in sorted(entity_dir.glob("*.rpt"))
+    ]
 
 def discover_xslt_files(ent_stem: str, entity_dir: Path, repo_root: Path) -> List[str]:
     """
@@ -1140,7 +1183,8 @@ def scan(repo_root: Path, out_file: Path) -> int:
             if service_mapping.service_schema_file:
                 consumed_service_schema_files.add(service_mapping.service_schema_file)
 
-            discovered_xslts = discover_xslt_files(ent_stem=canonical_name, entity_dir=ent_path.parent, repo_root=repo_root)
+            discovered_xslts = discover_xslt_files(ent_stem=ent_stem, entity_dir=ent_path.parent, repo_root=repo_root)
+            discovered_rpts = discover_rpt_files_with_fallback(ent_stem=ent_stem, entity_dir=ent_path.parent, repo_root=repo_root)
             row = EntityDefinition(
                 entity_name=canonical_name,
                 ent_file=to_repo_relative(ent_path, repo_root),
@@ -1182,7 +1226,8 @@ def scan(repo_root: Path, out_file: Path) -> int:
                 service_x_mapped_to=service_mapping.service_x_mapped_to,
                 service_status=service_mapping.service_status,
                 service_reason=service_mapping.service_reason,
-                xslt_files=discovered_xslts if discovered_xslts else None
+                xslt_files=discovered_xslts if discovered_xslts else None,
+                rpt_files=discovered_rpts if discovered_rpts else None
             )
             f.write(json.dumps(asdict(row), ensure_ascii=False, sort_keys=True) + "\n")
             count += 1
@@ -1242,7 +1287,8 @@ def scan(repo_root: Path, out_file: Path) -> int:
                 service_x_mapped_to=service_mapping.service_x_mapped_to,
                 service_status=service_mapping.service_status,
                 service_reason="service-only synthetic row (no .ent mapping)",
-                xslt_files=None
+                xslt_files=None,
+                rpt_files=None
             )
             f.write(json.dumps(asdict(row), ensure_ascii=False, sort_keys=True) + "\n")
             count += 1

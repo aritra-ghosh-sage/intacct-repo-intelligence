@@ -38,7 +38,7 @@ COMPANION_ROLES: list[str] = [
     "entity_manager",
     "entry_manager",
     "pick_manager",
-    "pick_picker",
+    "pick_picker"
 ]
 
 WORKFLOW_FILE_ROLES: list[str] = [
@@ -53,6 +53,7 @@ RELATED_FILE_ROLES: list[str] = [
     "inc",
     "xml",
     "sql",
+    "rpt"
 ]
 
 OPENAPI_SCHEMA_MAPPING_TYPE = "openapispec_schema"
@@ -167,9 +168,9 @@ def _collect_related_file_mappings(entity: dict[str, Any]) -> list[tuple[str, st
     Collect related-file mappings from both legacy and flattened JSONL shapes.
 
     Supported inputs:
-    - related_files.{yaml,xslt,inc,xml,sql}
-    - top-level {yaml,xslt,inc,xml,sql}
-    - top-level aliases such as {yaml_file,xslt_file,inc_file,xml_file,sql_file}
+    - related_files.{yaml,xslt,inc,xml,sql, rpt}
+    - top-level {yaml,xslt,inc,xml,sql, rpt}
+    - top-level aliases such as {yaml_file,xslt_file,inc_file,xml_file,sql_file, rpt_file}
     """
     alias_map: dict[str, list[str]] = {
         "yaml": ["yaml_file", "yaml_files"],
@@ -177,6 +178,7 @@ def _collect_related_file_mappings(entity: dict[str, Any]) -> list[tuple[str, st
         "inc": ["inc_file", "inc_files"],
         "xml": ["xml_file", "xml_files"],
         "sql": ["sql_file", "sql_files"],
+        "rpt": ["rpt_file", "rpt_files"],
     }
 
     role_to_paths: defaultdict[str, list[str]] = defaultdict(list)
@@ -702,7 +704,7 @@ def build(db: str, entities: Path, reset: bool) -> BuildStats:
                     if inserted:
                         stats.openapispec_mappings_inserted += 1
 
-            # Ingest related files (yaml, xslt, inc, xml, sql) as file-backed mappings.
+            # Ingest related files (yaml, xslt, inc, xml, sql, rpt) as file-backed mappings.
             # Accept both legacy related_files and flattened top-level fields.
             for mapping_type, related_path in _collect_related_file_mappings(entity):
                 inserted = insert_mapping(

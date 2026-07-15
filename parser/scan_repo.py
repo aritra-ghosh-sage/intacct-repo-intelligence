@@ -33,6 +33,7 @@ def detect_language(path: str) -> str:
         ".html": "html",
         ".xsl": "xslt",
         ".xslt": "xslt",
+        ".rpt": "php",
     }
     return mapping.get(ext, "unknown")
 
