@@ -2,6 +2,7 @@
 
 REPO_PATH = "/home/aritraghosh/projects/main"
 CATALOG_DB = "catalog/catalog.db"
+GRAPH_DB = "catalog/graph.lbug"
 
 INCLUDE_EXTENSIONS = {
     ".java",

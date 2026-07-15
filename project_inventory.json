@@ -1,9 +1,9 @@
 {
   "project_name": "intacct-repo-intelligence",
-  "generated_at": "2026-07-14T05:36:17.518935+00:00",
+  "generated_at": "2026-07-15T10:44:07.851887+00:00",
   "generator": "scripts/generate_inventory.py",
   "verified_state": {
-    "generated_at": "2026-07-14T05:36:16.910099+00:00",
+    "generated_at": "2026-07-15T10:44:06.770526+00:00",
     "phases": {
       "phase2d": {
         "status": "verified",
@@ -26,7 +26,7 @@
         },
         "entity_mappings": {
           "status": "present",
-          "rows": 6635
+          "rows": 6730
         },
         "entity_nodes": {
           "status": "present",
@@ -38,7 +38,7 @@
         },
         "files": {
           "status": "present",
-          "rows": 46319
+          "rows": 46463
         },
         "knowledge_items": {
           "status": "present",
@@ -54,7 +54,7 @@
         },
         "relationships": {
           "status": "present",
-          "rows": 296214
+          "rows": 296385
         },
         "repos": {
           "status": "present",
@@ -102,7 +102,7 @@
         },
         "symbols": {
           "status": "present",
-          "rows": 162587
+          "rows": 162590
         },
         "workflow_edges": {
           "status": "present",
@@ -162,9 +162,11 @@
         "pick_picker",
         "picker",
         "reverse_manager",
+        "rpt",
         "workflow_api_files",
         "workflow_history_file",
-        "workflow_schema_file"
+        "workflow_schema_file",
+        "xslt"
       ],
       "relationship_types": [
         "CALLS",
@@ -216,6 +218,7 @@
         "yaml_extractor.py"
       ],
       "scripts": [
+        "_query_json.py",
         "benchmark_score.py",
         "build_entities.py",
         "build_entity_access_links.py",
@@ -319,6 +322,10 @@
       "sqlite_sequence",
       "symbols",
       "workflows"
+    ],
+    "extra_mapping_types": [
+      "rpt",
+      "xslt"
     ]
   }
 }
