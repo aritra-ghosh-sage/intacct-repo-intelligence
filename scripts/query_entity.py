@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-from contextlib import redirect_stdout
-import io
-import json
 import os
 import sqlite3
 import sys
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import click
 
@@ -17,6 +15,11 @@ try:
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from catalog.db import get_connection
+
+try:
+    from ._query_json import emit_json, error_response, success_response
+except ImportError:
+    from _query_json import emit_json, error_response, success_response
 
 DEFAULT_DB = os.environ.get("CATALOG_DB", "catalog/catalog.db")
 
@@ -37,25 +40,14 @@ def cli() -> None:
     pass
 
 
-def _emit_json(payload: dict[str, object]) -> None:
-    click.echo(json.dumps(payload, ensure_ascii=True))
-
-
-def _capture_report_output(fn) -> tuple[int, str]:
-    buffer = io.StringIO()
-    with redirect_stdout(buffer):
-        exit_code = fn()
-    return int(exit_code), buffer.getvalue()
-
-
 def get_entity(conn: sqlite3.Connection, entity_name: str) -> sqlite3.Row | None:
     return conn.execute(
         """
         SELECT id, name
         FROM entity_nodes
-        WHERE name = ?
+        WHERE lower(name) = ?
         """,
-        (entity_name,),
+        (entity_name.lower(),),
     ).fetchone()
 
 
@@ -67,7 +59,9 @@ def get_entity_symbols(conn: sqlite3.Connection, entity_id: int) -> list[sqlite3
             s.name,
             s.kind,
             em.mapping_type,
-            em.confidence
+            em.confidence,
+            em.source_text,
+            em.file_id
         FROM entity_mappings em
         JOIN symbols s
             ON s.id = em.symbol_id
@@ -217,6 +211,682 @@ def group_relationships(rows: list[sqlite3.Row], direction: str) -> None:
                     f"{row['source_name']:<45} "
                     f"(confidence={row['confidence']})"
                 )
+
+
+def _entity_payload(entity: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": entity["id"],
+        "name": entity["name"],
+    }
+
+
+def _mapping_type_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = defaultdict(int)
+    for row in rows:
+        key = row.get("mapping_type") or "unknown"
+        counts[str(key)] += 1
+    return {k: counts[k] for k in sorted(counts)}
+
+
+def _workflow_type_counts(workflows_by_type: dict[str, list[dict[str, Any]]]) -> dict[str, int]:
+    return {
+        workflow_type: len(workflows_by_type[workflow_type])
+        for workflow_type in sorted(workflows_by_type)
+    }
+
+
+def _get_entity_or_error(
+    conn: sqlite3.Connection,
+    *,
+    command: str,
+    args: dict[str, Any],
+    entity_name: str,
+) -> tuple[sqlite3.Row | None, dict[str, Any] | None]:
+    entity = get_entity(conn, entity_name)
+    if entity is None:
+        return None, error_response(
+            command=command,
+            args=args,
+            code="entity_not_found",
+            message=f"Entity not found: {entity_name}",
+            details={"entity_name": entity_name},
+        )
+    return entity, None
+
+
+def _collect_workflows_by_type(
+    conn: sqlite3.Connection,
+    entity_id: int,
+    workflow_type: str | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for wf in get_workflows(conn, entity_id, workflow_type):
+        wf_type = wf["workflow_type"] or "unknown"
+        grouped.setdefault(wf_type, []).append(
+            {
+                "workflow_id": wf["id"],
+                "name": wf["name"],
+                "workflow_type": wf_type,
+                "source_kind": wf["source_kind"],
+                "source_file": wf["source_file"],
+            }
+        )
+
+    return {
+        wf_type: sorted(items, key=lambda x: (x["name"], x["workflow_id"]))
+        for wf_type, items in sorted(grouped.items())
+    }
+
+
+def _collect_entity_default_json(
+    conn: sqlite3.Connection, entity: sqlite3.Row
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    mapped_symbols = [
+        {
+            "symbol_id": row["id"],
+            "name": row["name"],
+            "kind": row["kind"],
+            "mapping_type": row["mapping_type"],
+            "confidence": row["confidence"],
+            "source_text": row["source_text"],
+            "file_id": row["file_id"],
+        }
+        for row in get_entity_symbols(conn, entity["id"])
+    ]
+    data = {
+        "entity": _entity_payload(entity),
+        "mapped_symbols": mapped_symbols,
+    }
+    summary = {
+        "mapped_symbol_count": len(mapped_symbols),
+        "mapping_type_counts": _mapping_type_counts(mapped_symbols),
+    }
+    return data, summary
+
+
+def _collect_entity_workflow_json(
+    conn: sqlite3.Connection, entity: sqlite3.Row
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    workflows_by_type = _collect_workflows_by_type(conn, entity["id"])
+    workflow_count = sum(len(items) for items in workflows_by_type.values())
+    data = {
+        "entity": _entity_payload(entity),
+        "workflows_by_type": workflows_by_type,
+    }
+    summary = {
+        "workflow_count": workflow_count,
+        "workflow_type_counts": _workflow_type_counts(workflows_by_type),
+    }
+    return data, summary
+
+
+def _collect_entity_flow_json(
+    conn: sqlite3.Connection, entity: sqlite3.Row
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    roots = [
+        {
+            "symbol_id": row["id"],
+            "name": row["name"],
+            "kind": row["kind"],
+            "role": row["role"],
+            "weight": row["weight"],
+            "reason": row["reason"],
+        }
+        for row in get_root_symbols(conn, entity["id"], 0.75)
+    ]
+
+    db_table_rows = conn.execute(
+        """
+        SELECT dt.id, dt.table_name, dt.primary_keys,
+               COUNT(df.id) AS field_count
+        FROM entity_nodes en
+        JOIN dbschema_tables dt ON LOWER(dt.table_name) = LOWER(en.table_name)
+        LEFT JOIN dbschema_fields df ON df.dbschema_table_id = dt.id
+        WHERE en.id = ?
+        GROUP BY dt.id
+        ORDER BY dt.table_name
+        """,
+        (entity["id"],),
+    ).fetchall()
+
+    db_tables: list[dict[str, Any]] = []
+    for row in db_table_rows:
+        fields = conn.execute(
+            """
+            SELECT field_name, field_type
+            FROM dbschema_fields
+            WHERE dbschema_table_id = ?
+            ORDER BY field_name
+            """,
+            (row["id"],),
+        ).fetchall()
+        db_tables.append(
+            {
+                "table_name": row["table_name"],
+                "primary_keys": row["primary_keys"],
+                "field_count": row["field_count"],
+                "fields": [
+                    {
+                        "field_name": f["field_name"],
+                        "field_type": f["field_type"],
+                    }
+                    for f in fields
+                ],
+            }
+        )
+
+    workflows_by_type = _collect_workflows_by_type(conn, entity["id"])
+    workflow_count = sum(len(items) for items in workflows_by_type.values())
+
+    data = {
+        "entity": _entity_payload(entity),
+        "core_roots": roots,
+        "db_schema_tables": db_tables,
+        "workflows_by_type": workflows_by_type,
+    }
+    summary = {
+        "core_root_count": len(roots),
+        "db_table_count": len(db_tables),
+        "workflow_count": workflow_count,
+    }
+    return data, summary
+
+
+def _collect_entity_openapispec_json(
+    conn: sqlite3.Connection, entity: sqlite3.Row
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT source_text, mapping_type, file_id
+        FROM entity_mappings
+        WHERE entity_id = ?
+          AND mapping_type LIKE 'openapispec_%'
+        ORDER BY mapping_type, source_text
+        """,
+        (entity["id"],),
+    ).fetchall()
+
+    mappings = [
+        {
+            "mapping_type": row["mapping_type"],
+            "source_text": row["source_text"],
+            "file_id": row["file_id"],
+        }
+        for row in rows
+    ]
+
+    data = {
+        "entity": _entity_payload(entity),
+        "openapi_mappings": mappings,
+    }
+    summary = {
+        "openapi_mapping_count": len(mappings),
+        "mapping_type_counts": _mapping_type_counts(mappings),
+    }
+    return data, summary
+
+
+def _collect_entity_access_json(
+    conn: sqlite3.Connection, entity: sqlite3.Row
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT
+            eal.surface,
+            eal.record_id,
+            eal.link_type,
+            eal.evidence_file_id,
+            ef.path AS evidence_file,
+            eal.notes,
+            CASE
+                WHEN eal.surface = 'security_operation' THEN (
+                    SELECT so.op_key
+                    FROM security_operations so
+                    WHERE so.id = eal.record_id
+                )
+                WHEN eal.surface = 'security_policy' THEN (
+                    SELECT sp.policy_name
+                    FROM security_policies sp
+                    WHERE sp.id = eal.record_id
+                )
+                WHEN eal.surface = 'security_menu' THEN (
+                    SELECT COALESCE(sm.menu_name, sm.module, '(menu)')
+                    FROM security_menus sm
+                    WHERE sm.id = eal.record_id
+                )
+                WHEN eal.surface = 'security_menu_item' THEN (
+                    SELECT smi.item_path
+                    FROM security_menu_items smi
+                    WHERE smi.id = eal.record_id
+                )
+                WHEN eal.surface = 'dbschema_table' THEN (
+                    SELECT dt.table_name
+                    FROM dbschema_tables dt
+                    WHERE dt.id = eal.record_id
+                )
+                WHEN eal.surface = 'workflow' THEN (
+                    SELECT wf.name
+                    FROM workflows wf
+                    WHERE wf.id = eal.record_id
+                )
+                WHEN eal.surface = 'rest_endpoint' THEN (
+                    SELECT re.method || ' ' || re.path
+                    FROM rest_endpoints re
+                    WHERE re.id = eal.record_id
+                )
+                ELSE '(unknown)'
+            END AS label,
+            CASE
+                WHEN eal.surface = 'security_operation' THEN (
+                    SELECT so.source_file
+                    FROM security_operations so
+                    WHERE so.id = eal.record_id
+                )
+                WHEN eal.surface = 'security_policy' THEN (
+                    SELECT sp.source_file
+                    FROM security_policies sp
+                    WHERE sp.id = eal.record_id
+                )
+                WHEN eal.surface = 'security_menu' THEN (
+                    SELECT sm.source_file
+                    FROM security_menus sm
+                    WHERE sm.id = eal.record_id
+                )
+                WHEN eal.surface = 'security_menu_item' THEN (
+                    SELECT sm.source_file
+                    FROM security_menu_items smi
+                    JOIN security_menus sm ON sm.id = smi.menu_id
+                    WHERE smi.id = eal.record_id
+                )
+                WHEN eal.surface = 'dbschema_table' THEN (
+                    SELECT dt.source_file
+                    FROM dbschema_tables dt
+                    WHERE dt.id = eal.record_id
+                )
+                WHEN eal.surface = 'workflow' THEN (
+                    SELECT wf.source_file
+                    FROM workflows wf
+                    WHERE wf.id = eal.record_id
+                )
+                WHEN eal.surface = 'rest_endpoint' THEN (
+                    SELECT f.path
+                    FROM rest_endpoints re
+                    JOIN files f ON f.id = re.file_id
+                    WHERE re.id = eal.record_id
+                )
+                ELSE NULL
+            END AS source_file
+        FROM entity_access_links eal
+        LEFT JOIN files ef
+          ON ef.id = eal.evidence_file_id
+        WHERE eal.entity_id = ?
+        ORDER BY eal.surface, eal.link_type, label
+        """,
+        (entity["id"],),
+    ).fetchall()
+
+    access_links = [
+        {
+            "surface": row["surface"],
+            "record_id": row["record_id"],
+            "link_type": row["link_type"],
+            "label": row["label"],
+            "source_file": row["source_file"],
+            "evidence_file": row["evidence_file"],
+            "notes": row["notes"],
+        }
+        for row in rows
+    ]
+
+    dbschema_fields_by_record_id: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        if row["surface"] != "dbschema_table":
+            continue
+        record_id = str(row["record_id"])
+        if record_id in dbschema_fields_by_record_id:
+            continue
+        fields = conn.execute(
+            """
+            SELECT field_name, field_type
+            FROM dbschema_fields
+            WHERE dbschema_table_id = ?
+            ORDER BY field_name
+            """,
+            (row["record_id"],),
+        ).fetchall()
+        dbschema_fields_by_record_id[record_id] = [
+            {
+                "field_name": f["field_name"],
+                "field_type": f["field_type"],
+            }
+            for f in fields
+        ]
+
+    surface_counts: dict[str, int] = defaultdict(int)
+    link_type_counts: dict[str, int] = defaultdict(int)
+    for link in access_links:
+        surface_counts[link["surface"]] += 1
+        link_type_counts[link["link_type"]] += 1
+
+    data = {
+        "entity": _entity_payload(entity),
+        "access_links": access_links,
+        "dbschema_fields_by_record_id": {
+            key: dbschema_fields_by_record_id[key]
+            for key in sorted(dbschema_fields_by_record_id, key=int)
+        },
+    }
+    summary = {
+        "access_link_count": len(access_links),
+        "surface_counts": {k: surface_counts[k] for k in sorted(surface_counts)},
+        "link_type_counts": {k: link_type_counts[k] for k in sorted(link_type_counts)},
+    }
+    return data, summary
+
+
+def _collect_root_symbols_json(
+    conn: sqlite3.Connection, entity: sqlite3.Row, min_weight: float
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    roots = [
+        {
+            "symbol_id": row["id"],
+            "name": row["name"],
+            "kind": row["kind"],
+            "role": row["role"],
+            "weight": row["weight"],
+            "reason": row["reason"],
+        }
+        for row in get_root_symbols(conn, entity["id"], min_weight)
+    ]
+    data = {
+        "entity": _entity_payload(entity),
+        "roots": roots,
+    }
+    summary = {
+        "root_count": len(roots),
+        "min_weight": min_weight,
+    }
+    return data, summary
+
+
+def _relationship_outgoing_payload(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "relationship_type": row["relationship_type"],
+        "target_symbol_id": row["target_symbol_id"],
+        "target_name": row["target_name"],
+        "target_kind": row["target_kind"],
+        "confidence": row["confidence"],
+        "file_path": row["file_path"],
+    }
+
+
+def _relationship_incoming_payload(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "relationship_type": row["relationship_type"],
+        "source_symbol_id": row["source_symbol_id"],
+        "source_name": row["source_name"],
+        "source_kind": row["source_kind"],
+        "confidence": row["confidence"],
+        "file_path": row["file_path"],
+    }
+
+
+def _collect_direct_impact_json(
+    conn: sqlite3.Connection,
+    entity: sqlite3.Row,
+    min_confidence: float,
+    per_symbol_limit: int,
+    core_only: bool,
+    min_weight: float,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    seed_rows = _seed_symbols(
+        conn=conn,
+        entity_id=entity["id"],
+        core_only=core_only,
+        min_weight=min_weight,
+    )
+
+    seed_symbols: list[dict[str, Any]] = []
+    symbol_impacts: list[dict[str, Any]] = []
+    outgoing_edge_count = 0
+    incoming_edge_count = 0
+    related_files_seen: set[str] = set()
+
+    for row in seed_rows:
+        seed_symbols.append(
+            {
+                "symbol_id": row["id"],
+                "name": row["name"],
+                "kind": row["kind"],
+                "seed_type": "root" if "role" in row.keys() else "mapped_symbol",
+                "mapping_type": row["mapping_type"] if "mapping_type" in row.keys() else None,
+                "confidence": row["confidence"] if "confidence" in row.keys() else None,
+                "role": row["role"] if "role" in row.keys() else None,
+                "weight": row["weight"] if "weight" in row.keys() else None,
+            }
+        )
+
+        outgoing_rows = get_outgoing_relationships(conn, row["id"], min_confidence)[
+            :per_symbol_limit
+        ]
+        incoming_rows = get_incoming_relationships(conn, row["id"], min_confidence)[
+            :per_symbol_limit
+        ]
+        file_rows = get_symbol_files(conn, row["id"], limit=10)
+
+        outgoing_edge_count += len(outgoing_rows)
+        incoming_edge_count += len(incoming_rows)
+
+        related_files = [f["file_path"] for f in file_rows]
+        related_files_seen.update(related_files)
+
+        symbol_impacts.append(
+            {
+                "seed_symbol_id": row["id"],
+                "outgoing": [_relationship_outgoing_payload(r) for r in outgoing_rows],
+                "incoming": [_relationship_incoming_payload(r) for r in incoming_rows],
+                "related_files": related_files,
+            }
+        )
+
+    data = {
+        "entity": _entity_payload(entity),
+        "seed_symbols": seed_symbols,
+        "symbol_impacts": symbol_impacts,
+    }
+    summary = {
+        "seed_count": len(seed_symbols),
+        "outgoing_edge_count": outgoing_edge_count,
+        "incoming_edge_count": incoming_edge_count,
+        "related_file_count": len(related_files_seen),
+    }
+    return data, summary
+
+
+def _collect_impact_json(
+    conn: sqlite3.Connection,
+    entity: sqlite3.Row,
+    depth: int,
+    min_confidence: float,
+    include_incoming: bool,
+    include_outgoing: bool,
+    core_only: bool,
+    min_weight: float,
+    max_edges_per_node: int,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    seed_rows = _seed_symbols(
+        conn=conn,
+        entity_id=entity["id"],
+        core_only=core_only,
+        min_weight=min_weight,
+    )
+
+    discovered = bfs_impact(
+        conn=conn,
+        seed_symbols=seed_rows,
+        max_depth=depth,
+        min_confidence=min_confidence,
+        include_incoming=include_incoming,
+        include_outgoing=include_outgoing,
+        max_edges_per_node=max_edges_per_node,
+    )
+
+    node_ids = {node.symbol_id for node in discovered}
+    nodes = [
+        {
+            "symbol_id": node.symbol_id,
+            "name": node.name,
+            "kind": node.kind,
+            "depth": node.depth,
+            "is_seed": node.depth == 0,
+        }
+        for node in discovered
+    ]
+
+    edge_set: set[tuple[int, int, str, str, float, str | None]] = set()
+    for node in discovered:
+        if node.depth >= depth:
+            continue
+
+        if include_outgoing:
+            for row in get_outgoing_relationships(conn, node.symbol_id, min_confidence)[
+                :max_edges_per_node
+            ]:
+                target_id = row["target_symbol_id"]
+                if target_id is None or target_id not in node_ids:
+                    continue
+                edge_set.add(
+                    (
+                        node.symbol_id,
+                        target_id,
+                        row["relationship_type"],
+                        "out",
+                        float(row["confidence"] or 0.0),
+                        row["file_path"],
+                    )
+                )
+
+        if include_incoming:
+            for row in get_incoming_relationships(conn, node.symbol_id, min_confidence)[
+                :max_edges_per_node
+            ]:
+                source_id = row["source_symbol_id"]
+                if source_id is None or source_id not in node_ids:
+                    continue
+                edge_set.add(
+                    (
+                        source_id,
+                        node.symbol_id,
+                        row["relationship_type"],
+                        "in",
+                        float(row["confidence"] or 0.0),
+                        row["file_path"],
+                    )
+                )
+
+    edges = [
+        {
+            "from_symbol_id": from_symbol_id,
+            "to_symbol_id": to_symbol_id,
+            "relationship_type": relationship_type,
+            "direction": direction,
+            "confidence": confidence,
+            "file_path": file_path,
+        }
+        for (
+            from_symbol_id,
+            to_symbol_id,
+            relationship_type,
+            direction,
+            confidence,
+            file_path,
+        ) in sorted(edge_set)
+    ]
+
+    by_kind_counts: dict[str, int] = defaultdict(int)
+    by_depth_counts: dict[int, int] = defaultdict(int)
+    for node in nodes:
+        by_kind_counts[node["kind"]] += 1
+        by_depth_counts[node["depth"]] += 1
+
+    data = {
+        "entity": _entity_payload(entity),
+        "traversal": {
+            "nodes": nodes,
+            "edges": edges,
+        },
+    }
+    summary = {
+        "node_count": len(nodes),
+        "edge_count": len(edges),
+        "by_kind": {k: by_kind_counts[k] for k in sorted(by_kind_counts)},
+        "by_depth": {
+            str(k): by_depth_counts[k]
+            for k in sorted(by_depth_counts)
+        },
+    }
+    return data, summary
+
+
+def _collect_risk_json(
+    conn: sqlite3.Connection,
+    entity: sqlite3.Row,
+    depth: int,
+    min_confidence: float,
+    max_edges_per_node: int,
+    core_only: bool,
+    min_weight: float,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    seed_symbols = _seed_symbols(
+        conn=conn,
+        entity_id=entity["id"],
+        core_only=core_only,
+        min_weight=min_weight,
+    )
+
+    discovered = bfs_impact(
+        conn=conn,
+        seed_symbols=seed_symbols,
+        max_depth=depth,
+        min_confidence=min_confidence,
+        include_incoming=True,
+        include_outgoing=True,
+        max_edges_per_node=max_edges_per_node,
+    )
+
+    incoming_count = 0
+    outgoing_count = 0
+    expansion_points: dict[str, int] = defaultdict(int)
+    for node in discovered:
+        if node.direction == "in":
+            incoming_count += 1
+        elif node.direction == "out":
+            outgoing_count += 1
+        expansion_points[node.from_symbol or "seed"] += 1
+
+    top_expansion_points = [
+        {
+            "symbol_name": symbol_name,
+            "count": count,
+        }
+        for symbol_name, count in sorted(
+            expansion_points.items(), key=lambda x: (-x[1], x[0])
+        )[:20]
+    ]
+
+    metrics = {
+        "seed_count": len(seed_symbols),
+        "discovered_count": len(discovered),
+        "incoming_count": incoming_count,
+        "outgoing_count": outgoing_count,
+    }
+    data = {
+        "entity": _entity_payload(entity),
+        "metrics": metrics,
+        "top_expansion_points": top_expansion_points,
+    }
+    summary = dict(metrics)
+    return data, summary
 
 
 def show_entity(conn: sqlite3.Connection, entity_name: str) -> int:
@@ -614,6 +1284,28 @@ def entity(
     """Show mapped symbols for an entity."""
     selected_views = sum([workflow, flow, openapispec, access])
     if selected_views > 1:
+        if json_output:
+            emit_json(
+                error_response(
+                    command="entity",
+                    args={
+                        "entity_name": entity_name,
+                        "workflow": workflow,
+                        "flow": flow,
+                        "openapispec": openapispec,
+                        "access": access,
+                    },
+                    code="invalid_flags",
+                    message="Use only one of --workflow, --flow, --openapispec, or --access",
+                    details={
+                        "workflow": workflow,
+                        "flow": flow,
+                        "openapispec": openapispec,
+                        "access": access,
+                    },
+                )
+            )
+            return
         raise click.ClickException(
             "Use only one of --workflow, --flow, --openapispec, or --access"
         )
@@ -631,35 +1323,45 @@ def entity(
             elif access:
                 selected = "access"
 
-            if workflow:
-                code, output = _capture_report_output(
-                    lambda: show_workflow_view(conn, entity_name)
-                )
-            elif flow:
-                code, output = _capture_report_output(
-                    lambda: show_flow_view(conn, entity_name)
-                )
-            elif openapispec:
-                code, output = _capture_report_output(
-                    lambda: show_openapispec_view(conn, entity_name)
-                )
-            elif access:
-                code, output = _capture_report_output(
-                    lambda: show_access_view(conn, entity_name)
-                )
-            else:
-                code, output = _capture_report_output(lambda: show_entity(conn, entity_name))
+            args = {
+                "entity_name": entity_name,
+                "view": selected,
+                "workflow": workflow,
+                "flow": flow,
+                "openapispec": openapispec,
+                "access": access,
+            }
 
-            _emit_json(
-                {
-                    "query": {
-                        "command": "entity",
-                        "entity_name": entity_name,
-                        "view": selected,
-                    },
-                    "exit_code": code,
-                    "report": output,
-                }
+            entity_row, error_payload = _get_entity_or_error(
+                conn,
+                command="entity",
+                args=args,
+                entity_name=entity_name,
+            )
+            if error_payload is not None:
+                emit_json(error_payload)
+                return
+
+            assert entity_row is not None
+
+            if workflow:
+                data, summary = _collect_entity_workflow_json(conn, entity_row)
+            elif flow:
+                data, summary = _collect_entity_flow_json(conn, entity_row)
+            elif openapispec:
+                data, summary = _collect_entity_openapispec_json(conn, entity_row)
+            elif access:
+                data, summary = _collect_entity_access_json(conn, entity_row)
+            else:
+                data, summary = _collect_entity_default_json(conn, entity_row)
+
+            emit_json(
+                success_response(
+                    command="entity",
+                    args=args,
+                    data=data,
+                    summary=summary,
+                )
             )
             return
 
@@ -695,19 +1397,29 @@ def root_symbols(entity_name: str, db: str, min_weight: float, json_output: bool
     conn = get_connection(db)
     try:
         if json_output:
-            code, output = _capture_report_output(
-                lambda: show_root_symbols(conn, entity_name, min_weight)
+            args = {
+                "entity_name": entity_name,
+                "min_weight": min_weight,
+            }
+            entity_row, error_payload = _get_entity_or_error(
+                conn,
+                command="root-symbols",
+                args=args,
+                entity_name=entity_name,
             )
-            _emit_json(
-                {
-                    "query": {
-                        "command": "root-symbols",
-                        "entity_name": entity_name,
-                        "min_weight": min_weight,
-                    },
-                    "exit_code": code,
-                    "report": output,
-                }
+            if error_payload is not None:
+                emit_json(error_payload)
+                return
+
+            assert entity_row is not None
+            data, summary = _collect_root_symbols_json(conn, entity_row, min_weight)
+            emit_json(
+                success_response(
+                    command="root-symbols",
+                    args=args,
+                    data=data,
+                    summary=summary,
+                )
             )
             return
         raise SystemExit(show_root_symbols(conn, entity_name, min_weight))
@@ -753,29 +1465,39 @@ def direct_impact(
     conn = get_connection(db)
     try:
         if json_output:
-            code, output = _capture_report_output(
-                lambda: show_direct_impact(
-                    conn=conn,
-                    entity_name=entity_name,
-                    min_confidence=min_confidence,
-                    per_symbol_limit=per_symbol_limit,
-                    core_only=core_only,
-                    min_weight=min_weight,
-                )
+            args = {
+                "entity_name": entity_name,
+                "min_confidence": min_confidence,
+                "core_only": core_only,
+                "min_weight": min_weight,
+                "per_symbol_limit": per_symbol_limit,
+            }
+            entity_row, error_payload = _get_entity_or_error(
+                conn,
+                command="direct-impact",
+                args=args,
+                entity_name=entity_name,
             )
-            _emit_json(
-                {
-                    "query": {
-                        "command": "direct-impact",
-                        "entity_name": entity_name,
-                        "min_confidence": min_confidence,
-                        "core_only": core_only,
-                        "min_weight": min_weight,
-                        "per_symbol_limit": per_symbol_limit,
-                    },
-                    "exit_code": code,
-                    "report": output,
-                }
+            if error_payload is not None:
+                emit_json(error_payload)
+                return
+
+            assert entity_row is not None
+            data, summary = _collect_direct_impact_json(
+                conn=conn,
+                entity=entity_row,
+                min_confidence=min_confidence,
+                per_symbol_limit=per_symbol_limit,
+                core_only=core_only,
+                min_weight=min_weight,
+            )
+            emit_json(
+                success_response(
+                    command="direct-impact",
+                    args=args,
+                    data=data,
+                    summary=summary,
+                )
             )
             return
         raise SystemExit(
@@ -837,41 +1559,12 @@ def impact(
     json_output: bool,
 ) -> None:
     """Show impact analysis; depth=1 uses direct impact, depth>1 uses BFS traversal."""
-    include_incoming, include_outgoing = _resolve_direction_flags(
-        incoming_only, outgoing_only
-    )
-    conn = get_connection(db)
-    try:
+    if incoming_only and outgoing_only:
         if json_output:
-            if depth <= 1:
-                code, output = _capture_report_output(
-                    lambda: show_direct_impact(
-                        conn=conn,
-                        entity_name=entity_name,
-                        min_confidence=min_confidence,
-                        per_symbol_limit=max_edges_per_node,
-                        core_only=core_only,
-                        min_weight=min_weight,
-                    )
-                )
-            else:
-                code, output = _capture_report_output(
-                    lambda: show_bfs_impact(
-                        conn=conn,
-                        entity_name=entity_name,
-                        depth=depth,
-                        min_confidence=min_confidence,
-                        include_incoming=include_incoming,
-                        include_outgoing=include_outgoing,
-                        max_edges_per_node=max_edges_per_node,
-                        core_only=core_only,
-                        min_weight=min_weight,
-                    )
-                )
-            _emit_json(
-                {
-                    "query": {
-                        "command": "impact",
+            emit_json(
+                error_response(
+                    command="impact",
+                    args={
                         "entity_name": entity_name,
                         "depth": depth,
                         "min_confidence": min_confidence,
@@ -881,9 +1574,61 @@ def impact(
                         "min_weight": min_weight,
                         "max_edges_per_node": max_edges_per_node,
                     },
-                    "exit_code": code,
-                    "report": output,
-                }
+                    code="invalid_flags",
+                    message="Use only one of --incoming-only or --outgoing-only",
+                    details={
+                        "incoming_only": incoming_only,
+                        "outgoing_only": outgoing_only,
+                    },
+                )
+            )
+            return
+        raise click.ClickException("Use only one of --incoming-only or --outgoing-only")
+
+    include_incoming, include_outgoing = _resolve_direction_flags(incoming_only, outgoing_only)
+
+    conn = get_connection(db)
+    try:
+        if json_output:
+            args = {
+                "entity_name": entity_name,
+                "depth": depth,
+                "min_confidence": min_confidence,
+                "incoming_only": incoming_only,
+                "outgoing_only": outgoing_only,
+                "core_only": core_only,
+                "min_weight": min_weight,
+                "max_edges_per_node": max_edges_per_node,
+            }
+            entity_row, error_payload = _get_entity_or_error(
+                conn,
+                command="impact",
+                args=args,
+                entity_name=entity_name,
+            )
+            if error_payload is not None:
+                emit_json(error_payload)
+                return
+
+            assert entity_row is not None
+            data, summary = _collect_impact_json(
+                conn=conn,
+                entity=entity_row,
+                depth=depth,
+                min_confidence=min_confidence,
+                include_incoming=include_incoming,
+                include_outgoing=include_outgoing,
+                core_only=core_only,
+                min_weight=min_weight,
+                max_edges_per_node=max_edges_per_node,
+            )
+            emit_json(
+                success_response(
+                    command="impact",
+                    args=args,
+                    data=data,
+                    summary=summary,
+                )
             )
             return
         if depth <= 1:
@@ -947,31 +1692,41 @@ def risk(
     conn = get_connection(db)
     try:
         if json_output:
-            code, output = _capture_report_output(
-                lambda: show_risk_summary(
-                    conn=conn,
-                    entity_name=entity_name,
-                    depth=depth,
-                    min_confidence=min_confidence,
-                    max_edges_per_node=max_edges_per_node,
-                    core_only=core_only,
-                    min_weight=min_weight,
-                )
+            args = {
+                "entity_name": entity_name,
+                "depth": depth,
+                "min_confidence": min_confidence,
+                "core_only": core_only,
+                "min_weight": min_weight,
+                "max_edges_per_node": max_edges_per_node,
+            }
+            entity_row, error_payload = _get_entity_or_error(
+                conn,
+                command="risk",
+                args=args,
+                entity_name=entity_name,
             )
-            _emit_json(
-                {
-                    "query": {
-                        "command": "risk",
-                        "entity_name": entity_name,
-                        "depth": depth,
-                        "min_confidence": min_confidence,
-                        "core_only": core_only,
-                        "min_weight": min_weight,
-                        "max_edges_per_node": max_edges_per_node,
-                    },
-                    "exit_code": code,
-                    "report": output,
-                }
+            if error_payload is not None:
+                emit_json(error_payload)
+                return
+
+            assert entity_row is not None
+            data, summary = _collect_risk_json(
+                conn=conn,
+                entity=entity_row,
+                depth=depth,
+                min_confidence=min_confidence,
+                max_edges_per_node=max_edges_per_node,
+                core_only=core_only,
+                min_weight=min_weight,
+            )
+            emit_json(
+                success_response(
+                    command="risk",
+                    args=args,
+                    data=data,
+                    summary=summary,
+                )
             )
             return
         raise SystemExit(

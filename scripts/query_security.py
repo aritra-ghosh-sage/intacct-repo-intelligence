@@ -4,10 +4,20 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sys
 
 import click
 
-from catalog.db import get_connection
+try:
+    from catalog.db import get_connection
+except ModuleNotFoundError:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from catalog.db import get_connection
+
+try:
+    from ._query_json import emit_json, error_response, success_response
+except ImportError:
+    from _query_json import emit_json, error_response, success_response
 
 DEFAULT_DB = "catalog/catalog.db"
 PARSE_FAILURES_LOG = Path("outputs/security_parse_failures.jsonl")
@@ -18,10 +28,6 @@ CONFLICTS_LOG = Path("outputs/security_conflicts.jsonl")
 @click.group()
 def cli() -> None:
     pass
-
-
-def _emit_json(payload: dict[str, object]) -> None:
-    click.echo(json.dumps(payload, ensure_ascii=True))
 
 
 def _read_jsonl(path: Path) -> list[dict]:
@@ -56,16 +62,19 @@ def stats_command(db: str, json_output: bool) -> None:
             "dbschema_fields",
         ]
         if json_output:
-            _emit_json(
-                {
-                    "query": {"command": "stats"},
-                    "counts": {
+            counts = {
                         table: conn.execute(
                             f"SELECT COUNT(*) AS c FROM {table}"
                         ).fetchone()["c"]
                         for table in tables
-                    },
-                }
+                    }
+            emit_json(
+                success_response(
+                    command="stats",
+                    args={"db": db},
+                    data={"counts": counts},
+                    summary={"table_count": len(counts)},
+                )
             )
             return
         for table in tables:
@@ -105,11 +114,14 @@ def op_command(key_or_id: str, db: str, json_output: bool) -> None:
 
         if not rows:
             if json_output:
-                _emit_json(
-                    {
-                        "query": {"command": "op", "key_or_id": key_or_id},
-                        "error": "not_found",
-                    }
+                emit_json(
+                    error_response(
+                        command="op",
+                        args={"key_or_id": key_or_id, "db": db},
+                        code="not_found",
+                        message="No matching operations found.",
+                        details={"key_or_id": key_or_id},
+                    )
                 )
                 return
             click.echo("No matching operations found.")
@@ -133,11 +145,13 @@ def op_command(key_or_id: str, db: str, json_output: bool) -> None:
                         "allowops": [allow["allowed_op_key"] for allow in allowops],
                     }
                 )
-            _emit_json(
-                {
-                    "query": {"command": "op", "key_or_id": key_or_id},
-                    "matches": payload_rows,
-                }
+            emit_json(
+                success_response(
+                    command="op",
+                    args={"key_or_id": key_or_id, "db": db},
+                    data={"matches": payload_rows},
+                    summary={"match_count": len(payload_rows)},
+                )
             )
             return
 
@@ -181,14 +195,14 @@ def policy_command(name_fragment: str, db: str, json_output: bool) -> None:
         ).fetchall()
         if not rows:
             if json_output:
-                _emit_json(
-                    {
-                        "query": {
-                            "command": "policy",
-                            "name_fragment": name_fragment,
-                        },
-                        "error": "not_found",
-                    }
+                emit_json(
+                    error_response(
+                        command="policy",
+                        args={"name_fragment": name_fragment, "db": db},
+                        code="not_found",
+                        message="No matching policies found.",
+                        details={"name_fragment": name_fragment},
+                    )
                 )
                 return
             click.echo("No matching policies found.")
@@ -225,14 +239,13 @@ def policy_command(name_fragment: str, db: str, json_output: bool) -> None:
                     )
                 matches.append({"policy": dict(row), "values": value_payload})
 
-            _emit_json(
-                {
-                    "query": {
-                        "command": "policy",
-                        "name_fragment": name_fragment,
-                    },
-                    "matches": matches,
-                }
+            emit_json(
+                success_response(
+                    command="policy",
+                    args={"name_fragment": name_fragment, "db": db},
+                    data={"matches": matches},
+                    summary={"match_count": len(matches)},
+                )
             )
             return
 
@@ -296,21 +309,27 @@ def menu_command(key_fragment: str, db: str, json_output: bool) -> None:
         ).fetchall()
         if not rows:
             if json_output:
-                _emit_json(
-                    {
-                        "query": {"command": "menu", "key_fragment": key_fragment},
-                        "error": "not_found",
-                    }
+                emit_json(
+                    error_response(
+                        command="menu",
+                        args={"key_fragment": key_fragment, "db": db},
+                        code="not_found",
+                        message="No matching menu links found.",
+                        details={"key_fragment": key_fragment},
+                    )
                 )
                 return
             click.echo("No matching menu links found.")
             return
         if json_output:
-            _emit_json(
-                {
-                    "query": {"command": "menu", "key_fragment": key_fragment},
-                    "matches": [dict(row) for row in rows],
-                }
+            matches = [dict(row) for row in rows]
+            emit_json(
+                success_response(
+                    command="menu",
+                    args={"key_fragment": key_fragment, "db": db},
+                    data={"matches": matches},
+                    summary={"match_count": len(matches)},
+                )
             )
             return
         for row in rows:
@@ -340,11 +359,14 @@ def can_command(op_key: str, db: str, json_output: bool) -> None:
         ).fetchall()
         if not ops:
             if json_output:
-                _emit_json(
-                    {
-                        "query": {"command": "can", "op_key": op_key},
-                        "error": "not_found",
-                    }
+                emit_json(
+                    error_response(
+                        command="can",
+                        args={"op_key": op_key, "db": db},
+                        code="not_found",
+                        message="No matching operation key found.",
+                        details={"op_key": op_key},
+                    )
                 )
                 return
             click.echo("No matching operation key found.")
@@ -390,13 +412,24 @@ def can_command(op_key: str, db: str, json_output: bool) -> None:
         ).fetchall()
 
         if json_output:
-            _emit_json(
-                {
-                    "query": {"command": "can", "op_key": op_key},
-                    "operations": [dict(op) for op in ops],
-                    "policy_buckets": [dict(row) for row in policy_rows],
-                    "menu_locations": [dict(row) for row in menu_rows],
-                }
+            operations = [dict(op) for op in ops]
+            policy_buckets = [dict(row) for row in policy_rows]
+            menu_locations = [dict(row) for row in menu_rows]
+            emit_json(
+                success_response(
+                    command="can",
+                    args={"op_key": op_key, "db": db},
+                    data={
+                        "operations": operations,
+                        "policy_buckets": policy_buckets,
+                        "menu_locations": menu_locations,
+                    },
+                    summary={
+                        "operation_count": len(operations),
+                        "policy_bucket_count": len(policy_buckets),
+                        "menu_location_count": len(menu_locations),
+                    },
+                )
             )
             return
 
@@ -446,12 +479,26 @@ def unresolved_command(kind: str, json_output: bool) -> None:
         rows = [row for row in rows if str(row.get("category", "")).startswith(prefix)]
     if not rows:
         if json_output:
-            _emit_json({"query": {"command": "unresolved", "kind": kind}, "rows": []})
+            emit_json(
+                success_response(
+                    command="unresolved",
+                    args={"kind": kind},
+                    data={"rows": []},
+                    summary={"row_count": 0},
+                )
+            )
             return
         click.echo("No unresolved rows.")
         return
     if json_output:
-        _emit_json({"query": {"command": "unresolved", "kind": kind}, "rows": rows})
+        emit_json(
+            success_response(
+                command="unresolved",
+                args={"kind": kind},
+                data={"rows": rows},
+                summary={"row_count": len(rows)},
+            )
+        )
         return
     for row in rows:
         click.echo(json.dumps(row, ensure_ascii=True))
@@ -463,12 +510,26 @@ def failures_command(json_output: bool) -> None:
     rows = _read_jsonl(PARSE_FAILURES_LOG)
     if not rows:
         if json_output:
-            _emit_json({"query": {"command": "failures"}, "rows": []})
+            emit_json(
+                success_response(
+                    command="failures",
+                    args={},
+                    data={"rows": []},
+                    summary={"row_count": 0},
+                )
+            )
             return
         click.echo("No parse failures logged.")
         return
     if json_output:
-        _emit_json({"query": {"command": "failures"}, "rows": rows})
+        emit_json(
+            success_response(
+                command="failures",
+                args={},
+                data={"rows": rows},
+                summary={"row_count": len(rows)},
+            )
+        )
         return
     for row in rows:
         click.echo(json.dumps(row, ensure_ascii=True))
@@ -480,12 +541,26 @@ def conflicts_command(json_output: bool) -> None:
     rows = _read_jsonl(CONFLICTS_LOG)
     if not rows:
         if json_output:
-            _emit_json({"query": {"command": "conflicts"}, "rows": []})
+            emit_json(
+                success_response(
+                    command="conflicts",
+                    args={},
+                    data={"rows": []},
+                    summary={"row_count": 0},
+                )
+            )
             return
         click.echo("No conflicts logged.")
         return
     if json_output:
-        _emit_json({"query": {"command": "conflicts"}, "rows": rows})
+        emit_json(
+            success_response(
+                command="conflicts",
+                args={},
+                data={"rows": rows},
+                summary={"row_count": len(rows)},
+            )
+        )
         return
     for row in rows:
         click.echo(json.dumps(row, ensure_ascii=True))

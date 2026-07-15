@@ -1,7 +1,6 @@
 # scripts/query_workflow.py
 
 from collections import defaultdict
-import json
 import click
 import sys
 from pathlib import Path
@@ -13,19 +12,20 @@ except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from catalog.db import get_connection
 
+try:
+    from ._query_json import emit_json, error_response, success_response
+except ImportError:
+    from _query_json import emit_json, error_response, success_response
+
 
 @click.group()
 def cli():
     pass
 
 
-def _emit_json(payload: dict[str, object]) -> None:
-    click.echo(json.dumps(payload, ensure_ascii=True))
-
-
 def get_entity(conn, entity_name):
     return conn.execute(
-        "SELECT * FROM entity_nodes WHERE name = ?",
+        "SELECT * FROM entity_nodes WHERE lower(name) = ?",
         (entity_name,),
     ).fetchone()
 
@@ -86,15 +86,17 @@ def list_workflows(entity_name, db, workflow_type, json_output):
 
     if grouped is None:
         if json_output:
-            _emit_json(
-                {
-                    "query": {
-                        "command": "list",
+            emit_json(
+                error_response(
+                    command="list",
+                    args={
                         "entity_name": entity_name,
                         "workflow_type": workflow_type,
                     },
-                    "error": "entity_not_found",
-                }
+                    code="entity_not_found",
+                    message=f"Entity not found: {entity_name}",
+                    details={"entity_name": entity_name},
+                )
             )
             conn.close()
             return
@@ -103,14 +105,7 @@ def list_workflows(entity_name, db, workflow_type, json_output):
         return
 
     if json_output:
-        _emit_json(
-            {
-                "query": {
-                    "command": "list",
-                    "entity_name": entity_name,
-                    "workflow_type": workflow_type,
-                },
-                "workflows": {
+        workflows = {
                     wf_type: [
                         {
                             "id": wf_id,
@@ -121,8 +116,23 @@ def list_workflows(entity_name, db, workflow_type, json_output):
                         for wf_id, wf_name, source_kind, source_file in items
                     ]
                     for wf_type, items in sorted(grouped.items())
+                }
+        emit_json(
+            success_response(
+                command="list",
+                args={
+                    "entity_name": entity_name,
+                    "workflow_type": workflow_type,
                 },
-            }
+                data={"workflows_by_type": workflows},
+                summary={
+                    "workflow_count": sum(len(items) for items in workflows.values()),
+                    "workflow_type_counts": {
+                        wf_type: len(workflows[wf_type])
+                        for wf_type in sorted(workflows)
+                    },
+                },
+            )
         )
         conn.close()
         return
@@ -146,15 +156,17 @@ def show_entity_workflows(entity_name, db, workflow_type, json_output):
 
     if grouped is None:
         if json_output:
-            _emit_json(
-                {
-                    "query": {
-                        "command": "entity",
+            emit_json(
+                error_response(
+                    command="entity",
+                    args={
                         "entity_name": entity_name,
                         "workflow_type": workflow_type,
                     },
-                    "error": "entity_not_found",
-                }
+                    code="entity_not_found",
+                    message=f"Entity not found: {entity_name}",
+                    details={"entity_name": entity_name},
+                )
             )
             conn.close()
             return
@@ -163,14 +175,7 @@ def show_entity_workflows(entity_name, db, workflow_type, json_output):
         return
 
     if json_output:
-        _emit_json(
-            {
-                "query": {
-                    "command": "entity",
-                    "entity_name": entity_name,
-                    "workflow_type": workflow_type,
-                },
-                "workflows": {
+        workflows = {
                     wf_type: [
                         {
                             "id": wf_id,
@@ -181,8 +186,23 @@ def show_entity_workflows(entity_name, db, workflow_type, json_output):
                         for wf_id, wf_name, source_kind, source_file in items
                     ]
                     for wf_type, items in sorted(grouped.items())
+                }
+        emit_json(
+            success_response(
+                command="entity",
+                args={
+                    "entity_name": entity_name,
+                    "workflow_type": workflow_type,
                 },
-            }
+                data={"workflows_by_type": workflows},
+                summary={
+                    "workflow_count": sum(len(items) for items in workflows.values()),
+                    "workflow_type_counts": {
+                        wf_type: len(workflows[wf_type])
+                        for wf_type in sorted(workflows)
+                    },
+                },
+            )
         )
         conn.close()
         return

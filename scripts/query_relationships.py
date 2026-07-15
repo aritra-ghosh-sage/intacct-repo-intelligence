@@ -17,12 +17,13 @@ except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from catalog.db import get_connection
 
+try:
+    from ._query_json import emit_json, success_response
+except ImportError:
+    from _query_json import emit_json, success_response
+
 
 DEFAULT_DB = os.environ.get("CATALOG_DB", "catalog/catalog.db")
-
-
-def _emit_json(payload: dict[str, object]) -> None:
-    click.echo(json.dumps(payload, ensure_ascii=True))
 
 
 def _relationship_row_to_dict(row: sqlite3.Row) -> dict[str, object]:
@@ -499,7 +500,18 @@ def cli() -> None:
 def stats(db: str, json_output: bool) -> None:
     conn = get_connection(db)
     if json_output:
-        _emit_json({"query": {"command": "stats"}, **_fetch_stats_payload(conn)})
+        stats_payload = _fetch_stats_payload(conn)
+        emit_json(
+            success_response(
+                command="stats",
+                args={"db": db},
+                data={
+                    "by_relationship_type": stats_payload["by_relationship_type"],
+                    "by_resolution_class": stats_payload.get("by_resolution_class", []),
+                },
+                summary={"total_relationships": stats_payload["total_relationships"]},
+            )
+        )
         conn.close()
         return
     show_stats(conn)
@@ -522,17 +534,19 @@ def deps(name: str, db: str, limit: int, classes: str, json_output: bool) -> Non
     parsed_classes = parse_resolution_classes(classes)
     if json_output:
         rows = _fetch_deps_rows(conn, name, limit, parsed_classes)
-        _emit_json(
-            {
-                "query": {
-                    "command": "deps",
+        relationships = [_relationship_row_to_dict(r) for r in rows]
+        emit_json(
+            success_response(
+                command="deps",
+                args={
                     "name": name,
+                    "db": db,
                     "limit": limit,
                     "classes": parsed_classes,
                 },
-                "count": len(rows),
-                "relationships": [_relationship_row_to_dict(r) for r in rows],
-            }
+                data={"relationships": relationships},
+                summary={"count": len(relationships)},
+            )
         )
         conn.close()
         return
@@ -556,17 +570,19 @@ def rdeps(name: str, db: str, limit: int, classes: str, json_output: bool) -> No
     parsed_classes = parse_resolution_classes(classes)
     if json_output:
         rows = _fetch_rdeps_rows(conn, name, limit, parsed_classes)
-        _emit_json(
-            {
-                "query": {
-                    "command": "rdeps",
+        relationships = [_relationship_row_to_dict(r) for r in rows]
+        emit_json(
+            success_response(
+                command="rdeps",
+                args={
                     "name": name,
+                    "db": db,
                     "limit": limit,
                     "classes": parsed_classes,
                 },
-                "count": len(rows),
-                "relationships": [_relationship_row_to_dict(r) for r in rows],
-            }
+                data={"relationships": relationships},
+                summary={"count": len(relationships)},
+            )
         )
         conn.close()
         return
@@ -592,17 +608,19 @@ def unresolved(
     parsed_classes = parse_resolution_classes(classes)
     if json_output:
         rows = _fetch_unresolved_rows(conn, name, limit, parsed_classes)
-        _emit_json(
-            {
-                "query": {
-                    "command": "unresolved",
+        relationships = [_relationship_row_to_dict(r) for r in rows]
+        emit_json(
+            success_response(
+                command="unresolved",
+                args={
                     "name": name,
+                    "db": db,
                     "limit": limit,
                     "classes": parsed_classes,
                 },
-                "count": len(rows),
-                "relationships": [_relationship_row_to_dict(r) for r in rows],
-            }
+                data={"relationships": relationships},
+                summary={"count": len(relationships)},
+            )
         )
         conn.close()
         return
@@ -626,17 +644,19 @@ def files(name: str, db: str, limit: int, classes: str, json_output: bool) -> No
     parsed_classes = parse_resolution_classes(classes)
     if json_output:
         rows = _fetch_files_rows(conn, name, limit, parsed_classes)
-        _emit_json(
-            {
-                "query": {
-                    "command": "files",
+        files_payload = [r["file_path"] for r in rows]
+        emit_json(
+            success_response(
+                command="files",
+                args={
                     "name": name,
+                    "db": db,
                     "limit": limit,
                     "classes": parsed_classes,
                 },
-                "count": len(rows),
-                "files": [r["file_path"] for r in rows],
-            }
+                data={"files": files_payload},
+                summary={"count": len(files_payload)},
+            )
         )
         conn.close()
         return

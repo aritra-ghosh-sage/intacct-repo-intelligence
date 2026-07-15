@@ -1,19 +1,26 @@
 # scripts/query_catalog.py
 
-import json
-
 import click
 from tabulate import tabulate
-from catalog.db import get_connection
+
+try:
+    from catalog.db import get_connection
+except ModuleNotFoundError:
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from catalog.db import get_connection
+
+try:
+    from ._query_json import emit_json, success_response
+except ImportError:
+    from _query_json import emit_json, success_response
 
 
 @click.group()
 def cli():
     pass
-
-
-def _emit_json(payload: dict[str, object]) -> None:
-    click.echo(json.dumps(payload, ensure_ascii=True))
 
 
 @cli.command()
@@ -32,19 +39,25 @@ def stats(json_output):
     """).fetchall()
 
     if json_output:
-        _emit_json(
-            {
-                "query": {"command": "stats"},
-                "total_files": total,
-                "languages": [
+        emit_json(
+            success_response(
+                command="stats",
+                args={},
+                data={
+                    "languages": [
                     {
                         "language": r["language"],
                         "file_count": r["c"],
                         "bytes": r["bytes"],
                     }
                     for r in rows
-                ],
-            }
+                    ]
+                },
+                summary={
+                    "total_files": total,
+                    "language_count": len(rows),
+                },
+            )
         )
         return
 
@@ -77,18 +90,21 @@ def find(keyword, limit, json_output):
     ).fetchall()
 
     if json_output:
-        _emit_json(
-            {
-                "query": {"command": "find", "keyword": keyword, "limit": limit},
-                "matches": [
+        matches = [
                     {
                         "path": r["path"],
                         "language": r["language"],
                         "size_bytes": r["size_bytes"],
                     }
                     for r in rows
-                ],
-            }
+                ]
+        emit_json(
+            success_response(
+                command="find",
+                args={"keyword": keyword, "limit": limit},
+                data={"matches": matches},
+                summary={"match_count": len(matches)},
+            )
         )
         return
 
@@ -116,13 +132,14 @@ def toplevel(json_output):
     """).fetchall()
 
     if json_output:
-        _emit_json(
-            {
-                "query": {"command": "toplevel"},
-                "directories": [
-                    {"top_dir": r["top_dir"], "file_count": r["c"]} for r in rows
-                ],
-            }
+        directories = [{"top_dir": r["top_dir"], "file_count": r["c"]} for r in rows]
+        emit_json(
+            success_response(
+                command="toplevel",
+                args={},
+                data={"directories": directories},
+                summary={"directory_count": len(directories)},
+            )
         )
         return
 
@@ -162,15 +179,7 @@ def symbols(keyword, kind, limit, json_output):
     rows = cur.execute(query, params).fetchall()
 
     if json_output:
-        _emit_json(
-            {
-                "query": {
-                    "command": "symbols",
-                    "keyword": keyword,
-                    "kind": kind,
-                    "limit": limit,
-                },
-                "matches": [
+        matches = [
                     {
                         "name": r["name"],
                         "kind": r["kind"],
@@ -180,8 +189,18 @@ def symbols(keyword, kind, limit, json_output):
                         "start_line": r["start_line"],
                     }
                     for r in rows
-                ],
-            }
+                ]
+        emit_json(
+            success_response(
+                command="symbols",
+                args={
+                    "keyword": keyword,
+                    "kind": kind,
+                    "limit": limit,
+                },
+                data={"matches": matches},
+                summary={"match_count": len(matches)},
+            )
         )
         return
 
@@ -218,18 +237,21 @@ def symbol_stats(json_output=False):
     """).fetchall()
 
     if json_output:
-        _emit_json(
-            {
-                "query": {"command": "symbol_stats"},
-                "stats": [
+        stats_rows = [
                     {
                         "language": r["language"],
                         "kind": r["kind"],
                         "count": r["c"],
                     }
                     for r in rows
-                ],
-            }
+                ]
+        emit_json(
+            success_response(
+                command="symbol_stats",
+                args={},
+                data={"stats": stats_rows},
+                summary={"row_count": len(stats_rows)},
+            )
         )
         return
 
@@ -265,11 +287,7 @@ def entity(entity_prefix, json_output):
     ).fetchall()
 
     if json_output:
-        _emit_json(
-            {
-                "query": {"command": "entity", "entity_prefix": entity_prefix},
-                "symbol_count": len(rows),
-                "symbols": [
+        symbols_payload = [
                     {
                         "name": r["name"],
                         "kind": r["kind"],
@@ -278,8 +296,14 @@ def entity(entity_prefix, json_output):
                         "file_path": r["path"],
                     }
                     for r in rows
-                ],
-            }
+                ]
+        emit_json(
+            success_response(
+                command="entity",
+                args={"entity_prefix": entity_prefix},
+                data={"symbols": symbols_payload},
+                summary={"symbol_count": len(symbols_payload)},
+            )
         )
         return
 

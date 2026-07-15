@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import sqlite3
 import sys
 from pathlib import Path
@@ -14,6 +13,11 @@ try:
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from catalog.db import get_connection
+
+try:
+    from ._query_json import emit_json, error_response, success_response
+except ImportError:
+    from _query_json import emit_json, error_response, success_response
 
 DEFAULT_DB = "catalog/catalog.db"
 
@@ -104,10 +108,6 @@ def _related_handler_row_to_dict(row: sqlite3.Row) -> dict[str, object]:
         "relationship_type": row["relationship_type"],
         "confidence": row["confidence"],
     }
-
-
-def _emit_json(payload: dict[str, object]) -> None:
-    click.echo(json.dumps(payload, ensure_ascii=True))
 
 
 def _fetch_endpoint_rows(
@@ -335,12 +335,14 @@ def entity_command(entity_name: str, db: str, limit: int, json_output: bool) -> 
         if not entity:
             if ambiguous_matches:
                 if json_output:
-                    _emit_json(
-                        {
-                            "query": {"command": "entity", "entity_name": entity_name},
-                            "error": "ambiguous_entity_lookup",
-                            "matches": ambiguous_matches,
-                        }
+                    emit_json(
+                        error_response(
+                            command="entity",
+                            args={"entity_name": entity_name, "db": db, "limit": limit},
+                            code="ambiguous_entity_lookup",
+                            message="Entity lookup is ambiguous.",
+                            details={"matches": ambiguous_matches},
+                        )
                     )
                     return
                 click.echo(
@@ -351,11 +353,14 @@ def entity_command(entity_name: str, db: str, limit: int, json_output: bool) -> 
                     click.echo(f"  - {match}")
                 return
             if json_output:
-                _emit_json(
-                    {
-                        "query": {"command": "entity", "entity_name": entity_name},
-                        "error": "entity_not_found",
-                    }
+                emit_json(
+                    error_response(
+                        command="entity",
+                        args={"entity_name": entity_name, "db": db, "limit": limit},
+                        code="entity_not_found",
+                        message=f"Entity not found: {entity_name}",
+                        details={"entity_name": entity_name},
+                    )
                 )
                 return
             click.echo(f"Entity not found: {entity_name}")
@@ -402,17 +407,22 @@ def entity_command(entity_name: str, db: str, limit: int, json_output: bool) -> 
                 else:
                     endpoint_data["related_code_handlers"] = []
                 endpoint_rows.append(endpoint_data)
-            payload: dict[str, object] = {
-                "query": {"command": "entity", "entity_name": entity_name, "limit": limit},
+            data: dict[str, object] = {
                 "entity": entity["name"],
                 "entity_id": entity["id"],
-                "endpoint_count": len(rows),
                 "endpoint_evidence_source": endpoint_source,
                 "endpoints": endpoint_rows,
             }
             if resolved_case_from:
-                payload["resolved_case_from"] = resolved_case_from
-            _emit_json(payload)
+                data["resolved_case_from"] = resolved_case_from
+            emit_json(
+                success_response(
+                    command="entity",
+                    args={"entity_name": entity_name, "db": db, "limit": limit},
+                    data=data,
+                    summary={"endpoint_count": len(rows)},
+                )
+            )
             return
 
         click.echo(f"Entity: {entity['name']}")
@@ -452,12 +462,14 @@ def path_command(path_fragment: str, db: str, limit: int, json_output: bool) -> 
             limit=limit,
         )
         if json_output:
-            _emit_json(
-                {
-                    "query": {"command": "path", "path_fragment": path_fragment, "limit": limit},
-                    "match_count": len(rows),
-                    "endpoints": [_endpoint_row_to_dict(row) for row in rows],
-                }
+            endpoints = [_endpoint_row_to_dict(row) for row in rows]
+            emit_json(
+                success_response(
+                    command="path",
+                    args={"path_fragment": path_fragment, "db": db, "limit": limit},
+                    data={"endpoints": endpoints},
+                    summary={"match_count": len(endpoints)},
+                )
             )
             return
         click.echo(f"Path fragment: {path_fragment}")
@@ -505,12 +517,13 @@ def endpoint_command(endpoint_path: str, db: str, limit: int, json_output: bool)
                 else:
                     endpoint_data["related_code_handlers"] = []
                 endpoint_rows.append(endpoint_data)
-            _emit_json(
-                {
-                    "query": {"command": "endpoint", "endpoint_path": endpoint_path, "limit": limit},
-                    "method_count": len(rows),
-                    "endpoints": endpoint_rows,
-                }
+            emit_json(
+                success_response(
+                    command="endpoint",
+                    args={"endpoint_path": endpoint_path, "db": db, "limit": limit},
+                    data={"endpoints": endpoint_rows},
+                    summary={"method_count": len(rows)},
+                )
             )
             return
         click.echo(f"Endpoint path: {endpoint_path}")
@@ -553,11 +566,14 @@ def symbol_command(symbol_name: str, db: str, limit: int, json_output: bool) -> 
         symbol_rows = _fetch_symbol_matches(conn, symbol_name)
         if not symbol_rows:
             if json_output:
-                _emit_json(
-                    {
-                        "query": {"command": "symbol", "symbol_name": symbol_name, "limit": limit},
-                        "error": "symbol_not_found",
-                    }
+                emit_json(
+                    error_response(
+                        command="symbol",
+                        args={"symbol_name": symbol_name, "db": db, "limit": limit},
+                        code="symbol_not_found",
+                        message=f"Symbol not found: {symbol_name}",
+                        details={"symbol_name": symbol_name},
+                    )
                 )
                 return
             click.echo(f"Symbol not found: {symbol_name}")
@@ -645,13 +661,16 @@ def symbol_command(symbol_name: str, db: str, limit: int, json_output: bool) -> 
                 )
 
         if json_output:
-            _emit_json(
-                {
-                    "query": {"command": "symbol", "symbol_name": symbol_name, "limit": limit},
-                    "symbol_match_count": len(symbol_rows),
-                    "linked_endpoint_count": len(seen_endpoint_ids),
-                    "matches": json_matches,
-                }
+            emit_json(
+                success_response(
+                    command="symbol",
+                    args={"symbol_name": symbol_name, "db": db, "limit": limit},
+                    data={"matches": json_matches},
+                    summary={
+                        "symbol_match_count": len(symbol_rows),
+                        "linked_endpoint_count": len(seen_endpoint_ids),
+                    },
+                )
             )
             return
         if not rendered_any:

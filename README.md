@@ -232,3 +232,123 @@ Kùzu answers:
 
 AI systems should use Kùzu for traversal and SQLite for evidence and
 provenance.
+
+### Query JSON Contract v1
+
+This is the canonical machine-readable contract for JSON mode across all
+`scripts/query_*.py` commands.
+
+Versioning:
+
+- `contract_version: 1`
+- Backward-compatible additions are allowed.
+- Breaking field or semantics changes require a new version.
+
+Top-level envelope (required):
+
+- `contract_version`: integer
+- `query`: object
+- `status`: `ok` or `error`
+- `data`: object
+- `summary`: object
+- `error`: null or object
+
+`query` object:
+
+- `command`: command name (for example `entity`, `stats`, `deps`)
+- `args`: normalized command arguments
+
+`error` object:
+
+- `code`: stable machine code
+- `message`: human-readable error summary
+- `details`: structured context object
+
+Rules:
+
+- Use `snake_case` field names.
+- Use `null` for missing scalar values.
+- Use empty arrays/objects instead of omitting expected collection fields.
+- Keep deterministic ordering.
+- JSON mode must not include captured text reports.
+- Text mode remains unchanged for human-readable CLI output.
+
+Strict cutover:
+
+- JSON output follows this contract only.
+- Legacy ad-hoc JSON roots such as `exit_code`, `report`, or plain string
+       `error` values are not part of v1.
+
+Command-specific data schemas:
+
+#### query_entity.py
+
+`entity` command (default):
+
+- `data.entity`: `id`, `name`
+- `data.mapped_symbols`: `symbol_id`, `name`, `kind`, `mapping_type`,
+       `confidence`, `source_text`, `file_id`
+- `summary`: `mapped_symbol_count`, `mapping_type_counts`
+
+`entity --workflow`:
+
+- `data.entity`
+- `data.workflows_by_type`: `workflow_id`, `name`, `workflow_type`,
+       `source_kind`, `source_file`
+- `summary`: `workflow_count`, `workflow_type_counts`
+
+`entity --flow`:
+
+- `data.entity`
+- `data.core_roots`: `symbol_id`, `name`, `kind`, `role`, `weight`, `reason`
+- `data.db_schema_tables`: `table_name`, `primary_keys`, `field_count`,
+       `fields[]` (`field_name`, `field_type`)
+- `data.workflows_by_type`
+- `summary`: `core_root_count`, `db_table_count`, `workflow_count`
+
+`entity --openapispec`:
+
+- `data.entity`
+- `data.openapi_mappings`: `mapping_type`, `source_text`, `file_id`
+- `summary`: `openapi_mapping_count`, `mapping_type_counts`
+
+`entity --access`:
+
+- `data.entity`
+- `data.access_links`: `surface`, `record_id`, `link_type`, `label`,
+       `source_file`, `evidence_file`, `notes`
+- `data.dbschema_fields_by_record_id`: `field_name`, `field_type`
+- `summary`: `access_link_count`, `surface_counts`, `link_type_counts`
+
+`root-symbols` command:
+
+- `data.entity`
+- `data.roots`: `symbol_id`, `name`, `kind`, `role`, `weight`, `reason`
+- `summary`: `root_count`, `min_weight`
+
+`direct-impact` command:
+
+- `data.entity`
+- `data.seed_symbols`: `symbol_id`, `name`, `kind`, `seed_type`,
+       `mapping_type`, `confidence`, `role`, `weight`
+- `data.symbol_impacts`: `seed_symbol_id`, `outgoing[]`, `incoming[]`,
+       `related_files[]`
+- `summary`: `seed_count`, `outgoing_edge_count`, `incoming_edge_count`,
+       `related_file_count`
+
+`impact` command:
+
+- `data.entity`
+- `data.traversal.nodes`: `symbol_id`, `name`, `kind`, `depth`, `is_seed`
+- `data.traversal.edges`: `from_symbol_id`, `to_symbol_id`,
+       `relationship_type`, `direction`, `confidence`, `file_path`
+- `summary`: `node_count`, `edge_count`, `by_kind`, `by_depth`
+
+`risk` command:
+
+- `data.entity`
+- `data.metrics`: `seed_count`, `discovered_count`, `incoming_count`,
+       `outgoing_count`
+- `data.top_expansion_points`: `symbol_name`, `count`
+- `summary`: `seed_count`, `discovered_count`, `incoming_count`,
+       `outgoing_count`
