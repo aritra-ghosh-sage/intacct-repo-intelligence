@@ -18,7 +18,6 @@ entity_mapping.txt
 repo_tree.txt
 catalog/catalog.db-journal
 .vscode/mcp.json
-validation/*.md
 validation/*.txt
 docs/*.txt
 docs/*.csv

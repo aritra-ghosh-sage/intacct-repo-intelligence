@@ -426,7 +426,8 @@ def build(
             SELECT id, file_id, file_path, kind, canonical_name, x_mapped_to
                  , module
             FROM openapispec_index
-            WHERE file_path LIKE '%/paths/%' OR kind = 'operations'
+                        WHERE (file_path LIKE '%/paths/%' OR kind = 'operations')
+                            AND file_path NOT LIKE '%/paths/workflows.%'
             ORDER BY file_path
             """
         ).fetchall()

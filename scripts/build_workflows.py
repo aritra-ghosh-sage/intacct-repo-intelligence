@@ -445,7 +445,8 @@ def get_entity_yaml_paths(conn: sqlite3.Connection, entity_id: int) -> list[str]
     """
     Return deterministic YAML candidates wired to this entity.
 
-    Includes generic YAML mappings plus OpenAPI-derived mapping types.
+    Includes generic YAML mappings plus OpenAPI-derived YAML mappings and
+    workflow API files.
     """
     rows = conn.execute(
         """
@@ -457,11 +458,12 @@ def get_entity_yaml_paths(conn: sqlite3.Connection, entity_id: int) -> list[str]
           AND (
                mapping_type = 'yaml'
              OR LOWER(mapping_type) LIKE ?
+                         OR mapping_type = 'workflow_api_files'
              OR mapping_type IS NULL
           )
         ORDER BY source_text
         """,
-        (entity_id, f"{OPENAPI_MAPPING_PREFIX}%"),
+                (entity_id, f"{OPENAPI_MAPPING_PREFIX}%"),
     ).fetchall()
 
     return [r["source_text"] for r in rows]
