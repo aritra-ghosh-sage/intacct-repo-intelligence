@@ -204,6 +204,35 @@ def _infer_x_mapped_to(doc: dict[str, Any] | None) -> str | None:
 
     return None
 
+def _infer_kind(filename: str) -> str:
+    lowered = filename.lower()
+    if lowered.endswith(".schema.history.yaml"):
+        return "history"
+    if lowered.endswith(".schema.yaml"):
+        return "schema"
+    if lowered.endswith(".api.yaml"):
+        return "operations"
+    if lowered.endswith(".view.yaml"):
+        return "view"
+    if lowered.endswith(".uimeta.yaml"):
+        return "uimeta"
+    if lowered.endswith(".viewmeta.yaml"):
+        return "viewmeta"
+    if "references" in lowered:
+        return "references"
+    if "paths" in lowered:
+        return "paths"
+    if "components" in lowered:
+        return "components"
+    if "security" in lowered:
+        return "security"
+    if "resource" in lowered:
+        return "resource"
+    if "actions" in lowered:
+        return "actions"
+    if "events" in lowered:
+        return "events"
+    return "unknown"
 
 def scan_openapispec(conn: sqlite3.Connection, repo_root: Path) -> ScanStats:
     if yaml is None:

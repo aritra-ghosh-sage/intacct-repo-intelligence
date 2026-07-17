@@ -187,7 +187,7 @@ echo ""
 # Phase 14: Ladybug Graph Projection
 # ===================================================================
 echo "🕸️  Phase 14: Building Ladybug graph projection..."
-python scripts/build_graph.py
+python -m scripts.build_graph
 if [ $? -ne 0 ]; then
   echo "   ❌ Ladybug graph projection failed"
   exit 1
@@ -200,7 +200,7 @@ echo ""
 # Phase 15: Ladybug Graph Validation
 # ===================================================================
 echo "✅ Phase 15: Validating Ladybug graph parity..."
-python validation/validate_graph.py
+python -m validation.validate_graph
 if [ $? -ne 0 ]; then
   echo "   ❌ Ladybug graph validation failed"
   exit 1
