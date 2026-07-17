@@ -19,7 +19,7 @@ REL_TYPE_MAP = {
 }
 
 NODE_CHUNK_SIZE = 50000
-EDGE_STMT_BATCH = 1000
+EDGE_STMT_BATCH = 3000
 EDGE_ROW_CHUNK_SIZE = 50000
 
 
@@ -33,14 +33,22 @@ def copy_table_from_sql(
     cursor = sql.execute(select_sql)
     columns = [col[0] for col in cursor.description]
 
-    with tqdm(desc=f"COPY {target_table}", unit="row") as pbar:
+    # Collect all rows first, then create one DataFrame
+    all_rows = []
+    with tqdm(desc=f"Fetching {target_table}", unit="row") as pbar:
         while True:
             rows = cursor.fetchmany(chunk_size)
             if not rows:
                 break
-            df = pd.DataFrame(rows, schema=columns, orient="row")  # noqa: F841 - required by Ladybug COPY ... FROM df
+            all_rows.extend(rows)
             pbar.update(len(rows))
+
+    # Create DataFrame once with all data
+    with tqdm(desc=f"COPY {target_table}", unit="row") as pbar:
+        if all_rows:
+            df = pd.DataFrame(all_rows, schema=columns, orient="row", infer_schema_length=None)  # noqa: F841 - required by Ladybug COPY ... FROM df
             g.execute(f"COPY {target_table} FROM df")
+            pbar.update(len(all_rows))
 
 
 def execute_queries_in_batches(
@@ -65,13 +73,20 @@ def ensure_schema(conn: lb.Connection) -> None:
         "CREATE NODE TABLE IF NOT EXISTS Entity("
         "entity_id INT64 PRIMARY KEY, "
         "name STRING, "
-        "entity_type STRING)"
+        "entity_type STRING, "
+        "module STRING, "
+        "table_name STRING, "
+        "ent_file STRING, "
+        "dummy INT64)"
     )
     conn.execute(
         "CREATE NODE TABLE IF NOT EXISTS Symbol("
         "symbol_id INT64 PRIMARY KEY, "
         "name STRING, "
-        "kind STRING)"
+        "kind STRING, "
+        "start_line INT64, "
+        "end_line INT64, "
+        "signature STRING)"
     )
     conn.execute(
         "CREATE NODE TABLE IF NOT EXISTS File("
@@ -354,10 +369,18 @@ def ensure_schema(conn: lb.Connection) -> None:
         "FROM EntityAccessLink TO DbTable)"
     )
 
+    # Deferred edges now resolved with deterministic unique resolution checks
+    conn.execute(
+        "CREATE REL TABLE IF NOT EXISTS DOCUMENTS_ENTITY("
+        "FROM OpenApiSpec TO Entity)"
+    )
+    conn.execute(
+        "CREATE REL TABLE IF NOT EXISTS POLICY_VALUE_GRANTS_OPERATION("
+        "FROM SecurityPolicyValue TO SecurityOperation)"
+    )
+
     # Defer these until you add deterministic unique resolution checks:
     # - security_operation_allowops -> SecurityOperation to SecurityOperation
-    # - security_policy_eops -> SecurityPolicyValue to SecurityOperation
-    # - openapispec_index.x_mapped_to -> Entity
 
 def process_edge_rows_many(
     sql: sqlite3.Connection,
@@ -591,13 +614,13 @@ def load_nodes(sql: sqlite3.Connection, g: lb.Connection) -> None:
     copy_table_from_sql(
         sql,
         g,
-        "SELECT id AS entity_id, name, entity_type FROM entity_nodes ORDER BY id",
+        "SELECT id AS entity_id, name, entity_type, module, table_name, ent_file, dummy FROM entity_nodes ORDER BY id",
         "Entity",
     )
     copy_table_from_sql(
         sql,
         g,
-        "SELECT id AS symbol_id, name, kind FROM symbols ORDER BY id",
+        "SELECT id AS symbol_id, name, kind, start_line, end_line, signature FROM symbols ORDER BY id",
         "Symbol",
     )
     copy_table_from_sql(
@@ -1168,6 +1191,49 @@ def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
             ) % (r[0], r[1])
         ],
         "Loading entity access dbtable edges",
+    )
+
+    process_edge_rows_many(
+        sql,
+        g,
+        """
+        SELECT o.id, e.id
+        FROM openapispec_index o
+        JOIN entity_nodes e ON e.name = o.x_mapped_to
+        WHERE o.x_mapped_to IS NOT NULL AND TRIM(o.x_mapped_to) <> ''
+        ORDER BY o.id
+        """,
+        lambda r: [
+            (
+                "MATCH (o:OpenApiSpec {openapi_id:%d}), "
+                "(e:Entity {entity_id:%d}) "
+                "CREATE (o)-[:DOCUMENTS_ENTITY]->(e)"
+            ) % (r[0], r[1])
+        ],
+        "Loading DOCUMENTS_ENTITY edges (openapi to entity via x_mapped_to)",
+    )
+
+    process_edge_rows_many(
+        sql,
+        g,
+        """
+        SELECT DISTINCT spv.id, so.id, spv.policy_id
+        FROM security_policy_values spv
+        JOIN security_policy_eops spe ON spe.policy_value_id = spv.id
+        JOIN security_operations so ON so.op_key = spe.op_key
+        WHERE spe.op_key IN (
+            SELECT op_key FROM security_operations GROUP BY op_key HAVING COUNT(*) = 1
+        )
+        ORDER BY spv.id, so.id
+        """,
+        lambda r: [
+            (
+                "MATCH (pv:SecurityPolicyValue {security_policy_value_id:%d}), "
+                "(o:SecurityOperation {security_operation_id:%d}) "
+                "CREATE (pv)-[:POLICY_VALUE_GRANTS_OPERATION]->(o)"
+            ) % (r[0], r[1])
+        ],
+        "Loading POLICY_VALUE_GRANTS_OPERATION edges (with dedup guard for unique op_keys)",
     )
 
 def main() -> None:

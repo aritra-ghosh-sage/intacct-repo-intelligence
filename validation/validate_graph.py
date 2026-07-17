@@ -374,6 +374,29 @@ def main() -> None:
                 "SELECT COUNT(*) FROM entity_access_links WHERE surface = 'dbschema_table'",
                 "MATCH ()-[r:ENTITY_ACCESS_LINK_DBTABLE]->() RETURN count(r)",
             ),
+            (
+                "DOCUMENTS_ENTITY",
+                """
+                SELECT COUNT(*)
+                FROM openapispec_index o
+                JOIN entity_nodes e ON e.name = o.x_mapped_to
+                WHERE o.x_mapped_to IS NOT NULL AND TRIM(o.x_mapped_to) <> ''
+                """,
+                "MATCH ()-[r:DOCUMENTS_ENTITY]->() RETURN count(r)",
+            ),
+            (
+                "POLICY_VALUE_GRANTS_OPERATION",
+                """
+                SELECT COUNT(DISTINCT spv.id, so.id)
+                FROM security_policy_values spv
+                JOIN security_policy_eops spe ON spe.policy_value_id = spv.id
+                JOIN security_operations so ON so.op_key = spe.op_key
+                WHERE spe.op_key IN (
+                    SELECT op_key FROM security_operations GROUP BY op_key HAVING COUNT(*) = 1
+                )
+                """,
+                "MATCH ()-[r:POLICY_VALUE_GRANTS_OPERATION]->() RETURN count(r)",
+            ),
         ]
 
         workflow_edge_kind_checks = [
