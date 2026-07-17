@@ -213,11 +213,11 @@ information, and validation metrics.
 SQLite is optimized for deterministic extraction, validation,
 auditing, and reproducibility.
 
-### Kùzu
+### Ladybug
 
-Kùzu is the graph query layer.
+Ladybug is the rebuildable graph traversal projection.
 
-Data from SQLite is projected into Kùzu to support graph traversal,
+Data from SQLite is projected into Ladybug to support graph traversal,
 dependency analysis, impact analysis, and AI-assisted navigation.
 
 ### Design Principle
@@ -226,12 +226,38 @@ SQLite answers:
 
 "What facts do we know?"
 
-Kùzu answers:
+Ladybug answers:
 
 "How are those facts connected?"
 
-AI systems should use Kùzu for traversal and SQLite for evidence and
+AI systems should use Ladybug for traversal and SQLite for evidence and
 provenance.
+
+### Graph Projection Workflow
+
+The rebuild flow captures a consistent SQLite backup, builds a uniquely named
+candidate Ladybug graph from that snapshot, and validates every projected node,
+directed edge, and property against the same snapshot. Only a validated candidate
+is atomically promoted. Build or validation failures leave the active graph
+available, and successful promotion retains the prior graph as
+`catalog/graph.lbug.previous`.
+
+Apply the graph-build metadata migration once to an existing catalog before the
+first safe rebuild:
+
+```bash
+python -c "import sqlite3; from pathlib import Path; c=sqlite3.connect('catalog/catalog.db'); c.executescript(Path('migrations/017_graph_builds.sql').read_text()); c.close()"
+```
+
+Fresh catalogs initialized through `catalog.db.init_db()` already contain this
+schema. Full Ladybug construction is a lengthy operator-run workflow and must
+not be started during an agentic session. Agents should restrict themselves to
+read-only parity validation and focused unit tests. SQLite query commands remain
+the authoritative evidence path; Ladybug is a rebuildable traversal projection.
+
+`graph_ready_entities` is an advisory triage view for entities with strong root
+evidence. It intentionally excludes weak or unrooted entities and must not be
+used to filter authoritative queries or the complete graph projection.
 
 ### Query JSON Contract v1
 
@@ -352,3 +378,44 @@ Command-specific data schemas:
 - `data.top_expansion_points`: `symbol_name`, `count`
 - `summary`: `seed_count`, `discovered_count`, `incoming_count`,
        `outgoing_count`
+
+#### query_graph.py interface
+
+The graph commands use the same JSON v1 envelope above. They open the
+Ladybug projection read-only, keep result ordering deterministic, emit text
+reports by default, and emit JSON only with `--json`. A graph failure is an
+explicit error response, never an empty successful result.
+
+`file-impact <file_path>`:
+
+- `data.file` identifies the catalog file.
+- `data.seed_symbols` contains symbols declared in that file.
+- `data.direct_entities` contains exact entity mappings from those symbols.
+- `data.traversal.nodes` and `data.traversal.edges` contain downstream evidence
+  reached through incoming dependency edges.
+- `data.affected_entities` and `data.surfaces` contain only exact mappings
+  reached by the traversal; the command does not infer entity ownership from a
+  file name.
+- Default traversal is depth `1` with at most `25` edges per symbol.
+
+Example: if `PricingHelper::calculate()` is changed and `InvoiceService` calls
+it, `InvoiceService` is a downstream impact. A dependency that
+`PricingHelper::calculate()` itself calls is not labelled as an impacted caller.
+
+`who-uses [symbol_name] --symbol-id <id>`:
+
+- A unique name resolves to one target symbol.
+- A non-unique name returns deterministic candidates with symbol ID, kind, file,
+  and line range; callers then retry with `--symbol-id`.
+- `data.target`, `data.callers`, and `data.referencers` preserve directed
+  evidence. If `A` calls `B`, querying `B` reports `A` as a caller.
+
+`entity-context <entity_name>` returns the entity, exact mapped symbols,
+evidence-backed surfaces, and matching database schema records.
+
+`security-surface <entity_name>` returns exact security-operation, policy, and
+menu links for the entity.
+
+Graph-specific errors use stable codes including `ambiguous_symbol`,
+`symbol_not_found`, `entity_not_found`, `file_not_found`, and `graph_query_failed`.
+In JSON mode, ambiguity candidates are returned in `error.details.candidates`.

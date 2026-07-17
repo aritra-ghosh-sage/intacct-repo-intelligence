@@ -9,7 +9,7 @@ fix_pr_refs:
 scope:
   repo_a_only: true
   languages: [php, javascript, java, xslt, sql]
-  extensions: [ent, cls, inc, cqry, yaml, sql, html, phtml]
+  extensions: [ent, cls, inc, cqry, yaml, sql, html, phtml, rpt, qry, php]
 sampling:
   strategy: stratified
   stratum_key: module
@@ -19,10 +19,12 @@ gold_set:
   path: apbill_goldset.json
   entity_count: 8
   modules_covered: [AP]
-pipeline_stages_run: [1, 2, 3, 4, 5, 6]   # stage 7 (Kuzu) & 8 (query) not run
+pipeline_stages_run: [1, 2, 3, 4, 5, 6]   # stage 7 (Ladybug projection) & 8 (graph query) planned
 pipeline_wall_clock_seconds: 312
 per_stage_wall_clock_seconds: { stage_1: 42, stage_2: 18, stage_3: 36, stage_4: 48, stage_5: 72, stage_6: 96 }
 notes: |
   APBill discovery restored at commit 1dab607 on 2026-07-08.
-  Benchmarking is the last gate before starting Stage 7 (Kuzu graph) design.
+  Benchmarking is the last gate before starting Stage 7 (Ladybug projection)
+  and Stage 8 (graph query) implementation. Planned work includes safe
+  candidate-build promotion, exact-parity validation, and query correctness.
   M365 Copilot token limits: 7.4 tables shipped as 5% stratified samples per SQLite table.

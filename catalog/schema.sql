@@ -483,6 +483,9 @@ CREATE INDEX IF NOT EXISTS idx_entity_access_links_evidence_file
     ON entity_access_links(evidence_file_id);
 
 
+-- Advisory quality/triage view only. It intentionally excludes entities without
+-- roots at or above the confidence threshold and must not filter authoritative
+-- catalog queries or the complete Ladybug projection.
 DROP VIEW IF EXISTS graph_ready_entities;
 
 CREATE VIEW graph_ready_entities AS
@@ -517,3 +520,18 @@ SELECT
 FROM entity_nodes en
 JOIN strong_roots sr
   ON sr.entity_id = en.id;
+
+
+CREATE TABLE IF NOT EXISTS graph_builds (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    graph_path TEXT NOT NULL,
+    source_db TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('building', 'validated', 'active', 'failed')),
+    source_fingerprint TEXT NOT NULL,
+    started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at TEXT,
+    validation_summary TEXT,
+    error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_graph_builds_status_started
+    ON graph_builds(status, started_at);

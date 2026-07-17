@@ -37,7 +37,7 @@ This design reflects the current implementation discovered in `scripts/build_wor
 - Consider renaming `workflow` → `operation` or `action` to reduce semantic confusion
 - Update documentation and query patterns
 
-**Kùzu Graph Modeling:**
+**Ladybug Graph Modeling:**
 ```
 (Entity) -[HAS_OPERATION]-> (Operation {name, type, source})
 (Entity) -[HAS_ACTION]-> (Action {name, sequence_order, entity})
@@ -68,7 +68,7 @@ This design reflects the current implementation discovered in `scripts/build_wor
 - Add `sequence_order` column to workflow_steps for deterministic ordering
 - Create `workflow_hierarchy` table to track orchestration
 
-**Kùzu Graph Modeling:**
+**Ladybug Graph Modeling:**
 ```
 (Entity) -[HAS_LIFECYCLE]-> (CompositeWorkflow {name, type})
 (CompositeWorkflow) -[CONTAINS]-> (AtomicWorkflow {sequence_order})

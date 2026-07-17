@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
+import hashlib
+import json
 import sqlite3
 import sys
+from itertools import zip_longest
+from pathlib import Path
 
 import ladybug as lb
 
@@ -73,14 +78,163 @@ def validate_conditional_graph_positive_checks(
         assert_positive(name, scalar_g(graph_conn, graph_query))
 
 
-def main() -> None:
+def _canonical_value(value):
+    if isinstance(value, float):
+        return {"float": format(value, ".17g")}
+    if isinstance(value, bytes):
+        return {"bytes": value.hex()}
+    return value
+
+
+def _canonical_row(row) -> bytes:
+    normalized = [_canonical_value(value) for value in tuple(row)]
+    return (json.dumps(normalized, ensure_ascii=True, separators=(",", ":")) + "\n").encode()
+
+
+def _sqlite_file_fingerprint(path: str) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _ordered_graph_rows(conn: lb.Connection, query: str):
+    result = conn.execute(query)
+    try:
+        while result.has_next():
+            yield tuple(result.get_next())
+    finally:
+        result.close()
+
+
+def _compare_exact_check(
+    name: str,
+    sqlite_conn: sqlite3.Connection,
+    graph_conn: lb.Connection,
+    sqlite_query: str,
+    graph_query: str,
+) -> dict[str, object]:
+    sql_cursor = sqlite_conn.execute(sqlite_query)
+    sql_digest = hashlib.sha256()
+    graph_digest = hashlib.sha256()
+    sql_count = 0
+    graph_count = 0
+    differences: list[dict[str, object]] = []
+    missing = object()
+
+    for ordinal, pair in enumerate(
+        zip_longest(sql_cursor, _ordered_graph_rows(graph_conn, graph_query), fillvalue=missing)
+    ):
+        sql_row, graph_row = pair
+        if sql_row is not missing:
+            sql_count += 1
+            sql_bytes = _canonical_row(sql_row)
+            sql_digest.update(sql_bytes)
+        else:
+            sql_bytes = None
+        if graph_row is not missing:
+            graph_count += 1
+            graph_bytes = _canonical_row(graph_row)
+            graph_digest.update(graph_bytes)
+        else:
+            graph_bytes = None
+        if sql_bytes != graph_bytes and len(differences) < 5:
+            differences.append(
+                {
+                    "ordinal": ordinal,
+                    "sqlite": None if sql_row is missing else tuple(sql_row),
+                    "graph": None if graph_row is missing else tuple(graph_row),
+                }
+            )
+
+    sql_hex = sql_digest.hexdigest()
+    graph_hex = graph_digest.hexdigest()
+    if sql_count != graph_count or sql_hex != graph_hex:
+        raise RuntimeError(
+            f"{name} exact parity mismatch: sqlite_count={sql_count} "
+            f"graph_count={graph_count} sqlite_digest={sql_hex} "
+            f"graph_digest={graph_hex} differences={differences}"
+        )
+    return {"name": name, "count": sql_count, "digest": sql_hex}
+
+
+def validate_exact_parity(
+    sqlite_conn: sqlite3.Connection, graph_conn: lb.Connection
+) -> list[dict[str, object]]:
+    checks = [
+        ("Entity", "SELECT id,name,entity_type,module,table_name,ent_file,dummy FROM entity_nodes ORDER BY id", "MATCH (n:Entity) RETURN n.entity_id,n.name,n.entity_type,n.module,n.table_name,n.ent_file,n.dummy ORDER BY n.entity_id"),
+        ("Symbol", "SELECT id,name,kind,start_line,end_line,signature FROM symbols ORDER BY id", "MATCH (n:Symbol) RETURN n.symbol_id,n.name,n.kind,n.start_line,n.end_line,n.signature ORDER BY n.symbol_id"),
+        ("File", "SELECT id,path,language FROM files ORDER BY id", "MATCH (n:File) RETURN n.file_id,n.path,n.language ORDER BY n.file_id"),
+        ("Workflow", "SELECT id,name,workflow_type FROM workflows ORDER BY id", "MATCH (n:Workflow) RETURN n.workflow_id,n.name,n.workflow_type ORDER BY n.workflow_id"),
+        ("RestEndpoint", "SELECT id,method,path FROM rest_endpoints ORDER BY id", "MATCH (n:RestEndpoint) RETURN n.rest_endpoint_id,n.method,n.path ORDER BY n.rest_endpoint_id"),
+        ("WorkflowNode", "SELECT id,workflow_id,entity_id,node_kind,node_key,name,ordinal,action,source_kind,file_id,symbol_id,metadata_json,created_at FROM workflow_nodes ORDER BY id", "MATCH (n:WorkflowNode) RETURN n.workflow_node_id,n.workflow_id,n.entity_id,n.node_kind,n.node_key,n.name,n.ordinal,n.action,n.source_kind,n.file_id,n.symbol_id,n.metadata_json,n.created_at ORDER BY n.workflow_node_id"),
+        ("OpenApiSpec", "SELECT id,file_id,file_path,module,slug,version,kind,canonical_name,resource_path,x_mapped_to,title,state,last_seen_at FROM openapispec_index ORDER BY id", "MATCH (n:OpenApiSpec) RETURN n.openapi_id,n.file_id,n.file_path,n.module,n.slug,n.version,n.kind,n.canonical_name,n.resource_path,n.x_mapped_to,n.title,n.state,n.last_seen_at ORDER BY n.openapi_id"),
+        ("SecurityOperation", "SELECT id,op_key,op_numeric_id,title,action,script,force_mode,secure_only,allow_dev_env_only,source_file,file_id,source_line,source_kind,raw_hash FROM security_operations ORDER BY id", "MATCH (n:SecurityOperation) RETURN n.security_operation_id,n.op_key,n.op_numeric_id,n.title,n.action,n.script,n.force_mode,n.secure_only,n.allow_dev_env_only,n.source_file,n.file_id,n.source_line,n.source_kind,n.raw_hash ORDER BY n.security_operation_id"),
+        ("SecurityPolicy", "SELECT id,policy_name,module,label,source_file,file_id,source_line FROM security_policies ORDER BY id", "MATCH (n:SecurityPolicy) RETURN n.security_policy_id,n.policy_name,n.module,n.label,n.source_file,n.file_id,n.source_line ORDER BY n.security_policy_id"),
+        ("SecurityPolicyValue", "SELECT id,policy_id,value_key,display,value_label,source_line FROM security_policy_values ORDER BY id", "MATCH (n:SecurityPolicyValue) RETURN n.security_policy_value_id,n.policy_id,n.value_key,n.display,n.value_label,n.source_line ORDER BY n.security_policy_value_id"),
+        ("SecurityMenu", "SELECT id,module,menu_name,source_file,file_id FROM security_menus ORDER BY id", "MATCH (n:SecurityMenu) RETURN n.security_menu_id,n.module,n.menu_name,n.source_file,n.file_id ORDER BY n.security_menu_id"),
+        ("SecurityMenuItem", "SELECT id,menu_id,item_path,item_name,menu_item_id,menu_script,menu_key,source_line FROM security_menu_items ORDER BY id", "MATCH (n:SecurityMenuItem) RETURN n.security_menu_item_id,n.menu_id,n.item_path,n.item_name,n.menu_item_id,n.menu_script,n.menu_key,n.source_line ORDER BY n.security_menu_item_id"),
+        ("DbTable", "SELECT id,table_name,primary_keys,source_file,file_id,source_line,raw_hash FROM dbschema_tables ORDER BY id", "MATCH (n:DbTable) RETURN n.dbschema_table_id,n.table_name,n.primary_keys,n.source_file,n.file_id,n.source_line,n.raw_hash ORDER BY n.dbschema_table_id"),
+        ("DbField", "SELECT id,dbschema_table_id,field_name,field_type,source_line FROM dbschema_fields ORDER BY id", "MATCH (n:DbField) RETURN n.dbschema_field_id,n.dbschema_table_id,n.field_name,n.field_type,n.source_line ORDER BY n.dbschema_field_id"),
+        ("EntityAccessLink", "SELECT id,entity_id,surface,record_id,link_type,evidence_file_id,evidence_symbol_id,confidence_mode,notes,created_at FROM entity_access_links ORDER BY id", "MATCH (n:EntityAccessLink) RETURN n.entity_access_link_id,n.entity_id,n.surface,n.record_id,n.link_type,n.evidence_file_id,n.evidence_symbol_id,n.confidence_mode,n.notes,n.created_at ORDER BY n.entity_access_link_id"),
+        ("ENTITY_ROOT", "SELECT entity_id,symbol_id,role,weight FROM entity_roots ORDER BY entity_id,symbol_id,role,weight", "MATCH (a:Entity)-[r:ENTITY_ROOT]->(b:Symbol) RETURN a.entity_id,b.symbol_id,r.role,r.weight ORDER BY a.entity_id,b.symbol_id,r.role,r.weight"),
+        ("ENTITY_MAPPING", "SELECT entity_id,symbol_id,mapping_type,confidence FROM entity_mappings WHERE symbol_id IS NOT NULL ORDER BY entity_id,symbol_id,mapping_type,confidence", "MATCH (a:Entity)-[r:ENTITY_MAPPING]->(b:Symbol) RETURN a.entity_id,b.symbol_id,r.mapping_type,r.confidence ORDER BY a.entity_id,b.symbol_id,r.mapping_type,r.confidence"),
+        ("INHERITS", "SELECT source_symbol_id,target_symbol_id FROM relationships WHERE relationship_type='INHERITS' AND source_symbol_id IS NOT NULL AND target_symbol_id IS NOT NULL ORDER BY source_symbol_id,target_symbol_id", "MATCH (a:Symbol)-[:INHERITS]->(b:Symbol) RETURN a.symbol_id,b.symbol_id ORDER BY a.symbol_id,b.symbol_id"),
+        ("IMPLEMENTS", "SELECT source_symbol_id,target_symbol_id FROM relationships WHERE relationship_type='IMPLEMENTS' AND source_symbol_id IS NOT NULL AND target_symbol_id IS NOT NULL ORDER BY source_symbol_id,target_symbol_id", "MATCH (a:Symbol)-[:IMPLEMENTS]->(b:Symbol) RETURN a.symbol_id,b.symbol_id ORDER BY a.symbol_id,b.symbol_id"),
+        ("IMPORTS", "SELECT source_symbol_id,target_symbol_id FROM relationships WHERE relationship_type='IMPORTS' AND source_symbol_id IS NOT NULL AND target_symbol_id IS NOT NULL ORDER BY source_symbol_id,target_symbol_id", "MATCH (a:Symbol)-[:IMPORTS]->(b:Symbol) RETURN a.symbol_id,b.symbol_id ORDER BY a.symbol_id,b.symbol_id"),
+        ("USES", "SELECT source_symbol_id,target_symbol_id FROM relationships WHERE relationship_type='USES' AND source_symbol_id IS NOT NULL AND target_symbol_id IS NOT NULL ORDER BY source_symbol_id,target_symbol_id", "MATCH (a:Symbol)-[:USES]->(b:Symbol) RETURN a.symbol_id,b.symbol_id ORDER BY a.symbol_id,b.symbol_id"),
+        ("REFERENCES", "SELECT source_symbol_id,target_symbol_id FROM relationships WHERE relationship_type='REFERENCES' AND source_symbol_id IS NOT NULL AND target_symbol_id IS NOT NULL ORDER BY source_symbol_id,target_symbol_id", "MATCH (a:Symbol)-[:REFERENCES]->(b:Symbol) RETURN a.symbol_id,b.symbol_id ORDER BY a.symbol_id,b.symbol_id"),
+        ("CALLS", "SELECT source_symbol_id,target_symbol_id FROM relationships WHERE relationship_type IN ('CALLS','STATIC_CALLS') AND source_symbol_id IS NOT NULL AND target_symbol_id IS NOT NULL ORDER BY source_symbol_id,target_symbol_id", "MATCH (a:Symbol)-[:CALLS]->(b:Symbol) RETURN a.symbol_id,b.symbol_id ORDER BY a.symbol_id,b.symbol_id"),
+        ("DECLARED_IN", "SELECT id,file_id FROM symbols ORDER BY id,file_id", "MATCH (a:Symbol)-[:DECLARED_IN]->(b:File) RETURN a.symbol_id,b.file_id ORDER BY a.symbol_id,b.file_id"),
+        ("HAS_WORKFLOW", "SELECT entity_id,id FROM workflows WHERE entity_id IS NOT NULL ORDER BY entity_id,id", "MATCH (a:Entity)-[:HAS_WORKFLOW]->(b:Workflow) RETURN a.entity_id,b.workflow_id ORDER BY a.entity_id,b.workflow_id"),
+        ("EXPOSES_ENTITY", "SELECT id,entity_id FROM rest_endpoints WHERE entity_id IS NOT NULL ORDER BY id,entity_id", "MATCH (a:RestEndpoint)-[:EXPOSES_ENTITY]->(b:Entity) RETURN a.rest_endpoint_id,b.entity_id ORDER BY a.rest_endpoint_id,b.entity_id"),
+        ("HANDLED_BY", "SELECT id,handler_symbol_id FROM rest_endpoints WHERE handler_symbol_id IS NOT NULL ORDER BY id,handler_symbol_id", "MATCH (a:RestEndpoint)-[:HANDLED_BY]->(b:Symbol) RETURN a.rest_endpoint_id,b.symbol_id ORDER BY a.rest_endpoint_id,b.symbol_id"),
+        ("WORKFLOW_HAS_NODE", "SELECT workflow_id,id FROM workflow_nodes ORDER BY workflow_id,id", "MATCH (a:Workflow)-[:WORKFLOW_HAS_NODE]->(b:WorkflowNode) RETURN a.workflow_id,b.workflow_node_id ORDER BY a.workflow_id,b.workflow_node_id"),
+        ("WORKFLOW_NODE_FILE", "SELECT id,file_id FROM workflow_nodes WHERE file_id IS NOT NULL ORDER BY id,file_id", "MATCH (a:WorkflowNode)-[:WORKFLOW_NODE_FILE]->(b:File) RETURN a.workflow_node_id,b.file_id ORDER BY a.workflow_node_id,b.file_id"),
+        ("WORKFLOW_NODE_SYMBOL", "SELECT id,symbol_id FROM workflow_nodes WHERE symbol_id IS NOT NULL ORDER BY id,symbol_id", "MATCH (a:WorkflowNode)-[:WORKFLOW_NODE_SYMBOL]->(b:Symbol) RETURN a.workflow_node_id,b.symbol_id ORDER BY a.workflow_node_id,b.symbol_id"),
+        ("WORKFLOW_NODE_EDGE", "SELECT from_node_id,to_node_id,workflow_id,COALESCE(edge_kind,''),COALESCE(ordinal,-1),COALESCE(evidence,''),COALESCE(confidence,0.0),file_id,symbol_id FROM workflow_edges ORDER BY from_node_id,to_node_id,workflow_id,COALESCE(edge_kind,''),COALESCE(ordinal,-1),COALESCE(evidence,''),COALESCE(confidence,0.0),file_id,symbol_id", "MATCH (a:WorkflowNode)-[r:WORKFLOW_NODE_EDGE]->(b:WorkflowNode) RETURN a.workflow_node_id,b.workflow_node_id,r.workflow_id,r.edge_kind,r.ordinal,r.evidence,r.confidence,r.file_id,r.symbol_id ORDER BY a.workflow_node_id,b.workflow_node_id,r.workflow_id,r.edge_kind,r.ordinal,r.evidence,r.confidence,r.file_id,r.symbol_id"),
+        ("OPENAPI_SPEC_FILE", "SELECT id,file_id FROM openapispec_index WHERE file_id IS NOT NULL ORDER BY id,file_id", "MATCH (a:OpenApiSpec)-[:OPENAPI_SPEC_FILE]->(b:File) RETURN a.openapi_id,b.file_id ORDER BY a.openapi_id,b.file_id"),
+        ("OPENAPI_FILE_REF", "SELECT source_file_id,target_file_id,COALESCE(ref_value,''),COALESCE(ref_path,''),COALESCE(confidence,0.0) FROM openapi_file_ref_edges ORDER BY source_file_id,target_file_id,COALESCE(ref_value,''),COALESCE(ref_path,''),COALESCE(confidence,0.0)", "MATCH (a:File)-[r:OPENAPI_FILE_REF]->(b:File) RETURN a.file_id,b.file_id,r.ref_value,r.ref_path,r.confidence ORDER BY a.file_id,b.file_id,r.ref_value,r.ref_path,r.confidence"),
+        ("SECURITY_OPERATION_FILE", "SELECT id,file_id FROM security_operations WHERE file_id IS NOT NULL ORDER BY id,file_id", "MATCH (a:SecurityOperation)-[:SECURITY_OPERATION_FILE]->(b:File) RETURN a.security_operation_id,b.file_id ORDER BY a.security_operation_id,b.file_id"),
+        ("SECURITY_POLICY_FILE", "SELECT id,file_id FROM security_policies WHERE file_id IS NOT NULL ORDER BY id,file_id", "MATCH (a:SecurityPolicy)-[:SECURITY_POLICY_FILE]->(b:File) RETURN a.security_policy_id,b.file_id ORDER BY a.security_policy_id,b.file_id"),
+        ("SECURITY_POLICY_HAS_VALUE", "SELECT policy_id,id FROM security_policy_values ORDER BY policy_id,id", "MATCH (a:SecurityPolicy)-[:SECURITY_POLICY_HAS_VALUE]->(b:SecurityPolicyValue) RETURN a.security_policy_id,b.security_policy_value_id ORDER BY a.security_policy_id,b.security_policy_value_id"),
+        ("SECURITY_MENU_FILE", "SELECT id,file_id FROM security_menus WHERE file_id IS NOT NULL ORDER BY id,file_id", "MATCH (a:SecurityMenu)-[:SECURITY_MENU_FILE]->(b:File) RETURN a.security_menu_id,b.file_id ORDER BY a.security_menu_id,b.file_id"),
+        ("SECURITY_MENU_HAS_ITEM", "SELECT menu_id,id FROM security_menu_items ORDER BY menu_id,id", "MATCH (a:SecurityMenu)-[:SECURITY_MENU_HAS_ITEM]->(b:SecurityMenuItem) RETURN a.security_menu_id,b.security_menu_item_id ORDER BY a.security_menu_id,b.security_menu_item_id"),
+        ("SECURITY_MENU_ITEM_TO_OPERATION", "SELECT menu_item_id,operation_id,COALESCE(op_key,''),COALESCE(resolution_reason,'') FROM security_menu_op_links WHERE operation_id IS NOT NULL ORDER BY menu_item_id,operation_id,COALESCE(op_key,''),COALESCE(resolution_reason,'')", "MATCH (a:SecurityMenuItem)-[r:SECURITY_MENU_ITEM_TO_OPERATION]->(b:SecurityOperation) RETURN a.security_menu_item_id,b.security_operation_id,r.op_key,r.resolution_reason ORDER BY a.security_menu_item_id,b.security_operation_id,r.op_key,r.resolution_reason"),
+        ("DBTABLE_FILE", "SELECT id,file_id FROM dbschema_tables WHERE file_id IS NOT NULL ORDER BY id,file_id", "MATCH (a:DbTable)-[:DBTABLE_FILE]->(b:File) RETURN a.dbschema_table_id,b.file_id ORDER BY a.dbschema_table_id,b.file_id"),
+        ("DBTABLE_HAS_FIELD", "SELECT dbschema_table_id,id FROM dbschema_fields ORDER BY dbschema_table_id,id", "MATCH (a:DbTable)-[:DBTABLE_HAS_FIELD]->(b:DbField) RETURN a.dbschema_table_id,b.dbschema_field_id ORDER BY a.dbschema_table_id,b.dbschema_field_id"),
+        ("ENTITY_ACCESS_LINK_ENTITY", "SELECT id,entity_id FROM entity_access_links ORDER BY id,entity_id", "MATCH (a:EntityAccessLink)-[:ENTITY_ACCESS_LINK_ENTITY]->(b:Entity) RETURN a.entity_access_link_id,b.entity_id ORDER BY a.entity_access_link_id,b.entity_id"),
+        ("ENTITY_ACCESS_LINK_FILE", "SELECT id,evidence_file_id FROM entity_access_links WHERE evidence_file_id IS NOT NULL ORDER BY id,evidence_file_id", "MATCH (a:EntityAccessLink)-[:ENTITY_ACCESS_LINK_FILE]->(b:File) RETURN a.entity_access_link_id,b.file_id ORDER BY a.entity_access_link_id,b.file_id"),
+        ("ENTITY_ACCESS_LINK_SYMBOL", "SELECT id,evidence_symbol_id FROM entity_access_links WHERE evidence_symbol_id IS NOT NULL ORDER BY id,evidence_symbol_id", "MATCH (a:EntityAccessLink)-[:ENTITY_ACCESS_LINK_SYMBOL]->(b:Symbol) RETURN a.entity_access_link_id,b.symbol_id ORDER BY a.entity_access_link_id,b.symbol_id"),
+        ("ENTITY_ACCESS_LINK_WORKFLOW", "SELECT id,record_id FROM entity_access_links WHERE surface='workflow' ORDER BY id,record_id", "MATCH (a:EntityAccessLink)-[:ENTITY_ACCESS_LINK_WORKFLOW]->(b:Workflow) RETURN a.entity_access_link_id,b.workflow_id ORDER BY a.entity_access_link_id,b.workflow_id"),
+        ("ENTITY_ACCESS_LINK_REST_ENDPOINT", "SELECT id,record_id FROM entity_access_links WHERE surface='rest_endpoint' ORDER BY id,record_id", "MATCH (a:EntityAccessLink)-[:ENTITY_ACCESS_LINK_REST_ENDPOINT]->(b:RestEndpoint) RETURN a.entity_access_link_id,b.rest_endpoint_id ORDER BY a.entity_access_link_id,b.rest_endpoint_id"),
+        ("ENTITY_ACCESS_LINK_SECURITY_OPERATION", "SELECT id,record_id FROM entity_access_links WHERE surface='security_operation' ORDER BY id,record_id", "MATCH (a:EntityAccessLink)-[:ENTITY_ACCESS_LINK_SECURITY_OPERATION]->(b:SecurityOperation) RETURN a.entity_access_link_id,b.security_operation_id ORDER BY a.entity_access_link_id,b.security_operation_id"),
+        ("ENTITY_ACCESS_LINK_SECURITY_POLICY", "SELECT id,record_id FROM entity_access_links WHERE surface='security_policy' ORDER BY id,record_id", "MATCH (a:EntityAccessLink)-[:ENTITY_ACCESS_LINK_SECURITY_POLICY]->(b:SecurityPolicy) RETURN a.entity_access_link_id,b.security_policy_id ORDER BY a.entity_access_link_id,b.security_policy_id"),
+        ("ENTITY_ACCESS_LINK_SECURITY_MENU", "SELECT id,record_id FROM entity_access_links WHERE surface='security_menu' ORDER BY id,record_id", "MATCH (a:EntityAccessLink)-[:ENTITY_ACCESS_LINK_SECURITY_MENU]->(b:SecurityMenu) RETURN a.entity_access_link_id,b.security_menu_id ORDER BY a.entity_access_link_id,b.security_menu_id"),
+        ("ENTITY_ACCESS_LINK_SECURITY_MENU_ITEM", "SELECT id,record_id FROM entity_access_links WHERE surface='security_menu_item' ORDER BY id,record_id", "MATCH (a:EntityAccessLink)-[:ENTITY_ACCESS_LINK_SECURITY_MENU_ITEM]->(b:SecurityMenuItem) RETURN a.entity_access_link_id,b.security_menu_item_id ORDER BY a.entity_access_link_id,b.security_menu_item_id"),
+        ("ENTITY_ACCESS_LINK_DBTABLE", "SELECT id,record_id FROM entity_access_links WHERE surface='dbschema_table' ORDER BY id,record_id", "MATCH (a:EntityAccessLink)-[:ENTITY_ACCESS_LINK_DBTABLE]->(b:DbTable) RETURN a.entity_access_link_id,b.dbschema_table_id ORDER BY a.entity_access_link_id,b.dbschema_table_id"),
+        ("DOCUMENTS_ENTITY", "SELECT o.id,e.id FROM openapispec_index o JOIN entity_nodes e ON e.name=o.x_mapped_to WHERE o.x_mapped_to IS NOT NULL AND TRIM(o.x_mapped_to)<>'' ORDER BY o.id,e.id", "MATCH (a:OpenApiSpec)-[:DOCUMENTS_ENTITY]->(b:Entity) RETURN a.openapi_id,b.entity_id ORDER BY a.openapi_id,b.entity_id"),
+        ("POLICY_VALUE_GRANTS_OPERATION", "SELECT DISTINCT spv.id,so.id FROM security_policy_values spv JOIN security_policy_eops spe ON spe.policy_value_id=spv.id JOIN security_operations so ON so.op_key=spe.op_key WHERE spe.op_key IN (SELECT op_key FROM security_operations GROUP BY op_key HAVING COUNT(*)=1) ORDER BY spv.id,so.id", "MATCH (a:SecurityPolicyValue)-[:POLICY_VALUE_GRANTS_OPERATION]->(b:SecurityOperation) RETURN a.security_policy_value_id,b.security_operation_id ORDER BY a.security_policy_value_id,b.security_operation_id"),
+    ]
+    return [
+        _compare_exact_check(name, sqlite_conn, graph_conn, sql_query, graph_query)
+        for name, sql_query, graph_query in checks
+    ]
+
+
+def validate_paths(
+    sqlite_path: str = SQLITE_DB,
+    graph_path: str = GRAPH_DB,
+    expected_fingerprint: str | None = None,
+) -> str:
     sqlite_conn = None
     graph_db = None
     graph_conn = None
 
     try:
-        sqlite_conn = sqlite3.connect(SQLITE_DB)
-        graph_db = lb.Database(GRAPH_DB)
+        sqlite_conn = sqlite3.connect(f"file:{Path(sqlite_path).resolve()}?mode=ro", uri=True)
+        graph_db = lb.Database(graph_path, read_only=True)
         graph_conn = lb.Connection(graph_db)
 
         node_checks = [
@@ -387,7 +541,7 @@ def main() -> None:
             (
                 "POLICY_VALUE_GRANTS_OPERATION",
                 """
-                SELECT COUNT(DISTINCT spv.id, so.id)
+                SELECT COUNT(*)
                 FROM security_policy_values spv
                 JOIN security_policy_eops spe ON spe.policy_value_id = spv.id
                 JOIN security_operations so ON so.op_key = spe.op_key
@@ -972,15 +1126,35 @@ def main() -> None:
             ),
         ]
 
+        starting_fingerprint = _sqlite_file_fingerprint(sqlite_path)
+        if expected_fingerprint is not None and starting_fingerprint != expected_fingerprint:
+            raise RuntimeError(
+                f"snapshot fingerprint mismatch before validation: "
+                f"expected={expected_fingerprint} actual={starting_fingerprint}"
+            )
+
         validate_counts(sqlite_conn, graph_conn, node_checks)
         validate_counts(sqlite_conn, graph_conn, rel_checks)
+        parity_results = validate_exact_parity(sqlite_conn, graph_conn)
         validate_counts(sqlite_conn, graph_conn, workflow_edge_kind_checks)
 
         validate_sql_zero_checks(sqlite_conn, sql_zero_checks)
         validate_graph_zero_checks(graph_conn, graph_zero_checks)
         validate_conditional_graph_positive_checks(sqlite_conn, graph_conn, graph_positive_checks)
 
+        ending_fingerprint = _sqlite_file_fingerprint(sqlite_path)
+        if ending_fingerprint != starting_fingerprint:
+            raise RuntimeError("SQLite snapshot changed during graph validation")
+        summary = json.dumps(
+            {
+                "source_fingerprint": ending_fingerprint,
+                "exact_check_count": len(parity_results),
+                "projected_row_count": sum(int(item["count"]) for item in parity_results),
+            },
+            sort_keys=True,
+        )
         print("Ladybug graph parity validation passed")
+        return summary
     finally:
         if graph_conn is not None:
             graph_conn.close()
@@ -988,6 +1162,14 @@ def main() -> None:
             graph_db.close()
         if sqlite_conn is not None:
             sqlite_conn.close()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Validate SQLite/Ladybug graph parity.")
+    parser.add_argument("--db", default=SQLITE_DB, help="SQLite catalog path")
+    parser.add_argument("--graph", default=GRAPH_DB, help="Ladybug graph path")
+    args = parser.parse_args()
+    validate_paths(args.db, args.graph)
 
 
 if __name__ == "__main__":

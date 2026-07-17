@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
+import fcntl
+import hashlib
+import os
+import shutil
 import sqlite3
+import uuid
 from pathlib import Path
 from config import CATALOG_DB as SQLITE_DB, GRAPH_DB
 import ladybug as lb
@@ -21,7 +27,6 @@ REL_TYPE_MAP = {
 NODE_CHUNK_SIZE = 50000
 EDGE_STMT_BATCH = 3000
 EDGE_ROW_CHUNK_SIZE = 50000
-
 
 def copy_table_from_sql(
     sql: sqlite3.Connection,
@@ -47,8 +52,36 @@ def copy_table_from_sql(
     with tqdm(desc=f"COPY {target_table}", unit="row") as pbar:
         if all_rows:
             df = pd.DataFrame(all_rows, schema=columns, orient="row", infer_schema_length=None)  # noqa: F841 - required by Ladybug COPY ... FROM df
+            _ = df
             g.execute(f"COPY {target_table} FROM df")
             pbar.update(len(all_rows))
+
+
+def copy_rel_table_from_sql(
+    sql: sqlite3.Connection,
+    g: lb.Connection,
+    select_sql: str,
+    rel_table: str,
+    chunk_size: int = EDGE_ROW_CHUNK_SIZE,
+) -> None:
+    cursor = sql.execute(select_sql)
+    columns = [col[0] for col in cursor.description]
+
+    with tqdm(desc=f"COPY {rel_table}", unit="row") as pbar:
+        while True:
+            rows = cursor.fetchmany(chunk_size)
+            if not rows:
+                break
+
+            df = pd.DataFrame(
+                rows,
+                schema=columns,
+                orient="row",
+                infer_schema_length=None,
+            )  # noqa: F841 - required by Ladybug COPY ... FROM df
+            _ = df
+            g.execute(f"COPY {rel_table} FROM df")
+            pbar.update(len(rows))
 
 
 def execute_queries_in_batches(
@@ -644,28 +677,36 @@ def load_nodes(sql: sqlite3.Connection, g: lb.Connection) -> None:
 
 def load_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
     def _process_edge_rows(
-        select_sql: str,
-        row_to_query,
-        desc: str,
-    ) -> None:
+    select_sql: str,
+    row_to_query,
+    desc: str,
+) -> None:
         cursor = sql.execute(select_sql)
+        pending_queries: list[str] = []
+
         with tqdm(desc=desc, unit="row") as pbar:
             while True:
                 rows = cursor.fetchmany(EDGE_ROW_CHUNK_SIZE)
                 if not rows:
                     break
-                batch_queries = []
+
                 for row in rows:
                     stmt = row_to_query(row)
-                    if stmt:
-                        batch_queries.append(stmt)
-                execute_queries_in_batches(
-                    g,
-                    batch_queries,
-                    batch_size=EDGE_STMT_BATCH,
-                    desc=f"{desc} execute",
-                )
+                    if not stmt:
+                        continue
+
+                    pending_queries.append(stmt)
+
+                    # Flush as soon as we hit the statement batch size.
+                    if len(pending_queries) >= EDGE_STMT_BATCH:
+                        g.execute(";\n".join(pending_queries) + ";")
+                        pending_queries.clear()
+
                 pbar.update(len(rows))
+
+            # Flush tail statements.
+            if pending_queries:
+                g.execute(";\n".join(pending_queries) + ";")
 
     _process_edge_rows(
         "SELECT entity_id, symbol_id, role, weight FROM entity_roots ORDER BY id",
@@ -687,24 +728,113 @@ def load_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
         "Loading ENTITY_MAPPING edges",
     )
 
-    _process_edge_rows(
-        "SELECT relationship_type, source_symbol_id, target_symbol_id FROM relationships WHERE source_symbol_id IS NOT NULL AND target_symbol_id IS NOT NULL",
-        lambda r: (
-            "MATCH (a:Symbol {symbol_id:%d}), (b:Symbol {symbol_id:%d}) "
-            "CREATE (a)-[:%s]->(b)" % (r[1], r[2], REL_TYPE_MAP[r[0]])
-            if r[0] in REL_TYPE_MAP
-            else None
-        ),
-        "Loading symbol relationships",
+    copy_rel_table_from_sql(
+        sql,
+        g,
+        """
+        SELECT
+            source_symbol_id AS \"FROM\",
+            target_symbol_id AS \"TO\"
+        FROM relationships
+        WHERE relationship_type = 'INHERITS'
+          AND source_symbol_id IS NOT NULL
+          AND target_symbol_id IS NOT NULL
+        ORDER BY id
+        """,
+        "INHERITS",
     )
 
-    _process_edge_rows(
-        "SELECT s.id, s.file_id FROM symbols s WHERE s.file_id IS NOT NULL",
-        lambda r: (
-            "MATCH (s:Symbol {symbol_id:%d}), (f:File {file_id:%d}) "
-            "CREATE (s)-[:DECLARED_IN]->(f)" % (r[0], r[1])
-        ),
-        "Loading DECLARED_IN edges",
+    copy_rel_table_from_sql(
+        sql,
+        g,
+        """
+        SELECT
+            source_symbol_id AS \"FROM\",
+            target_symbol_id AS \"TO\"
+        FROM relationships
+        WHERE relationship_type = 'IMPLEMENTS'
+          AND source_symbol_id IS NOT NULL
+          AND target_symbol_id IS NOT NULL
+        ORDER BY id
+        """,
+        "IMPLEMENTS",
+    )
+
+    copy_rel_table_from_sql(
+        sql,
+        g,
+        """
+        SELECT
+            source_symbol_id AS \"FROM\",
+            target_symbol_id AS \"TO\"
+        FROM relationships
+        WHERE relationship_type = 'IMPORTS'
+          AND source_symbol_id IS NOT NULL
+          AND target_symbol_id IS NOT NULL
+        ORDER BY id
+        """,
+        "IMPORTS",
+    )
+
+    copy_rel_table_from_sql(
+        sql,
+        g,
+        """
+        SELECT
+            source_symbol_id AS \"FROM\",
+            target_symbol_id AS \"TO\"
+        FROM relationships
+        WHERE relationship_type = 'USES'
+          AND source_symbol_id IS NOT NULL
+          AND target_symbol_id IS NOT NULL
+        ORDER BY id
+        """,
+        "USES",
+    )
+
+    copy_rel_table_from_sql(
+        sql,
+        g,
+        """
+        SELECT
+            source_symbol_id AS \"FROM\",
+            target_symbol_id AS \"TO\"
+        FROM relationships
+        WHERE relationship_type = 'REFERENCES'
+          AND source_symbol_id IS NOT NULL
+          AND target_symbol_id IS NOT NULL
+        ORDER BY id
+        """,
+        "REFERENCES",
+    )
+
+    copy_rel_table_from_sql(
+        sql,
+        g,
+        """
+        SELECT
+            source_symbol_id AS \"FROM\",
+            target_symbol_id AS \"TO\"
+        FROM relationships
+        WHERE relationship_type IN ('CALLS', 'STATIC_CALLS')
+          AND source_symbol_id IS NOT NULL
+          AND target_symbol_id IS NOT NULL
+        ORDER BY id
+        """,
+        "CALLS",
+    )
+
+    copy_rel_table_from_sql(
+        sql,
+        g,
+        """
+        SELECT
+            s.id AS \"FROM\",
+            s.file_id AS \"TO\"
+        FROM symbols s
+        ORDER BY s.id
+        """,
+        "DECLARED_IN",
     )
 
     _process_edge_rows(
@@ -1236,22 +1366,18 @@ def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
         "Loading POLICY_VALUE_GRANTS_OPERATION edges (with dedup guard for unique op_keys)",
     )
 
-def main() -> None:
+def build_graph(sqlite_path: str, graph_path: str) -> None:
     sql = db = g = None
     try:
-        Path(GRAPH_DB).parent.mkdir(parents=True, exist_ok=True)
-        sql = sqlite3.connect(SQLITE_DB)
-        db = lb.Database(GRAPH_DB)
+        Path(graph_path).parent.mkdir(parents=True, exist_ok=True)
+        sql = sqlite3.connect(sqlite_path)
+        db = lb.Database(graph_path)
         g = lb.Connection(db)
-
         ensure_schema(g)
-        
         load_nodes(sql, g)
         load_v2_nodes(sql, g)
-
         load_edges(sql, g)
         load_v2_edges(sql, g)
-
         print("Ladybug graph build complete")
     finally:
         if g is not None:
@@ -1260,6 +1386,154 @@ def main() -> None:
             db.close()
         if sql is not None:
             sql.close()
+
+
+def create_sqlite_snapshot(source_path: str, snapshot_path: Path) -> None:
+    """Create one transactionally consistent SQLite backup for build and validation."""
+    source = sqlite3.connect(f"file:{Path(source_path).resolve()}?mode=ro", uri=True)
+    destination = sqlite3.connect(snapshot_path)
+    try:
+        source.backup(destination)
+    finally:
+        destination.close()
+        source.close()
+
+
+def source_fingerprint(snapshot_path: Path) -> str:
+    digest = hashlib.sha256()
+    with snapshot_path.open("rb") as snapshot:
+        for chunk in iter(lambda: snapshot.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def require_graph_builds_migration(conn: sqlite3.Connection) -> None:
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='graph_builds'"
+    ).fetchone()
+    if not exists:
+        raise RuntimeError(
+            "graph_builds is missing; apply migrations/017_graph_builds.sql first"
+        )
+
+
+def preserve_previous_graph(active: Path, previous: Path, build_token: str) -> None:
+    """Prepare the rollback copy without moving or removing the active path."""
+    if not active.exists():
+        return
+    temporary = previous.with_name(f"{previous.name}.tmp.{build_token}")
+    temporary.unlink(missing_ok=True)
+    try:
+        try:
+            os.link(active, temporary)
+        except OSError:
+            shutil.copy2(active, temporary)
+        os.replace(temporary, previous)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def promote_validated_graph(
+    sqlite_path: str = SQLITE_DB, graph_path: str = GRAPH_DB
+) -> None:
+    active = Path(graph_path)
+    active.parent.mkdir(parents=True, exist_ok=True)
+    previous = active.with_name(active.name + ".previous")
+    lock_path = active.with_name(active.name + ".build.lock")
+    build_token = uuid.uuid4().hex
+    candidate = active.with_name(f"{active.name}.candidate.{build_token}")
+    snapshot = active.with_name(f"{active.name}.snapshot.{build_token}.db")
+    build_id = None
+    promoted = False
+
+    with lock_path.open("a+b") as lock:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError(f"another graph build holds {lock_path}") from exc
+
+        metadata = sqlite3.connect(sqlite_path)
+        try:
+            require_graph_builds_migration(metadata)
+            create_sqlite_snapshot(sqlite_path, snapshot)
+            fingerprint = source_fingerprint(snapshot)
+            cur = metadata.execute(
+                """
+                INSERT INTO graph_builds(
+                    graph_path, source_db, status, source_fingerprint
+                ) VALUES (?, ?, 'building', ?)
+                """,
+                (str(active), str(Path(sqlite_path).resolve()), fingerprint),
+            )
+            build_id = int(cur.lastrowid)
+            metadata.commit()
+
+            build_graph(str(snapshot), str(candidate))
+            from validation.validate_graph import validate_paths
+
+            validation_summary = validate_paths(
+                str(snapshot),
+                str(candidate),
+                expected_fingerprint=fingerprint,
+            )
+            metadata.execute(
+                """
+                UPDATE graph_builds
+                SET status='validated', validation_summary=?
+                WHERE id=?
+                """,
+                (validation_summary, build_id),
+            )
+            metadata.commit()
+
+            preserve_previous_graph(active, previous, build_token)
+            os.replace(candidate, active)
+            promoted = True
+
+            try:
+                metadata.execute(
+                    """
+                    UPDATE graph_builds
+                    SET status='active', completed_at=CURRENT_TIMESTAMP
+                    WHERE id=?
+                    """,
+                    (build_id,),
+                )
+                metadata.commit()
+            except sqlite3.Error as exc:
+                print(
+                    f"Warning: graph promoted but metadata update failed for "
+                    f"build {build_id}: {exc}"
+                )
+            print(f"Promoted validated graph to {active}")
+        except Exception as exc:
+            if build_id is not None and not promoted:
+                try:
+                    metadata.execute(
+                        """
+                        UPDATE graph_builds
+                        SET status='failed', completed_at=CURRENT_TIMESTAMP, error=?
+                        WHERE id=?
+                        """,
+                        (str(exc), build_id),
+                    )
+                    metadata.commit()
+                except sqlite3.Error:
+                    pass
+            raise
+        finally:
+            metadata.close()
+            candidate.unlink(missing_ok=True)
+            snapshot.unlink(missing_ok=True)
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Build and atomically promote the Ladybug graph.")
+    parser.add_argument("--db", default=SQLITE_DB, help="SQLite catalog path")
+    parser.add_argument("--graph", default=GRAPH_DB, help="Active Ladybug graph path")
+    args = parser.parse_args()
+    promote_validated_graph(args.db, args.graph)
 
 
 if __name__ == "__main__":

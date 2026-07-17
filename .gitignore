@@ -28,3 +28,6 @@ catalog/catalog - Copy.db:Zone.Identifier
 catalog/*.db
 catalog.db
 catalog/*.lbug
+catalog/*.lbug.build.lock
+catalog/*.lbug.candidate.*
+catalog/*.lbug.snapshot.*.db

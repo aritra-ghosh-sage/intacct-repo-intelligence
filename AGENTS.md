@@ -89,6 +89,7 @@ python scripts/query_catalog.py sql "SELECT COUNT(*) FROM files"
 - Query scripts expect a populated `catalog/catalog.db`; they are not setup commands.
 - `parser.extract_symbols` is incremental unless `--full` is passed.
 - Validation documents may be more operationally accurate than the README for current edge cases and failure modes.
+- Do not build the Ladybug graph during an agentic session. Full graph construction is a lengthy operator-run workflow; agents may run read-only validation and focused unit tests only.
 
 ## Data Quality Hotspots
 
