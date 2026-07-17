@@ -386,6 +386,10 @@ def ensure_schema(conn: lb.Connection) -> None:
         "FROM EntityAccessLink TO SecurityOperation)"
     )
     conn.execute(
+        "CREATE REL TABLE IF NOT EXISTS ENTITY_ACCESS_LINK_SECURITY_RESOURCE("
+        "FROM EntityAccessLink TO SecurityOperation)"
+    )
+    conn.execute(
         "CREATE REL TABLE IF NOT EXISTS ENTITY_ACCESS_LINK_SECURITY_POLICY("
         "FROM EntityAccessLink TO SecurityPolicy)"
     )
@@ -411,9 +415,12 @@ def ensure_schema(conn: lb.Connection) -> None:
         "CREATE REL TABLE IF NOT EXISTS POLICY_VALUE_GRANTS_OPERATION("
         "FROM SecurityPolicyValue TO SecurityOperation)"
     )
-
-    # Defer these until you add deterministic unique resolution checks:
-    # - security_operation_allowops -> SecurityOperation to SecurityOperation
+    conn.execute(
+        "CREATE REL TABLE IF NOT EXISTS ALLOWS_SECURITY_OPERATION("
+        "FROM SecurityOperation TO SecurityOperation, "
+        "allowed_op_key STRING, "
+        "resolution_reason STRING)"
+    )
 
 def process_edge_rows_many(
     sql: sqlite3.Connection,
@@ -1234,6 +1241,25 @@ def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
         """
         SELECT id, record_id
         FROM entity_access_links
+        WHERE surface = 'security_resource'
+        ORDER BY id
+        """,
+        lambda r: [
+            (
+                "MATCH (l:EntityAccessLink {entity_access_link_id:%d}), "
+                "(o:SecurityOperation {security_operation_id:%d}) "
+                "CREATE (l)-[:ENTITY_ACCESS_LINK_SECURITY_RESOURCE]->(o)"
+            ) % (r[0], r[1])
+        ],
+        "Loading entity access security resource edges",
+    )
+
+    process_edge_rows_many(
+        sql,
+        g,
+        """
+        SELECT id, record_id
+        FROM entity_access_links
         WHERE surface = 'security_operation'
         ORDER BY id
         """,
@@ -1327,11 +1353,15 @@ def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
         sql,
         g,
         """
-        SELECT o.id, e.id
+        SELECT DISTINCT o.id, em.entity_id
         FROM openapispec_index o
-        JOIN entity_nodes e ON e.name = o.x_mapped_to
-        WHERE o.x_mapped_to IS NOT NULL AND TRIM(o.x_mapped_to) <> ''
-        ORDER BY o.id
+        JOIN entity_mappings em
+          ON em.file_id = o.file_id
+         AND em.entity_id IS NOT NULL
+         AND em.mapping_type LIKE 'openapispec_%'
+        WHERE o.x_mapped_to IS NOT NULL
+          AND TRIM(o.x_mapped_to) <> ''
+        ORDER BY o.id, em.entity_id
         """,
         lambda r: [
             (
@@ -1341,6 +1371,25 @@ def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
             ) % (r[0], r[1])
         ],
         "Loading DOCUMENTS_ENTITY edges (openapi to entity via x_mapped_to)",
+    )
+
+    process_edge_rows_many(
+        sql,
+        g,
+        """
+        SELECT operation_id, allowed_operation_id, allowed_op_key, resolution_reason
+        FROM security_operation_allowops
+        WHERE allowed_operation_id IS NOT NULL
+        ORDER BY operation_id, allowed_operation_id, id
+        """,
+        lambda r: [
+            (
+                "MATCH (a:SecurityOperation {security_operation_id:%d}), "
+                "(b:SecurityOperation {security_operation_id:%d}) "
+                "CREATE (a)-[:ALLOWS_SECURITY_OPERATION {allowed_op_key:'%s', resolution_reason:'%s'}]->(b)"
+            ) % (r[0], r[1], q(r[2] or ""), q(r[3] or ""))
+        ],
+        "Loading ALLOWS_SECURITY_OPERATION edges",
     )
 
     process_edge_rows_many(

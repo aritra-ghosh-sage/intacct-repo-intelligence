@@ -19,6 +19,73 @@ def column_exists(conn: sqlite3.Connection, table_name: str, column_name: str) -
     return any(str(row["name"]) == column_name for row in rows)
 
 
+
+
+def check_security_entity_access_links(conn: sqlite3.Connection) -> dict:
+    required = {"entity_access_links", "security_operations", "entity_nodes"}
+    existing = {
+        row["name"]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    if not required.issubset(existing):
+        return {"ok": False, "count": -1, "error": "missing_security_link_tables"}
+
+    operation_count = int(
+        conn.execute("SELECT COUNT(*) FROM security_operations").fetchone()[0]
+    )
+    rows = conn.execute(
+        """
+        SELECT eal.surface, so.op_key, e.name, e.module
+        FROM entity_access_links eal
+        JOIN security_operations so
+          ON so.id = eal.record_id
+        JOIN entity_nodes e
+          ON e.id = eal.entity_id
+        WHERE eal.surface IN ('security_resource', 'security_operation')
+        """
+    ).fetchall()
+    invalid = 0
+    for row in rows:
+        parts = [part.strip() for part in str(row["op_key"]).strip("/").split("/")]
+        if len(parts) < 3:
+            invalid += 1
+            continue
+        expected_surface = (
+            "security_resource" if len(parts) == 3 else "security_operation"
+        )
+        if (
+            row["surface"] != expected_surface
+            or parts[2].lower() != str(row["name"]).lower()
+            or parts[0].lower() != str(row["module"]).lower()
+        ):
+            invalid += 1
+    missing_links = int(operation_count > 0 and not rows)
+    return {
+        "ok": missing_links == 0 and invalid == 0,
+        "count": invalid + missing_links,
+        "operation_count": operation_count,
+        "linked_rows": len(rows),
+    }
+
+
+def check_allowops_resolution(conn: sqlite3.Connection) -> dict:
+    if not column_exists(conn, "security_operation_allowops", "allowed_operation_id"):
+        return {"ok": False, "count": -1, "error": "missing_column:allowed_operation_id"}
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS cnt
+        FROM security_operation_allowops a
+        LEFT JOIN security_operations target
+          ON target.id = a.allowed_operation_id
+        WHERE a.allowed_operation_id IS NOT NULL
+          AND target.id IS NULL
+        """
+    ).fetchone()
+    return {"ok": row["cnt"] == 0, "count": int(row["cnt"])}
+
+
 def check_conflicting_key_to_id(conn: sqlite3.Connection) -> dict:
     row = conn.execute(
         """
@@ -144,6 +211,46 @@ def check_unresolved_security_menus_file_ids(conn: sqlite3.Connection) -> dict:
     return {"ok": row["cnt"] == 0, "count": int(row["cnt"])}
 
 
+
+
+def check_security_derived_links(conn: sqlite3.Connection) -> dict:
+    checks = [
+        """
+        SELECT COUNT(*)
+        FROM entity_access_links p
+        WHERE p.surface = 'security_policy'
+          AND NOT EXISTS (
+              SELECT 1
+              FROM security_policy_values spv
+              JOIN security_policy_eops spe ON spe.policy_value_id = spv.id
+              JOIN security_operations so ON so.op_key = spe.op_key
+              JOIN entity_access_links op
+                ON op.entity_id = p.entity_id
+               AND op.surface IN ('security_resource', 'security_operation')
+               AND op.record_id = so.id
+              WHERE spv.policy_id = p.record_id
+          )
+        """,
+        """
+        SELECT COUNT(*)
+        FROM entity_access_links mi
+        WHERE mi.surface = 'security_menu_item'
+          AND NOT EXISTS (
+              SELECT 1
+              FROM security_menu_op_links mol
+              JOIN security_operations so ON so.op_key = mol.op_key
+              JOIN entity_access_links op
+                ON op.entity_id = mi.entity_id
+               AND op.surface IN ('security_resource', 'security_operation')
+               AND op.record_id = so.id
+              WHERE mol.menu_item_id = mi.record_id
+          )
+        """,
+    ]
+    count = sum(int(conn.execute(query).fetchone()[0]) for query in checks)
+    return {"ok": count == 0, "count": count}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", default="catalog/catalog.db")
@@ -208,6 +315,9 @@ def main() -> None:
     try:
         checks = {
             "conflicting_key_to_id": check_conflicting_key_to_id(conn),
+            "security_entity_access_links": check_security_entity_access_links(conn),
+            "allowops_resolution": check_allowops_resolution(conn),
+            "security_derived_links": check_security_derived_links(conn),
             "conflicting_id_to_key": check_conflicting_id_to_key(conn),
             "unresolved_policy_keys": check_unresolved_policy_keys(conn),
             "unresolved_menu_keys": check_unresolved_menu_keys(conn),
@@ -234,6 +344,9 @@ def main() -> None:
         return threshold >= 0 and count > threshold
 
     threshold_map = {
+        "security_entity_access_links": 0,
+        "allowops_resolution": -1,
+        "security_derived_links": -1,
         "conflicting_key_to_id": args.max_conflicting_key_to_id,
         "conflicting_id_to_key": args.max_conflicting_id_to_key,
         "unresolved_policy_keys": args.max_unresolved_policy_keys,

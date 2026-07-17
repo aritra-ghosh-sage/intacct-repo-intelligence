@@ -708,13 +708,14 @@ def link_command(
     repo_root = repo_root.resolve()
     conn = get_connection(db)
     try:
-        if reset:
-            placeholders = ", ".join(["?"] * len(OPENAPI_MAPPING_TYPES))
-            conn.execute(
-                f"DELETE FROM entity_mappings WHERE mapping_type IN ({placeholders})",
-                OPENAPI_MAPPING_TYPES,
-            )
-            conn.commit()
+        # OpenAPI mappings are a materialized projection of the current index.
+        # Rebuild them on every run so stale mappings cannot survive metadata
+        # changes when callers omit the compatibility --reset flag.
+        placeholders = ", ".join(["?"] * len(OPENAPI_MAPPING_TYPES))
+        conn.execute(
+            f"DELETE FROM entity_mappings WHERE mapping_type IN ({placeholders})",
+            OPENAPI_MAPPING_TYPES,
+        )
 
         stats = _link_openapispec(
             conn=conn,

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import sys
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,11 +18,15 @@ except ModuleNotFoundError:
     from catalog.db import get_connection
 
 DEFAULT_DB = "catalog/catalog.db"
+SECURITY_UNRESOLVED_LOG = Path("outputs/security_unresolved_keys.jsonl")
+ENTITY_SECURITY_UNRESOLVED_CATEGORY = "entity_security_key_unresolved"
 
 
 @dataclass
 class BuildStats:
     rows_inserted: int = 0
+    security_keys_linked: int = 0
+    security_keys_unresolved: int = 0
 
 
 def ensure_entity_access_table(conn: sqlite3.Connection) -> None:
@@ -130,116 +136,6 @@ def _run_insert(conn: sqlite3.Connection, sql: str) -> int:
 
 def link_by_file_overlap(conn: sqlite3.Connection) -> int:
     total = 0
-
-    total += _run_insert(
-        conn,
-        _entity_file_anchors_cte()
-        + """
-        INSERT OR IGNORE INTO entity_access_links (
-            entity_id,
-            surface,
-            record_id,
-            link_type,
-            evidence_file_id,
-            confidence_mode,
-            notes
-        )
-        SELECT DISTINCT
-            efa.entity_id,
-            'security_operation',
-            so.id,
-            'file_id_overlap',
-            so.file_id,
-            'deterministic_exact',
-            'entity anchor file_id equals security operation file_id'
-        FROM entity_file_anchors efa
-        JOIN security_operations so
-          ON so.file_id = efa.file_id
-        """,
-    )
-
-    total += _run_insert(
-        conn,
-        _entity_file_anchors_cte()
-        + """
-        INSERT OR IGNORE INTO entity_access_links (
-            entity_id,
-            surface,
-            record_id,
-            link_type,
-            evidence_file_id,
-            confidence_mode,
-            notes
-        )
-        SELECT DISTINCT
-            efa.entity_id,
-            'security_policy',
-            sp.id,
-            'file_id_overlap',
-            sp.file_id,
-            'deterministic_exact',
-            'entity anchor file_id equals security policy file_id'
-        FROM entity_file_anchors efa
-        JOIN security_policies sp
-          ON sp.file_id = efa.file_id
-        """,
-    )
-
-    total += _run_insert(
-        conn,
-        _entity_file_anchors_cte()
-        + """
-        INSERT OR IGNORE INTO entity_access_links (
-            entity_id,
-            surface,
-            record_id,
-            link_type,
-            evidence_file_id,
-            confidence_mode,
-            notes
-        )
-        SELECT DISTINCT
-            efa.entity_id,
-            'security_menu',
-            sm.id,
-            'file_id_overlap',
-            sm.file_id,
-            'deterministic_exact',
-            'entity anchor file_id equals security menu file_id'
-        FROM entity_file_anchors efa
-        JOIN security_menus sm
-          ON sm.file_id = efa.file_id
-        """,
-    )
-
-    total += _run_insert(
-        conn,
-        _entity_file_anchors_cte()
-        + """
-        INSERT OR IGNORE INTO entity_access_links (
-            entity_id,
-            surface,
-            record_id,
-            link_type,
-            evidence_file_id,
-            confidence_mode,
-            notes
-        )
-        SELECT DISTINCT
-            efa.entity_id,
-            'security_menu_item',
-            smi.id,
-            'file_id_overlap',
-            sm.file_id,
-            'deterministic_exact',
-            'entity anchor file_id equals parent security menu file_id'
-        FROM entity_file_anchors efa
-        JOIN security_menus sm
-          ON sm.file_id = efa.file_id
-        JOIN security_menu_items smi
-          ON smi.menu_id = sm.id
-        """,
-    )
 
     total += _run_insert(
         conn,
@@ -418,9 +314,210 @@ def link_by_table_name_match(conn: sqlite3.Connection) -> int:
     )
 
 
+
+def parse_security_operation_key(op_key: str) -> dict[str, str] | None:
+    parts = [part.strip() for part in op_key.strip("/").split("/")]
+    if len(parts) < 3 or any(not part for part in parts[:3]):
+        return None
+    return {
+        "module": parts[0].lower(),
+        "route": parts[1].lower(),
+        "entity": parts[2].lower(),
+        "action": "/".join(parts[3:]).lower(),
+        "surface": "security_resource" if len(parts) == 3 else "security_operation",
+    }
+
+
+def _insert_access_link(
+    conn: sqlite3.Connection,
+    entity_id: int,
+    surface: str,
+    record_id: int,
+    link_type: str,
+    evidence_file_id: int | None,
+    notes: str,
+) -> int:
+    existing = conn.execute(
+        """
+        SELECT 1
+        FROM entity_access_links
+        WHERE entity_id = ? AND surface = ? AND record_id = ?
+          AND link_type = ? AND evidence_file_id IS ?
+          AND evidence_symbol_id IS NULL
+        LIMIT 1
+        """,
+        (entity_id, surface, record_id, link_type, evidence_file_id),
+    ).fetchone()
+    if existing:
+        return 0
+    cur = conn.execute(
+        """
+        INSERT INTO entity_access_links (
+            entity_id, surface, record_id, link_type,
+            evidence_file_id, confidence_mode, notes
+        )
+        VALUES (?, ?, ?, ?, ?, 'deterministic_exact', ?)
+        """,
+        (entity_id, surface, record_id, link_type, evidence_file_id, notes),
+    )
+    return int(cur.rowcount)
+
+
+def _security_key_diagnostic(
+    row: sqlite3.Row,
+    parsed: dict[str, str] | None,
+    reason: str,
+    candidates: list[tuple[int, str]],
+) -> dict:
+    record = {
+        "category": ENTITY_SECURITY_UNRESOLVED_CATEGORY,
+        "security_operation_id": int(row["id"]),
+        "op_key": str(row["op_key"]),
+        "source_file": row["source_file"],
+        "file_id": row["file_id"],
+        "reason": reason,
+        "candidate_entities": [
+            {"entity_id": entity_id, "module": module}
+            for entity_id, module in candidates
+        ],
+    }
+    if parsed is not None:
+        record["parsed"] = parsed
+    return record
+
+
+def _write_security_key_diagnostics(records: list[dict]) -> None:
+    path = SECURITY_UNRESOLVED_LOG
+    existing_lines: list[str] = []
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if value.get("category") != ENTITY_SECURITY_UNRESOLVED_CATEGORY:
+                existing_lines.append(line)
+    new_lines = [
+        json.dumps(value, ensure_ascii=False, sort_keys=True)
+        for value in records
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [*existing_lines, *new_lines]
+    path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+
+
+def link_security_surfaces(
+    conn: sqlite3.Connection,
+    diagnostics: list[dict] | None = None,
+) -> tuple[int, int]:
+    """Link security surfaces by exact key evidence and report rejected keys."""
+    if diagnostics is None:
+        diagnostics = []
+    entities_by_name: dict[str, list[tuple[int, str]]] = defaultdict(list)
+    for row in conn.execute("SELECT id, name, module FROM entity_nodes"):
+        if row["name"] and row["module"]:
+            entities_by_name[str(row["name"]).strip().lower()].append(
+                (int(row["id"]), str(row["module"]).strip().lower())
+            )
+
+    total = 0
+    linked_key_count = 0
+    linked_keys_by_entity: dict[int, set[str]] = defaultdict(set)
+    for row in conn.execute(
+        "SELECT id, op_key, source_file, file_id FROM security_operations ORDER BY id"
+    ):
+        parsed = parse_security_operation_key(str(row["op_key"]))
+        if parsed is None:
+            diagnostics.append(
+                _security_key_diagnostic(row, None, "malformed_key", [])
+            )
+            continue
+        name_candidates = entities_by_name.get(parsed["entity"], [])
+        candidates = [
+            (entity_id, module)
+            for entity_id, module in name_candidates
+            if module == parsed["module"]
+        ]
+        if len(candidates) == 0:
+            reason = (
+                "module_mismatched"
+                if name_candidates
+                else "entity_unmatched"
+            )
+            diagnostics.append(
+                _security_key_diagnostic(row, parsed, reason, name_candidates)
+            )
+            continue
+        if len(candidates) != 1:
+            diagnostics.append(
+                _security_key_diagnostic(row, parsed, "entity_ambiguous", candidates)
+            )
+            continue
+        entity_id = candidates[0][0]
+        linked_key_count += 1
+        linked_keys_by_entity[entity_id].add(str(row["op_key"]))
+        total += _insert_access_link(
+            conn,
+            entity_id,
+            parsed["surface"],
+            int(row["id"]),
+            "security_key_match",
+            row["file_id"],
+            (
+                f"parsed key module={parsed['module']} route={parsed['route']} "
+                f"entity={parsed['entity']} action={parsed['action'] or '<resource>'}; "
+                f"source={row['source_file']}"
+            ),
+        )
+
+    for entity_id, op_keys in linked_keys_by_entity.items():
+        for op_key in sorted(op_keys):
+            for row in conn.execute(
+                """
+                SELECT DISTINCT sp.id, sp.file_id
+                FROM security_policy_values spv
+                JOIN security_policy_eops spe ON spe.policy_value_id = spv.id
+                JOIN security_policies sp ON sp.id = spv.policy_id
+                WHERE spe.op_key = ?
+                ORDER BY sp.id
+                """,
+                (op_key,),
+            ):
+                total += _insert_access_link(
+                    conn, entity_id, "security_policy", int(row["id"]),
+                    "operation_policy_grant", row["file_id"],
+                    f"policy supported by security operation key={op_key}",
+                )
+
+            for row in conn.execute(
+                """
+                SELECT DISTINCT smi.id AS item_id, sm.id AS menu_id, sm.file_id
+                FROM security_menu_op_links mol
+                JOIN security_menu_items smi ON smi.id = mol.menu_item_id
+                JOIN security_menus sm ON sm.id = smi.menu_id
+                WHERE mol.op_key = ? AND mol.operation_id IS NOT NULL
+                ORDER BY smi.id
+                """,
+                (op_key,),
+            ):
+                total += _insert_access_link(
+                    conn, entity_id, "security_menu_item", int(row["item_id"]),
+                    "operation_menu_item", row["file_id"],
+                    f"menu item supported by security operation key={op_key}",
+                )
+                total += _insert_access_link(
+                    conn, entity_id, "security_menu", int(row["menu_id"]),
+                    "operation_menu", row["file_id"],
+                    f"menu supported by security operation key={op_key}",
+                )
+    return total, linked_key_count
+
+
+
 def build(db: str, reset: bool) -> BuildStats:
     conn = get_connection(db)
     stats = BuildStats()
+    diagnostics: list[dict] = []
 
     try:
         ensure_entity_access_table(conn)
@@ -429,6 +526,11 @@ def build(db: str, reset: bool) -> BuildStats:
             conn.execute("DELETE FROM entity_access_links")
 
         stats.rows_inserted += link_by_file_overlap(conn)
+        security_links, linked_key_count = link_security_surfaces(conn, diagnostics)
+        stats.rows_inserted += security_links
+        stats.security_keys_linked = linked_key_count
+        stats.security_keys_unresolved = len(diagnostics)
+        _write_security_key_diagnostics(diagnostics)
         stats.rows_inserted += link_by_entity_fk(conn)
         stats.rows_inserted += link_by_table_name_match(conn)
 
@@ -455,6 +557,8 @@ def cli() -> None:
 def build_command(db: str, reset: bool) -> None:
     stats = build(db=db, reset=reset)
     click.echo(f"Entity access links inserted: {stats.rows_inserted}")
+    click.echo(f"Security keys linked: {stats.security_keys_linked}")
+    click.echo(f"Security keys unresolved: {stats.security_keys_unresolved}")
 
 
 if __name__ == "__main__":

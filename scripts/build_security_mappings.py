@@ -170,6 +170,8 @@ class BuildStats:
     unresolved_menu_keys: int = 0
     conflicts_detected: int = 0
     missing_includes: int = 0
+    allowops_resolved: int = 0
+    allowops_unresolved: int = 0
     file_ids_backfilled: int = 0
     unresolved_source_files: int = 0
 
@@ -303,11 +305,23 @@ def ensure_security_tables(conn: sqlite3.Connection) -> None:
         if "file_id" not in cols:
             conn.execute(f"ALTER TABLE {table_name} ADD COLUMN file_id INTEGER")
 
+    allowops_cols = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(security_operation_allowops)").fetchall()
+    }
+    if "allowed_operation_id" not in allowops_cols:
+        conn.execute("ALTER TABLE security_operation_allowops ADD COLUMN allowed_operation_id INTEGER")
+    if "resolution_reason" not in allowops_cols:
+        conn.execute("ALTER TABLE security_operation_allowops ADD COLUMN resolution_reason TEXT")
+
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_security_operations_file_id ON security_operations(file_id)"
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_security_allowops_file_id ON security_operation_allowops(file_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_security_allowops_operation_id ON security_operation_allowops(allowed_operation_id)"
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_security_policies_file_id ON security_policies(file_id)"
@@ -727,17 +741,69 @@ def parse_security_files(
                 cur_allow = conn.execute(
                     """
                     INSERT OR IGNORE INTO security_operation_allowops (
-                        operation_id,
-                        allowed_op_key,
-                        source_file,
-                        source_line
+                        operation_id, allowed_op_key, source_file, source_line,
+                        allowed_operation_id, resolution_reason
                     )
-                    VALUES (?, ?, ?, NULL)
+                    VALUES (?, ?, ?, NULL, NULL, NULL)
                     """,
                     (operation_id, allowed_op, rel),
                 )
                 if cur_allow.rowcount > 0:
                     stats.allowops_inserted += 1
+
+
+def resolve_allowops(
+    conn: sqlite3.Connection,
+    stats: BuildStats,
+    unresolved: list[dict[str, Any]],
+) -> None:
+    """Resolve numeric allowops values to unique security operation rows."""
+    conn.execute(
+        "UPDATE security_operation_allowops "
+        "SET allowed_operation_id = NULL, resolution_reason = NULL"
+    )
+    rows = conn.execute(
+        "SELECT id, allowed_op_key FROM security_operation_allowops ORDER BY id"
+    ).fetchall()
+    for row in rows:
+        raw = normalize_string(row["allowed_op_key"])
+        target_ids: list[int] = []
+        if raw and re.fullmatch(r"-?\d+", raw):
+            target_ids = [
+                int(target["id"])
+                for target in conn.execute(
+                    "SELECT id FROM security_operations "
+                    "WHERE op_numeric_id = ? ORDER BY id",
+                    (int(raw),),
+                ).fetchall()
+            ]
+        if len(target_ids) == 1:
+            conn.execute(
+                "UPDATE security_operation_allowops "
+                "SET allowed_operation_id = ?, resolution_reason = ? WHERE id = ?",
+                (target_ids[0], "unique_numeric_id", row["id"]),
+            )
+            stats.allowops_resolved += 1
+            continue
+        reason = (
+            "missing_numeric_operation"
+            if not target_ids
+            else "ambiguous_numeric_operation"
+        )
+        conn.execute(
+            "UPDATE security_operation_allowops "
+            "SET resolution_reason = ? WHERE id = ?",
+            (reason, row["id"]),
+        )
+        stats.allowops_unresolved += 1
+        unresolved.append(
+            {
+                "category": "allowops_unresolved",
+                "allowops_id": int(row["id"]),
+                "allowed_op_key": raw,
+                "reason": reason,
+            }
+        )
 
 
 def detect_conflicts(
@@ -1228,6 +1294,7 @@ def build(
 
         parse_security_files(conn, repo_root, stats, parse_failures)
         detect_conflicts(conn, conflicts, stats)
+        resolve_allowops(conn, stats, unresolved)
         op_key_map = load_operation_key_map(conn)
         parse_policy_files(
             conn=conn,
@@ -1322,6 +1389,8 @@ def build_command(
     click.echo(f"Files failed:                 {stats.files_failed}")
     click.echo(f"Security operations:          {stats.operations_inserted}")
     click.echo(f"Security allowops links:      {stats.allowops_inserted}")
+    click.echo(f"Security allowops resolved:   {stats.allowops_resolved}")
+    click.echo(f"Security allowops unresolved: {stats.allowops_unresolved}")
     click.echo(f"Policies:                     {stats.policies_inserted}")
     click.echo(f"Policy values:                {stats.policy_values_inserted}")
     click.echo(f"Policy eops:                  {stats.policy_eops_inserted}")

@@ -759,12 +759,31 @@ def _query_entity_security_surface(
 ) -> dict[str, list[dict[str, Any]]]:
     """Query graph for security surface of an entity."""
     surface = {
+        "resources": [],
         "operations": [],
         "policies": [],
         "menus": [],
     }
 
-    # Query operations via EntityAccessLink
+    # Query parent security resources via EntityAccessLink.
+    resource_query = """
+    MATCH (e:Entity {entity_id: $entity_id})<-[:ENTITY_ACCESS_LINK_ENTITY]-(l:EntityAccessLink)-[:ENTITY_ACCESS_LINK_SECURITY_RESOURCE]->(so:SecurityOperation)
+    RETURN DISTINCT
+        so.security_operation_id AS security_operation_id,
+        so.op_key AS op_key,
+        so.title AS title
+    ORDER BY op_key, security_operation_id
+    """
+    try:
+        resource_results = graph_conn.execute(resource_query, {"entity_id": entity_id})
+        surface["resources"] = [
+            {"security_operation_id": row[0], "op_key": row[1], "title": row[2]}
+            for row in resource_results.get_all()
+        ]
+    except Exception as exc:
+        raise RuntimeError(f"graph query failed: {exc}") from exc
+
+    # Query action operations via EntityAccessLink.
     op_query = """
     MATCH (e:Entity {entity_id: $entity_id})<-[:ENTITY_ACCESS_LINK_ENTITY]-(l:EntityAccessLink)-[:ENTITY_ACCESS_LINK_SECURITY_OPERATION]->(so:SecurityOperation)
     RETURN DISTINCT
@@ -873,6 +892,7 @@ def security_surface(
                 "security_surface": surface,
             }
             summary = {
+                "resource_count": len(surface["resources"]),
                 "operation_count": len(surface["operations"]),
                 "policy_count": len(surface["policies"]),
                 "menu_count": len(surface["menus"]),
@@ -887,7 +907,12 @@ def security_surface(
             )
         else:
             click.echo(f"Entity: {entity["name"]} (id={entity["id"]})")
+            click.echo(f"Resources: {len(surface["resources"])}")
+            for row in surface["resources"]:
+                click.echo(f"  {row["op_key"]}")
             click.echo(f"Operations: {len(surface["operations"])}")
+            for row in surface["operations"]:
+                click.echo(f"  {row["op_key"]}")
             click.echo(f"Policies: {len(surface["policies"])}")
             click.echo(f"Menus: {len(surface["menus"])}")
 

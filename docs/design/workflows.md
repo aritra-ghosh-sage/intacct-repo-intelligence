@@ -132,6 +132,7 @@ Then Option B should be reconsidered with concrete source evidence.
 OpenAPI linking is DB-first by design:
 
 - Runtime linker source: `entity_nodes` + `openapispec_index`
+- Each link_openapispec.py link run refreshes all openapispec_* mappings before linking, preventing stale mappings from surviving index changes.
 - Deterministic priority: `x_mapped_to` match first, then heuristic name/module fallback
 - `entity_definitions.jsonl` role: diagnostics/reconciliation only (not runtime linkage)
 

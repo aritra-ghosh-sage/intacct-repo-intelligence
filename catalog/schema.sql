@@ -345,10 +345,13 @@ CREATE TABLE IF NOT EXISTS security_operation_allowops (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     operation_id INTEGER NOT NULL,
     allowed_op_key TEXT NOT NULL,
+    allowed_operation_id INTEGER,
+    resolution_reason TEXT,
     source_file TEXT NOT NULL,
     file_id INTEGER,
     source_line INTEGER,
     FOREIGN KEY(operation_id) REFERENCES security_operations(id) ON DELETE CASCADE,
+    FOREIGN KEY(allowed_operation_id) REFERENCES security_operations(id) ON DELETE SET NULL,
     UNIQUE(operation_id, allowed_op_key, source_file)
 );
 
@@ -356,6 +359,8 @@ CREATE INDEX IF NOT EXISTS idx_security_allowops_allowed_key
     ON security_operation_allowops(allowed_op_key);
 CREATE INDEX IF NOT EXISTS idx_security_allowops_file_id
     ON security_operation_allowops(file_id);
+CREATE INDEX IF NOT EXISTS idx_security_allowops_operation_id
+    ON security_operation_allowops(allowed_operation_id);
 
 CREATE TABLE IF NOT EXISTS security_policies (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
