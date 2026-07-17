@@ -416,7 +416,8 @@ def _query_entity_from_graph(
 ) -> dict[str, Any] | None:
     """Query graph for an entity by name."""
     query = """
-    MATCH (e:Entity {name: $name})
+    MATCH (e:Entity)
+    WHERE toLower(e.name) = toLower($name)
     RETURN 
         e.entity_id AS id,
         e.name AS name,
