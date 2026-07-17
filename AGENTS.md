@@ -30,6 +30,12 @@ This repository builds an evidence-backed SQLite catalog of the Intacct codebase
 python -c "from catalog.db import init_db; init_db()"
 ```
 
+- Apply graph metadata migrations to an existing catalog before using safe graph promotion:
+
+```bash
+python -c "import sqlite3; from pathlib import Path; c=sqlite3.connect('catalog/catalog.db'); [c.executescript(Path(m).read_text()) for m in ('migrations/017_graph_builds.sql', 'migrations/018_graph_build_status_previous.sql')]; c.close()"
+```
+
 - Run the full rebuild pipeline:
 
 ```bash
@@ -75,6 +81,17 @@ python scripts/query_workflow.py
 python scripts/query_catalog.py sql "SELECT COUNT(*) FROM files"
 ```
 
+Read-only graph query commands:
+
+```bash
+python scripts/query_graph.py file-impact app/source/apar/SomeFile.cls
+python scripts/query_graph.py entity-context APBill
+python scripts/query_graph.py who-uses create --symbol-id 6361
+python scripts/query_graph.py security-surface APBill
+```
+
+`who-uses` names must be unique; use `--symbol-id` when the command returns ambiguity candidates. Add `--json` for the stable JSON v1 envelope.
+
 ## Working Conventions
 
 - Prefer SQLite evidence over prose. If a claim can be checked in `catalog/catalog.db`, check it.
@@ -89,7 +106,7 @@ python scripts/query_catalog.py sql "SELECT COUNT(*) FROM files"
 - Query scripts expect a populated `catalog/catalog.db`; they are not setup commands.
 - `parser.extract_symbols` is incremental unless `--full` is passed.
 - Validation documents may be more operationally accurate than the README for current edge cases and failure modes.
-- Do not build the Ladybug graph during an agentic session. Full graph construction is a lengthy operator-run workflow; agents may run read-only validation and focused unit tests only.
+- Do not build or promote the Ladybug graph during an agentic session. Full candidate construction and promotion are lengthy operator-run workflows; agents may run read-only validation, graph queries, and focused unit tests only.
 
 ## Data Quality Hotspots
 
@@ -116,6 +133,7 @@ python validation/validate_phase2b.py --db catalog/catalog.db
 python validation/validate_phase2c1.py --db catalog/catalog.db
 python validation/validate_phase2d.py --db catalog/catalog.db
 python validation/validate_security_mappings.py --db catalog/catalog.db
+PYTHONPATH=. python validation/validate_graph.py --db catalog/catalog.db --graph catalog/graph.lbug
 ```
 
 ## Troubleshooting Queries
