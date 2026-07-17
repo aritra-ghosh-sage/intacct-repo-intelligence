@@ -246,7 +246,7 @@ Apply the graph-build metadata migration once to an existing catalog before the
 first safe rebuild:
 
 ```bash
-python -c "import sqlite3; from pathlib import Path; c=sqlite3.connect('catalog/catalog.db'); c.executescript(Path('migrations/017_graph_builds.sql').read_text()); c.close()"
+python -c "import sqlite3; from pathlib import Path; c=sqlite3.connect('catalog/catalog.db'); [c.executescript(Path(m).read_text()) for m in ('migrations/017_graph_builds.sql', 'migrations/018_graph_build_status_previous.sql')]; c.close()"
 ```
 
 Fresh catalogs initialized through `catalog.db.init_db()` already contain this

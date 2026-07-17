@@ -542,11 +542,14 @@ def validate_paths(
                 "POLICY_VALUE_GRANTS_OPERATION",
                 """
                 SELECT COUNT(*)
-                FROM security_policy_values spv
-                JOIN security_policy_eops spe ON spe.policy_value_id = spv.id
-                JOIN security_operations so ON so.op_key = spe.op_key
-                WHERE spe.op_key IN (
-                    SELECT op_key FROM security_operations GROUP BY op_key HAVING COUNT(*) = 1
+                FROM (
+                    SELECT DISTINCT spv.id, so.id
+                    FROM security_policy_values spv
+                    JOIN security_policy_eops spe ON spe.policy_value_id = spv.id
+                    JOIN security_operations so ON so.op_key = spe.op_key
+                    WHERE spe.op_key IN (
+                        SELECT op_key FROM security_operations GROUP BY op_key HAVING COUNT(*) = 1
+                    )
                 )
                 """,
                 "MATCH ()-[r:POLICY_VALUE_GRANTS_OPERATION]->() RETURN count(r)",

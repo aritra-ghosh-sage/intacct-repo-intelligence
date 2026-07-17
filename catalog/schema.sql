@@ -526,7 +526,7 @@ CREATE TABLE IF NOT EXISTS graph_builds (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     graph_path TEXT NOT NULL,
     source_db TEXT NOT NULL,
-    status TEXT NOT NULL CHECK(status IN ('building', 'validated', 'active', 'failed')),
+    status TEXT NOT NULL CHECK(status IN ('building', 'validated', 'active', 'previous', 'failed')),
     source_fingerprint TEXT NOT NULL,
     started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     completed_at TEXT,

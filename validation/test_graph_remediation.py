@@ -88,6 +88,9 @@ class GraphRemediationTests(unittest.TestCase):
                 migrated.executescript(
                     (ROOT / "migrations/017_graph_builds.sql").read_text()
                 )
+                migrated.executescript(
+                    (ROOT / "migrations/018_graph_build_status_previous.sql").read_text()
+                )
                 self.assertEqual(schema_signature(fresh), schema_signature(migrated))
                 row = migrated.execute(
                     "SELECT status, source_fingerprint FROM graph_builds"
@@ -152,11 +155,14 @@ class GraphRemediationTests(unittest.TestCase):
         conn.execute("INSERT INTO evidence(value) VALUES ('snapshot')")
         conn.commit()
         conn.executescript((ROOT / "migrations/017_graph_builds.sql").read_text())
+        conn.executescript(
+            (ROOT / "migrations/018_graph_build_status_previous.sql").read_text()
+        )
         conn.close()
 
     @mock.patch("validation.validate_graph.validate_paths")
     @mock.patch("scripts.build_graph.build_graph")
-    def test_successful_promotion_retains_previous(
+    def test_two_promotions_mark_one_active_and_one_previous(
         self, mocked_build, mocked_validate
     ):
         with tempfile.TemporaryDirectory() as directory:
@@ -164,27 +170,27 @@ class GraphRemediationTests(unittest.TestCase):
             active = Path(directory) / "graph.lbug"
             active.write_bytes(b"old-active")
             self._create_migrated_catalog(catalog)
+            candidate_contents = iter((b"candidate-one", b"candidate-two"))
 
             def write_candidate(_snapshot, candidate):
-                Path(candidate).write_bytes(b"validated-candidate")
+                Path(candidate).write_bytes(next(candidate_contents))
 
             mocked_build.side_effect = write_candidate
             mocked_validate.return_value = '{"exact_check_count": 52}'
             promote_validated_graph(str(catalog), str(active))
+            promote_validated_graph(str(catalog), str(active))
 
-            self.assertEqual(active.read_bytes(), b"validated-candidate")
+            self.assertEqual(active.read_bytes(), b"candidate-two")
             self.assertEqual(
                 active.with_name("graph.lbug.previous").read_bytes(),
-                b"old-active",
+                b"candidate-one",
             )
             conn = sqlite3.connect(catalog)
             try:
-                self.assertEqual(
-                    conn.execute(
-                        "SELECT status FROM graph_builds ORDER BY id DESC LIMIT 1"
-                    ).fetchone()[0],
-                    "active",
-                )
+                statuses = conn.execute(
+                    "SELECT status FROM graph_builds ORDER BY id"
+                ).fetchall()
+                self.assertEqual(statuses, [("previous",), ("active",)])
             finally:
                 conn.close()
             self.assertEqual(
@@ -193,6 +199,41 @@ class GraphRemediationTests(unittest.TestCase):
             self.assertEqual(
                 list(Path(directory).glob("graph.lbug.snapshot.*")), []
             )
+
+    def test_policy_grant_count_deduplicates_source_rows(self):
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE security_policy_values(id INTEGER PRIMARY KEY);
+                CREATE TABLE security_policy_eops(policy_value_id INTEGER, op_key TEXT);
+                CREATE TABLE security_operations(id INTEGER PRIMARY KEY, op_key TEXT);
+                INSERT INTO security_policy_values VALUES (1);
+                INSERT INTO security_policy_eops VALUES (1, 'read'), (1, 'read');
+                INSERT INTO security_operations VALUES (10, 'read');
+                """
+            )
+            count = conn.execute(
+                """
+                SELECT COUNT(*) FROM (
+                    SELECT DISTINCT spv.id, so.id
+                    FROM security_policy_values spv
+                    JOIN security_policy_eops spe ON spe.policy_value_id = spv.id
+                    JOIN security_operations so ON so.op_key = spe.op_key
+                    WHERE spe.op_key IN (
+                        SELECT op_key FROM security_operations
+                        GROUP BY op_key HAVING COUNT(*) = 1
+                    )
+                )
+                """
+            ).fetchone()[0]
+            self.assertEqual(count, 1)
+        finally:
+            conn.close()
+
+    def test_previous_graph_artifact_is_ignored(self):
+        ignored = (ROOT / ".gitignore").read_text()
+        self.assertIn("catalog/*.lbug.previous", ignored)
 
     @mock.patch("validation.validate_graph.validate_paths")
     @mock.patch("scripts.build_graph.build_graph")

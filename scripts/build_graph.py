@@ -1494,6 +1494,14 @@ def promote_validated_graph(
                 metadata.execute(
                     """
                     UPDATE graph_builds
+                    SET status='previous'
+                    WHERE graph_path=? AND id<>? AND status='active'
+                    """,
+                    (str(active), build_id),
+                )
+                metadata.execute(
+                    """
+                    UPDATE graph_builds
                     SET status='active', completed_at=CURRENT_TIMESTAMP
                     WHERE id=?
                     """,
