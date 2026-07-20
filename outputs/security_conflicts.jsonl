@@ -12,7 +12,6 @@
 {"category": "conflicting_id_to_keys", "op_numeric_id": 171, "distinct_keys": 2}
 {"category": "conflicting_id_to_keys", "op_numeric_id": 2880, "distinct_keys": 2}
 {"category": "conflicting_id_to_keys", "op_numeric_id": 2906, "distinct_keys": 2}
-{"category": "conflicting_id_to_keys", "op_numeric_id": 5833, "distinct_keys": 2}
 {"category": "conflicting_id_to_keys", "op_numeric_id": 7300, "distinct_keys": 2}
 {"category": "conflicting_id_to_keys", "op_numeric_id": 7462, "distinct_keys": 2}
 {"category": "conflicting_id_to_keys", "op_numeric_id": 8010, "distinct_keys": 2}

@@ -1,6 +1,7 @@
 # config.py
+import os
 
-REPO_PATH = "/home/aritraghosh/projects/main"
+REPO_PATH = os.path.expanduser("~/projects/main")
 CATALOG_DB = "catalog/catalog.db"
 GRAPH_DB = "catalog/graph.lbug"
 

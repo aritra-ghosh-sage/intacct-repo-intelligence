@@ -535,7 +535,7 @@ def validate_paths(
                 """
                 SELECT COUNT(*)
                 FROM openapispec_index o
-                JOIN entity_nodes e ON e.name = o.x_mapped_to
+                JOIN entity_nodes e ON lower(e.name) = lower(o.x_mapped_to)
                 WHERE o.x_mapped_to IS NOT NULL AND TRIM(o.x_mapped_to) <> ''
                 """,
                 "MATCH ()-[r:DOCUMENTS_ENTITY]->() RETURN count(r)",
@@ -552,7 +552,7 @@ def validate_paths(
                     WHERE spe.op_key IN (
                         SELECT op_key FROM security_operations GROUP BY op_key HAVING COUNT(*) = 1
                     )
-                )
+                )`
                 """,
                 "MATCH ()-[r:POLICY_VALUE_GRANTS_OPERATION]->() RETURN count(r)",
             ),

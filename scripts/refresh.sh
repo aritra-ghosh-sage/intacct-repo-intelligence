@@ -5,6 +5,14 @@ set -e
 cd ~/projects/intacct-repo-intelligence
 source .venv/bin/activate
 
+# Determine REPO_ROOT dynamically from projects/main
+REPO_ROOT="$(cd ~/projects && find . -maxdepth 1 -type d -name 'main' | head -1 | sed 's|^\./||')"
+if [ -z "$REPO_ROOT" ]; then
+  REPO_ROOT="main"
+fi
+REPO_ROOT="$HOME/projects/$REPO_ROOT"
+PROJECT_ROOT="$HOME/projects/intacct-repo-intelligence"
+
 # Track start time
 START_TIME=$(date +%s)
 echo "=================================================="
@@ -37,7 +45,7 @@ echo ""
 # Phase 2: Repository Scanning
 # ===================================================================
 echo "📂 Phase 2: Scanning repository..."
-echo "   Indexing all source files from /home/aritraghosh/projects/main"
+echo "   Indexing all source files from $REPO_ROOT"
 python -m parser.scan_repo
 echo "   ✅ Repository scan complete"
 echo ""
@@ -56,8 +64,6 @@ echo ""
 # ===================================================================
 echo "📋 Phase 4: Processing ENT files..."
 echo "   Scanning PHP entity files for entity metadata"
-REPO_ROOT="/home/aritraghosh/projects/main"
-PROJECT_ROOT="/home/aritraghosh/projects/intacct-repo-intelligence"
 python scripts/scan_ent_files.py --repo-root "$REPO_ROOT" --out "$PROJECT_ROOT/config/entity_definitions.jsonl"
 if [ $? -ne 0 ]; then
   echo "   ⚠️  ENT file scanning completed with warnings (non-fatal)"
@@ -97,7 +103,7 @@ echo ""
 # ===================================================================
 echo "🔗 Phase 7: Extracting symbol relationships..."
 echo "   Analyzing code to identify relationships (INHERITS, IMPLEMENTS, IMPORTS, etc.)"
-python -m parser.extract_relationships --repo-root "/home/aritraghosh/projects/main"
+python -m parser.extract_relationships --repo-root "$REPO_ROOT"
 if [ $? -ne 0 ]; then
   echo "   ⚠️  Relationship extraction completed with warnings (non-fatal)"
 else
@@ -110,7 +116,7 @@ echo ""
 # ===================================================================
 echo "🔄 Phase 8: Building workflows..."
 echo "   Extracting workflow definitions from entity mappings and YAML handlers"
-python scripts/build_workflows.py build --db catalog/catalog.db --repo-root "/home/aritraghosh/projects/main"
+python scripts/build_workflows.py build --db "$PROJECT_ROOT/catalog/catalog.db" --repo-root "$REPO_ROOT"
 if [ $? -ne 0 ]; then
   echo "   ⚠️  Workflow building completed with warnings (non-fatal)"
 else
@@ -123,7 +129,7 @@ echo ""
 # ===================================================================
 echo "🔐 Phase 9: Building security/menu/dbschema mappings..."
 echo "   Extracting security operation keys/ids, policy eops, menu links, and dbschema metadata"
-python scripts/build_security_mappings.py build --db catalog/catalog.db --repo-root "/home/aritraghosh/projects/main"
+python scripts/build_security_mappings.py build --db "$PROJECT_ROOT/catalog/catalog.db" --repo-root "$REPO_ROOT"
 if [ $? -ne 0 ]; then
   echo "   ⚠️  Security mapping build completed with warnings (non-fatal)"
 else
@@ -136,7 +142,7 @@ echo ""
 # ===================================================================
 echo "📚 Phase 10: Scanning OpenAPI specifications..."
 echo "   Indexing OpenAPI YAML specification files"
-python scripts/scan_openapispec.py scan --db catalog/catalog.db --repo-root "/home/aritraghosh/projects/main"
+python scripts/scan_openapispec.py scan --db "$PROJECT_ROOT/catalog/catalog.db" --repo-root "$REPO_ROOT"
 if [ $? -ne 0 ]; then
   echo "   ⚠️  OpenAPI scanning completed with warnings (non-fatal)"
 else
@@ -149,7 +155,7 @@ echo ""
 # ===================================================================
 echo "🔗 Phase 11: Linking OpenAPI specifications to entities..."
 echo "   Connecting API entities to OpenAPI spec files (kinds: operations, schemas, etc.)"
-python scripts/link_openapispec.py link --db catalog/catalog.db
+python scripts/link_openapispec.py link --db "$PROJECT_ROOT/catalog/catalog.db"
 if [ $? -ne 0 ]; then
   echo "   ⚠️  OpenAPI linking completed with warnings (non-fatal)"
 else
@@ -162,7 +168,7 @@ echo ""
 # ===================================================================
 echo "🌐 Phase 12: Extracting REST endpoints..."
 echo "   Parsing OpenAPI files from openapispec_index to extract REST API paths and methods"
-python scripts/build_rest_endpoints.py build --db catalog/catalog.db --repo-root "/home/aritraghosh/projects/main"
+python scripts/build_rest_endpoints.py build --db "$PROJECT_ROOT/catalog/catalog.db" --repo-root "$REPO_ROOT"
 if [ $? -ne 0 ]; then
   echo "   ⚠️  REST endpoints extraction completed with warnings (non-fatal)"
 else
@@ -175,7 +181,7 @@ echo ""
 # ===================================================================
 echo "🔗 Phase 13: Building entity access graph links..."
 echo "   Creating deterministic entity bridges for security/menu/dbschema/workflow/rest evidence"
-python scripts/build_entity_access_links.py build --db catalog/catalog.db --reset
+python scripts/build_entity_access_links.py build --db "$PROJECT_ROOT/catalog/catalog.db" --reset
 if [ $? -ne 0 ]; then
   echo "   ⚠️  Entity access linking completed with warnings (non-fatal)"
 else
@@ -207,8 +213,8 @@ if [ $? -ne 0 ]; then
 else
   echo "   ✅ Ladybug graph validation passed"
 fi
-echo ""
 
+echo ""
 # ===================================================================
 # Summary
 # ===================================================================
@@ -220,10 +226,10 @@ echo "=================================================="
 echo "Duration: ${DURATION}s"
 echo ""
 echo "📊 Database Status:"
-echo "   Location: ~/projects/intacct-repo-intelligence/catalog/catalog.db"
+echo "   Location: $PROJECT_ROOT/catalog/catalog.db"
 python -c "
 import sqlite3
-conn = sqlite3.connect('catalog/catalog.db')
+conn = sqlite3.connect('$PROJECT_ROOT/catalog/catalog.db')
 cur = conn.cursor()
 tables = [
     ('files', 'Source files indexed'),
