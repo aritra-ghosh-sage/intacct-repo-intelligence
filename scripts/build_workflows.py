@@ -16,9 +16,11 @@ from tqdm import tqdm
 
 try:
     from catalog.db import get_connection
+    from catalog.repositories import get_repository, resolve_repository_root
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from catalog.db import get_connection
+    from catalog.repositories import get_repository, resolve_repository_root
 
 try:
     import yaml
@@ -139,18 +141,18 @@ def ensure_workflows_file_id_column(conn: sqlite3.Connection) -> None:
 
 
 def _resolve_file_id(
-    conn: sqlite3.Connection, source_file: str
+    conn: sqlite3.Connection, repo_id: int, source_file: str
 ) -> tuple[int | None, str]:
     row = conn.execute(
-        "SELECT id FROM files WHERE path = ? LIMIT 1",
-        (source_file,),
+        "SELECT id FROM files WHERE repo_id = ? AND path = ? LIMIT 1",
+        (repo_id, source_file),
     ).fetchone()
     if row:
         return int(row["id"]), "exact_path"
 
     row = conn.execute(
-        "SELECT id FROM files WHERE LOWER(path) = LOWER(?) ORDER BY id LIMIT 1",
-        (source_file,),
+        "SELECT id FROM files WHERE repo_id = ? AND LOWER(path) = LOWER(?) ORDER BY id LIMIT 1",
+        (repo_id, source_file),
     ).fetchone()
     if row:
         return int(row["id"]), "case_insensitive_path"
@@ -185,6 +187,7 @@ def _resolve_ref_target_path(source_file_path: str, ref_value: str) -> str | Non
 def materialize_openapi_ref_edges(
     conn: sqlite3.Connection,
     stats: BuildStats,
+    repo_id: int,
 ) -> None:
     """
     Materialize shared YAML $ref edges from relationships into openapi_file_ref_edges.
@@ -205,8 +208,9 @@ def materialize_openapi_ref_edges(
         """
         SELECT id, path
         FROM files
-        WHERE path IS NOT NULL
-        """
+        WHERE repo_id = ? AND path IS NOT NULL
+        """,
+        (repo_id,),
     ).fetchall()
 
     id_to_path: dict[int, str] = {}
@@ -229,10 +233,12 @@ def materialize_openapi_ref_edges(
             evidence
         FROM relationships
         WHERE relationship_type = 'REFERENCES'
+          AND repo_id = ?
           AND LOWER(COALESCE(language, '')) = 'yaml'
           AND COALESCE(TRIM(target_name), '') <> ''
           AND COALESCE(evidence, '') LIKE '%$ref'
-        """
+        """,
+        (repo_id,),
     ).fetchall()
 
     for row in rel_rows:
@@ -268,15 +274,17 @@ def materialize_openapi_ref_edges(
         conn.execute(
             """
             INSERT OR IGNORE INTO openapi_file_ref_edges(
+                repo_id,
                 source_file_id,
                 target_file_id,
                 ref_value,
                 ref_path,
                 confidence
             )
-            VALUES (?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
+                repo_id,
                 source_file_id,
                 target_file_id,
                 ref_value,
@@ -292,15 +300,17 @@ def backfill_workflow_file_ids(
     conn: sqlite3.Connection,
     stats: BuildStats,
     unresolved_sources: list[dict[str, Any]],
+    repo_id: int,
 ) -> None:
     # First backfill from source_file using files.path as source of truth.
     rows = conn.execute(
         """
         SELECT id, source_file
         FROM workflows
-        WHERE source_file IS NOT NULL
+        WHERE repo_id = ? AND source_file IS NOT NULL
           AND (file_id IS NULL OR file_id = 0)
-        """
+        """,
+        (repo_id,),
     ).fetchall()
 
     for row in rows:
@@ -308,7 +318,7 @@ def backfill_workflow_file_ids(
         source_file = str(row["source_file"] or "").strip()
         if not source_file:
             continue
-        file_id, strategy = _resolve_file_id(conn, source_file)
+        file_id, strategy = _resolve_file_id(conn, repo_id, source_file)
         if file_id is not None:
             conn.execute(
                 "UPDATE workflows SET file_id = ? WHERE id = ?",
@@ -334,10 +344,11 @@ def backfill_workflow_file_ids(
         SELECT w.id AS workflow_id, s.file_id AS symbol_file_id
         FROM workflows w
         JOIN symbols s ON s.id = w.source_symbol_id
-        WHERE w.source_symbol_id IS NOT NULL
+        WHERE w.repo_id = ? AND w.source_symbol_id IS NOT NULL
           AND (w.file_id IS NULL OR w.file_id = 0)
           AND s.file_id IS NOT NULL
-        """
+        """,
+        (repo_id,),
     ).fetchall()
     for row in symbol_rows:
         conn.execute(
@@ -347,17 +358,21 @@ def backfill_workflow_file_ids(
         stats.file_ids_backfilled += 1
 
 
-def get_entities(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+def get_entities(conn: sqlite3.Connection, repo_id: int) -> list[sqlite3.Row]:
     return conn.execute(
         """
         SELECT id, name
-        FROM entity_nodes
+        FROM entity_nodes en
+        WHERE EXISTS (
+            SELECT 1 FROM entity_mappings em
+            WHERE em.entity_id = en.id AND em.repo_id = ?
+        )
         ORDER BY name
         """
-    ).fetchall()
+    , (repo_id,)).fetchall()
 
 
-def get_entity_roots(conn: sqlite3.Connection, entity_id: int) -> list[sqlite3.Row]:
+def get_entity_roots(conn: sqlite3.Connection, repo_id: int, entity_id: int) -> list[sqlite3.Row]:
     return conn.execute(
         """
         SELECT
@@ -370,14 +385,15 @@ def get_entity_roots(conn: sqlite3.Connection, entity_id: int) -> list[sqlite3.R
             s.file_id AS symbol_file_id
         FROM entity_mappings em
         LEFT JOIN symbols s ON s.id = em.symbol_id
-        WHERE em.entity_id = ?
+        WHERE em.entity_id = ? AND em.repo_id = ?
         """,
-        (entity_id,),
+        (entity_id, repo_id),
     ).fetchall()
 
 
 def insert_workflow(
     conn: sqlite3.Connection,
+    repo_id: int,
     entity_id: int,
     name: str,
     workflow_type: str,
@@ -391,6 +407,7 @@ def insert_workflow(
         cur = conn.execute(
             """
             INSERT OR IGNORE INTO workflows(
+                repo_id,
                 entity_id,
                 name,
                 workflow_type,
@@ -400,9 +417,10 @@ def insert_workflow(
                 source_symbol_id,
                 reason
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
+                repo_id,
                 entity_id,
                 name,
                 workflow_type,
@@ -423,12 +441,12 @@ def insert_workflow(
         """
         SELECT id
         FROM workflows
-        WHERE entity_id = ?
+        WHERE repo_id = ? AND entity_id = ?
           AND name = ?
           AND workflow_type = ?
           AND IFNULL(source_file,'') = IFNULL(?, '')
         """,
-        (entity_id, name, workflow_type, source_file),
+        (repo_id, entity_id, name, workflow_type, source_file),
     ).fetchone()
 
     return (int(row["id"]) if row else None), False
@@ -441,7 +459,7 @@ def normalize_action(text: str | None) -> str | None:
     return t if t in KNOWN_ACTIONS else None
 
 
-def get_entity_yaml_paths(conn: sqlite3.Connection, entity_id: int) -> list[str]:
+def get_entity_yaml_paths(conn: sqlite3.Connection, repo_id: int, entity_id: int) -> list[str]:
     """
     Return deterministic YAML candidates wired to this entity.
 
@@ -452,7 +470,7 @@ def get_entity_yaml_paths(conn: sqlite3.Connection, entity_id: int) -> list[str]
         """
         SELECT DISTINCT source_text
         FROM entity_mappings
-        WHERE entity_id = ?
+        WHERE entity_id = ? AND repo_id = ?
           AND source_text IS NOT NULL
           AND LOWER(source_text) LIKE '%.yaml'
           AND (
@@ -463,7 +481,7 @@ def get_entity_yaml_paths(conn: sqlite3.Connection, entity_id: int) -> list[str]
           )
         ORDER BY source_text
         """,
-                (entity_id, f"{OPENAPI_MAPPING_PREFIX}%"),
+                (entity_id, repo_id, f"{OPENAPI_MAPPING_PREFIX}%"),
     ).fetchall()
 
     return [r["source_text"] for r in rows]
@@ -471,6 +489,7 @@ def get_entity_yaml_paths(conn: sqlite3.Connection, entity_id: int) -> list[str]
 
 def get_yaml_actions_from_symbols_for_path(
     conn: sqlite3.Connection,
+    repo_id: int,
     entity_id: int,
     yaml_path: str,
 ) -> list[tuple[str, str]]:
@@ -484,16 +503,16 @@ def get_yaml_actions_from_symbols_for_path(
         SELECT DISTINCT s.name, s.kind
         FROM entity_mappings em
         JOIN files f
-          ON f.path = em.source_text
+          ON f.repo_id = em.repo_id AND f.path = em.source_text
         JOIN symbols s
           ON s.file_id = f.id
-        WHERE em.entity_id = ?
+        WHERE em.entity_id = ? AND em.repo_id = ?
           AND em.source_text = ?
           AND s.language = 'yaml'
           AND s.kind IN ('yaml_action', 'yaml_operation')
         ORDER BY s.kind, s.name
         """,
-        (entity_id, yaml_path),
+        (entity_id, repo_id, yaml_path),
     ).fetchall()
 
     out: list[tuple[str, str]] = []
@@ -764,6 +783,7 @@ def build_action_chain_for_workflow(
     source_file: str | None,
     source_kind: str,
     actions: list[tuple[int, str, str]],
+    repo_id: int,
 ) -> tuple[int, int]:
     # Steps:
     #   Create one workflow node (node_kind=workflow, node_key=workflow:{workflow_id}).
@@ -797,7 +817,7 @@ def build_action_chain_for_workflow(
     source_file_id: int | None = None
     file_node_id: int | None = None
     if source_file:
-        source_file_id, _ = _resolve_file_id(conn, source_file)
+        source_file_id, _ = _resolve_file_id(conn, repo_id, source_file)
         file_node_id, _ = insert_workflow_node(
             conn=conn,
             workflow_id=workflow_id,
@@ -1074,6 +1094,7 @@ def link_workflow_to_symbol_roots(
 def build_workflows_for_entity(
     conn: sqlite3.Connection,
     repo_root: Path,
+    repo_id: int,
     entity: sqlite3.Row,
     roots: list[sqlite3.Row],
     stats: BuildStats,
@@ -1090,7 +1111,7 @@ def build_workflows_for_entity(
     # ------------------------------------------------------------------
     # 1. YAML-driven allowed operations / workflows
     # ------------------------------------------------------------------
-    yaml_paths = get_entity_yaml_paths(conn, entity_id)
+    yaml_paths = get_entity_yaml_paths(conn, repo_id, entity_id)
 
     for yaml_path in yaml_paths:
         actions: list[tuple[int, str, str]] = []
@@ -1160,6 +1181,7 @@ def build_workflows_for_entity(
         if not actions:
             fallback_actions = get_yaml_actions_from_symbols_for_path(
                 conn=conn,
+                repo_id=repo_id,
                 entity_id=entity_id,
                 yaml_path=yaml_path,
             )
@@ -1175,6 +1197,7 @@ def build_workflows_for_entity(
 
         wf_id, workflow_inserted = insert_workflow(
             conn,
+            repo_id=repo_id,
             entity_id=entity_id,
             name=f"{entity_name} allowed operations",
             workflow_type="allowed_operations",
@@ -1195,6 +1218,7 @@ def build_workflows_for_entity(
             source_file=yaml_path,
             source_kind="yaml" if action_source == "yaml" else "inference",
             actions=actions,
+            repo_id=repo_id,
         )
         stats.workflow_nodes_inserted += chain_nodes
         stats.workflow_edges_inserted += chain_edges
@@ -1223,6 +1247,7 @@ def build_workflows_for_entity(
 
         wf_id, workflow_inserted = insert_workflow(
             conn,
+            repo_id=repo_id,
             entity_id=entity_id,
             name=f"{entity_name} operations handler",
             workflow_type="allowed_operations",
@@ -1246,6 +1271,7 @@ def build_workflows_for_entity(
                 source_file=None,
                 source_kind="class",
                 actions=[],
+                repo_id=repo_id,
             )
             stats.workflow_nodes_inserted += chain_nodes
             stats.workflow_edges_inserted += chain_edges
@@ -1276,6 +1302,7 @@ def build_workflows_for_entity(
 
         wf_id, workflow_inserted = insert_workflow(
             conn,
+            repo_id=repo_id,
             entity_id=entity_id,
             name=f"{entity_name} {wf_type} workflow",
             workflow_type=wf_type,
@@ -1299,6 +1326,7 @@ def build_workflows_for_entity(
                 source_file=None,
                 source_kind="class",
                 actions=[],
+                repo_id=repo_id,
             )
             stats.workflow_nodes_inserted += chain_nodes
             stats.workflow_edges_inserted += chain_edges
@@ -1318,7 +1346,7 @@ def build_workflows_for_entity(
     return wf_count
 
 
-def build(db: str, repo_root: Path, reset: bool) -> BuildStats:
+def build(db: str, repo_root: Path, repo_id: int, reset: bool) -> BuildStats:
     stats = BuildStats()
     unresolved_sources: list[dict[str, Any]] = []
     parse_failures: list[dict[str, Any]] = []
@@ -1335,18 +1363,25 @@ def build(db: str, repo_root: Path, reset: bool) -> BuildStats:
         ensure_workflows_file_id_column(conn)
 
         if reset:
-            conn.execute("DELETE FROM workflow_edges")
-            conn.execute("DELETE FROM workflow_nodes")
-            conn.execute("DELETE FROM workflows")
-            conn.execute("DELETE FROM openapi_file_ref_edges")
+            conn.execute(
+                "DELETE FROM workflow_edges WHERE workflow_id IN (SELECT id FROM workflows WHERE repo_id = ?)",
+                (repo_id,),
+            )
+            conn.execute(
+                "DELETE FROM workflow_nodes WHERE workflow_id IN (SELECT id FROM workflows WHERE repo_id = ?)",
+                (repo_id,),
+            )
+            conn.execute("DELETE FROM workflows WHERE repo_id = ?", (repo_id,))
+            conn.execute("DELETE FROM openapi_file_ref_edges WHERE repo_id = ?", (repo_id,))
             conn.commit()
 
-        entities = get_entities(conn)
+        entities = get_entities(conn, repo_id)
         for entity in tqdm(entities, desc="Building workflows", unit="entity"):
-            roots = get_entity_roots(conn, entity["id"])
+            roots = get_entity_roots(conn, repo_id, entity["id"])
             wf = build_workflows_for_entity(
                 conn=conn,
                 repo_root=repo_root,
+                repo_id=repo_id,
                 entity=entity,
                 roots=roots,
                 stats=stats,
@@ -1358,8 +1393,8 @@ def build(db: str, repo_root: Path, reset: bool) -> BuildStats:
             if stats.entities_processed % 500 == 0:
                 conn.commit()
 
-        materialize_openapi_ref_edges(conn, stats)
-        backfill_workflow_file_ids(conn, stats, unresolved_sources)
+        materialize_openapi_ref_edges(conn, stats, repo_id)
+        backfill_workflow_file_ids(conn, stats, unresolved_sources, repo_id)
 
         conn.commit()
     finally:
@@ -1377,6 +1412,7 @@ def cli() -> None:
 
 
 @cli.command("build")
+@click.option("--repo", required=True, help="Registered repository key to build.")
 @click.option(
     "--db",
     default=DEFAULT_DB,
@@ -1386,13 +1422,18 @@ def cli() -> None:
 @click.option(
     "--repo-root",
     type=click.Path(path_type=Path, exists=True, file_okay=False),
-    default=Path(DEFAULT_REPO_ROOT),
-    show_default=True,
+    default=None,
     help="Repository root path used to resolve YAML/source files.",
 )
 @click.option("--reset", is_flag=True, help="Delete workflow tables before rebuilding.")
-def build_command(db: str, repo_root: Path, reset: bool) -> None:
-    stats = build(db=db, repo_root=repo_root.resolve(), reset=reset)
+def build_command(db: str, repo: str, repo_root: Path | None, reset: bool) -> None:
+    conn = get_connection(db)
+    try:
+        repository = get_repository(conn, repo)
+        resolved_root = repo_root.resolve() if repo_root is not None else resolve_repository_root(conn, repo)
+    finally:
+        conn.close()
+    stats = build(db=db, repo_root=resolved_root, repo_id=int(repository["id"]), reset=reset)
     click.echo(f"Processed entities:  {stats.entities_processed}")
     click.echo(f"Workflows inserted:  {stats.workflows_inserted}")
     click.echo(f"Workflow nodes inserted:  {stats.workflow_nodes_inserted}")

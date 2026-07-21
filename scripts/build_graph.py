@@ -103,14 +103,22 @@ def q(text: str) -> str:
 def ensure_schema(conn: lb.Connection) -> None:
     # Base V1 node tables
     conn.execute(
+        "CREATE NODE TABLE IF NOT EXISTS Repository("
+        "repo_id INT64 PRIMARY KEY, repo_key STRING, tracked_branch STRING, "
+        "indexed_commit_sha STRING, last_indexed_at STRING, index_status STRING)"
+    )
+    conn.execute(
         "CREATE NODE TABLE IF NOT EXISTS Entity("
         "entity_id INT64 PRIMARY KEY, "
         "name STRING, "
-        "entity_type STRING, "
-        "module STRING, "
-        "table_name STRING, "
-        "ent_file STRING, "
-        "dummy INT64)"
+        "entity_type STRING)"
+    )
+    conn.execute(
+        "CREATE NODE TABLE IF NOT EXISTS EntityOccurrence("
+        "entity_occurrence_id INT64 PRIMARY KEY, "
+        "repo_id INT64, entity_id INT64, ent_file STRING, module STRING, "
+        "table_name STRING, view_name STRING, dummy INT64, source_file_id INT64, "
+        "extractor STRING, confidence DOUBLE, created_at STRING, updated_at STRING)"
     )
     conn.execute(
         "CREATE NODE TABLE IF NOT EXISTS Symbol("
@@ -124,6 +132,7 @@ def ensure_schema(conn: lb.Connection) -> None:
     conn.execute(
         "CREATE NODE TABLE IF NOT EXISTS File("
         "file_id INT64 PRIMARY KEY, "
+        "repo_id INT64, repo_key STRING, "
         "path STRING, "
         "language STRING)"
     )
@@ -280,6 +289,20 @@ def ensure_schema(conn: lb.Connection) -> None:
     conn.execute("CREATE REL TABLE IF NOT EXISTS REFERENCES(FROM Symbol TO Symbol)")
     conn.execute("CREATE REL TABLE IF NOT EXISTS CALLS(FROM Symbol TO Symbol)")
     conn.execute("CREATE REL TABLE IF NOT EXISTS DECLARED_IN(FROM Symbol TO File)")
+    conn.execute("CREATE REL TABLE IF NOT EXISTS REPOSITORY_CONTAINS_FILE(FROM Repository TO File)")
+    conn.execute("CREATE REL TABLE IF NOT EXISTS REPOSITORY_HAS_ENTITY_OCCURRENCE(FROM Repository TO EntityOccurrence)")
+    conn.execute("CREATE REL TABLE IF NOT EXISTS ENTITY_HAS_OCCURRENCE(FROM Entity TO EntityOccurrence)")
+    conn.execute("CREATE REL TABLE IF NOT EXISTS ENTITY_OCCURRENCE_FILE(FROM EntityOccurrence TO File)")
+    conn.execute("CREATE REL TABLE IF NOT EXISTS ENTITY_OCCURRENCE_ROOT(FROM EntityOccurrence TO Symbol, role STRING, weight DOUBLE)")
+    conn.execute("CREATE REL TABLE IF NOT EXISTS ENTITY_OCCURRENCE_MAPPING(FROM EntityOccurrence TO Symbol, mapping_type STRING, confidence DOUBLE)")
+    conn.execute("CREATE REL TABLE IF NOT EXISTS ENTITY_OCCURRENCE_WORKFLOW(FROM EntityOccurrence TO Workflow)")
+    conn.execute("CREATE REL TABLE IF NOT EXISTS ENTITY_OCCURRENCE_REST_ENDPOINT(FROM EntityOccurrence TO RestEndpoint)")
+    conn.execute("CREATE REL TABLE IF NOT EXISTS ENTITY_ACCESS_LINK_ENTITY_OCCURRENCE(FROM EntityAccessLink TO EntityOccurrence)")
+    conn.execute(
+        "CREATE REL TABLE IF NOT EXISTS CROSS_REPO_INTEGRATION("
+        "FROM File TO File, integration_link_id INT64, relation_type STRING, "
+        "confidence DOUBLE, resolution_status STRING)"
+    )
     conn.execute("CREATE REL TABLE IF NOT EXISTS HAS_WORKFLOW(FROM Entity TO Workflow)")
     conn.execute(
         "CREATE REL TABLE IF NOT EXISTS EXPOSES_ENTITY(FROM RestEndpoint TO Entity)"
@@ -652,10 +675,24 @@ def load_v2_nodes(sql: sqlite3.Connection, g: lb.Connection) -> None:
 
 def load_nodes(sql: sqlite3.Connection, g: lb.Connection) -> None:
     copy_table_from_sql(
+        sql, g,
+        "SELECT id AS repo_id,repo_key,tracked_branch,indexed_commit_sha,"
+        "COALESCE(last_built_at,last_scanned_at) AS last_indexed_at,index_status FROM repos ORDER BY id",
+        "Repository",
+    )
+    copy_table_from_sql(
         sql,
         g,
-        "SELECT id AS entity_id, name, entity_type, module, table_name, ent_file, dummy FROM entity_nodes ORDER BY id",
+        "SELECT id AS entity_id, name, entity_type FROM entity_nodes ORDER BY id",
         "Entity",
+    )
+    copy_table_from_sql(
+        sql,
+        g,
+        "SELECT id AS entity_occurrence_id,repo_id,entity_id,ent_file,module,table_name,view_name,"
+        "dummy,source_file_id,extractor,confidence,created_at,updated_at "
+        "FROM entity_occurrences ORDER BY id",
+        "EntityOccurrence",
     )
     copy_table_from_sql(
         sql,
@@ -666,7 +703,8 @@ def load_nodes(sql: sqlite3.Connection, g: lb.Connection) -> None:
     copy_table_from_sql(
         sql,
         g,
-        "SELECT id AS file_id, path, language FROM files ORDER BY id",
+        "SELECT f.id AS file_id,f.repo_id,r.repo_key,f.path,f.language "
+        "FROM files f JOIN repos r ON r.id=f.repo_id ORDER BY f.id",
         "File",
     )
     copy_table_from_sql(
@@ -726,6 +764,21 @@ def load_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
     )
 
     _process_edge_rows(
+        """
+        SELECT eo.id, er.symbol_id, er.role, er.weight
+        FROM entity_roots er
+        JOIN entity_occurrences eo ON eo.repo_id=er.repo_id AND eo.entity_id=er.entity_id
+        ORDER BY er.id
+        """,
+        lambda r: (
+            "MATCH (e:EntityOccurrence {entity_occurrence_id:%d}), (s:Symbol {symbol_id:%d}) "
+            "CREATE (e)-[:ENTITY_OCCURRENCE_ROOT {role:'%s', weight:%s}]->(s)"
+            % (r[0], r[1], q(r[2] or ""), str(float(r[3] or 0.0)))
+        ),
+        "Loading ENTITY_OCCURRENCE_ROOT edges",
+    )
+
+    _process_edge_rows(
         "SELECT entity_id, symbol_id, mapping_type, confidence FROM entity_mappings WHERE symbol_id IS NOT NULL ORDER BY id",
         lambda r: (
             "MATCH (e:Entity {entity_id:%d}), (s:Symbol {symbol_id:%d}) "
@@ -733,6 +786,22 @@ def load_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
             % (r[0], r[1], q(r[2] or ""), str(float(r[3] or 0.0)))
         ),
         "Loading ENTITY_MAPPING edges",
+    )
+
+    _process_edge_rows(
+        """
+        SELECT eo.id, em.symbol_id, em.mapping_type, em.confidence
+        FROM entity_mappings em
+        JOIN entity_occurrences eo ON eo.repo_id=em.repo_id AND eo.entity_id=em.entity_id
+        WHERE em.symbol_id IS NOT NULL
+        ORDER BY em.id
+        """,
+        lambda r: (
+            "MATCH (e:EntityOccurrence {entity_occurrence_id:%d}), (s:Symbol {symbol_id:%d}) "
+            "CREATE (e)-[:ENTITY_OCCURRENCE_MAPPING {mapping_type:'%s', confidence:%s}]->(s)"
+            % (r[0], r[1], q(r[2] or ""), str(float(r[3] or 0.0)))
+        ),
+        "Loading ENTITY_OCCURRENCE_MAPPING edges",
     )
 
     copy_rel_table_from_sql(
@@ -843,6 +912,43 @@ def load_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
         """,
         "DECLARED_IN",
     )
+    copy_rel_table_from_sql(
+        sql, g,
+        'SELECT repo_id AS "FROM",id AS "TO" FROM files ORDER BY repo_id,id',
+        "REPOSITORY_CONTAINS_FILE",
+    )
+    copy_rel_table_from_sql(
+        sql, g,
+        'SELECT repo_id AS "FROM",id AS "TO" FROM entity_occurrences ORDER BY repo_id,id',
+        "REPOSITORY_HAS_ENTITY_OCCURRENCE",
+    )
+    copy_rel_table_from_sql(
+        sql, g,
+        'SELECT entity_id AS "FROM",id AS "TO" FROM entity_occurrences ORDER BY entity_id,id',
+        "ENTITY_HAS_OCCURRENCE",
+    )
+    copy_rel_table_from_sql(
+        sql, g,
+        'SELECT id AS "FROM",source_file_id AS "TO" FROM entity_occurrences WHERE source_file_id IS NOT NULL ORDER BY id',
+        "ENTITY_OCCURRENCE_FILE",
+    )
+    if sql.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='integration_links'").fetchone():
+        columns = {row[1] for row in sql.execute("PRAGMA table_info(integration_links)")}
+        if {"id", "source_file_id", "target_file_id"} <= columns:
+            relation_col = "relation_type" if "relation_type" in columns else "'integration'"
+            confidence_col = "confidence" if "confidence" in columns else "0.0"
+            status_col = "resolution_status" if "resolution_status" in columns else "'resolved'"
+            status_filter = " AND resolution_status IN ('resolved','validated')" if "resolution_status" in columns else ""
+            copy_rel_table_from_sql(
+                sql, g,
+                f'''SELECT source_file_id AS "FROM",target_file_id AS "TO",id AS integration_link_id,
+                           {relation_col} AS relation_type,COALESCE({confidence_col},0.0) AS confidence,
+                           COALESCE({status_col},'resolved') AS resolution_status
+                    FROM integration_links WHERE source_file_id IS NOT NULL AND target_file_id IS NOT NULL
+                    AND source_repo_id <> target_repo_id
+                    {status_filter} ORDER BY id''',
+                "CROSS_REPO_INTEGRATION",
+            )
 
     _process_edge_rows(
         "SELECT id, entity_id FROM workflows WHERE entity_id IS NOT NULL",
@@ -851,6 +957,20 @@ def load_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
             "CREATE (e)-[:HAS_WORKFLOW]->(w)" % (r[1], r[0])
         ),
         "Loading HAS_WORKFLOW edges",
+    )
+    _process_edge_rows(
+        """
+        SELECT eo.id, w.id
+        FROM workflows w
+        JOIN entity_occurrences eo ON eo.repo_id=w.repo_id AND eo.entity_id=w.entity_id
+        WHERE w.entity_id IS NOT NULL
+        ORDER BY w.id
+        """,
+        lambda r: (
+            "MATCH (e:EntityOccurrence {entity_occurrence_id:%d}), (w:Workflow {workflow_id:%d}) "
+            "CREATE (e)-[:ENTITY_OCCURRENCE_WORKFLOW]->(w)" % (r[0], r[1])
+        ),
+        "Loading ENTITY_OCCURRENCE_WORKFLOW edges",
     )
 
     # _process_edge_rows(
@@ -883,6 +1003,20 @@ def load_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
             "CREATE (re)-[:EXPOSES_ENTITY]->(e)" % (r[0], r[1])
         ),
         "Loading EXPOSES_ENTITY edges",
+    )
+    _process_edge_rows(
+        """
+        SELECT eo.id, ep.id
+        FROM rest_endpoints ep
+        JOIN entity_occurrences eo ON eo.repo_id=ep.repo_id AND eo.entity_id=ep.entity_id
+        WHERE ep.entity_id IS NOT NULL
+        ORDER BY ep.id
+        """,
+        lambda r: (
+            "MATCH (e:EntityOccurrence {entity_occurrence_id:%d}), (re:RestEndpoint {rest_endpoint_id:%d}) "
+            "CREATE (e)-[:ENTITY_OCCURRENCE_REST_ENDPOINT]->(re)" % (r[0], r[1])
+        ),
+        "Loading ENTITY_OCCURRENCE_REST_ENDPOINT edges",
     )
 
     _process_edge_rows(
@@ -1161,25 +1295,39 @@ def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
         sql,
         g,
         """
-        SELECT id, entity_id, evidence_file_id, evidence_symbol_id
-        FROM entity_access_links
-        ORDER BY id
+        SELECT eal.id, eal.repo_id, eal.entity_id, eal.evidence_file_id,
+               eal.evidence_symbol_id, eo.id AS occurrence_id
+        FROM entity_access_links eal
+        LEFT JOIN entity_occurrences eo
+          ON eo.repo_id=eal.repo_id AND eo.entity_id=eal.entity_id
+        ORDER BY eal.id
         """,
         lambda r: [
             (
                 "MATCH (l:EntityAccessLink {entity_access_link_id:%d}), "
                 "(e:Entity {entity_id:%d}) "
                 "CREATE (l)-[:ENTITY_ACCESS_LINK_ENTITY]->(e)"
-            ) % (r[0], r[1]),
+            ) % (r[0], r[2]),
+            *(
+                [
+                    (
+                        "MATCH (l:EntityAccessLink {entity_access_link_id:%d}), "
+                        "(e:EntityOccurrence {entity_occurrence_id:%d}) "
+                        "CREATE (l)-[:ENTITY_ACCESS_LINK_ENTITY_OCCURRENCE]->(e)"
+                    ) % (r[0], r[5])
+                ]
+                if r[5] is not None
+                else []
+            ),
             *(
                 [
                     (
                         "MATCH (l:EntityAccessLink {entity_access_link_id:%d}), "
                         "(f:File {file_id:%d}) "
                         "CREATE (l)-[:ENTITY_ACCESS_LINK_FILE]->(f)"
-                    ) % (r[0], r[2])
+                    ) % (r[0], r[3])
                 ]
-                if r[2] is not None
+                if r[3] is not None
                 else []
             ),
             *(
@@ -1188,9 +1336,9 @@ def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
                         "MATCH (l:EntityAccessLink {entity_access_link_id:%d}), "
                         "(s:Symbol {symbol_id:%d}) "
                         "CREATE (l)-[:ENTITY_ACCESS_LINK_SYMBOL]->(s)"
-                    ) % (r[0], r[3])
+                    ) % (r[0], r[4])
                 ]
-                if r[3] is not None
+                if r[4] is not None
                 else []
             ),
         ],
@@ -1398,10 +1546,11 @@ def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
         """
         SELECT DISTINCT spv.id, so.id, spv.policy_id
         FROM security_policy_values spv
+        JOIN security_policies sp ON sp.id = spv.policy_id
         JOIN security_policy_eops spe ON spe.policy_value_id = spv.id
-        JOIN security_operations so ON so.op_key = spe.op_key
-        WHERE spe.op_key IN (
-            SELECT op_key FROM security_operations GROUP BY op_key HAVING COUNT(*) = 1
+        JOIN security_operations so ON so.repo_id = sp.repo_id AND so.op_key = spe.op_key
+        WHERE (sp.repo_id, spe.op_key) IN (
+            SELECT repo_id, op_key FROM security_operations GROUP BY repo_id, op_key HAVING COUNT(*) = 1
         )
         ORDER BY spv.id, so.id
         """,
@@ -1412,7 +1561,7 @@ def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
                 "CREATE (pv)-[:POLICY_VALUE_GRANTS_OPERATION]->(o)"
             ) % (r[0], r[1])
         ],
-        "Loading POLICY_VALUE_GRANTS_OPERATION edges (with dedup guard for unique op_keys)",
+        "Loading POLICY_VALUE_GRANTS_OPERATION edges (with per-repository op_key guard)",
     )
 
 def build_graph(sqlite_path: str, graph_path: str) -> None:
@@ -1505,7 +1654,12 @@ def promote_validated_graph(
         try:
             require_graph_builds_migration(metadata)
             create_sqlite_snapshot(sqlite_path, snapshot)
-            fingerprint = source_fingerprint(snapshot)
+            # Validation must use the immutable snapshot, while the active
+            # graph metadata must identify the catalog file that clients will
+            # query after promotion.  A SQLite backup may differ byte-for-byte
+            # from its source even when it contains the same facts.
+            snapshot_fingerprint = source_fingerprint(snapshot)
+            fingerprint = source_fingerprint(Path(sqlite_path))
             cur = metadata.execute(
                 """
                 INSERT INTO graph_builds(
@@ -1523,7 +1677,7 @@ def promote_validated_graph(
             validation_summary = validate_paths(
                 str(snapshot),
                 str(candidate),
-                expected_fingerprint=fingerprint,
+                expected_fingerprint=snapshot_fingerprint,
             )
             metadata.execute(
                 """

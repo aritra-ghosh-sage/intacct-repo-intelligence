@@ -14,7 +14,11 @@ from scripts.build_graph import (
     preserve_previous_graph,
     promote_validated_graph,
 )
-from scripts.query_graph import _query_bounded_incoming_traversal
+from scripts.query_graph import (
+    EntityAmbiguityError,
+    _query_bounded_incoming_traversal,
+    _query_entity_from_graph,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -60,7 +64,32 @@ class FakeGraphConnection:
         return FakeResult(rows[: params["limit"]])
 
 
+class EntityGraphConnection:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def execute(self, _query, _params):
+        return FakeResult(self.rows)
+
+
 class GraphRemediationTests(unittest.TestCase):
+    def test_entity_lookup_requires_repo_for_multiple_occurrences(self):
+        graph = EntityGraphConnection(
+            [
+                [1, "Customer", "entity", "one", 10, "ar", "ARCustomer", None, "one/Customer.ent"],
+                [1, "Customer", "entity", "two", 20, "co", "COCustomer", None, "two/Customer.ent"],
+            ]
+        )
+        with self.assertRaises(EntityAmbiguityError) as caught:
+            _query_entity_from_graph(graph, "Customer")
+        self.assertEqual(
+            caught.exception.candidates,
+            [
+                {"repo_key": "one", "occurrence_id": 10, "ent_file": "one/Customer.ent"},
+                {"repo_key": "two", "occurrence_id": 20, "ent_file": "two/Customer.ent"},
+            ],
+        )
+
     def test_migration_matches_fresh_schema(self):
         with tempfile.TemporaryDirectory() as directory:
             fresh = sqlite3.connect(Path(directory) / "fresh.db")
@@ -205,12 +234,14 @@ class GraphRemediationTests(unittest.TestCase):
         try:
             conn.executescript(
                 """
-                CREATE TABLE security_policy_values(id INTEGER PRIMARY KEY);
+                CREATE TABLE security_policies(id INTEGER PRIMARY KEY, repo_id INTEGER);
+                CREATE TABLE security_policy_values(id INTEGER PRIMARY KEY, policy_id INTEGER);
                 CREATE TABLE security_policy_eops(policy_value_id INTEGER, op_key TEXT);
-                CREATE TABLE security_operations(id INTEGER PRIMARY KEY, op_key TEXT);
-                INSERT INTO security_policy_values VALUES (1);
+                CREATE TABLE security_operations(id INTEGER PRIMARY KEY, repo_id INTEGER, op_key TEXT);
+                INSERT INTO security_policies VALUES (1, 10);
+                INSERT INTO security_policy_values VALUES (1, 1);
                 INSERT INTO security_policy_eops VALUES (1, 'read'), (1, 'read');
-                INSERT INTO security_operations VALUES (10, 'read');
+                INSERT INTO security_operations VALUES (10, 10, 'read');
                 """
             )
             count = conn.execute(
@@ -218,16 +249,50 @@ class GraphRemediationTests(unittest.TestCase):
                 SELECT COUNT(*) FROM (
                     SELECT DISTINCT spv.id, so.id
                     FROM security_policy_values spv
+                    JOIN security_policies sp ON sp.id = spv.policy_id
                     JOIN security_policy_eops spe ON spe.policy_value_id = spv.id
-                    JOIN security_operations so ON so.op_key = spe.op_key
-                    WHERE spe.op_key IN (
-                        SELECT op_key FROM security_operations
-                        GROUP BY op_key HAVING COUNT(*) = 1
+                    JOIN security_operations so ON so.repo_id = sp.repo_id AND so.op_key = spe.op_key
+                    WHERE (sp.repo_id, spe.op_key) IN (
+                        SELECT repo_id, op_key FROM security_operations
+                        GROUP BY repo_id, op_key HAVING COUNT(*) = 1
                     )
                 )
                 """
             ).fetchone()[0]
             self.assertEqual(count, 1)
+        finally:
+            conn.close()
+
+    def test_policy_grants_are_unique_per_repository(self):
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE security_policies(id INTEGER PRIMARY KEY, repo_id INTEGER);
+                CREATE TABLE security_policy_values(id INTEGER PRIMARY KEY, policy_id INTEGER);
+                CREATE TABLE security_policy_eops(policy_value_id INTEGER, op_key TEXT);
+                CREATE TABLE security_operations(id INTEGER PRIMARY KEY, repo_id INTEGER, op_key TEXT);
+                INSERT INTO security_policies VALUES (1, 10), (2, 20);
+                INSERT INTO security_policy_values VALUES (101, 1), (201, 2);
+                INSERT INTO security_policy_eops VALUES (101, 'read'), (201, 'read');
+                INSERT INTO security_operations VALUES (11, 10, 'read'), (22, 20, 'read');
+                """
+            )
+            rows = conn.execute(
+                """
+                SELECT DISTINCT spv.id, so.id
+                FROM security_policy_values spv
+                JOIN security_policies sp ON sp.id = spv.policy_id
+                JOIN security_policy_eops spe ON spe.policy_value_id = spv.id
+                JOIN security_operations so ON so.repo_id = sp.repo_id AND so.op_key = spe.op_key
+                WHERE (sp.repo_id, spe.op_key) IN (
+                    SELECT repo_id, op_key FROM security_operations
+                    GROUP BY repo_id, op_key HAVING COUNT(*) = 1
+                )
+                ORDER BY spv.id
+                """
+            ).fetchall()
+            self.assertEqual(rows, [(101, 11), (201, 22)])
         finally:
             conn.close()
 

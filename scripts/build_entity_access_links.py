@@ -13,9 +13,11 @@ import click
 
 try:
     from catalog.db import get_connection
+    from catalog.repositories import get_repository
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from catalog.db import get_connection
+    from catalog.repositories import get_repository
 
 DEFAULT_DB = "catalog/catalog.db"
 SECURITY_UNRESOLVED_LOG = Path("outputs/security_unresolved_keys.jsonl")
@@ -34,6 +36,7 @@ def ensure_entity_access_table(conn: sqlite3.Connection) -> None:
         """
         CREATE TABLE IF NOT EXISTS entity_access_links (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo_id INTEGER NOT NULL,
             entity_id INTEGER NOT NULL,
             surface TEXT NOT NULL,
             record_id INTEGER NOT NULL,
@@ -46,7 +49,7 @@ def ensure_entity_access_table(conn: sqlite3.Connection) -> None:
             FOREIGN KEY(entity_id) REFERENCES entity_nodes(id) ON DELETE CASCADE,
             FOREIGN KEY(evidence_file_id) REFERENCES files(id) ON DELETE SET NULL,
             FOREIGN KEY(evidence_symbol_id) REFERENCES symbols(id) ON DELETE SET NULL,
-            UNIQUE(entity_id, surface, record_id, link_type, evidence_file_id, evidence_symbol_id)
+            UNIQUE(repo_id, entity_id, surface, record_id, link_type, evidence_file_id, evidence_symbol_id)
         );
 
         CREATE INDEX IF NOT EXISTS idx_entity_access_links_entity_surface
@@ -59,7 +62,7 @@ def ensure_entity_access_table(conn: sqlite3.Connection) -> None:
     )
 
 
-def ensure_dbschema_file_id_column(conn: sqlite3.Connection) -> None:
+def ensure_dbschema_file_id_column(conn: sqlite3.Connection, repo_id: int) -> None:
     cols = {
         row["name"]
         for row in conn.execute("PRAGMA table_info(dbschema_tables)").fetchall()
@@ -77,12 +80,15 @@ def ensure_dbschema_file_id_column(conn: sqlite3.Connection) -> None:
         SET file_id = (
             SELECT f.id
             FROM files f
-            WHERE f.path = dbschema_tables.source_file
+            WHERE f.repo_id = dbschema_tables.repo_id
+              AND f.path = dbschema_tables.source_file
             LIMIT 1
         )
-        WHERE (file_id IS NULL OR file_id = 0)
+        WHERE repo_id = ?
+          AND (file_id IS NULL OR file_id = 0)
           AND source_file IS NOT NULL
-        """
+        """,
+        (repo_id,),
     )
 
 
@@ -91,7 +97,8 @@ def _entity_file_anchors_cte() -> str:
     WITH entity_file_anchors AS (
         SELECT DISTINCT em.entity_id, em.file_id
         FROM entity_mappings em
-        WHERE em.entity_id IS NOT NULL
+        WHERE em.repo_id = :repo_id
+          AND em.entity_id IS NOT NULL
           AND em.file_id IS NOT NULL
 
         UNION
@@ -99,42 +106,46 @@ def _entity_file_anchors_cte() -> str:
         SELECT DISTINCT em.entity_id, f.id AS file_id
         FROM entity_mappings em
         JOIN files f
-          ON f.path = em.source_text
-        WHERE em.entity_id IS NOT NULL
+          ON f.repo_id = em.repo_id AND f.path = em.source_text
+        WHERE em.repo_id = :repo_id
+          AND em.entity_id IS NOT NULL
           AND em.source_text IS NOT NULL
 
         UNION
 
-        SELECT DISTINCT en.id AS entity_id, f.id AS file_id
-        FROM entity_nodes en
+        SELECT DISTINCT eo.entity_id, f.id AS file_id
+        FROM entity_occurrences eo
         JOIN files f
-          ON f.path = en.ent_file
-        WHERE en.ent_file IS NOT NULL
+          ON f.id = eo.source_file_id
+        WHERE eo.repo_id = :repo_id
+          AND eo.source_file_id IS NOT NULL
 
         UNION
 
         SELECT DISTINCT w.entity_id, w.file_id
         FROM workflows w
-        WHERE w.entity_id IS NOT NULL
+        WHERE w.repo_id = :repo_id
+          AND w.entity_id IS NOT NULL
           AND w.file_id IS NOT NULL
 
         UNION
 
         SELECT DISTINCT r.entity_id, r.file_id
         FROM rest_endpoints r
-        WHERE r.entity_id IS NOT NULL
+        WHERE r.repo_id = :repo_id
+          AND r.entity_id IS NOT NULL
           AND r.file_id IS NOT NULL
     )
     """
 
 
-def _run_insert(conn: sqlite3.Connection, sql: str) -> int:
+def _run_insert(conn: sqlite3.Connection, sql: str, repo_id: int) -> int:
     before = conn.total_changes
-    conn.execute(sql)
+    conn.execute(sql, {"repo_id": repo_id})
     return conn.total_changes - before
 
 
-def link_by_file_overlap(conn: sqlite3.Connection) -> int:
+def link_by_file_overlap(conn: sqlite3.Connection, repo_id: int) -> int:
     total = 0
 
     total += _run_insert(
@@ -142,7 +153,7 @@ def link_by_file_overlap(conn: sqlite3.Connection) -> int:
         _entity_file_anchors_cte()
         + """
         INSERT OR IGNORE INTO entity_access_links (
-            entity_id,
+            repo_id, entity_id,
             surface,
             record_id,
             link_type,
@@ -151,7 +162,7 @@ def link_by_file_overlap(conn: sqlite3.Connection) -> int:
             notes
         )
         SELECT DISTINCT
-            efa.entity_id,
+            :repo_id, efa.entity_id,
             'dbschema_table',
             dt.id,
             'file_id_overlap',
@@ -161,7 +172,9 @@ def link_by_file_overlap(conn: sqlite3.Connection) -> int:
         FROM entity_file_anchors efa
         JOIN dbschema_tables dt
           ON dt.file_id = efa.file_id
+         AND dt.repo_id = :repo_id
         """,
+        repo_id,
     )
 
     total += _run_insert(
@@ -169,7 +182,7 @@ def link_by_file_overlap(conn: sqlite3.Connection) -> int:
         _entity_file_anchors_cte()
         + """
         INSERT OR IGNORE INTO entity_access_links (
-            entity_id,
+            repo_id, entity_id,
             surface,
             record_id,
             link_type,
@@ -178,7 +191,7 @@ def link_by_file_overlap(conn: sqlite3.Connection) -> int:
             notes
         )
         SELECT DISTINCT
-            efa.entity_id,
+            :repo_id, efa.entity_id,
             'rest_endpoint',
             r.id,
             'file_id_overlap',
@@ -188,7 +201,9 @@ def link_by_file_overlap(conn: sqlite3.Connection) -> int:
         FROM entity_file_anchors efa
         JOIN rest_endpoints r
           ON r.file_id = efa.file_id
+         AND r.repo_id = :repo_id
         """,
+        repo_id,
     )
 
     total += _run_insert(
@@ -196,7 +211,7 @@ def link_by_file_overlap(conn: sqlite3.Connection) -> int:
         _entity_file_anchors_cte()
         + """
         INSERT OR IGNORE INTO entity_access_links (
-            entity_id,
+            repo_id, entity_id,
             surface,
             record_id,
             link_type,
@@ -205,7 +220,7 @@ def link_by_file_overlap(conn: sqlite3.Connection) -> int:
             notes
         )
         SELECT DISTINCT
-            efa.entity_id,
+            :repo_id, efa.entity_id,
             'workflow',
             w.id,
             'file_id_overlap',
@@ -215,20 +230,22 @@ def link_by_file_overlap(conn: sqlite3.Connection) -> int:
         FROM entity_file_anchors efa
         JOIN workflows w
           ON w.file_id = efa.file_id
+         AND w.repo_id = :repo_id
         """,
+        repo_id,
     )
 
     return total
 
 
-def link_by_entity_fk(conn: sqlite3.Connection) -> int:
+def link_by_entity_fk(conn: sqlite3.Connection, repo_id: int) -> int:
     total = 0
 
     total += _run_insert(
         conn,
         """
         INSERT OR IGNORE INTO entity_access_links (
-            entity_id,
+            repo_id, entity_id,
             surface,
             record_id,
             link_type,
@@ -237,7 +254,7 @@ def link_by_entity_fk(conn: sqlite3.Connection) -> int:
             notes
         )
         SELECT
-            w.entity_id,
+            :repo_id, w.entity_id,
             'workflow',
             w.id,
             'entity_fk',
@@ -245,15 +262,16 @@ def link_by_entity_fk(conn: sqlite3.Connection) -> int:
             'deterministic_exact',
             'direct workflow.entity_id'
         FROM workflows w
-        WHERE w.entity_id IS NOT NULL
+        WHERE w.repo_id = :repo_id AND w.entity_id IS NOT NULL
         """,
+        repo_id,
     )
 
     total += _run_insert(
         conn,
         """
         INSERT OR IGNORE INTO entity_access_links (
-            entity_id,
+            repo_id, entity_id,
             surface,
             record_id,
             link_type,
@@ -262,7 +280,7 @@ def link_by_entity_fk(conn: sqlite3.Connection) -> int:
             notes
         )
         SELECT
-            r.entity_id,
+            :repo_id, r.entity_id,
             'rest_endpoint',
             r.id,
             'entity_fk',
@@ -270,16 +288,17 @@ def link_by_entity_fk(conn: sqlite3.Connection) -> int:
             'deterministic_exact',
             'direct rest_endpoints.entity_id'
         FROM rest_endpoints r
-        WHERE r.entity_id IS NOT NULL
+        WHERE r.repo_id = :repo_id AND r.entity_id IS NOT NULL
         """,
+        repo_id,
     )
 
     return total
 
 
-def link_by_table_name_match(conn: sqlite3.Connection) -> int:
+def link_by_table_name_match(conn: sqlite3.Connection, repo_id: int) -> int:
     """
-    Link entities to dbschema_tables by matching entity_nodes.table_name
+    Link entities to dbschema_tables by matching the repository declaration's table_name
     to dbschema_tables.table_name (case-insensitive).
 
     This is the primary tracing path for dbschema: a single shared source
@@ -289,7 +308,7 @@ def link_by_table_name_match(conn: sqlite3.Connection) -> int:
         conn,
         """
         INSERT OR IGNORE INTO entity_access_links (
-            entity_id,
+            repo_id, entity_id,
             surface,
             record_id,
             link_type,
@@ -298,19 +317,22 @@ def link_by_table_name_match(conn: sqlite3.Connection) -> int:
             notes
         )
         SELECT DISTINCT
-            en.id,
+            :repo_id, eo.entity_id,
             'dbschema_table',
             dt.id,
             'table_name_match',
             dt.file_id,
             'deterministic_exact',
-            'entity_nodes.table_name = dbschema_tables.table_name'
-        FROM entity_nodes en
+            'entity_occurrences.table_name = dbschema_tables.table_name'
+        FROM entity_occurrences eo
         JOIN dbschema_tables dt
-          ON LOWER(dt.table_name) = LOWER(en.table_name)
-        WHERE en.table_name IS NOT NULL
-          AND TRIM(en.table_name) <> ''
+          ON LOWER(dt.table_name) = LOWER(eo.table_name)
+        WHERE dt.repo_id = :repo_id
+          AND eo.repo_id = :repo_id
+          AND eo.table_name IS NOT NULL
+          AND TRIM(eo.table_name) <> ''
         """,
+        repo_id,
     )
 
 
@@ -330,6 +352,7 @@ def parse_security_operation_key(op_key: str) -> dict[str, str] | None:
 
 def _insert_access_link(
     conn: sqlite3.Connection,
+    repo_id: int,
     entity_id: int,
     surface: str,
     record_id: int,
@@ -341,24 +364,24 @@ def _insert_access_link(
         """
         SELECT 1
         FROM entity_access_links
-        WHERE entity_id = ? AND surface = ? AND record_id = ?
+        WHERE repo_id = ? AND entity_id = ? AND surface = ? AND record_id = ?
           AND link_type = ? AND evidence_file_id IS ?
           AND evidence_symbol_id IS NULL
         LIMIT 1
         """,
-        (entity_id, surface, record_id, link_type, evidence_file_id),
+        (repo_id, entity_id, surface, record_id, link_type, evidence_file_id),
     ).fetchone()
     if existing:
         return 0
     cur = conn.execute(
         """
         INSERT INTO entity_access_links (
-            entity_id, surface, record_id, link_type,
+            repo_id, entity_id, surface, record_id, link_type,
             evidence_file_id, confidence_mode, notes
         )
-        VALUES (?, ?, ?, ?, ?, 'deterministic_exact', ?)
+        VALUES (?, ?, ?, ?, ?, ?, 'deterministic_exact', ?)
         """,
-        (entity_id, surface, record_id, link_type, evidence_file_id, notes),
+        (repo_id, entity_id, surface, record_id, link_type, evidence_file_id, notes),
     )
     return int(cur.rowcount)
 
@@ -408,13 +431,22 @@ def _write_security_key_diagnostics(records: list[dict]) -> None:
 
 def link_security_surfaces(
     conn: sqlite3.Connection,
+    repo_id: int,
     diagnostics: list[dict] | None = None,
 ) -> tuple[int, int]:
     """Link security surfaces by exact key evidence and report rejected keys."""
     if diagnostics is None:
         diagnostics = []
     entities_by_name: dict[str, list[tuple[int, str]]] = defaultdict(list)
-    for row in conn.execute("SELECT id, name, module FROM entity_nodes"):
+    for row in conn.execute(
+        """
+        SELECT en.id, en.name, eo.module
+        FROM entity_nodes en
+        JOIN entity_occurrences eo ON eo.entity_id = en.id
+        WHERE eo.repo_id = ?
+        """,
+        (repo_id,),
+    ):
         if row["name"] and row["module"]:
             entities_by_name[str(row["name"]).strip().lower()].append(
                 (int(row["id"]), str(row["module"]).strip().lower())
@@ -424,7 +456,8 @@ def link_security_surfaces(
     linked_key_count = 0
     linked_keys_by_entity: dict[int, set[str]] = defaultdict(set)
     for row in conn.execute(
-        "SELECT id, op_key, source_file, file_id FROM security_operations ORDER BY id"
+        "SELECT id, op_key, source_file, file_id FROM security_operations WHERE repo_id = ? ORDER BY id",
+        (repo_id,),
     ):
         parsed = parse_security_operation_key(str(row["op_key"]))
         if parsed is None:
@@ -458,6 +491,7 @@ def link_security_surfaces(
         linked_keys_by_entity[entity_id].add(str(row["op_key"]))
         total += _insert_access_link(
             conn,
+            repo_id,
             entity_id,
             parsed["surface"],
             int(row["id"]),
@@ -478,13 +512,13 @@ def link_security_surfaces(
                 FROM security_policy_values spv
                 JOIN security_policy_eops spe ON spe.policy_value_id = spv.id
                 JOIN security_policies sp ON sp.id = spv.policy_id
-                WHERE spe.op_key = ?
+                WHERE sp.repo_id = ? AND spe.op_key = ?
                 ORDER BY sp.id
                 """,
-                (op_key,),
+                (repo_id, op_key),
             ):
                 total += _insert_access_link(
-                    conn, entity_id, "security_policy", int(row["id"]),
+                    conn, repo_id, entity_id, "security_policy", int(row["id"]),
                     "operation_policy_grant", row["file_id"],
                     f"policy supported by security operation key={op_key}",
                 )
@@ -495,18 +529,18 @@ def link_security_surfaces(
                 FROM security_menu_op_links mol
                 JOIN security_menu_items smi ON smi.id = mol.menu_item_id
                 JOIN security_menus sm ON sm.id = smi.menu_id
-                WHERE mol.op_key = ? AND mol.operation_id IS NOT NULL
+                WHERE sm.repo_id = ? AND mol.op_key = ? AND mol.operation_id IS NOT NULL
                 ORDER BY smi.id
                 """,
-                (op_key,),
+                (repo_id, op_key),
             ):
                 total += _insert_access_link(
-                    conn, entity_id, "security_menu_item", int(row["item_id"]),
+                    conn, repo_id, entity_id, "security_menu_item", int(row["item_id"]),
                     "operation_menu_item", row["file_id"],
                     f"menu item supported by security operation key={op_key}",
                 )
                 total += _insert_access_link(
-                    conn, entity_id, "security_menu", int(row["menu_id"]),
+                    conn, repo_id, entity_id, "security_menu", int(row["menu_id"]),
                     "operation_menu", row["file_id"],
                     f"menu supported by security operation key={op_key}",
                 )
@@ -514,25 +548,26 @@ def link_security_surfaces(
 
 
 
-def build(db: str, reset: bool) -> BuildStats:
+def build(db: str, reset: bool, repo_key: str) -> BuildStats:
     conn = get_connection(db)
     stats = BuildStats()
     diagnostics: list[dict] = []
 
     try:
         ensure_entity_access_table(conn)
-        ensure_dbschema_file_id_column(conn)
+        repo_id = int(get_repository(conn, repo_key)["id"])
+        ensure_dbschema_file_id_column(conn, repo_id)
         if reset:
-            conn.execute("DELETE FROM entity_access_links")
+            conn.execute("DELETE FROM entity_access_links WHERE repo_id = ?", (repo_id,))
 
-        stats.rows_inserted += link_by_file_overlap(conn)
-        security_links, linked_key_count = link_security_surfaces(conn, diagnostics)
+        stats.rows_inserted += link_by_file_overlap(conn, repo_id)
+        security_links, linked_key_count = link_security_surfaces(conn, repo_id, diagnostics)
         stats.rows_inserted += security_links
         stats.security_keys_linked = linked_key_count
         stats.security_keys_unresolved = len(diagnostics)
         _write_security_key_diagnostics(diagnostics)
-        stats.rows_inserted += link_by_entity_fk(conn)
-        stats.rows_inserted += link_by_table_name_match(conn)
+        stats.rows_inserted += link_by_entity_fk(conn, repo_id)
+        stats.rows_inserted += link_by_table_name_match(conn, repo_id)
 
         conn.commit()
     finally:
@@ -554,8 +589,9 @@ def cli() -> None:
     show_default=True,
     help="Rebuild entity access links from a clean snapshot.",
 )
-def build_command(db: str, reset: bool) -> None:
-    stats = build(db=db, reset=reset)
+@click.option("--repo", "repo_key", required=True, help="Registered repository key.")
+def build_command(db: str, reset: bool, repo_key: str) -> None:
+    stats = build(db=db, reset=reset, repo_key=repo_key)
     click.echo(f"Entity access links inserted: {stats.rows_inserted}")
     click.echo(f"Security keys linked: {stats.security_keys_linked}")
     click.echo(f"Security keys unresolved: {stats.security_keys_unresolved}")

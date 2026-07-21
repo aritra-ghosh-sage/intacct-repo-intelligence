@@ -17,9 +17,11 @@ from tree_sitter_languages import get_parser
 
 try:
     from catalog.db import get_connection
+    from catalog.repositories import get_repository, resolve_repository_root
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from catalog.db import get_connection
+    from catalog.repositories import get_repository, resolve_repository_root
 
 DEFAULT_DB = "catalog/catalog.db"
 DEFAULT_REPO_ROOT = "/home/aritraghosh/projects/main"
@@ -185,6 +187,7 @@ def ensure_security_tables(conn: sqlite3.Connection) -> None:
         """
         CREATE TABLE IF NOT EXISTS security_operations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo_id INTEGER NOT NULL,
             op_key TEXT NOT NULL,
             op_numeric_id INTEGER,
             title TEXT,
@@ -198,7 +201,7 @@ def ensure_security_tables(conn: sqlite3.Connection) -> None:
             source_line INTEGER,
             source_kind TEXT NOT NULL,
             raw_hash TEXT,
-            UNIQUE(op_key, op_numeric_id, source_file, source_kind)
+            UNIQUE(repo_id, op_key, op_numeric_id, source_file, source_kind)
         );
         CREATE TABLE IF NOT EXISTS security_operation_allowops (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -212,13 +215,14 @@ def ensure_security_tables(conn: sqlite3.Connection) -> None:
         );
         CREATE TABLE IF NOT EXISTS security_policies (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo_id INTEGER NOT NULL,
             policy_name TEXT NOT NULL,
             module TEXT,
             label TEXT,
             source_file TEXT NOT NULL,
             file_id INTEGER,
             source_line INTEGER,
-            UNIQUE(policy_name, source_file)
+            UNIQUE(repo_id, policy_name, source_file)
         );
         CREATE TABLE IF NOT EXISTS security_policy_values (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -240,10 +244,12 @@ def ensure_security_tables(conn: sqlite3.Connection) -> None:
         );
         CREATE TABLE IF NOT EXISTS security_menus (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo_id INTEGER NOT NULL,
             module TEXT,
             menu_name TEXT,
-            source_file TEXT NOT NULL UNIQUE,
+            source_file TEXT NOT NULL,
             file_id INTEGER
+            ,UNIQUE(repo_id, source_file)
         );
         CREATE TABLE IF NOT EXISTS security_menu_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -269,13 +275,14 @@ def ensure_security_tables(conn: sqlite3.Connection) -> None:
         );
         CREATE TABLE IF NOT EXISTS dbschema_tables (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo_id INTEGER NOT NULL,
             table_name TEXT NOT NULL,
             primary_keys TEXT,
             source_file TEXT NOT NULL,
             file_id INTEGER,
             source_line INTEGER,
             raw_hash TEXT,
-            UNIQUE(table_name, source_file)
+            UNIQUE(repo_id, table_name, source_file)
         );
         CREATE TABLE IF NOT EXISTS dbschema_fields (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -335,17 +342,19 @@ def ensure_security_tables(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _resolve_file_id(conn: sqlite3.Connection, source_file: str) -> tuple[int | None, str]:
+def _resolve_file_id(
+    conn: sqlite3.Connection, repo_id: int, source_file: str
+) -> tuple[int | None, str]:
     row = conn.execute(
-        "SELECT id FROM files WHERE path = ? LIMIT 1",
-        (source_file,),
+        "SELECT id FROM files WHERE repo_id = ? AND path = ? LIMIT 1",
+        (repo_id, source_file),
     ).fetchone()
     if row:
         return int(row["id"]), "exact_path"
 
     row = conn.execute(
-        "SELECT id FROM files WHERE LOWER(path) = LOWER(?) ORDER BY id LIMIT 1",
-        (source_file,),
+        "SELECT id FROM files WHERE repo_id = ? AND LOWER(path) = LOWER(?) ORDER BY id LIMIT 1",
+        (repo_id, source_file),
     ).fetchone()
     if row:
         return int(row["id"]), "case_insensitive_path"
@@ -362,25 +371,33 @@ def _remediation_hint(source_file: str) -> str:
 
 def backfill_security_file_ids(
     conn: sqlite3.Connection,
+    repo_id: int,
     stats: BuildStats,
     unresolved_sources: list[dict[str, Any]],
 ) -> None:
     targets = (
-        ("security_operations", "id"),
-        ("security_operation_allowops", "id"),
-        ("security_policies", "id"),
-        ("security_menus", "id"),
-        ("dbschema_tables", "id"),
+        ("security_operations", "id", "repo_id = ?", (repo_id,)),
+        (
+            "security_operation_allowops",
+            "id",
+            "operation_id IN (SELECT id FROM security_operations WHERE repo_id = ?)",
+            (repo_id,),
+        ),
+        ("security_policies", "id", "repo_id = ?", (repo_id,)),
+        ("security_menus", "id", "repo_id = ?", (repo_id,)),
+        ("dbschema_tables", "id", "repo_id = ?", (repo_id,)),
     )
 
-    for table_name, pk_col in targets:
+    for table_name, pk_col, owner_filter, owner_params in targets:
         rows = conn.execute(
             f"""
             SELECT {pk_col} AS row_id, source_file
             FROM {table_name}
-            WHERE source_file IS NOT NULL
+            WHERE {owner_filter}
+              AND source_file IS NOT NULL
               AND (file_id IS NULL OR file_id = 0)
-            """
+            """,
+            owner_params,
         ).fetchall()
 
         for row in rows:
@@ -389,7 +406,7 @@ def backfill_security_file_ids(
             if not source_file:
                 continue
 
-            file_id, strategy = _resolve_file_id(conn, source_file)
+            file_id, strategy = _resolve_file_id(conn, repo_id, source_file)
             if file_id is not None:
                 conn.execute(
                     f"UPDATE {table_name} SET file_id = ? WHERE {pk_col} = ?",
@@ -410,21 +427,15 @@ def backfill_security_file_ids(
             )
 
 
-def reset_security_tables(conn: sqlite3.Connection) -> None:
-    conn.executescript(
-        """
-        DELETE FROM security_menu_op_links;
-        DELETE FROM security_menu_items;
-        DELETE FROM security_menus;
-        DELETE FROM security_policy_eops;
-        DELETE FROM security_policy_values;
-        DELETE FROM security_policies;
-        DELETE FROM security_operation_allowops;
-        DELETE FROM security_operations;
-        DELETE FROM dbschema_fields;
-        DELETE FROM dbschema_tables;
-        """
-    )
+def reset_security_tables(conn: sqlite3.Connection, repo_id: int) -> None:
+    # Child tables cascade from their repo-owned parent records.
+    for table_name in (
+        "security_menus",
+        "security_policies",
+        "security_operations",
+        "dbschema_tables",
+    ):
+        conn.execute(f"DELETE FROM {table_name} WHERE repo_id = ?", (repo_id,))
     conn.commit()
 
 
@@ -610,6 +621,7 @@ def menu_source_files(repo_root: Path) -> list[Path]:
 
 def insert_security_operation(
     conn: sqlite3.Connection,
+    repo_id: int,
     op_key: str,
     op_numeric_id: int | None,
     source_file: str,
@@ -619,7 +631,7 @@ def insert_security_operation(
     cur = conn.execute(
         """
         INSERT INTO security_operations (
-            op_key,
+            repo_id, op_key,
             op_numeric_id,
             title,
             action,
@@ -632,8 +644,8 @@ def insert_security_operation(
             source_kind,
             raw_hash
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
-        ON CONFLICT(op_key, op_numeric_id, source_file, source_kind) DO UPDATE SET
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+        ON CONFLICT(repo_id, op_key, op_numeric_id, source_file, source_kind) DO UPDATE SET
             title = excluded.title,
             action = excluded.action,
             script = excluded.script,
@@ -643,7 +655,7 @@ def insert_security_operation(
             raw_hash = excluded.raw_hash
         """,
         (
-            op_key,
+            repo_id, op_key,
             op_numeric_id,
             normalize_string(op_map.get("title")),
             normalize_string(op_map.get("action")),
@@ -662,13 +674,13 @@ def insert_security_operation(
         """
         SELECT id
         FROM security_operations
-        WHERE op_key = ?
+        WHERE repo_id = ? AND op_key = ?
           AND IFNULL(op_numeric_id, -1) = IFNULL(?, -1)
           AND source_file = ?
           AND source_kind = ?
         LIMIT 1
         """,
-        (op_key, op_numeric_id, source_file, source_kind),
+        (repo_id, op_key, op_numeric_id, source_file, source_kind),
     ).fetchone()
     assert row is not None
     return int(row["id"])
@@ -676,6 +688,7 @@ def insert_security_operation(
 
 def parse_security_files(
     conn: sqlite3.Connection,
+    repo_id: int,
     repo_root: Path,
     stats: BuildStats,
     parse_failures: list[dict[str, Any]],
@@ -727,6 +740,7 @@ def parse_security_files(
             op_id = normalize_int(op_map.get("id"))
             operation_id = insert_security_operation(
                 conn=conn,
+                repo_id=repo_id,
                 op_key=op_key,
                 op_numeric_id=op_id,
                 source_file=rel,
@@ -754,16 +768,20 @@ def parse_security_files(
 
 def resolve_allowops(
     conn: sqlite3.Connection,
+    repo_id: int,
     stats: BuildStats,
     unresolved: list[dict[str, Any]],
 ) -> None:
     """Resolve numeric allowops values to unique security operation rows."""
     conn.execute(
-        "UPDATE security_operation_allowops "
-        "SET allowed_operation_id = NULL, resolution_reason = NULL"
+        "UPDATE security_operation_allowops SET allowed_operation_id = NULL, resolution_reason = NULL "
+        "WHERE operation_id IN (SELECT id FROM security_operations WHERE repo_id = ?)",
+        (repo_id,),
     )
     rows = conn.execute(
-        "SELECT id, allowed_op_key FROM security_operation_allowops ORDER BY id"
+        "SELECT sao.id, sao.allowed_op_key FROM security_operation_allowops sao "
+        "JOIN security_operations so ON so.id = sao.operation_id WHERE so.repo_id = ? ORDER BY sao.id",
+        (repo_id,),
     ).fetchall()
     for row in rows:
         raw = normalize_string(row["allowed_op_key"])
@@ -773,8 +791,8 @@ def resolve_allowops(
                 int(target["id"])
                 for target in conn.execute(
                     "SELECT id FROM security_operations "
-                    "WHERE op_numeric_id = ? ORDER BY id",
-                    (int(raw),),
+                    "WHERE repo_id = ? AND op_numeric_id = ? ORDER BY id",
+                    (repo_id, int(raw)),
                 ).fetchall()
             ]
         if len(target_ids) == 1:
@@ -807,16 +825,17 @@ def resolve_allowops(
 
 
 def detect_conflicts(
-    conn: sqlite3.Connection, conflicts: list[dict[str, Any]], stats: BuildStats
+    conn: sqlite3.Connection, repo_id: int, conflicts: list[dict[str, Any]], stats: BuildStats
 ) -> None:
     dup_key_rows = conn.execute(
         """
         SELECT op_key, COUNT(DISTINCT op_numeric_id) AS distinct_ids
         FROM security_operations
-        WHERE op_numeric_id IS NOT NULL
+        WHERE repo_id = ? AND op_numeric_id IS NOT NULL
         GROUP BY op_key
         HAVING distinct_ids > 1
-        """
+        """,
+        (repo_id,),
     ).fetchall()
     for row in dup_key_rows:
         stats.conflicts_detected += 1
@@ -832,10 +851,11 @@ def detect_conflicts(
         """
         SELECT op_numeric_id, COUNT(DISTINCT op_key) AS distinct_keys
         FROM security_operations
-        WHERE op_numeric_id IS NOT NULL
+        WHERE repo_id = ? AND op_numeric_id IS NOT NULL
         GROUP BY op_numeric_id
         HAVING distinct_keys > 1
-        """
+        """,
+        (repo_id,),
     ).fetchall()
     for row in dup_id_rows:
         stats.conflicts_detected += 1
@@ -850,6 +870,7 @@ def detect_conflicts(
 
 def parse_policy_files(
     conn: sqlite3.Connection,
+    repo_id: int,
     repo_root: Path,
     stats: BuildStats,
     parse_failures: list[dict[str, Any]],
@@ -890,14 +911,14 @@ def parse_policy_files(
             cur = conn.execute(
                 """
                 INSERT INTO security_policies (
-                    policy_name, module, label, source_file, source_line
+                    repo_id, policy_name, module, label, source_file, source_line
                 )
-                VALUES (?, ?, ?, ?, NULL)
-                ON CONFLICT(policy_name, source_file) DO UPDATE SET
+                VALUES (?, ?, ?, ?, ?, NULL)
+                ON CONFLICT(repo_id, policy_name, source_file) DO UPDATE SET
                     module = excluded.module,
                     label = excluded.label
                 """,
-                (policy_name, module, label, rel),
+                (repo_id, policy_name, module, label, rel),
             )
             if cur.lastrowid:
                 policy_id = int(cur.lastrowid)
@@ -906,10 +927,10 @@ def parse_policy_files(
                     """
                     SELECT id
                     FROM security_policies
-                    WHERE policy_name = ? AND source_file = ?
+                    WHERE repo_id = ? AND policy_name = ? AND source_file = ?
                     LIMIT 1
                     """,
-                    (policy_name, rel),
+                    (repo_id, policy_name, rel),
                 ).fetchone()
                 assert row is not None
                 policy_id = int(row["id"])
@@ -1017,6 +1038,7 @@ def walk_menu_tree(
 
 def parse_menu_files(
     conn: sqlite3.Connection,
+    repo_id: int,
     repo_root: Path,
     stats: BuildStats,
     parse_failures: list[dict[str, Any]],
@@ -1066,19 +1088,19 @@ def parse_menu_files(
         module = path.stem.split("_", 1)[0]
         cur = conn.execute(
             """
-            INSERT INTO security_menus (module, menu_name, source_file)
-            VALUES (?, ?, ?)
-            ON CONFLICT(source_file) DO UPDATE SET
+            INSERT INTO security_menus (repo_id, module, menu_name, source_file)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(repo_id, source_file) DO UPDATE SET
                 module = excluded.module,
                 menu_name = excluded.menu_name
             """,
-            (module, menu_var, rel),
+            (repo_id, module, menu_var, rel),
         )
         if cur.lastrowid:
             menu_id = int(cur.lastrowid)
         else:
             row = conn.execute(
-                "SELECT id FROM security_menus WHERE source_file = ? LIMIT 1", (rel,)
+                "SELECT id FROM security_menus WHERE repo_id = ? AND source_file = ? LIMIT 1", (repo_id, rel)
             ).fetchone()
             assert row is not None
             menu_id = int(row["id"])
@@ -1161,6 +1183,7 @@ def parse_menu_files(
 
 def parse_dbschema(
     conn: sqlite3.Connection,
+    repo_id: int,
     repo_root: Path,
     stats: BuildStats,
     parse_failures: list[dict[str, Any]],
@@ -1204,7 +1227,7 @@ def parse_dbschema(
         return
 
     stats.files_parsed += 1
-    dbschema_file_id, _ = _resolve_file_id(conn, rel)
+    dbschema_file_id, _ = _resolve_file_id(conn, repo_id, rel)
     for table_name_raw, table_node in k_tables.items:
         table_name = normalize_string(table_name_raw)
         if not table_name:
@@ -1218,15 +1241,15 @@ def parse_dbschema(
         cur = conn.execute(
             """
             INSERT INTO dbschema_tables (
-                table_name, primary_keys, source_file, file_id, source_line, raw_hash
+                repo_id, table_name, primary_keys, source_file, file_id, source_line, raw_hash
             )
-            VALUES (?, ?, ?, ?, NULL, ?)
-            ON CONFLICT(table_name, source_file) DO UPDATE SET
+            VALUES (?, ?, ?, ?, ?, NULL, ?)
+            ON CONFLICT(repo_id, table_name, source_file) DO UPDATE SET
                 primary_keys = excluded.primary_keys,
                 file_id = excluded.file_id,
                 raw_hash = excluded.raw_hash
             """,
-            (table_name, primary_keys, rel, dbschema_file_id, sha1_jsonable(table_map)),
+            (repo_id, table_name, primary_keys, rel, dbschema_file_id, sha1_jsonable(table_map)),
         )
         if cur.lastrowid:
             table_id = int(cur.lastrowid)
@@ -1235,10 +1258,10 @@ def parse_dbschema(
                 """
                 SELECT id
                 FROM dbschema_tables
-                WHERE table_name = ? AND source_file = ?
+                WHERE repo_id = ? AND table_name = ? AND source_file = ?
                 LIMIT 1
                 """,
-                (table_name, rel),
+                (repo_id, table_name, rel),
             ).fetchone()
             assert row is not None
             table_id = int(row["id"])
@@ -1262,20 +1285,22 @@ def parse_dbschema(
             stats.dbschema_fields_inserted += 1
 
 
-def load_operation_key_map(conn: sqlite3.Connection) -> dict[str, int]:
+def load_operation_key_map(conn: sqlite3.Connection, repo_id: int) -> dict[str, int]:
     rows = conn.execute(
         """
         SELECT op_key, MIN(id) AS operation_id
         FROM security_operations
+        WHERE repo_id = ?
         GROUP BY op_key
-        """
+        """,
+        (repo_id,),
     ).fetchall()
     return {str(row["op_key"]): int(row["operation_id"]) for row in rows}
 
 
 def build(
     db: str,
-    repo_root: Path,
+    repo_key: str,
     reset: bool,
     max_parse_failures: int,
     max_unresolved: int,
@@ -1289,15 +1314,19 @@ def build(
 
     try:
         ensure_security_tables(conn)
+        repo = get_repository(conn, repo_key)
+        repo_id = int(repo["id"])
+        repo_root = resolve_repository_root(conn, repo_key)
         if reset:
-            reset_security_tables(conn)
+            reset_security_tables(conn, repo_id)
 
-        parse_security_files(conn, repo_root, stats, parse_failures)
-        detect_conflicts(conn, conflicts, stats)
-        resolve_allowops(conn, stats, unresolved)
-        op_key_map = load_operation_key_map(conn)
+        parse_security_files(conn, repo_id, repo_root, stats, parse_failures)
+        detect_conflicts(conn, repo_id, conflicts, stats)
+        resolve_allowops(conn, repo_id, stats, unresolved)
+        op_key_map = load_operation_key_map(conn, repo_id)
         parse_policy_files(
             conn=conn,
+            repo_id=repo_id,
             repo_root=repo_root,
             stats=stats,
             parse_failures=parse_failures,
@@ -1306,14 +1335,15 @@ def build(
         )
         parse_menu_files(
             conn=conn,
+            repo_id=repo_id,
             repo_root=repo_root,
             stats=stats,
             parse_failures=parse_failures,
             unresolved=unresolved,
             op_key_to_operation_id=op_key_map,
         )
-        parse_dbschema(conn, repo_root, stats, parse_failures)
-        backfill_security_file_ids(conn, stats, unresolved_sources)
+        parse_dbschema(conn, repo_id, repo_root, stats, parse_failures)
+        backfill_security_file_ids(conn, repo_id, stats, unresolved_sources)
         conn.commit()
     finally:
         conn.close()
@@ -1344,13 +1374,7 @@ def cli() -> None:
 @click.option(
     "--db", default=DEFAULT_DB, show_default=True, help="Catalog database path."
 )
-@click.option(
-    "--repo-root",
-    type=click.Path(path_type=Path, exists=True, file_okay=False),
-    default=Path(DEFAULT_REPO_ROOT),
-    show_default=True,
-    help="Intacct source repository root.",
-)
+@click.option("--repo", "repo_key", required=True, help="Registered repository key.")
 @click.option(
     "--reset/--no-reset",
     default=True,
@@ -1371,14 +1395,14 @@ def cli() -> None:
 )
 def build_command(
     db: str,
-    repo_root: Path,
+    repo_key: str,
     reset: bool,
     max_parse_failures: int,
     max_unresolved: int,
 ) -> None:
     stats = build(
         db=db,
-        repo_root=repo_root.resolve(),
+        repo_key=repo_key,
         reset=reset,
         max_parse_failures=max_parse_failures,
         max_unresolved=max_unresolved,

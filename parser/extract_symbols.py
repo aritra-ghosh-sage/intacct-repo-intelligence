@@ -4,8 +4,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from tqdm import tqdm
 
-from config import REPO_PATH
 from catalog.db import get_connection
+from parser.repo_context import require_repo_scoped_files, resolve_repo
 from parser.extractors import (
     java_extractor,
     php_extractor,
@@ -33,9 +33,17 @@ def write_jsonl(path: Path, rows: list[dict[str, str]]) -> None:
             handle.write(json.dumps(row, ensure_ascii=True) + "\n")
 
 
-def extract_all(only_changed: bool = True, languages: list[str] | None = None):
-    conn = get_connection()
+def extract_all(
+    only_changed: bool = True,
+    languages: list[str] | None = None,
+    repo_key: str | None = None,
+    db_path: str | None = None,
+    write_logs: bool = True,
+):
+    conn = get_connection(db_path)
     cur = conn.cursor()
+    require_repo_scoped_files(conn)
+    repo = resolve_repo(conn, repo_key)
 
     started = datetime.now(timezone.utc).isoformat()
 
@@ -58,22 +66,24 @@ def extract_all(only_changed: bool = True, languages: list[str] | None = None):
             f"""
             SELECT id, path, language
             FROM files
-            WHERE language IN ({placeholders})
+            WHERE repo_id = ?
+              AND language IN ({placeholders})
               AND (
                     last_symbols_extracted IS NULL
                  OR last_indexed > last_symbols_extracted
               )
         """,
-            lang_tuple,
+            (repo.id, *lang_tuple),
         ).fetchall()
     else:
         rows = cur.execute(
             f"""
             SELECT id, path, language
             FROM files
-            WHERE language IN ({placeholders})
+            WHERE repo_id = ?
+              AND language IN ({placeholders})
         """,
-            lang_tuple,
+            (repo.id, *lang_tuple),
         ).fetchall()
 
     print(f"🔎 Extracting symbols from {len(rows)} files")
@@ -88,7 +98,7 @@ def extract_all(only_changed: bool = True, languages: list[str] | None = None):
         file_id = row["id"]
         rel_path = row["path"]
         language = row["language"]
-        abs_path = Path(REPO_PATH) / rel_path
+        abs_path = repo.local_root / rel_path
 
         extractor = EXTRACTORS.get(language)
         if not extractor:
@@ -158,8 +168,9 @@ def extract_all(only_changed: bool = True, languages: list[str] | None = None):
         parse_failures: list[dict[str, str]] = []
         if hasattr(yaml_extractor, "get_parse_failures"):
             parse_failures = yaml_extractor.get_parse_failures()
-        write_jsonl(YAML_PARSE_FAILURES_LOG, parse_failures)
-        print(f"   YAML parse fail log: {YAML_PARSE_FAILURES_LOG.as_posix()}")
+        if write_logs:
+            write_jsonl(YAML_PARSE_FAILURES_LOG, parse_failures)
+            print(f"   YAML parse fail log: {YAML_PARSE_FAILURES_LOG.as_posix()}")
 
 
 if __name__ == "__main__":
@@ -177,6 +188,13 @@ if __name__ == "__main__":
         choices=sorted(EXTRACTORS.keys()),
         help="Limit extraction to one or more languages (repeat flag to pass multiple).",
     )
+    parser.add_argument("--repo", help="Registered repo_key to extract")
+    parser.add_argument("--db", help="Catalog database path")
     args = parser.parse_args()
 
-    extract_all(only_changed=not args.full, languages=args.language)
+    extract_all(
+        only_changed=not args.full,
+        languages=args.language,
+        repo_key=args.repo,
+        db_path=args.db,
+    )

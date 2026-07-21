@@ -1,0 +1,24 @@
+# Operator-local checkout roots are intentionally configuration, not identity.
+version: 1
+repositories:
+  - repo_key: ia-main
+    name: Intacct Main
+    kind: monorepo
+    language: php
+    remote_url: git@example.invalid:intacct/main.git
+    local_root: /home/aritraghosh/projects/main
+    tracked_branch: main
+    enabled: true
+    profile: intacct_app
+    builders:
+      - scan
+      - symbols
+      - relationships
+      - entities
+      - entity_roots
+      - workflows
+      - security
+      - openapi_scan
+      - openapi_link
+      - rest_endpoints
+      - entity_access_links

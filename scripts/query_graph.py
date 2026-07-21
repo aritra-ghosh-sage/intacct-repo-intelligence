@@ -41,6 +41,16 @@ DEFAULT_GRAPH = os.environ.get("GRAPH_DB", GRAPH_DB)
 _graph_connection_cache: dict[str, tuple[lb.Database, lb.Connection]] = {}
 
 
+class EntityAmbiguityError(ValueError):
+    """Raised when a canonical entity has several repo-scoped occurrences."""
+
+    def __init__(self, entity_name: str, candidates: list[dict[str, Any]]) -> None:
+        self.candidates = candidates
+        super().__init__(
+            f"Entity '{entity_name}' exists in multiple repositories; retry with --repo"
+        )
+
+
 def graph_error_boundary(func):
     @wraps(func)
     def wrapped(*args, **kwargs):
@@ -83,9 +93,10 @@ def enrich_symbols_from_sql(
         placeholders = ",".join("?" for _ in chunk)
         rows = sql_conn.execute(
             f"""
-            SELECT s.id, f.path, s.start_line, s.end_line, s.signature
+            SELECT s.id, r.repo_key, f.path, s.start_line, s.end_line, s.signature
             FROM symbols s
             LEFT JOIN files f ON f.id = s.file_id
+            LEFT JOIN repos r ON r.id = f.repo_id
             WHERE s.id IN ({placeholders})
             """,
             chunk,
@@ -100,10 +111,11 @@ def enrich_symbols_from_sql(
         if metadata is not None:
             result.update(
                 {
-                    "file_path": metadata[1],
-                    "start_line": metadata[2],
-                    "end_line": metadata[3],
-                    "signature": metadata[4],
+                    "repo_key": metadata[1],
+                    "file_path": metadata[2],
+                    "start_line": metadata[3],
+                    "end_line": metadata[4],
+                    "signature": metadata[5],
                 }
             )
         enriched.append(result)
@@ -122,18 +134,19 @@ def cli() -> None:
 
 
 def _query_file_symbols_from_graph(
-    graph_conn: lb.Connection, file_path: str
+    graph_conn: lb.Connection, file_path: str, repo_key: str | None = None
 ) -> list[dict[str, Any]]:
     """Query graph for all symbols declared in a file."""
     query = """
     MATCH (f:File {path: $file_path})-[r:DECLARED_IN]-(s:Symbol)
+    WHERE $repo_key IS NULL OR f.repo_key = $repo_key
     RETURN 
         s.symbol_id AS symbol_id,
         s.name AS name,
         s.kind AS kind
     ORDER BY s.name, s.symbol_id
     """
-    results = graph_conn.execute(query, {"file_path": file_path})
+    results = graph_conn.execute(query, {"file_path": file_path, "repo_key": repo_key})
     rows = results.get_all()
     return [
         {"symbol_id": row[0], "name": row[1], "kind": row[2]} for row in rows
@@ -141,49 +154,54 @@ def _query_file_symbols_from_graph(
 
 
 def _query_entities_from_symbols(
-    graph_conn: lb.Connection, symbol_ids: list[int]
+    graph_conn: lb.Connection, symbol_ids: list[int], repo_key: str | None = None
 ) -> list[dict[str, Any]]:
     """Batch-query exact entity mappings for the supplied symbols."""
     if not symbol_ids:
         return []
     query = """
-    MATCH (s:Symbol)-[:ENTITY_MAPPING]-(e:Entity)
+    MATCH (s:Symbol)-[:ENTITY_OCCURRENCE_MAPPING]-(o:EntityOccurrence)
+    MATCH (e:Entity)-[:ENTITY_HAS_OCCURRENCE]->(o)
+    MATCH (r:Repository)-[:REPOSITORY_HAS_ENTITY_OCCURRENCE]->(o)
     WHERE s.symbol_id IN $symbol_ids
-    RETURN DISTINCT e.entity_id, e.name, e.entity_type, e.module
-    ORDER BY e.entity_id
+      AND ($repo_key IS NULL OR r.repo_key = $repo_key)
+    RETURN DISTINCT e.entity_id, e.name, e.entity_type, r.repo_key, o.entity_occurrence_id, o.module
+    ORDER BY r.repo_key, e.entity_id, o.entity_occurrence_id
     """
     rows = graph_conn.execute(
-        query, {"symbol_ids": sorted(set(symbol_ids))}
+        query, {"symbol_ids": sorted(set(symbol_ids)), "repo_key": repo_key}
     ).get_all()
     return [
         {
             "entity_id": row[0],
             "name": row[1],
             "entity_type": row[2],
-            "module": row[3],
+            "repo_key": row[3],
+            "occurrence_id": row[4],
+            "module": row[5],
         }
         for row in rows
     ]
 
 
-def _query_surfaces_from_entities(
-    graph_conn: lb.Connection, entity_ids: list[int]
+def _query_surfaces_from_occurrences(
+    graph_conn: lb.Connection, occurrence_ids: list[int]
 ) -> dict[str, list[dict[str, Any]]]:
-    """Batch-query evidence-backed surfaces for the supplied entities."""
+    """Batch-query evidence-backed surfaces for repository-qualified occurrences."""
     empty = {
         "rest_endpoints": [],
         "workflows": [],
         "security_ops": [],
         "security_menus": [],
     }
-    if not entity_ids:
+    if not occurrence_ids:
         return empty
-    params = {"entity_ids": sorted(set(entity_ids))}
+    params = {"occurrence_ids": sorted(set(occurrence_ids))}
     queries = {
         "rest_endpoints": (
             """
-            MATCH (re:RestEndpoint)-[:EXPOSES_ENTITY]->(e:Entity)
-            WHERE e.entity_id IN $entity_ids
+            MATCH (e:EntityOccurrence)-[:ENTITY_OCCURRENCE_REST_ENDPOINT]->(re:RestEndpoint)
+            WHERE e.entity_occurrence_id IN $occurrence_ids
             RETURN DISTINCT re.rest_endpoint_id, re.path, re.method
             ORDER BY re.rest_endpoint_id
             """,
@@ -193,8 +211,8 @@ def _query_surfaces_from_entities(
         ),
         "workflows": (
             """
-            MATCH (e:Entity)-[:HAS_WORKFLOW]->(wf:Workflow)
-            WHERE e.entity_id IN $entity_ids
+            MATCH (e:EntityOccurrence)-[:ENTITY_OCCURRENCE_WORKFLOW]->(wf:Workflow)
+            WHERE e.entity_occurrence_id IN $occurrence_ids
             RETURN DISTINCT wf.workflow_id, wf.name, wf.workflow_type
             ORDER BY wf.workflow_id
             """,
@@ -204,9 +222,9 @@ def _query_surfaces_from_entities(
         ),
         "security_ops": (
             """
-            MATCH (e:Entity)<-[:ENTITY_ACCESS_LINK_ENTITY]-(l:EntityAccessLink)
+            MATCH (e:EntityOccurrence)<-[:ENTITY_ACCESS_LINK_ENTITY_OCCURRENCE]-(l:EntityAccessLink)
                   -[:ENTITY_ACCESS_LINK_SECURITY_OPERATION]->(so:SecurityOperation)
-            WHERE e.entity_id IN $entity_ids
+            WHERE e.entity_occurrence_id IN $occurrence_ids
             RETURN DISTINCT so.security_operation_id, so.op_key, so.title
             ORDER BY so.security_operation_id
             """,
@@ -216,9 +234,9 @@ def _query_surfaces_from_entities(
         ),
         "security_menus": (
             """
-            MATCH (e:Entity)<-[:ENTITY_ACCESS_LINK_ENTITY]-(l:EntityAccessLink)
+            MATCH (e:EntityOccurrence)<-[:ENTITY_ACCESS_LINK_ENTITY_OCCURRENCE]-(l:EntityAccessLink)
                   -[:ENTITY_ACCESS_LINK_SECURITY_MENU]->(sm:SecurityMenu)
-            WHERE e.entity_id IN $entity_ids
+            WHERE e.entity_occurrence_id IN $occurrence_ids
             RETURN DISTINCT sm.security_menu_id, sm.menu_name
             ORDER BY sm.security_menu_id
             """,
@@ -288,6 +306,7 @@ def _query_bounded_incoming_traversal(
 
 @cli.command("file-impact")
 @click.argument("file_path")
+@click.option("--repo", "repo_key", default=None, help="Repository key; required when a path is ambiguous.")
 @click.option(
     "--db",
     default=DEFAULT_DB,
@@ -306,6 +325,7 @@ def _query_bounded_incoming_traversal(
 @graph_error_boundary
 def file_impact(
     file_path: str,
+    repo_key: str | None,
     db: str,
     graph: str,
     json_output: bool,
@@ -322,12 +342,22 @@ def file_impact(
         graph_db, graph_conn = get_graph_connection(graph)
 
         # Verify file exists
-        file_record = sql_conn.execute(
-            "SELECT id, path FROM files WHERE path = ?", (file_path,)
-        ).fetchone()
+        file_rows = sql_conn.execute(
+            "SELECT f.id,f.path,r.repo_key FROM files f JOIN repos r ON r.id=f.repo_id "
+            "WHERE f.path=? AND (? IS NULL OR r.repo_key=?) ORDER BY r.repo_key,f.id",
+            (file_path, repo_key, repo_key),
+        ).fetchall()
+        if repo_key is None and len(file_rows) > 1:
+            details = {"candidates": [dict(row) for row in file_rows]}
+            args = {"file_path": file_path, "repo_key": None}
+            if json_output:
+                emit_json(error_response(command="file-impact", args=args, code="ambiguous_file", message="File path exists in multiple repositories; retry with --repo", details=details))
+                return
+            raise click.ClickException("File path is ambiguous; retry with --repo")
+        file_record = file_rows[0] if file_rows else None
 
         if not file_record:
-            args = {"file_path": file_path}
+            args = {"file_path": file_path, "repo_key": repo_key}
             error_payload = error_response(
                 command="file-impact",
                 args=args,
@@ -341,7 +371,7 @@ def file_impact(
             raise click.ClickException(error_payload["error"]["message"])
 
         # Query graph
-        seed_symbols = _query_file_symbols_from_graph(graph_conn, file_path)
+        seed_symbols = _query_file_symbols_from_graph(graph_conn, file_path, repo_key)
         seed_ids = [s["symbol_id"] for s in seed_symbols]
         traversed_symbols, traversal_edges = _query_bounded_incoming_traversal(
             graph_conn, seed_ids, depth, max_edges_per_symbol
@@ -355,15 +385,15 @@ def file_impact(
         traversal_nodes = seed_nodes + traversed_symbols
         symbols = enrich_symbols_from_sql(sql_conn, traversal_nodes)
 
-        direct_entities = _query_entities_from_symbols(graph_conn, seed_ids)
-        entities = _query_entities_from_symbols(graph_conn, affected_ids)
-        entity_ids = [e["entity_id"] for e in entities]
-        surfaces = _query_surfaces_from_entities(graph_conn, entity_ids)
+        direct_entities = _query_entities_from_symbols(graph_conn, seed_ids, repo_key)
+        entities = _query_entities_from_symbols(graph_conn, affected_ids, repo_key)
+        occurrence_ids = [e["occurrence_id"] for e in entities]
+        surfaces = _query_surfaces_from_occurrences(graph_conn, occurrence_ids)
 
         if json_output:
-            args = {"file_path": file_path, "depth": depth, "max_edges_per_symbol": max_edges_per_symbol}
+            args = {"file_path": file_path, "repo_key": repo_key, "depth": depth, "max_edges_per_symbol": max_edges_per_symbol}
             data = {
-                "file": {"path": file_path, "id": file_record[0]},
+                "file": {"path": file_path, "id": file_record[0], "repo_key": file_record[2]},
                 "seed_symbols": enrich_symbols_from_sql(sql_conn, seed_nodes),
                 "direct_entities": direct_entities,
                 "affected_symbols": symbols,
@@ -416,48 +446,69 @@ def file_impact(
 
 
 def _query_entity_from_graph(
-    graph_conn: lb.Connection, entity_name: str
+    graph_conn: lb.Connection, entity_name: str, repo_key: str | None = None
 ) -> dict[str, Any] | None:
     """Query graph for an entity by name."""
     query = """
-    MATCH (e:Entity)
+    MATCH (e:Entity)-[:ENTITY_HAS_OCCURRENCE]->(o:EntityOccurrence)
+    MATCH (r:Repository)-[:REPOSITORY_HAS_ENTITY_OCCURRENCE]->(o)
     WHERE toLower(e.name) = toLower($name)
+      AND ($repo_key IS NULL OR r.repo_key = $repo_key)
     RETURN 
         e.entity_id AS id,
         e.name AS name,
         e.entity_type AS entity_type,
-        e.module AS module,
-        e.table_name AS table_name,
-        e.ent_file AS ent_file
+        r.repo_key AS repo_key,
+        o.entity_occurrence_id AS occurrence_id,
+        o.module AS module,
+        o.table_name AS table_name,
+        o.view_name AS view_name,
+        o.ent_file AS ent_file
+    ORDER BY r.repo_key, o.entity_occurrence_id
     """
-    results = graph_conn.execute(query, {"name": entity_name})
+    results = graph_conn.execute(query, {"name": entity_name, "repo_key": repo_key})
     rows = results.get_all()
     if not rows:
         return None
+    if repo_key is None and len(rows) > 1:
+        raise EntityAmbiguityError(
+            entity_name,
+            [
+                {
+                    "repo_key": row[3],
+                    "occurrence_id": row[4],
+                    "ent_file": row[8],
+                }
+                for row in rows
+            ],
+        )
     row = rows[0]
     return {
         "id": row[0],
         "name": row[1],
         "entity_type": row[2],
-        "module": row[3],
-        "table_name": row[4],
-        "ent_file": row[5],
+        "repo_key": row[3],
+        "occurrence_id": row[4],
+        "module": row[5],
+        "table_name": row[6],
+        "view_name": row[7],
+        "ent_file": row[8],
     }
 
 
 def _query_mapped_symbols_for_entity(
-    graph_conn: lb.Connection, entity_id: int
+    graph_conn: lb.Connection, occurrence_id: int
 ) -> list[dict[str, Any]]:
     """Query graph for all symbols mapped to an entity."""
     query = """
-    MATCH (e:Entity {entity_id: $entity_id})-[r:ENTITY_MAPPING]-(s:Symbol)
+    MATCH (e:EntityOccurrence {entity_occurrence_id: $occurrence_id})-[r:ENTITY_OCCURRENCE_MAPPING]-(s:Symbol)
     RETURN 
         s.symbol_id AS symbol_id,
         s.name AS name,
         s.kind AS kind
     ORDER BY s.kind, s.name, s.symbol_id
     """
-    results = graph_conn.execute(query, {"entity_id": entity_id})
+    results = graph_conn.execute(query, {"occurrence_id": occurrence_id})
     rows = results.get_all()
     return [
         {
@@ -484,12 +535,14 @@ def _query_mapped_symbols_for_entity(
     help="Path to Ladybug graph database.",
 )
 @click.option("--json", "json_output", is_flag=True, help="Emit JSON output.")
+@click.option("--repo", "repo_key", default=None, help="Repository key from the catalog registry.")
 @graph_error_boundary
 def entity_context(
     entity_name: str,
     db: str,
     graph: str,
     json_output: bool,
+    repo_key: str | None,
 ) -> None:
     """Get full context for an entity."""
     sql_conn = None
@@ -500,9 +553,24 @@ def entity_context(
         sql_conn = get_connection(db)
         graph_db, graph_conn = get_graph_connection(graph)
 
-        entity = _query_entity_from_graph(graph_conn, entity_name)
+        try:
+            entity = _query_entity_from_graph(graph_conn, entity_name, repo_key)
+        except EntityAmbiguityError as exc:
+            args = {"entity_name": entity_name, "repo_key": repo_key}
+            if json_output:
+                emit_json(
+                    error_response(
+                        command="entity-context",
+                        args=args,
+                        code="ambiguous_entity",
+                        message=str(exc),
+                        details={"candidates": exc.candidates},
+                    )
+                )
+                return
+            raise click.ClickException(str(exc)) from exc
         if not entity:
-            args = {"entity_name": entity_name}
+            args = {"entity_name": entity_name, "repo_key": repo_key}
             error_payload = error_response(
                 command="entity-context",
                 args=args,
@@ -514,10 +582,10 @@ def entity_context(
                 return
             raise click.ClickException(error_payload["error"]["message"])
 
-        symbols = _query_mapped_symbols_for_entity(graph_conn, entity["id"])
+        symbols = _query_mapped_symbols_for_entity(graph_conn, entity["occurrence_id"])
         symbols = enrich_symbols_from_sql(sql_conn, symbols)
 
-        surfaces = _query_surfaces_from_entities(graph_conn, [entity["id"]])
+        surfaces = _query_surfaces_from_occurrences(graph_conn, [entity["occurrence_id"]])
 
         db_schema = []
         if entity["table_name"]:
@@ -529,11 +597,12 @@ def entity_context(
                     dt.primary_keys,
                     COUNT(df.id) AS field_count
                 FROM dbschema_tables dt
+                JOIN repos r ON r.id = dt.repo_id
                 LEFT JOIN dbschema_fields df ON df.dbschema_table_id = dt.id
-                WHERE LOWER(dt.table_name) = LOWER(?)
+                WHERE r.repo_key = ? AND LOWER(dt.table_name) = LOWER(?)
                 GROUP BY dt.id
                 """,
-                (entity["table_name"],),
+                (entity["repo_key"], entity["table_name"]),
             ).fetchall()
             db_schema = [
                 {
@@ -546,7 +615,7 @@ def entity_context(
             ]
 
         if json_output:
-            args = {"entity_name": entity_name}
+            args = {"entity_name": entity_name, "repo_key": repo_key}
             data = {
                 "entity": entity,
                 "mapped_symbols": symbols,
@@ -570,12 +639,12 @@ def entity_context(
                 )
             )
         else:
-            click.echo(f"Entity: {entity["name"]} (id={entity["id"]})")
+            click.echo(f"Entity: {entity['name']} (id={entity['id']})")
             click.echo(f"Mapped symbols: {len(symbols)}")
-            click.echo(f"REST endpoints: {len(surfaces["rest_endpoints"])}")
-            click.echo(f"Workflows: {len(surfaces["workflows"])}")
-            click.echo(f"Security operations: {len(surfaces["security_ops"])}")
-            click.echo(f"Security menus: {len(surfaces["security_menus"])}")
+            click.echo(f"REST endpoints: {len(surfaces['rest_endpoints'])}")
+            click.echo(f"Workflows: {len(surfaces['workflows'])}")
+            click.echo(f"Security operations: {len(surfaces['security_ops'])}")
+            click.echo(f"Security menus: {len(surfaces['security_menus'])}")
             click.echo(f"Database tables: {len(db_schema)}")
 
     finally:
@@ -737,12 +806,12 @@ def who_uses(
             )
         else:
             click.echo(f"Symbol: {symbol_name or target_id}")
-            click.echo(f"Callers: {len(usages["callers"])}")
+            click.echo(f"Callers: {len(usages['callers'])}")
             for row in usages["callers"]:
-                click.echo(f"  {row["name"]} ({row["kind"]})")
-            click.echo(f"Referencers: {len(usages["referencers"])}")
+                click.echo(f"  {row['name']} ({row['kind']})")
+            click.echo(f"Referencers: {len(usages['referencers'])}")
             for row in usages["referencers"]:
-                click.echo(f"  {row["name"]} ({row["kind"]})")
+                click.echo(f"  {row['name']} ({row['kind']})")
 
     finally:
         if graph_conn:
@@ -759,9 +828,9 @@ def who_uses(
 
 
 def _query_entity_security_surface(
-    graph_conn: lb.Connection, entity_id: int
+    graph_conn: lb.Connection, occurrence_id: int
 ) -> dict[str, list[dict[str, Any]]]:
-    """Query graph for security surface of an entity."""
+    """Query graph for the security surface of an entity occurrence."""
     surface = {
         "resources": [],
         "operations": [],
@@ -771,7 +840,7 @@ def _query_entity_security_surface(
 
     # Query parent security resources via EntityAccessLink.
     resource_query = """
-    MATCH (e:Entity {entity_id: $entity_id})<-[:ENTITY_ACCESS_LINK_ENTITY]-(l:EntityAccessLink)-[:ENTITY_ACCESS_LINK_SECURITY_RESOURCE]->(so:SecurityOperation)
+    MATCH (e:EntityOccurrence {entity_occurrence_id: $occurrence_id})<-[:ENTITY_ACCESS_LINK_ENTITY_OCCURRENCE]-(l:EntityAccessLink)-[:ENTITY_ACCESS_LINK_SECURITY_RESOURCE]->(so:SecurityOperation)
     RETURN DISTINCT
         so.security_operation_id AS security_operation_id,
         so.op_key AS op_key,
@@ -779,7 +848,7 @@ def _query_entity_security_surface(
     ORDER BY op_key, security_operation_id
     """
     try:
-        resource_results = graph_conn.execute(resource_query, {"entity_id": entity_id})
+        resource_results = graph_conn.execute(resource_query, {"occurrence_id": occurrence_id})
         surface["resources"] = [
             {"security_operation_id": row[0], "op_key": row[1], "title": row[2]}
             for row in resource_results.get_all()
@@ -789,7 +858,7 @@ def _query_entity_security_surface(
 
     # Query action operations via EntityAccessLink.
     op_query = """
-    MATCH (e:Entity {entity_id: $entity_id})<-[:ENTITY_ACCESS_LINK_ENTITY]-(l:EntityAccessLink)-[:ENTITY_ACCESS_LINK_SECURITY_OPERATION]->(so:SecurityOperation)
+    MATCH (e:EntityOccurrence {entity_occurrence_id: $occurrence_id})<-[:ENTITY_ACCESS_LINK_ENTITY_OCCURRENCE]-(l:EntityAccessLink)-[:ENTITY_ACCESS_LINK_SECURITY_OPERATION]->(so:SecurityOperation)
     RETURN DISTINCT
         so.security_operation_id AS security_operation_id,
         so.op_key AS op_key,
@@ -797,7 +866,7 @@ def _query_entity_security_surface(
     ORDER BY op_key, security_operation_id
     """
     try:
-        op_results = graph_conn.execute(op_query, {"entity_id": entity_id})
+        op_results = graph_conn.execute(op_query, {"occurrence_id": occurrence_id})
         surface["operations"] = [
             {"security_operation_id": row[0], "op_key": row[1], "title": row[2]}
             for row in op_results.get_all()
@@ -807,14 +876,14 @@ def _query_entity_security_surface(
 
     # Query policies via EntityAccessLink
     policy_query = """
-    MATCH (e:Entity {entity_id: $entity_id})<-[:ENTITY_ACCESS_LINK_ENTITY]-(l:EntityAccessLink)-[:ENTITY_ACCESS_LINK_SECURITY_POLICY]->(sp:SecurityPolicy)
+    MATCH (e:EntityOccurrence {entity_occurrence_id: $occurrence_id})<-[:ENTITY_ACCESS_LINK_ENTITY_OCCURRENCE]-(l:EntityAccessLink)-[:ENTITY_ACCESS_LINK_SECURITY_POLICY]->(sp:SecurityPolicy)
     RETURN DISTINCT
         sp.security_policy_id AS security_policy_id,
         sp.policy_name AS policy_name
     ORDER BY policy_name, security_policy_id
     """
     try:
-        policy_results = graph_conn.execute(policy_query, {"entity_id": entity_id})
+        policy_results = graph_conn.execute(policy_query, {"occurrence_id": occurrence_id})
         surface["policies"] = [
             {"security_policy_id": row[0], "policy_name": row[1]}
             for row in policy_results.get_all()
@@ -824,14 +893,14 @@ def _query_entity_security_surface(
 
     # Query menus via EntityAccessLink
     menu_query = """
-    MATCH (e:Entity {entity_id: $entity_id})<-[:ENTITY_ACCESS_LINK_ENTITY]-(l:EntityAccessLink)-[:ENTITY_ACCESS_LINK_SECURITY_MENU]->(sm:SecurityMenu)
+    MATCH (e:EntityOccurrence {entity_occurrence_id: $occurrence_id})<-[:ENTITY_ACCESS_LINK_ENTITY_OCCURRENCE]-(l:EntityAccessLink)-[:ENTITY_ACCESS_LINK_SECURITY_MENU]->(sm:SecurityMenu)
     RETURN DISTINCT
         sm.security_menu_id AS security_menu_id,
         sm.menu_name AS menu_name
     ORDER BY menu_name, security_menu_id
     """
     try:
-        menu_results = graph_conn.execute(menu_query, {"entity_id": entity_id})
+        menu_results = graph_conn.execute(menu_query, {"occurrence_id": occurrence_id})
         surface["menus"] = [
             {"security_menu_id": row[0], "menu_name": row[1]}
             for row in menu_results.get_all()
@@ -857,12 +926,14 @@ def _query_entity_security_surface(
     help="Path to Ladybug graph database.",
 )
 @click.option("--json", "json_output", is_flag=True, help="Emit JSON output.")
+@click.option("--repo", "repo_key", default=None, help="Repository key from the catalog registry.")
 @graph_error_boundary
 def security_surface(
     entity_name: str,
     db: str,
     graph: str,
     json_output: bool,
+    repo_key: str | None,
 ) -> None:
     """Analyze the security surface of an entity."""
     sql_conn = None
@@ -873,9 +944,24 @@ def security_surface(
         sql_conn = get_connection(db)
         graph_db, graph_conn = get_graph_connection(graph)
 
-        entity = _query_entity_from_graph(graph_conn, entity_name)
+        try:
+            entity = _query_entity_from_graph(graph_conn, entity_name, repo_key)
+        except EntityAmbiguityError as exc:
+            args = {"entity_name": entity_name, "repo_key": repo_key}
+            if json_output:
+                emit_json(
+                    error_response(
+                        command="security-surface",
+                        args=args,
+                        code="ambiguous_entity",
+                        message=str(exc),
+                        details={"candidates": exc.candidates},
+                    )
+                )
+                return
+            raise click.ClickException(str(exc)) from exc
         if not entity:
-            args = {"entity_name": entity_name}
+            args = {"entity_name": entity_name, "repo_key": repo_key}
             error_payload = error_response(
                 command="security-surface",
                 args=args,
@@ -887,10 +973,10 @@ def security_surface(
                 return
             raise click.ClickException(error_payload["error"]["message"])
 
-        surface = _query_entity_security_surface(graph_conn, entity["id"])
+        surface = _query_entity_security_surface(graph_conn, entity["occurrence_id"])
 
         if json_output:
-            args = {"entity_name": entity_name}
+            args = {"entity_name": entity_name, "repo_key": repo_key}
             data = {
                 "entity": entity,
                 "security_surface": surface,
@@ -910,15 +996,15 @@ def security_surface(
                 )
             )
         else:
-            click.echo(f"Entity: {entity["name"]} (id={entity["id"]})")
-            click.echo(f"Resources: {len(surface["resources"])}")
+            click.echo(f"Entity: {entity['name']} (id={entity['id']})")
+            click.echo(f"Resources: {len(surface['resources'])}")
             for row in surface["resources"]:
-                click.echo(f"  {row["op_key"]}")
-            click.echo(f"Operations: {len(surface["operations"])}")
+                click.echo(f"  {row['op_key']}")
+            click.echo(f"Operations: {len(surface['operations'])}")
             for row in surface["operations"]:
-                click.echo(f"  {row["op_key"]}")
-            click.echo(f"Policies: {len(surface["policies"])}")
-            click.echo(f"Menus: {len(surface["menus"])}")
+                click.echo(f"  {row['op_key']}")
+            click.echo(f"Policies: {len(surface['policies'])}")
+            click.echo(f"Menus: {len(surface['menus'])}")
 
     finally:
         if graph_conn:

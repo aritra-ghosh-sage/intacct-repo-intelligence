@@ -14,9 +14,11 @@ from tqdm import tqdm
 
 try:
     from catalog.db import get_connection
+    from catalog.repositories import get_repository, resolve_repository_root
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from catalog.db import get_connection
+    from catalog.repositories import get_repository, resolve_repository_root
 
 try:
     import yaml
@@ -70,10 +72,10 @@ def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
     return bool(row)
 
 
-def _get_file_id(conn: sqlite3.Connection, rel_path: str) -> int | None:
+def _get_file_id(conn: sqlite3.Connection, repo_id: int, rel_path: str) -> int | None:
     row = conn.execute(
-        "SELECT id FROM files WHERE path = ? LIMIT 1",
-        (rel_path,),
+        "SELECT id FROM files WHERE repo_id = ? AND path = ? LIMIT 1",
+        (repo_id, rel_path),
     ).fetchone()
     return int(row["id"]) if row else None
 
@@ -234,7 +236,9 @@ def _infer_kind(filename: str) -> str:
         return "events"
     return "unknown"
 
-def scan_openapispec(conn: sqlite3.Connection, repo_root: Path) -> ScanStats:
+def scan_openapispec(
+    conn: sqlite3.Connection, repo_root: Path, repo_id: int
+) -> ScanStats:
     if yaml is None:
         raise click.ClickException(
             "Missing dependency 'pyyaml'. Install project dependencies and rerun."
@@ -250,7 +254,7 @@ def scan_openapispec(conn: sqlite3.Connection, repo_root: Path) -> ScanStats:
 
     # Rebuild the index snapshot each run so kind/classification corrections
     # replace stale rows instead of accumulating duplicates.
-    conn.execute("DELETE FROM openapispec_index")
+    conn.execute("DELETE FROM openapispec_index WHERE repo_id = ?", (repo_id,))
 
     stats = ScanStats()
     for yaml_path in tqdm(
@@ -262,7 +266,7 @@ def scan_openapispec(conn: sqlite3.Connection, repo_root: Path) -> ScanStats:
             stats.template_files_skipped += 1
             continue
 
-        file_id = _get_file_id(conn, rel_path)
+        file_id = _get_file_id(conn, repo_id, rel_path)
         if file_id is None:
             stats.files_missing_in_catalog += 1
             continue
@@ -279,6 +283,7 @@ def scan_openapispec(conn: sqlite3.Connection, repo_root: Path) -> ScanStats:
         conn.execute(
             """
             INSERT OR REPLACE INTO openapispec_index(
+                repo_id,
                 file_id,
                 file_path,
                 module,
@@ -292,9 +297,10 @@ def scan_openapispec(conn: sqlite3.Connection, repo_root: Path) -> ScanStats:
                 state,
                 last_seen_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', CURRENT_TIMESTAMP)
             """,
             (
+                repo_id,
                 file_id,
                 rel_path,
                 module,
@@ -319,6 +325,11 @@ def cli() -> None:
 
 @cli.command("scan")
 @click.option(
+    "--repo",
+    required=True,
+    help="Registered repository key whose OpenAPI index will be rebuilt.",
+)
+@click.option(
     "--db",
     default=DEFAULT_DB,
     show_default=True,
@@ -327,14 +338,21 @@ def cli() -> None:
 @click.option(
     "--repo-root",
     type=click.Path(path_type=Path, exists=True, file_okay=False),
-    default=Path(DEFAULT_REPO_ROOT),
-    show_default=True,
+    default=None,
     help="Path to repository root containing app/source/openapispec.",
 )
-def scan_command(db: str, repo_root: Path) -> None:
+def scan_command(db: str, repo: str, repo_root: Path | None) -> None:
     conn = get_connection(db)
     try:
-        stats = scan_openapispec(conn=conn, repo_root=repo_root.resolve())
+        repository = get_repository(conn, repo)
+        resolved_root = (
+            repo_root.resolve()
+            if repo_root is not None
+            else resolve_repository_root(conn, repo)
+        )
+        stats = scan_openapispec(
+            conn=conn, repo_root=resolved_root, repo_id=int(repository["id"])
+        )
         conn.commit()
     finally:
         conn.close()

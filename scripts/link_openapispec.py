@@ -14,11 +14,11 @@ import click
 
 try:
     from catalog.db import get_connection
-    from config import REPO_PATH
+    from catalog.repositories import get_repository, resolve_repository_root
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from catalog.db import get_connection
-    from config import REPO_PATH
+    from catalog.repositories import get_repository, resolve_repository_root
 
 DEFAULT_DB = "catalog/catalog.db"
 MISSING_METADATA_LOG_PATH = (
@@ -106,8 +106,18 @@ def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
     return bool(row)
 
 
-def _get_entities_by_name(conn: sqlite3.Connection) -> dict[str, dict[str, list[int]]]:
-    rows = conn.execute("SELECT id, name, module FROM entity_nodes").fetchall()
+def _get_entities_by_name(
+    conn: sqlite3.Connection, repo_id: int
+) -> dict[str, dict[str, list[int]]]:
+    rows = conn.execute(
+        """
+        SELECT DISTINCT en.id, en.name, en.module
+        FROM entity_nodes en
+        JOIN entity_mappings em ON em.entity_id = en.id
+        WHERE em.repo_id = ?
+        """,
+        (repo_id,),
+    ).fetchall()
     entities_by_module: dict[str, dict[str, list[int]]] = {}
     for row in rows:
         name = str(row["name"] or "").strip()
@@ -291,6 +301,7 @@ def _canonical_name_variants(canonical_name: str) -> list[str]:
 
 def _insert_mapping(
     conn: sqlite3.Connection,
+    repo_id: int,
     entity_id: int,
     file_id: int,
     mapping_type: str,
@@ -299,6 +310,7 @@ def _insert_mapping(
     cur = conn.execute(
         """
         INSERT INTO entity_mappings(
+            repo_id,
             entity_id,
             symbol_id,
             file_id,
@@ -306,11 +318,12 @@ def _insert_mapping(
             confidence,
             source_text
         )
-        SELECT ?, NULL, ?, ?, 1.0, ?
+        SELECT ?, ?, NULL, ?, ?, 1.0, ?
         WHERE NOT EXISTS (
             SELECT 1
             FROM entity_mappings
-            WHERE entity_id = ?
+            WHERE repo_id = ?
+              AND entity_id = ?
               AND symbol_id IS NULL
               AND file_id = ?
               AND mapping_type = ?
@@ -318,10 +331,12 @@ def _insert_mapping(
         )
         """,
         (
+            repo_id,
             entity_id,
             file_id,
             mapping_type,
             source_text,
+            repo_id,
             entity_id,
             file_id,
             mapping_type,
@@ -429,6 +444,7 @@ def _read_entity_definitions_jsonl(jsonl_path: Path) -> list[dict]:
 def _reconcile_with_entity_definitions(
     conn: sqlite3.Connection,
     jsonl_path: Path,
+    repo_id: int,
 ) -> list[dict]:
     diagnostics: list[dict] = []
     now = datetime.now(timezone.utc).isoformat()
@@ -444,8 +460,9 @@ def _reconcile_with_entity_definitions(
         """
         SELECT id, file_path, module, x_mapped_to
         FROM openapispec_index
-        WHERE state = 'active' AND COALESCE(TRIM(x_mapped_to), '') <> ''
-        """
+        WHERE repo_id = ? AND state = 'active' AND COALESCE(TRIM(x_mapped_to), '') <> ''
+        """,
+        (repo_id,),
     ).fetchall()
 
     seen_db_mapped_to: set[str] = set()
@@ -516,6 +533,7 @@ def _reconcile_with_entity_definitions(
 def _link_openapispec(
     conn: sqlite3.Connection,
     repo_root: Path,
+    repo_id: int,
     reconcile_jsonl_path: Path | None,
 ) -> LinkStats:
     if not _table_exists(conn, "openapispec_index"):
@@ -536,16 +554,17 @@ def _link_openapispec(
             resource_path,
             x_mapped_to
         FROM openapispec_index
-        WHERE state = 'active'
-        """
+        WHERE repo_id = ? AND state = 'active'
+        """,
+        (repo_id,),
     ).fetchall()
 
     stats = LinkStats()
     missing_records: list[dict] = []
     now = datetime.now(timezone.utc).isoformat()
-    entities_by_name = _get_entities_by_name(conn)
+    entities_by_name = _get_entities_by_name(conn, repo_id)
     entities_across_modules = _get_entities_across_modules(entities_by_name)
-    valid_ent_stems = _load_valid_ent_stems(Path(REPO_PATH))
+    valid_ent_stems = _load_valid_ent_stems(repo_root)
     for row in rows:
         module_keys = _module_candidates(str(row["module"] or ""))
         mapped_to = str(row["x_mapped_to"] or "").strip()
@@ -658,6 +677,7 @@ def _link_openapispec(
         mapping_type = f"openapispec_{row['kind']}"
         inserted = _insert_mapping(
             conn=conn,
+            repo_id=repo_id,
             entity_id=entity_id,
             file_id=int(file_id),
             mapping_type=mapping_type,
@@ -668,7 +688,7 @@ def _link_openapispec(
 
     if reconcile_jsonl_path is not None:
         missing_records.extend(
-            _reconcile_with_entity_definitions(conn, reconcile_jsonl_path)
+            _reconcile_with_entity_definitions(conn, reconcile_jsonl_path, repo_id)
         )
 
     _append_missing_metadata_records(records=missing_records)
@@ -682,6 +702,7 @@ def cli() -> None:
 
 
 @cli.command("link")
+@click.option("--repo", required=True, help="Registered repository key to link.")
 @click.option(
     "--db",
     default=DEFAULT_DB,
@@ -694,8 +715,7 @@ def cli() -> None:
 @click.option(
     "--repo-root",
     type=click.Path(path_type=Path, file_okay=False),
-    default=Path("."),
-    show_default=True,
+    default=None,
     help="Repository root used for diagnostics log output.",
 )
 @click.option(
@@ -705,23 +725,25 @@ def cli() -> None:
     help="Optional path to entity_definitions.jsonl for drift diagnostics only.",
 )
 def link_command(
-    db: str, reset: bool, repo_root: Path, reconcile_jsonl: Path | None
+    db: str, repo: str, reset: bool, repo_root: Path | None, reconcile_jsonl: Path | None
 ) -> None:
-    repo_root = repo_root.resolve()
     conn = get_connection(db)
     try:
+        repository = get_repository(conn, repo)
+        resolved_root = repo_root.resolve() if repo_root is not None else resolve_repository_root(conn, repo)
         # OpenAPI mappings are a materialized projection of the current index.
         # Rebuild them on every run so stale mappings cannot survive metadata
         # changes when callers omit the compatibility --reset flag.
         placeholders = ", ".join(["?"] * len(OPENAPI_MAPPING_TYPES))
         conn.execute(
-            f"DELETE FROM entity_mappings WHERE mapping_type IN ({placeholders})",
-            OPENAPI_MAPPING_TYPES,
+            f"DELETE FROM entity_mappings WHERE repo_id = ? AND mapping_type IN ({placeholders})",
+            (int(repository["id"]), *OPENAPI_MAPPING_TYPES),
         )
 
         stats = _link_openapispec(
             conn=conn,
-            repo_root=repo_root,
+            repo_root=resolved_root,
+            repo_id=int(repository["id"]),
             reconcile_jsonl_path=reconcile_jsonl.resolve()
             if reconcile_jsonl is not None
             else None,

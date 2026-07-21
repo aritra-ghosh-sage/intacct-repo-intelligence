@@ -230,23 +230,30 @@ def _collect_related_file_mappings(entity: dict[str, Any]) -> list[tuple[str, st
     return results
 
 
-def ensure_entity_columns(conn: sqlite3.Connection) -> None:
-    cols = {
+def ensure_entity_occurrences_table(conn: sqlite3.Connection) -> None:
+    """Fail clearly when the repo-scoped entity schema has not been migrated."""
+    columns = {
         row["name"]
-        for row in conn.execute("PRAGMA table_info(entity_nodes)").fetchall()
+        for row in conn.execute("PRAGMA table_info(entity_occurrences)").fetchall()
     }
-
-    for col, ddl in [
-        ("ent_file", "ALTER TABLE entity_nodes ADD COLUMN ent_file TEXT"),
-        ("module", "ALTER TABLE entity_nodes ADD COLUMN module TEXT"),
-        ("table_name", "ALTER TABLE entity_nodes ADD COLUMN table_name TEXT"),
-        ("view_name", "ALTER TABLE entity_nodes ADD COLUMN view_name TEXT"),
-        ("dummy", "ALTER TABLE entity_nodes ADD COLUMN dummy INTEGER"),
-    ]:
-        if col not in cols:
-            conn.execute(ddl)
-
-    conn.commit()
+    required = {
+        "repo_id",
+        "entity_id",
+        "ent_file",
+        "module",
+        "table_name",
+        "view_name",
+        "dummy",
+        "source_file_id",
+        "extractor",
+        "confidence",
+    }
+    missing = sorted(required - columns)
+    if missing:
+        raise click.ClickException(
+            "entity_occurrences is missing required columns; apply the multi-repo migration: "
+            + ", ".join(missing)
+        )
 
 
 def _normalize_entity_module(entity: dict[str, Any]) -> str | None:
@@ -281,8 +288,12 @@ def _normalize_entity_module(entity: dict[str, Any]) -> str | None:
 
 
 def get_or_create_entity(conn: sqlite3.Connection, entity: dict[str, Any]) -> int:
-    normalized_module = _normalize_entity_module(entity)
+    """Return a source-neutral canonical entity identity.
 
+    Repository declaration metadata intentionally belongs in entity_occurrences,
+    because equal names in different repositories are not evidence of equivalent
+    source declarations.
+    """
     row = conn.execute(
         "SELECT id FROM entity_nodes WHERE name = ?",
         (entity["entity_name"],),
@@ -292,23 +303,11 @@ def get_or_create_entity(conn: sqlite3.Connection, entity: dict[str, Any]) -> in
         conn.execute(
             """
             UPDATE entity_nodes
-            SET ent_file = ?,
-                module = ?,
-                table_name = ?,
-                view_name = ?,
-                dummy = ?,
-                entity_type = 'business_entity',
+            SET entity_type = 'business_entity',
                 confidence = 1.0
             WHERE id = ?
             """,
-            (
-                entity.get("ent_file"),
-                normalized_module,
-                entity.get("table"),
-                entity.get("view"),
-                1 if entity.get("dummy") else 0,
-                row["id"],
-            ),
+            (row["id"],),
         )
         return row["id"]
 
@@ -317,24 +316,14 @@ def get_or_create_entity(conn: sqlite3.Connection, entity: dict[str, Any]) -> in
         INSERT INTO entity_nodes(
             name,
             entity_type,
-            confidence,
-            ent_file,
-            module,
-            table_name,
-            view_name,
-            dummy
+            confidence
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?)
         """,
         (
             entity["entity_name"],
             "business_entity",
             1.0,
-            entity.get("ent_file"),
-            normalized_module,
-            entity.get("table"),
-            entity.get("view"),
-            1 if entity.get("dummy") else 0,
         ),
     )
     lastrowid = cur.lastrowid
@@ -342,8 +331,58 @@ def get_or_create_entity(conn: sqlite3.Connection, entity: dict[str, Any]) -> in
     return int(lastrowid)
 
 
+def upsert_entity_occurrence(
+    conn: sqlite3.Connection,
+    repo_id: int,
+    entity_id: int,
+    entity: dict[str, Any],
+) -> None:
+    """Persist deterministic declaration facts for one repo/entity occurrence."""
+    ent_file = entity.get("ent_file")
+    source_file_id: int | None = None
+    if isinstance(ent_file, str) and ent_file.strip():
+        row = conn.execute(
+            """
+            SELECT id FROM files
+            WHERE repo_id = ? AND path = ?
+            LIMIT 1
+            """,
+            (repo_id, ent_file.strip()),
+        ).fetchone()
+        source_file_id = int(row["id"]) if row else None
+
+    conn.execute(
+        """
+        INSERT INTO entity_occurrences(
+            repo_id, entity_id, ent_file, module, table_name, view_name, dummy,
+            source_file_id, extractor, confidence
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'build_entities', 1.0)
+        ON CONFLICT(repo_id, entity_id) DO UPDATE SET
+            ent_file = excluded.ent_file,
+            module = excluded.module,
+            table_name = excluded.table_name,
+            view_name = excluded.view_name,
+            dummy = excluded.dummy,
+            source_file_id = excluded.source_file_id,
+            extractor = excluded.extractor,
+            confidence = excluded.confidence
+        """,
+        (
+            repo_id,
+            entity_id,
+            ent_file.strip() if isinstance(ent_file, str) and ent_file.strip() else None,
+            _normalize_entity_module(entity),
+            entity.get("table"),
+            entity.get("view"),
+            1 if entity.get("dummy") else 0,
+            source_file_id,
+        ),
+    )
+
+
 def resolve_companion_symbol(
     conn: sqlite3.Connection,
+    repo_id: int,
     class_file_path: str | None,
     expected_class_name: str,
 ) -> tuple[int | None, str]:
@@ -361,7 +400,7 @@ def resolve_companion_symbol(
     if not class_file_path:
         return None, "no_path"
 
-    key = f"{class_file_path.lower()}::{expected_class_name.lower()}"
+    key = f"{repo_id}::{class_file_path.lower()}::{expected_class_name.lower()}"
     if key in _cache:
         cached_symbol_id, cached_reason = _cache[key]
         return cached_symbol_id, cached_reason
@@ -370,10 +409,11 @@ def resolve_companion_symbol(
         """
         SELECT id
         FROM files
-        WHERE LOWER(path) = LOWER(?)
+        WHERE repo_id = ?
+          AND LOWER(path) = LOWER(?)
         LIMIT 1
         """,
-        (class_file_path,),
+        (repo_id, class_file_path),
     ).fetchone()
     file_id = int(file_row["id"]) if file_row else None
 
@@ -382,12 +422,14 @@ def resolve_companion_symbol(
         """
         SELECT s.id
         FROM symbols s
+        JOIN files f ON f.id = s.file_id
         WHERE s.kind = 'class'
           AND LOWER(s.name) = LOWER(?)
+          AND f.repo_id = ?
         ORDER BY s.id
         LIMIT 1
         """,
-        (expected_class_name,),
+        (expected_class_name, repo_id),
     ).fetchone()
     if row:
         symbol_id, resolution_reason = int(row["id"]), "class_name_match"
@@ -470,6 +512,7 @@ def resolve_companion_symbol(
 
 def insert_mapping(
     conn: sqlite3.Connection,
+    repo_id: int,
     entity_id: int,
     symbol_id: int | None,
     mapping_type: str,
@@ -477,16 +520,26 @@ def insert_mapping(
     source_text: str,
 ) -> bool:
     file_id: int | None = None
-    key_file_id = f"file_id::{source_text.lower()}"
-    key_symbol_id = f"symbol_id::{symbol_id}" if symbol_id is not None else "symbol_id::None"
+    key_file_id = f"file_id::{repo_id}::{source_text.lower()}"
+    key_symbol_id = (
+        f"symbol_id::{repo_id}::{symbol_id}"
+        if symbol_id is not None
+        else f"symbol_id::{repo_id}::None"
+    )
 
     if symbol_id is not None:
         if key_symbol_id in _cache:
             file_id = _cache[key_symbol_id]
         else:
             symbol_row = conn.execute(
-                "SELECT file_id FROM symbols WHERE id = ? LIMIT 1",
-                (symbol_id,),
+                """
+                SELECT s.file_id
+                FROM symbols s
+                JOIN files f ON f.id = s.file_id
+                WHERE s.id = ? AND f.repo_id = ?
+                LIMIT 1
+                """,
+                (symbol_id, repo_id),
             ).fetchone()
             file_id = (
                 int(symbol_row["file_id"])
@@ -502,10 +555,11 @@ def insert_mapping(
                 """
                 SELECT id
                 FROM files
-                WHERE LOWER(path) = LOWER(?)
+                WHERE repo_id = ?
+                  AND LOWER(path) = LOWER(?)
                 LIMIT 1
                 """,
-                (source_text,),
+                (repo_id, source_text),
             ).fetchone()
             file_id = int(file_row["id"]) if file_row else None
             _cache[key_file_id] = file_id
@@ -514,6 +568,7 @@ def insert_mapping(
     cur = conn.execute(
         """
         INSERT INTO entity_mappings(
+            repo_id,
             entity_id,
             symbol_id,
             file_id,
@@ -521,11 +576,12 @@ def insert_mapping(
             confidence,
             source_text
         )
-        SELECT ?, ?, ?, ?, ?, ?
+        SELECT ?, ?, ?, ?, ?, ?, ?
         WHERE NOT EXISTS (
             SELECT 1
             FROM entity_mappings
-            WHERE entity_id = ?
+            WHERE repo_id = ?
+              AND entity_id = ?
               AND (
                     (symbol_id = ?)
                  OR (symbol_id IS NULL AND ? IS NULL AND source_text = ?)
@@ -534,12 +590,14 @@ def insert_mapping(
         )
         """,
         (
+            repo_id,
             entity_id,
             symbol_id,
             file_id,
             mapping_type,
             confidence,
             source_text,
+            repo_id,
             entity_id,
             symbol_id,
             symbol_id,
@@ -554,23 +612,25 @@ def insert_mapping(
                 """
                 UPDATE entity_mappings
                 SET file_id = COALESCE(file_id, ?)
-                WHERE entity_id = ?
+                WHERE repo_id = ?
+                  AND entity_id = ?
                   AND mapping_type = ?
                   AND symbol_id IS NULL
                   AND source_text = ?
                 """,
-                (file_id, entity_id, mapping_type, source_text),
+                (file_id, repo_id, entity_id, mapping_type, source_text),
             )
         else:
             conn.execute(
                 """
                 UPDATE entity_mappings
                 SET file_id = COALESCE(file_id, ?)
-                WHERE entity_id = ?
+                WHERE repo_id = ?
+                  AND entity_id = ?
                   AND mapping_type = ?
                   AND symbol_id = ?
                 """,
-                (file_id, entity_id, mapping_type, symbol_id),
+                (file_id, repo_id, entity_id, mapping_type, symbol_id),
             )
 
     return cur.rowcount > 0
@@ -593,7 +653,17 @@ def _read_entities_jsonl(entities_path: Path) -> list[dict[str, Any]]:
     return entities
 
 
-def build(db: str, entities: Path, reset: bool) -> BuildStats:
+def _resolve_repo_id(conn: sqlite3.Connection, repo_key: str) -> int:
+    row = conn.execute(
+        "SELECT id FROM repos WHERE repo_key = ?",
+        (repo_key,),
+    ).fetchone()
+    if row is None:
+        raise click.ClickException(f"Unknown repository key: {repo_key}")
+    return int(row["id"])
+
+
+def build(db: str, entities: Path, reset: bool, repo_key: str) -> BuildStats:
     """Build entity nodes and mappings idempotently using INSERT...WHERE NOT EXISTS."""
     rows = _read_entities_jsonl(entities)
     missing_symbols: list[dict[str, str]] = []
@@ -601,11 +671,14 @@ def build(db: str, entities: Path, reset: bool) -> BuildStats:
 
     conn = get_connection(db)
     try:
-        ensure_entity_columns(conn)
+        ensure_entity_occurrences_table(conn)
+        repo_id = _resolve_repo_id(conn, repo_key)
 
         if reset:
-            conn.execute("DELETE FROM entity_mappings")
-            conn.execute("DELETE FROM entity_nodes")
+            conn.execute("DELETE FROM entity_mappings WHERE repo_id = ?", (repo_id,))
+            # An occurrence is a snapshot of declarations from this repository.
+            # Canonical entity_nodes intentionally remain shared and are not deleted.
+            conn.execute("DELETE FROM entity_occurrences WHERE repo_id = ?", (repo_id,))
             conn.commit()
         
         openapispec_mappings = [
@@ -619,6 +692,7 @@ def build(db: str, entities: Path, reset: bool) -> BuildStats:
         for entity in tqdm(rows, desc="Building entity mappings", unit="entity"):
             entity_name = entity["entity_name"]
             entity_id = get_or_create_entity(conn, entity)
+            upsert_entity_occurrence(conn, repo_id, entity_id, entity)
             stats.entities_upserted += 1
 
             companion_classes = entity.get("companion_classes", {})
@@ -630,6 +704,7 @@ def build(db: str, entities: Path, reset: bool) -> BuildStats:
                 expected_class_name = f"{entity_name}{_role_to_suffix(role)}"
                 symbol_id, resolution_reason = resolve_companion_symbol(
                     conn=conn,
+                    repo_id=repo_id,
                     class_file_path=class_file,
                     expected_class_name=expected_class_name,
                 )
@@ -637,6 +712,7 @@ def build(db: str, entities: Path, reset: bool) -> BuildStats:
                     if resolution_reason == "file_only_companion":
                         inserted = insert_mapping(
                             conn=conn,
+                            repo_id=repo_id,
                             entity_id=entity_id,
                             symbol_id=None,
                             mapping_type=role,
@@ -661,6 +737,7 @@ def build(db: str, entities: Path, reset: bool) -> BuildStats:
 
                 inserted = insert_mapping(
                     conn=conn,
+                    repo_id=repo_id,
                     entity_id=entity_id,
                     symbol_id=symbol_id,
                     mapping_type=role,
@@ -679,6 +756,7 @@ def build(db: str, entities: Path, reset: bool) -> BuildStats:
                 if isinstance(file_path, str) and file_path.strip():
                     inserted = insert_mapping(
                         conn=conn,
+                        repo_id=repo_id,
                         entity_id=entity_id,
                         symbol_id=None,
                         mapping_type=mapping_type,
@@ -695,6 +773,7 @@ def build(db: str, entities: Path, reset: bool) -> BuildStats:
                         continue
                     inserted = insert_mapping(
                         conn=conn,
+                        repo_id=repo_id,
                         entity_id=entity_id,
                         symbol_id=None,
                         mapping_type=WORKFLOW_FILE_ROLES[2],
@@ -709,6 +788,7 @@ def build(db: str, entities: Path, reset: bool) -> BuildStats:
             for mapping_type, related_path in _collect_related_file_mappings(entity):
                 inserted = insert_mapping(
                     conn=conn,
+                    repo_id=repo_id,
                     entity_id=entity_id,
                     symbol_id=None,
                     mapping_type=mapping_type,
@@ -723,7 +803,7 @@ def build(db: str, entities: Path, reset: bool) -> BuildStats:
         conn.close()
 
     stats.missing_symbols = len(missing_symbols)
-    out_path = Path("validation/missing_symbols.json")
+    out_path = Path(f"validation/missing_symbols_{repo_key}.json")
     if missing_symbols:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(missing_symbols, indent=2), encoding="utf-8")
@@ -754,8 +834,9 @@ def cli() -> None:
     help="Path to entity definitions JSONL file.",
 )
 @click.option("--reset", is_flag=True, help="Delete entity tables before rebuilding.")
-def build_command(db: str, entities: Path, reset: bool) -> None:
-    stats = build(db=db, entities=entities, reset=reset)
+@click.option("--repo", "repo_key", required=True, help="Registered repository key.")
+def build_command(db: str, entities: Path, reset: bool, repo_key: str) -> None:
+    stats = build(db=db, entities=entities, reset=reset, repo_key=repo_key)
     click.echo(f"Entities upserted:   {stats.entities_upserted}")
     click.echo(f"Mappings inserted:   {stats.mappings_inserted}")
     click.echo(f"Missing symbols:     {stats.missing_symbols}")

@@ -163,9 +163,11 @@ def validate_exact_parity(
     sqlite_conn: sqlite3.Connection, graph_conn: lb.Connection
 ) -> list[dict[str, object]]:
     checks = [
-        ("Entity", "SELECT id,name,entity_type,module,table_name,ent_file,dummy FROM entity_nodes ORDER BY id", "MATCH (n:Entity) RETURN n.entity_id,n.name,n.entity_type,n.module,n.table_name,n.ent_file,n.dummy ORDER BY n.entity_id"),
+        ("Entity", "SELECT id,name,entity_type FROM entity_nodes ORDER BY id", "MATCH (n:Entity) RETURN n.entity_id,n.name,n.entity_type ORDER BY n.entity_id"),
+        ("EntityOccurrence", "SELECT id,repo_id,entity_id,ent_file,module,table_name,view_name,dummy,source_file_id,extractor,confidence,created_at,updated_at FROM entity_occurrences ORDER BY id", "MATCH (n:EntityOccurrence) RETURN n.entity_occurrence_id,n.repo_id,n.entity_id,n.ent_file,n.module,n.table_name,n.view_name,n.dummy,n.source_file_id,n.extractor,n.confidence,n.created_at,n.updated_at ORDER BY n.entity_occurrence_id"),
         ("Symbol", "SELECT id,name,kind,start_line,end_line,signature FROM symbols ORDER BY id", "MATCH (n:Symbol) RETURN n.symbol_id,n.name,n.kind,n.start_line,n.end_line,n.signature ORDER BY n.symbol_id"),
-        ("File", "SELECT id,path,language FROM files ORDER BY id", "MATCH (n:File) RETURN n.file_id,n.path,n.language ORDER BY n.file_id"),
+        ("Repository", "SELECT id,repo_key,tracked_branch,indexed_commit_sha,COALESCE(last_built_at,last_scanned_at),index_status FROM repos ORDER BY id", "MATCH (n:Repository) RETURN n.repo_id,n.repo_key,n.tracked_branch,n.indexed_commit_sha,n.last_indexed_at,n.index_status ORDER BY n.repo_id"),
+        ("File", "SELECT f.id,f.repo_id,r.repo_key,f.path,f.language FROM files f JOIN repos r ON r.id=f.repo_id ORDER BY f.id", "MATCH (n:File) RETURN n.file_id,n.repo_id,n.repo_key,n.path,n.language ORDER BY n.file_id"),
         ("Workflow", "SELECT id,name,workflow_type FROM workflows ORDER BY id", "MATCH (n:Workflow) RETURN n.workflow_id,n.name,n.workflow_type ORDER BY n.workflow_id"),
         ("RestEndpoint", "SELECT id,method,path FROM rest_endpoints ORDER BY id", "MATCH (n:RestEndpoint) RETURN n.rest_endpoint_id,n.method,n.path ORDER BY n.rest_endpoint_id"),
         ("WorkflowNode", "SELECT id,workflow_id,entity_id,node_kind,node_key,name,ordinal,action,source_kind,file_id,symbol_id,metadata_json,created_at FROM workflow_nodes ORDER BY id", "MATCH (n:WorkflowNode) RETURN n.workflow_node_id,n.workflow_id,n.entity_id,n.node_kind,n.node_key,n.name,n.ordinal,n.action,n.source_kind,n.file_id,n.symbol_id,n.metadata_json,n.created_at ORDER BY n.workflow_node_id"),
@@ -180,6 +182,13 @@ def validate_exact_parity(
         ("EntityAccessLink", "SELECT id,entity_id,surface,record_id,link_type,evidence_file_id,evidence_symbol_id,confidence_mode,notes,created_at FROM entity_access_links ORDER BY id", "MATCH (n:EntityAccessLink) RETURN n.entity_access_link_id,n.entity_id,n.surface,n.record_id,n.link_type,n.evidence_file_id,n.evidence_symbol_id,n.confidence_mode,n.notes,n.created_at ORDER BY n.entity_access_link_id"),
         ("ENTITY_ROOT", "SELECT entity_id,symbol_id,role,weight FROM entity_roots ORDER BY entity_id,symbol_id,role,weight", "MATCH (a:Entity)-[r:ENTITY_ROOT]->(b:Symbol) RETURN a.entity_id,b.symbol_id,r.role,r.weight ORDER BY a.entity_id,b.symbol_id,r.role,r.weight"),
         ("ENTITY_MAPPING", "SELECT entity_id,symbol_id,mapping_type,confidence FROM entity_mappings WHERE symbol_id IS NOT NULL ORDER BY entity_id,symbol_id,mapping_type,confidence", "MATCH (a:Entity)-[r:ENTITY_MAPPING]->(b:Symbol) RETURN a.entity_id,b.symbol_id,r.mapping_type,r.confidence ORDER BY a.entity_id,b.symbol_id,r.mapping_type,r.confidence"),
+        ("REPOSITORY_HAS_ENTITY_OCCURRENCE", "SELECT repo_id,id FROM entity_occurrences ORDER BY repo_id,id", "MATCH (a:Repository)-[:REPOSITORY_HAS_ENTITY_OCCURRENCE]->(b:EntityOccurrence) RETURN a.repo_id,b.entity_occurrence_id ORDER BY a.repo_id,b.entity_occurrence_id"),
+        ("ENTITY_HAS_OCCURRENCE", "SELECT entity_id,id FROM entity_occurrences ORDER BY entity_id,id", "MATCH (a:Entity)-[:ENTITY_HAS_OCCURRENCE]->(b:EntityOccurrence) RETURN a.entity_id,b.entity_occurrence_id ORDER BY a.entity_id,b.entity_occurrence_id"),
+        ("ENTITY_OCCURRENCE_FILE", "SELECT id,source_file_id FROM entity_occurrences WHERE source_file_id IS NOT NULL ORDER BY id", "MATCH (a:EntityOccurrence)-[:ENTITY_OCCURRENCE_FILE]->(b:File) RETURN a.entity_occurrence_id,b.file_id ORDER BY a.entity_occurrence_id,b.file_id"),
+        ("ENTITY_OCCURRENCE_ROOT", "SELECT eo.id,er.symbol_id,er.role,er.weight FROM entity_roots er JOIN entity_occurrences eo ON eo.repo_id=er.repo_id AND eo.entity_id=er.entity_id ORDER BY eo.id,er.symbol_id,er.role,er.weight", "MATCH (a:EntityOccurrence)-[r:ENTITY_OCCURRENCE_ROOT]->(b:Symbol) RETURN a.entity_occurrence_id,b.symbol_id,r.role,r.weight ORDER BY a.entity_occurrence_id,b.symbol_id,r.role,r.weight"),
+        ("ENTITY_OCCURRENCE_MAPPING", "SELECT eo.id,em.symbol_id,em.mapping_type,em.confidence FROM entity_mappings em JOIN entity_occurrences eo ON eo.repo_id=em.repo_id AND eo.entity_id=em.entity_id WHERE em.symbol_id IS NOT NULL ORDER BY eo.id,em.symbol_id,em.mapping_type,em.confidence", "MATCH (a:EntityOccurrence)-[r:ENTITY_OCCURRENCE_MAPPING]->(b:Symbol) RETURN a.entity_occurrence_id,b.symbol_id,r.mapping_type,r.confidence ORDER BY a.entity_occurrence_id,b.symbol_id,r.mapping_type,r.confidence"),
+        ("ENTITY_OCCURRENCE_WORKFLOW", "SELECT eo.id,w.id FROM workflows w JOIN entity_occurrences eo ON eo.repo_id=w.repo_id AND eo.entity_id=w.entity_id WHERE w.entity_id IS NOT NULL ORDER BY eo.id,w.id", "MATCH (a:EntityOccurrence)-[:ENTITY_OCCURRENCE_WORKFLOW]->(b:Workflow) RETURN a.entity_occurrence_id,b.workflow_id ORDER BY a.entity_occurrence_id,b.workflow_id"),
+        ("ENTITY_OCCURRENCE_REST_ENDPOINT", "SELECT eo.id,ep.id FROM rest_endpoints ep JOIN entity_occurrences eo ON eo.repo_id=ep.repo_id AND eo.entity_id=ep.entity_id WHERE ep.entity_id IS NOT NULL ORDER BY eo.id,ep.id", "MATCH (a:EntityOccurrence)-[:ENTITY_OCCURRENCE_REST_ENDPOINT]->(b:RestEndpoint) RETURN a.entity_occurrence_id,b.rest_endpoint_id ORDER BY a.entity_occurrence_id,b.rest_endpoint_id"),
         ("INHERITS", "SELECT source_symbol_id,target_symbol_id FROM relationships WHERE relationship_type='INHERITS' AND source_symbol_id IS NOT NULL AND target_symbol_id IS NOT NULL ORDER BY source_symbol_id,target_symbol_id", "MATCH (a:Symbol)-[:INHERITS]->(b:Symbol) RETURN a.symbol_id,b.symbol_id ORDER BY a.symbol_id,b.symbol_id"),
         ("IMPLEMENTS", "SELECT source_symbol_id,target_symbol_id FROM relationships WHERE relationship_type='IMPLEMENTS' AND source_symbol_id IS NOT NULL AND target_symbol_id IS NOT NULL ORDER BY source_symbol_id,target_symbol_id", "MATCH (a:Symbol)-[:IMPLEMENTS]->(b:Symbol) RETURN a.symbol_id,b.symbol_id ORDER BY a.symbol_id,b.symbol_id"),
         ("IMPORTS", "SELECT source_symbol_id,target_symbol_id FROM relationships WHERE relationship_type='IMPORTS' AND source_symbol_id IS NOT NULL AND target_symbol_id IS NOT NULL ORDER BY source_symbol_id,target_symbol_id", "MATCH (a:Symbol)-[:IMPORTS]->(b:Symbol) RETURN a.symbol_id,b.symbol_id ORDER BY a.symbol_id,b.symbol_id"),
@@ -187,6 +196,7 @@ def validate_exact_parity(
         ("REFERENCES", "SELECT source_symbol_id,target_symbol_id FROM relationships WHERE relationship_type='REFERENCES' AND source_symbol_id IS NOT NULL AND target_symbol_id IS NOT NULL ORDER BY source_symbol_id,target_symbol_id", "MATCH (a:Symbol)-[:REFERENCES]->(b:Symbol) RETURN a.symbol_id,b.symbol_id ORDER BY a.symbol_id,b.symbol_id"),
         ("CALLS", "SELECT source_symbol_id,target_symbol_id FROM relationships WHERE relationship_type IN ('CALLS','STATIC_CALLS') AND source_symbol_id IS NOT NULL AND target_symbol_id IS NOT NULL ORDER BY source_symbol_id,target_symbol_id", "MATCH (a:Symbol)-[:CALLS]->(b:Symbol) RETURN a.symbol_id,b.symbol_id ORDER BY a.symbol_id,b.symbol_id"),
         ("DECLARED_IN", "SELECT id,file_id FROM symbols ORDER BY id,file_id", "MATCH (a:Symbol)-[:DECLARED_IN]->(b:File) RETURN a.symbol_id,b.file_id ORDER BY a.symbol_id,b.file_id"),
+        ("REPOSITORY_CONTAINS_FILE", "SELECT repo_id,id FROM files ORDER BY repo_id,id", "MATCH (a:Repository)-[:REPOSITORY_CONTAINS_FILE]->(b:File) RETURN a.repo_id,b.file_id ORDER BY a.repo_id,b.file_id"),
         ("HAS_WORKFLOW", "SELECT entity_id,id FROM workflows WHERE entity_id IS NOT NULL ORDER BY entity_id,id", "MATCH (a:Entity)-[:HAS_WORKFLOW]->(b:Workflow) RETURN a.entity_id,b.workflow_id ORDER BY a.entity_id,b.workflow_id"),
         ("EXPOSES_ENTITY", "SELECT id,entity_id FROM rest_endpoints WHERE entity_id IS NOT NULL ORDER BY id,entity_id", "MATCH (a:RestEndpoint)-[:EXPOSES_ENTITY]->(b:Entity) RETURN a.rest_endpoint_id,b.entity_id ORDER BY a.rest_endpoint_id,b.entity_id"),
         ("HANDLED_BY", "SELECT id,handler_symbol_id FROM rest_endpoints WHERE handler_symbol_id IS NOT NULL ORDER BY id,handler_symbol_id", "MATCH (a:RestEndpoint)-[:HANDLED_BY]->(b:Symbol) RETURN a.rest_endpoint_id,b.symbol_id ORDER BY a.rest_endpoint_id,b.symbol_id"),
@@ -214,11 +224,23 @@ def validate_exact_parity(
         ("ENTITY_ACCESS_LINK_SECURITY_POLICY", "SELECT id,record_id FROM entity_access_links WHERE surface='security_policy' ORDER BY id,record_id", "MATCH (a:EntityAccessLink)-[:ENTITY_ACCESS_LINK_SECURITY_POLICY]->(b:SecurityPolicy) RETURN a.entity_access_link_id,b.security_policy_id ORDER BY a.entity_access_link_id,b.security_policy_id"),
         ("ENTITY_ACCESS_LINK_SECURITY_MENU", "SELECT id,record_id FROM entity_access_links WHERE surface='security_menu' ORDER BY id,record_id", "MATCH (a:EntityAccessLink)-[:ENTITY_ACCESS_LINK_SECURITY_MENU]->(b:SecurityMenu) RETURN a.entity_access_link_id,b.security_menu_id ORDER BY a.entity_access_link_id,b.security_menu_id"),
         ("ENTITY_ACCESS_LINK_SECURITY_MENU_ITEM", "SELECT id,record_id FROM entity_access_links WHERE surface='security_menu_item' ORDER BY id,record_id", "MATCH (a:EntityAccessLink)-[:ENTITY_ACCESS_LINK_SECURITY_MENU_ITEM]->(b:SecurityMenuItem) RETURN a.entity_access_link_id,b.security_menu_item_id ORDER BY a.entity_access_link_id,b.security_menu_item_id"),
+        ("ENTITY_ACCESS_LINK_ENTITY_OCCURRENCE", "SELECT eal.id,eo.id FROM entity_access_links eal JOIN entity_occurrences eo ON eo.repo_id=eal.repo_id AND eo.entity_id=eal.entity_id ORDER BY eal.id,eo.id", "MATCH (a:EntityAccessLink)-[:ENTITY_ACCESS_LINK_ENTITY_OCCURRENCE]->(b:EntityOccurrence) RETURN a.entity_access_link_id,b.entity_occurrence_id ORDER BY a.entity_access_link_id,b.entity_occurrence_id"),
         ("ENTITY_ACCESS_LINK_DBTABLE", "SELECT id,record_id FROM entity_access_links WHERE surface='dbschema_table' ORDER BY id,record_id", "MATCH (a:EntityAccessLink)-[:ENTITY_ACCESS_LINK_DBTABLE]->(b:DbTable) RETURN a.entity_access_link_id,b.dbschema_table_id ORDER BY a.entity_access_link_id,b.dbschema_table_id"),
         ("DOCUMENTS_ENTITY", "SELECT DISTINCT o.id,em.entity_id FROM openapispec_index o JOIN entity_mappings em ON em.file_id=o.file_id AND em.entity_id IS NOT NULL AND em.mapping_type LIKE 'openapispec_%' WHERE o.x_mapped_to IS NOT NULL AND TRIM(o.x_mapped_to)<>'' ORDER BY o.id,em.entity_id", "MATCH (a:OpenApiSpec)-[:DOCUMENTS_ENTITY]->(b:Entity) RETURN a.openapi_id,b.entity_id ORDER BY a.openapi_id,b.entity_id"),
-        ("POLICY_VALUE_GRANTS_OPERATION", "SELECT DISTINCT spv.id,so.id FROM security_policy_values spv JOIN security_policy_eops spe ON spe.policy_value_id=spv.id JOIN security_operations so ON so.op_key=spe.op_key WHERE spe.op_key IN (SELECT op_key FROM security_operations GROUP BY op_key HAVING COUNT(*)=1) ORDER BY spv.id,so.id", "MATCH (a:SecurityPolicyValue)-[:POLICY_VALUE_GRANTS_OPERATION]->(b:SecurityOperation) RETURN a.security_policy_value_id,b.security_operation_id ORDER BY a.security_policy_value_id,b.security_operation_id"),
+        ("POLICY_VALUE_GRANTS_OPERATION", "SELECT DISTINCT spv.id,so.id FROM security_policy_values spv JOIN security_policies sp ON sp.id=spv.policy_id JOIN security_policy_eops spe ON spe.policy_value_id=spv.id JOIN security_operations so ON so.repo_id=sp.repo_id AND so.op_key=spe.op_key WHERE (sp.repo_id,spe.op_key) IN (SELECT repo_id,op_key FROM security_operations GROUP BY repo_id,op_key HAVING COUNT(*)=1) ORDER BY spv.id,so.id", "MATCH (a:SecurityPolicyValue)-[:POLICY_VALUE_GRANTS_OPERATION]->(b:SecurityOperation) RETURN a.security_policy_value_id,b.security_operation_id ORDER BY a.security_policy_value_id,b.security_operation_id"),
         ("ALLOWS_SECURITY_OPERATION", "SELECT operation_id,allowed_operation_id,COALESCE(allowed_op_key,''),COALESCE(resolution_reason,'') FROM security_operation_allowops WHERE allowed_operation_id IS NOT NULL ORDER BY operation_id,allowed_operation_id,id", "MATCH (a:SecurityOperation)-[r:ALLOWS_SECURITY_OPERATION]->(b:SecurityOperation) RETURN a.security_operation_id,b.security_operation_id,r.allowed_op_key,r.resolution_reason ORDER BY a.security_operation_id,b.security_operation_id,r.allowed_op_key,r.resolution_reason"),
     ]
+    integration_columns = {row[1] for row in sqlite_conn.execute("PRAGMA table_info(integration_links)")}
+    if {"id", "source_file_id", "target_file_id"} <= integration_columns:
+        relation_col = "relation_type" if "relation_type" in integration_columns else "'integration'"
+        confidence_col = "confidence" if "confidence" in integration_columns else "0.0"
+        status_col = "resolution_status" if "resolution_status" in integration_columns else "'resolved'"
+        status_filter = " AND resolution_status IN ('resolved','validated')" if "resolution_status" in integration_columns else ""
+        checks.append((
+            "CROSS_REPO_INTEGRATION",
+            f"SELECT source_file_id,target_file_id,id,{relation_col},COALESCE({confidence_col},0.0),COALESCE({status_col},'resolved') FROM integration_links WHERE source_file_id IS NOT NULL AND target_file_id IS NOT NULL AND source_repo_id <> target_repo_id{status_filter} ORDER BY id",
+            "MATCH (a:File)-[r:CROSS_REPO_INTEGRATION]->(b:File) RETURN a.file_id,b.file_id,r.integration_link_id,r.relation_type,r.confidence,r.resolution_status ORDER BY r.integration_link_id",
+        ))
     return [
         _compare_exact_check(name, sqlite_conn, graph_conn, sql_query, graph_query)
         for name, sql_query, graph_query in checks
@@ -533,10 +555,14 @@ def validate_paths(
             (
                 "DOCUMENTS_ENTITY",
                 """
-                SELECT COUNT(*)
-                FROM openapispec_index o
-                JOIN entity_nodes e ON lower(e.name) = lower(o.x_mapped_to)
-                WHERE o.x_mapped_to IS NOT NULL AND TRIM(o.x_mapped_to) <> ''
+                SELECT COUNT(*) FROM (
+                    SELECT DISTINCT o.id, em.entity_id
+                    FROM openapispec_index o
+                    JOIN entity_mappings em ON em.file_id = o.file_id
+                        AND em.entity_id IS NOT NULL
+                        AND em.mapping_type LIKE 'openapispec_%'
+                    WHERE o.x_mapped_to IS NOT NULL AND TRIM(o.x_mapped_to) <> ''
+                )
                 """,
                 "MATCH ()-[r:DOCUMENTS_ENTITY]->() RETURN count(r)",
             ),
@@ -547,10 +573,13 @@ def validate_paths(
                 FROM (
                     SELECT DISTINCT spv.id, so.id
                     FROM security_policy_values spv
+                    JOIN security_policies sp ON sp.id = spv.policy_id
                     JOIN security_policy_eops spe ON spe.policy_value_id = spv.id
-                    JOIN security_operations so ON so.op_key = spe.op_key
-                    WHERE spe.op_key IN (
-                        SELECT op_key FROM security_operations GROUP BY op_key HAVING COUNT(*) = 1
+                    JOIN security_operations so
+                        ON so.repo_id = sp.repo_id AND so.op_key = spe.op_key
+                    WHERE (sp.repo_id, spe.op_key) IN (
+                        SELECT repo_id, op_key FROM security_operations
+                        GROUP BY repo_id, op_key HAVING COUNT(*) = 1
                     )
                 )
                 """,
