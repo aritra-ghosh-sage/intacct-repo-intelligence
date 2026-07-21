@@ -41,7 +41,9 @@ CLASS_EXTS = (
     ".js",
     ".rpt",
 )
-MISSING_METADATA_LOG_REL = Path("outputs/missing_metadata.jsonl")
+MISSING_METADATA_LOG_PATH = (
+    Path(__file__).resolve().parents[1] / "outputs" / "missing_metadata.jsonl"
+)
 SCHEMA_FILE_RE = re.compile(
     r"^(?P<kind>objects|services)\.(?P<prefix>.+?)\.(?P<object>[^.]+)\.s1\.schema\.yaml$"
 )
@@ -1293,10 +1295,7 @@ def scan(repo_root: Path, out_file: Path) -> int:
             f.write(json.dumps(asdict(row), ensure_ascii=False, sort_keys=True) + "\n")
             count += 1
 
-    _write_missing_metadata_log(
-        (repo_root / MISSING_METADATA_LOG_REL).resolve(),
-        missing_metadata_records,
-    )
+    _write_missing_metadata_log(MISSING_METADATA_LOG_PATH, missing_metadata_records)
 
     return count
 

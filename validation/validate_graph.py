@@ -552,7 +552,7 @@ def validate_paths(
                     WHERE spe.op_key IN (
                         SELECT op_key FROM security_operations GROUP BY op_key HAVING COUNT(*) = 1
                     )
-                )`
+                )
                 """,
                 "MATCH ()-[r:POLICY_VALUE_GRANTS_OPERATION]->() RETURN count(r)",
             ),

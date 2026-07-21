@@ -21,7 +21,9 @@ except ModuleNotFoundError:
     from config import REPO_PATH
 
 DEFAULT_DB = "catalog/catalog.db"
-MISSING_METADATA_LOG_REL = Path("outputs/missing_metadata.jsonl")
+MISSING_METADATA_LOG_PATH = (
+    Path(__file__).resolve().parents[1] / "outputs" / "missing_metadata.jsonl"
+)
 OPENAPI_MAPPING_TYPES = [
     "openapispec_schema",
     "openapispec_operations",
@@ -352,11 +354,11 @@ def _resolve_mapped_to_entity(
     return None
 
 
-def _append_missing_metadata_records(repo_root: Path, records: list[dict]) -> None:
+def _append_missing_metadata_records(records: list[dict]) -> None:
     if not records:
         return
 
-    log_path = (repo_root / MISSING_METADATA_LOG_REL).resolve()
+    log_path = MISSING_METADATA_LOG_PATH
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("a", encoding="utf-8") as f:
         for record in records:
@@ -669,7 +671,7 @@ def _link_openapispec(
             _reconcile_with_entity_definitions(conn, reconcile_jsonl_path)
         )
 
-    _append_missing_metadata_records(repo_root=repo_root, records=missing_records)
+    _append_missing_metadata_records(records=missing_records)
 
     return stats
 

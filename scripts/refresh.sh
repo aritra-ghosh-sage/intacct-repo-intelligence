@@ -64,7 +64,7 @@ echo ""
 # ===================================================================
 echo "📋 Phase 4: Processing ENT files..."
 echo "   Scanning PHP entity files for entity metadata"
-python scripts/scan_ent_files.py --repo-root "$REPO_ROOT" --out "$PROJECT_ROOT/config/entity_definitions.jsonl"
+python scripts/scan_ent_files.py --repo-root "$REPO_ROOT" --out "$PROJECT_ROOT/outputs/entity_definitions.jsonl"
 if [ $? -ne 0 ]; then
   echo "   ⚠️  ENT file scanning completed with warnings (non-fatal)"
 else
@@ -77,7 +77,7 @@ echo ""
 # ===================================================================
 echo "🏗️  Phase 5: Building entity nodes..."
 echo "   Creating entity_nodes from entity definitions"
-python scripts/build_entities.py build --entities "$PROJECT_ROOT/config/entity_definitions.jsonl" --db "$PROJECT_ROOT/catalog/catalog.db"
+python scripts/build_entities.py build --entities "$PROJECT_ROOT/outputs/entity_definitions.jsonl" --db "$PROJECT_ROOT/catalog/catalog.db"
 if [ $? -ne 0 ]; then
   echo "   ⚠️  Entity building completed with warnings (non-fatal)"
 else
