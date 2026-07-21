@@ -148,7 +148,47 @@ def ensure_schema(conn: lb.Connection) -> None:
         "CREATE NODE TABLE IF NOT EXISTS RestEndpoint("
         "rest_endpoint_id INT64 PRIMARY KEY, "
         "method STRING, "
-        "path STRING)"
+        "path STRING, "
+        "source_version STRING)"
+    )
+    # Test coverage facts are deliberately modeled separately from production
+    # source facts.  A TestRequest is the evidence-bearing unit that links an
+    # authored Gherkin request to an endpoint/entity.
+    conn.execute(
+        "CREATE NODE TABLE IF NOT EXISTS TestCase("
+        "test_case_id INT64 PRIMARY KEY, "
+        "repository_id INT64, "
+        "feature_name STRING, "
+        "scenario_name STRING, "
+        "case_name STRING, "
+        "example_row STRING, "
+        "feature_line INT64, "
+        "scenario_line INT64, "
+        "eligibility STRING, "
+        "tags_json STRING, "
+        "jira_refs_json STRING)"
+    )
+    conn.execute(
+        "CREATE NODE TABLE IF NOT EXISTS TestCaseVersion("
+        "test_case_version_id INT64 PRIMARY KEY, "
+        "version_label STRING, "
+        "source_kind STRING, "
+        "source_file_id INT64, "
+        "source_line INT64, "
+        "raw_value STRING)"
+    )
+    conn.execute(
+        "CREATE NODE TABLE IF NOT EXISTS TestRequest("
+        "test_request_id INT64 PRIMARY KEY, "
+        "ordinal INT64, "
+        "step_line INT64, "
+        "method STRING, "
+        "object_token STRING, "
+        "raw_path STRING, "
+        "normalized_path STRING, "
+        "request_version STRING, "
+        "expected_status INT64, "
+        "operation_kind STRING)"
     )
 
     # V2 node tables
@@ -313,6 +353,25 @@ def ensure_schema(conn: lb.Connection) -> None:
     )
     conn.execute(
         "CREATE REL TABLE IF NOT EXISTS HANDLED_BY(FROM RestEndpoint TO Symbol)"
+    )
+    conn.execute(
+        "CREATE REL TABLE IF NOT EXISTS TEST_CASE_HAS_VERSION("
+        "FROM TestCase TO TestCaseVersion)"
+    )
+    conn.execute(
+        "CREATE REL TABLE IF NOT EXISTS TEST_CASE_HAS_REQUEST("
+        "FROM TestCase TO TestRequest)"
+    )
+    conn.execute(
+        "CREATE REL TABLE IF NOT EXISTS TEST_REQUEST_COVERS_ENDPOINT("
+        "FROM TestRequest TO RestEndpoint, "
+        "compatibility_id INT64, "
+        "resolution_kind STRING)"
+    )
+    conn.execute(
+        "CREATE REL TABLE IF NOT EXISTS TEST_REQUEST_COVERS_ENTITY("
+        "FROM TestRequest TO Entity, "
+        "rest_endpoint_id INT64)"
     )
 
     # V2 relationship tables backed by direct FK or deterministic resolved links
@@ -709,11 +768,54 @@ def load_nodes(sql: sqlite3.Connection, g: lb.Connection) -> None:
         "SELECT id AS workflow_id, name, workflow_type FROM workflows ORDER BY id",
         "Workflow",
     )
+    endpoint_columns = {
+        row[1] for row in sql.execute("PRAGMA table_info(rest_endpoints)").fetchall()
+    }
+    endpoint_version_sql = (
+        "source_version" if "source_version" in endpoint_columns else "NULL AS source_version"
+    )
     copy_table_from_sql(
         sql,
         g,
-        "SELECT id AS rest_endpoint_id, method, path FROM rest_endpoints ORDER BY id",
+        "SELECT id AS rest_endpoint_id, method, path, "
+        f"{endpoint_version_sql} FROM rest_endpoints ORDER BY id",
         "RestEndpoint",
+    )
+
+
+def _sqlite_table_exists(sql: sqlite3.Connection, table_name: str) -> bool:
+    return (
+        sql.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table_name,)
+        ).fetchone()
+        is not None
+    )
+
+
+def load_test_coverage_nodes(sql: sqlite3.Connection, g: lb.Connection) -> None:
+    """Load optional Gherkin coverage nodes after the coverage migration exists."""
+    required = {"test_cases", "test_case_versions", "test_requests"}
+    if not all(_sqlite_table_exists(sql, table) for table in required):
+        return
+    copy_table_from_sql(
+        sql, g,
+        "SELECT id AS test_case_id, repository_id, feature_name, scenario_name, case_name, "
+        "example_row, feature_line, scenario_line, eligibility, tags_json, jira_refs_json "
+        "FROM test_cases ORDER BY id",
+        "TestCase",
+    )
+    copy_table_from_sql(
+        sql, g,
+        "SELECT id AS test_case_version_id, version_label, source_kind, source_file_id, "
+        "source_line, raw_value FROM test_case_versions ORDER BY id",
+        "TestCaseVersion",
+    )
+    copy_table_from_sql(
+        sql, g,
+        "SELECT id AS test_request_id, ordinal, step_line, method, object_token, raw_path, "
+        "normalized_path, request_version, expected_status, operation_kind "
+        "FROM test_requests ORDER BY id",
+        "TestRequest",
     )
 
 def load_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
@@ -1491,6 +1593,60 @@ def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
         "Loading POLICY_VALUE_GRANTS_OPERATION edges (with dedup guard for unique op_keys)",
     )
 
+
+def load_test_coverage_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
+    """Project only ingestion-resolved test links; diagnostics never become edges."""
+    required = {
+        "test_cases",
+        "test_case_versions",
+        "test_requests",
+        "test_endpoint_links",
+        "test_entity_links",
+    }
+    if not all(_sqlite_table_exists(sql, table) for table in required):
+        return
+
+    process_edge_rows_many(
+        sql, g,
+        "SELECT test_case_id, id FROM test_case_versions ORDER BY test_case_id, id",
+        lambda r: [
+            "MATCH (c:TestCase {test_case_id:%d}), (v:TestCaseVersion {test_case_version_id:%d}) "
+            "CREATE (c)-[:TEST_CASE_HAS_VERSION]->(v)" % (r[0], r[1])
+        ],
+        "Loading test case version edges",
+    )
+    process_edge_rows_many(
+        sql, g,
+        "SELECT test_case_id, id FROM test_requests ORDER BY test_case_id, ordinal, id",
+        lambda r: [
+            "MATCH (c:TestCase {test_case_id:%d}), (r:TestRequest {test_request_id:%d}) "
+            "CREATE (c)-[:TEST_CASE_HAS_REQUEST]->(r)" % (r[0], r[1])
+        ],
+        "Loading test case request edges",
+    )
+    process_edge_rows_many(
+        sql, g,
+        "SELECT test_request_id, rest_endpoint_id, compatibility_id, resolution_kind "
+        "FROM test_endpoint_links ORDER BY test_request_id, rest_endpoint_id, id",
+        lambda r: [
+            "MATCH (t:TestRequest {test_request_id:%d}), (e:RestEndpoint {rest_endpoint_id:%d}) "
+            "CREATE (t)-[:TEST_REQUEST_COVERS_ENDPOINT {compatibility_id:%s, resolution_kind:'%s'}]->(e)"
+            % (r[0], r[1], "NULL" if r[2] is None else str(int(r[2])), q(r[3] or ""))
+        ],
+        "Loading test request endpoint coverage edges",
+    )
+    process_edge_rows_many(
+        sql, g,
+        "SELECT test_request_id, entity_id, rest_endpoint_id "
+        "FROM test_entity_links ORDER BY test_request_id, entity_id, rest_endpoint_id, id",
+        lambda r: [
+            "MATCH (t:TestRequest {test_request_id:%d}), (e:Entity {entity_id:%d}) "
+            "CREATE (t)-[:TEST_REQUEST_COVERS_ENTITY {rest_endpoint_id:%s}]->(e)"
+            % (r[0], r[1], "NULL" if r[2] is None else str(int(r[2])))
+        ],
+        "Loading test request entity coverage edges",
+    )
+
 def build_graph(sqlite_path: str, graph_path: str) -> None:
     sql = db = g = None
     try:
@@ -1501,8 +1657,10 @@ def build_graph(sqlite_path: str, graph_path: str) -> None:
         ensure_schema(g)
         load_nodes(sql, g)
         load_v2_nodes(sql, g)
+        load_test_coverage_nodes(sql, g)
         load_edges(sql, g)
         load_v2_edges(sql, g)
+        load_test_coverage_edges(sql, g)
         print("Ladybug graph build complete")
     finally:
         if g is not None:

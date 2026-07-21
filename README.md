@@ -255,6 +255,29 @@ not be started during an agentic session. Agents should restrict themselves to
 read-only parity validation and focused unit tests. SQLite query commands remain
 the authoritative evidence path; Ladybug is a rebuildable traversal projection.
 
+### REST Automation Coverage
+
+Apply `migrations/019_versioned_rest_test_coverage.sql` once to an existing
+catalog, then register each automation suite before ingesting its Gherkin
+evidence. The ingestion reads only feature files, same-stem properties metadata
+(`version` and `testObject`), and the suite object mapping.
+
+```bash
+sqlite3 catalog/catalog.db ".read migrations/019_versioned_rest_test_coverage.sql"
+
+python scripts/register_rest_automation_suite.py \
+  --suite-id ia-restapi-automation \
+  --suite-root /Users/aritra.ghosh/projects/ia-restapi-automation \
+  --object-mapping /Users/aritra.ghosh/projects/ia-restapi-automation/src/test/resources/object-mapping.json
+
+python scripts/build_gherkin_coverage.py \
+  --suite-id ia-restapi-automation \
+  --suite-root /Users/aritra.ghosh/projects/ia-restapi-automation \
+  --object-mapping /Users/aritra.ghosh/projects/ia-restapi-automation/src/test/resources/object-mapping.json
+
+python scripts/query_rest.py coverage APBill --version s1
+```
+
 `graph_ready_entities` is an advisory triage view for entities with strong root
 evidence. It intentionally excludes weak or unrooted entities and must not be
 used to filter authoritative queries or the complete graph projection.
