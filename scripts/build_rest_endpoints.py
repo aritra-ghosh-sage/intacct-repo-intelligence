@@ -142,13 +142,14 @@ def _extract_endpoints_from_symbols(
 
 def _insert_endpoints(
     conn: sqlite3.Connection,
-    endpoints: list[tuple[str, str, int, int | None, int | None]],
+    endpoints: list[tuple[str, str, str | None, int, int | None, int | None]],
 ) -> int:
     """
     Insert REST endpoints into the database.
     Args:
         conn: Database connection
-        endpoints: List of (method, path, file_id, entity_id, handler_symbol_id) tuples
+        endpoints: List of (method, path, source_version, file_id, entity_id,
+            handler_symbol_id) tuples
     Returns:
         Count of inserted endpoints
     """
@@ -157,18 +158,19 @@ def _insert_endpoints(
         INSERT OR IGNORE INTO rest_endpoints (
             method,
             path,
+            source_version,
             file_id,
             entity_id,
             handler_symbol_id
         )
-        VALUES (?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?)
     """
 
-    for method, path, file_id, entity_id, handler_symbol_id in endpoints:
+    for method, path, source_version, file_id, entity_id, handler_symbol_id in endpoints:
         try:
             cur = conn.execute(
                 sql,
-                (method, path, file_id, entity_id, handler_symbol_id),
+                (method, path, source_version, file_id, entity_id, handler_symbol_id),
             )
             if cur.rowcount > 0:
                 inserted += 1
@@ -180,7 +182,7 @@ def _insert_endpoints(
 
 def _update_endpoints(
     conn: sqlite3.Connection,
-    endpoints: list[tuple[str, str, int, int | None, int | None]],
+    endpoints: list[tuple[str, str, str | None, int, int | None, int | None]],
 ) -> int:
     """
     Backfill nullable columns for endpoints that already exist.
@@ -192,13 +194,14 @@ def _update_endpoints(
             handler_symbol_id = COALESCE(handler_symbol_id, ?)
         WHERE method = ?
           AND path = ?
+          AND source_version IS ?
           AND file_id = ?
     """
 
-    for method, path, file_id, entity_id, handler_symbol_id in endpoints:
+    for method, path, source_version, file_id, entity_id, handler_symbol_id in endpoints:
         cur = conn.execute(
             sql,
-            (entity_id, handler_symbol_id, method, path, file_id),
+            (entity_id, handler_symbol_id, method, path, source_version, file_id),
         )
         if cur.rowcount > 0:
             updated += 1
@@ -423,8 +426,8 @@ def build(
         # Focus on files in paths directories which contain REST endpoint definitions
         specs = conn.execute(
             """
-            SELECT id, file_id, file_path, kind, canonical_name, x_mapped_to
-                 , module
+            SELECT id, file_id, file_path, kind, canonical_name, x_mapped_to,
+                   module, version
             FROM openapispec_index
                         WHERE (file_path LIKE '%/paths/%' OR kind = 'operations')
                             AND file_path NOT LIKE '%/paths/workflows.%'
@@ -474,7 +477,13 @@ def build(
                 stats.symbol_fallback_files += 1
                 stats.symbol_fallback_endpoints += len(endpoints)
 
-            # Prepare data for insertion: (method, path, file_id, entity_id, handler_symbol_id)
+            # Endpoint version comes from the exact indexed OpenAPI row.  A
+            # missing value remains NULL and must not be treated as equivalent
+            # to another version by downstream test coverage linking.
+            source_version = str(spec_row["version"] or "").strip() or None
+
+            # Prepare data for insertion: (method, path, source_version,
+            # file_id, entity_id, handler_symbol_id).
             # entity_id is populated only when deterministic evidence resolves to one entity.
             resolved_entity_id = entity_by_file_id.get(int(file_id))
             bridged_candidate = _resolve_entity_schema_bridge(
@@ -504,6 +513,7 @@ def build(
                 (
                     method,
                     path,
+                    source_version,
                     int(file_id),
                     resolved_entity_id,
                     handler_by_endpoint.get((method, path)),
