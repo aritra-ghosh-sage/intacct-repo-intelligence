@@ -5,12 +5,19 @@ from pathlib import Path
 from config import CATALOG_DB
 
 
+_connection = None
+
+
 def get_connection(db_path: str | None = None):
+    global _connection
+    if _connection is not None:
+        return _connection
+    
     path = db_path or CATALOG_DB
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
-    return conn
+    _connection = sqlite3.connect(path)
+    _connection.row_factory = sqlite3.Row
+    return _connection
 
 
 def init_db():
