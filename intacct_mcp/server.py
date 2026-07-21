@@ -301,10 +301,11 @@ def create_server(db_path: str | None = None, graph_path: str | None = None) -> 
         db_path or os.getenv("CATALOG_DB", CATALOG_DB),
         graph_path or os.getenv("GRAPH_DB", GRAPH_DB),
     )
-    s = FastMCP(
-        "intacct-catalog",
-        instructions="Read-only evidence-first catalog. Search first, cite returned source paths, line ranges, record IDs and confidence; do not infer missing evidence.",
-    )
+    transport = os.getenv("MCP_TRANSPORT", "streamable-http")
+    kwargs = {"name": "intacct-catalog", "instructions": "Read-only evidence-first catalog. Search first, cite returned source paths, line ranges, record IDs and confidence; do not infer missing evidence."}
+    if transport in {"sse", "streamable-http"}:
+        kwargs["port"] = int(os.getenv("MCP_PORT", "8010"))
+    s = FastMCP(**kwargs)
 
     @s.tool()
     def catalog_search(
