@@ -513,4 +513,7 @@ def create_server(db_path: str | None = None, graph_path: str | None = None) -> 
 
 mcp = create_server()
 if __name__ == "__main__":
-    mcp.run(transport="stdio")
+    transport = os.getenv("MCP_TRANSPORT", "streamable-http")
+    if transport not in {"stdio", "sse", "streamable-http"}:
+        raise ValueError("MCP_TRANSPORT must be stdio, sse, or streamable-http")
+    mcp.run(transport=transport)

@@ -1,144 +1,9 @@
 # Phase 2B.1 Validation Report
 
-## Scan output checks
-
-### entity_definitions companion_classes keys must match expected role set
-
-OK — no issues found.
-
-## JSONL vs DB checks
-
-### entity_nodes missing expected columns
-
-OK — no issues found.
-
-### entities in JSONL but missing in entity_nodes
-
-OK — no issues found.
-
-### entities in entity_nodes but missing in JSONL
-
-OK — no issues found.
-
-### entity metadata mismatches between JSONL and entity_nodes
-
-OK — no issues found.
-
-## Mapping/roots checks
-
-### entity_mappings with unknown mapping_type
-
-OK — no issues found.
-
-### entity_mappings missing corresponding entity_roots rows
-
-OK — no issues found.
-
-### entity_roots role/weight/reason mismatches
-
-OK — no issues found.
-
 ## Structural checks
-
-### entity_nodes missing expected columns
-
-OK — no issues found.
 
 ### entity_nodes without ent_file
 
-OK — no issues found.
-
-### entity_mappings pointing to missing symbols
-
-OK — no issues found.
-
-### entity_roots not backed by entity_mappings
-
-OK — no issues found.
-
-### domain entities with 0 seed roots at weight >= 0.75
-
-- `Apxbatch`
-- `PASwebhookqueue`
-- `PASwebhookqueuehistory`
-- `Qdepositpayment`
-- `Recordgeneratorqueue`
-- `Recordgeneratorqueuehistory`
-- `Stxexternalqueue`
-- `Stxexternalqueuehistory`
-- `Stxfileuploadqueue`
-- `Stxfileuploadqueuehistory`
-- `Stxwebhookqueue`
-- `Stxwebhookqueuehistory`
-- `Apautomatedtransactionfileupload`
-- `AUTOMATEDTRANSACTIONCompany`
-- `AUTOMATEDTRANSACTIONSetup`
-- `Automationfeedbackext`
-- `Poautomatedtransactionfileupload`
-- `Attachment`
-- `Entityusecode`
-- `GLObals`
-- `Stdrepeat`
-- `IaSuiteUserApp`
-- `Schemamap`
-- `Girunsummary`
-- `GLObalrunobjectsummary`
-- `Runobject`
-- `Runobjectdetail`
-- `Runobjectgroup`
-- `Runobjectsummary`
-- `Base`
-- `DDSHistory`
-- `DDSJob`
-- `DDSJobconfig`
-- `DDSJobsummary`
-- `DDSNotice`
-- `DDSSchedule`
-- `DDSSetup`
-- `DDSSubscription`
-- `Cashflowdigitalnetworksyncqueue`
-- `Cashflowdigitalnetworksyncqueuehistory`
-- `Digitalnetworksyncqueue`
-- `Digitalnetworksyncqueuehistory`
-- `Podigitalnetworksyncqueue`
-- `Podigitalnetworksyncqueuehistory`
-- `Expenseexternalqueue`
-- `Expenseexternalqueuehistory`
-- `Expensefileuploadqueue`
-- `Expensefileuploadqueuehistory`
-- `Expensewebhookqueue`
-- `Expensewebhookqueuehistory`
-- `Deprschrunsummary`
-- `EmployeeAging`
-- `Expensefileupload`
-- `CONsbookdeletionqueue`
-- `CONsbookdeletionqueuehistory`
-- `Projectrunsummary`
-- `Tsdocentryresolve`
-- `Activitylog`
-- `Appissue`
-- `Apppageproperties`
-- `Approvedapplication`
-- `Cerpsetup`
-- `CSPviolation`
-- `PACkageownership`
-- `PACkagepushhistory`
-- `PACkagepushqueue`
-- `PACkagerepository`
-- `PACkagesubscriber`
-- `PACkagetracking`
-- `Ptapplication`
-- `Ptnamespace`
-- `Transactionmap`
-- `Triggerlogs`
-- `SFORCEQueue`
-- `SFORCEQueuehistory`
-- `SFORCESyncqueuejobui`
-- `Loanstatementrunsummary`
-- `Acctlabeltaxgroup`
-- `Customeravataxsyncqueue`
-- `Customeravataxsyncqueuehistory`
-- `TAXSummary`
 - `AppToolsAppToolsSuiteUserListResponse`
 - `AppToolsAppToolsUserMyApplicationsResponse`
 - `CoCompanyConfigAudiTrailListResponse`
@@ -187,242 +52,608 @@ OK — no issues found.
 - `PurchasingReportsPurchasingPriceList`
 - `SalesReportsOrderEntryPriceList`
 
-### non-domain entities with 0 seed roots at weight >= 0.75
+### entity_mappings pointing to missing symbols
+
+- `(17, None)`
+- `(17, None)`
+- `(17, None)`
+- `(17, None)`
+- `(17, None)`
+- `(24, None)`
+- `(24, None)`
+- `(24, None)`
+- `(24, None)`
+- `(29, None)`
+- `(46, None)`
+- `(46, None)`
+- `(46, None)`
+- `(46, None)`
+- `(46, None)`
+- `(46, None)`
+- `(46, None)`
+- `(46, None)`
+- `(46, None)`
+- `(46, None)`
+- `(51, None)`
+- `(51, None)`
+- `(57, None)`
+- `(82, None)`
+- `(87, None)`
+- `(87, None)`
+- `(87, None)`
+- `(87, None)`
+- `(87, None)`
+- `(87, None)`
+- `(87, None)`
+- `(105, None)`
+- `(105, None)`
+- `(105, None)`
+- `(105, None)`
+- `(105, None)`
+- `(111, None)`
+- `(111, None)`
+- `(111, None)`
+- `(111, None)`
+- `(115, None)`
+- `(129, None)`
+- `(129, None)`
+- `(129, None)`
+- `(129, None)`
+- `(129, None)`
+- `(129, None)`
+- `(148, None)`
+- `(156, None)`
+- `(156, None)`
+- `(156, None)`
+- `(176, None)`
+- `(178, None)`
+- `(186, None)`
+- `(186, None)`
+- `(186, None)`
+- `(186, None)`
+- `(186, None)`
+- `(187, None)`
+- `(195, None)`
+- `(198, None)`
+- `(198, None)`
+- `(198, None)`
+- `(198, None)`
+- `(205, None)`
+- `(240, None)`
+- `(240, None)`
+- `(240, None)`
+- `(240, None)`
+- `(240, None)`
+- `(240, None)`
+- `(241, None)`
+- `(242, None)`
+- `(300, None)`
+- `(300, None)`
+- `(300, None)`
+- `(301, None)`
+- `(301, None)`
+- `(301, None)`
+- `(301, None)`
+- `(301, None)`
+- `(306, None)`
+- `(306, None)`
+- `(306, None)`
+- `(306, None)`
+- `(306, None)`
+- `(306, None)`
+- `(306, None)`
+- `(306, None)`
+- `(306, None)`
+- `(307, None)`
+- `(319, None)`
+- `(331, None)`
+- `(344, None)`
+- `(344, None)`
+- `(380, None)`
+- `(387, None)`
+- `(387, None)`
+- `(390, None)`
+- `(390, None)`
+- `(390, None)`
+- `(390, None)`
+- `(391, None)`
+- `(391, None)`
+- `(411, None)`
+- `(411, None)`
+- `(415, None)`
+- `(415, None)`
+- `(424, None)`
+- `(435, None)`
+- `(435, None)`
+- `(437, None)`
+- `(437, None)`
+- `(441, None)`
+- `(441, None)`
+- `(441, None)`
+- `(441, None)`
+- `(441, None)`
+- `(447, None)`
+- `(451, None)`
+- `(451, None)`
+- `(458, None)`
+- `(458, None)`
+- `(491, None)`
+- `(551, None)`
+- `(552, None)`
+- `(610, None)`
+- `(614, None)`
+- `(685, None)`
+- `(685, None)`
+- `(685, None)`
+- `(712, None)`
+- `(718, None)`
+- `(718, None)`
+- `(754, None)`
+- `(754, None)`
+- `(754, None)`
+- `(798, None)`
+- `(798, None)`
+- `(798, None)`
+- `(798, None)`
+- `(798, None)`
+- `(798, None)`
+- `(798, None)`
+- `(798, None)`
+- `(798, None)`
+- `(798, None)`
+- `(798, None)`
+- `(811, None)`
+- `(811, None)`
+- `(811, None)`
+- `(811, None)`
+- `(811, None)`
+- `(811, None)`
+- `(811, None)`
+- `(811, None)`
+- `(811, None)`
+- `(811, None)`
+- `(814, None)`
+- `(814, None)`
+- `(814, None)`
+- `(814, None)`
+- `(814, None)`
+- `(819, None)`
+- `(819, None)`
+- `(819, None)`
+- `(860, None)`
+- `(860, None)`
+- `(860, None)`
+- `(1062, None)`
+- `(1062, None)`
+- `(1062, None)`
+- `(1062, None)`
+- `(1064, None)`
+- `(1064, None)`
+- `(1064, None)`
+- `(1064, None)`
+- `(1066, None)`
+- `(1066, None)`
+- `(1066, None)`
+- `(1066, None)`
+- `(1148, None)`
+- `(1149, None)`
+- `(1158, None)`
+- `(1158, None)`
+- `(1158, None)`
+- `(1163, None)`
+- `(1163, None)`
+- `(1178, None)`
+- `(1178, None)`
+- `(1178, None)`
+- `(1178, None)`
+- `(1178, None)`
+- `(1178, None)`
+- `(1178, None)`
+- `(1184, None)`
+- `(1184, None)`
+- `(1199, None)`
+- `(1201, None)`
+- `(1219, None)`
+
+_(truncated — 2970 total)_
+
+### entity_roots not backed by entity_mappings
 
 OK — no issues found.
 
-### unclassified entities with 0 seed roots at weight >= 0.75
+### entities with 0 seed roots at weight >= 0.75
 
-OK — no issues found.
-
-### non-domain entity counts
-
-OK — no issues found.
+- `AUTOMATEDTRANSACTIONCompany`
+- `AUTOMATEDTRANSACTIONSetup`
+- `Acctlabeltaxgroup`
+- `Activitylog`
+- `Apautomatedtransactionfileupload`
+- `AppToolsAppToolsSuiteUserListResponse`
+- `AppToolsAppToolsUserMyApplicationsResponse`
+- `Appissue`
+- `Apppageproperties`
+- `Approvedapplication`
+- `Apxbatch`
+- `Attachment`
+- `Automationfeedbackext`
+- `Base`
+- `CONsbookdeletionqueue`
+- `CONsbookdeletionqueuehistory`
+- `CSPviolation`
+- `Cashflowdigitalnetworksyncqueue`
+- `Cashflowdigitalnetworksyncqueuehistory`
+- `Cerpsetup`
+- `CoCompanyConfigAudiTrailListResponse`
+- `CollaborationCollaborationSageIdInitializeUsersRequest`
+- `CollaborationCollaborationSageIdInitializeUsersResponse`
+- `CollaborationCollaborationSageIdUsersResponse`
+- `CommonCommonAuthAllOperationsRequest`
+- `CommonCommonAuthAllOperationsResponse`
+- `CommonCommonAuthAllowedOperationsRequest`
+- `CommonCommonAuthAllowedOperationsResponse`
+- `CommonCoreComposite`
+- `CommonCoreExport`
+- `CommonCoreKeyValueMap`
+- `CommonReportSubmittedStatus`
+- `CoreAdminProvisioningGrantSlideInPermissionsRequest`
+- `CoreAdminProvisioningGrantSlideInPermissionsResponse`
+- `CoreCoreAllowedOperationsRequest`
+- `CoreCoreAllowedOperationsResponse`
+- `CoreCoreAsyncJobStatus`
+- `CoreCoreAsyncOperationResponse`
+- `CoreCoreRelatedObjectsQuery`
+- `CoreIodlProxyFsComponentContent`
+- `CoreIodlProxyFsComponentContentDeploy`
+- `CoreIodlProxyFsComponentId`
+- `CoreReportStatusCanceled`
+- `CoreReportsStoredReports`
+- `Customeravataxsyncqueue`
+- `Customeravataxsyncqueuehistory`
+- `DDSHistory`
+- `DDSJob`
+- `DDSJobconfig`
+- `DDSJobsummary`
+- `DDSNotice`
+- `DDSSchedule`
+- `DDSSetup`
+- `DDSSubscription`
+- `Deprschrunsummary`
+- `Digitalnetworksyncqueue`
+- `Digitalnetworksyncqueuehistory`
+- `EmployeeAging`
+- `Entityusecode`
+- `Expenseexternalqueue`
+- `Expenseexternalqueuehistory`
+- `Expensefileupload`
+- `Expensefileuploadqueue`
+- `Expensefileuploadqueuehistory`
+- `Expensewebhookqueue`
+- `Expensewebhookqueuehistory`
+- `GLObalrunobjectsummary`
+- `GLObals`
+- `Girunsummary`
+- `GlGeneralLedgerAccountingBooksCloseBooksResponse`
+- `GlGeneralLedgerAccountingBooksLockStatutoryPeriodRequest`
+- `GlGeneralLedgerAccountingBooksLockStatutoryPeriodResponse`
+- `GlGeneralLedgerAccountingBooksOpenBooksResponse`
+- `GlReportsGeneralLedgerAccountBalanceByDimension`
+- `GlReportsGeneralLedgerAccountGroupHierarchy`
+- `GlReportsGeneralLedgerBasic`
+- `GlReportsGeneralLedgerDetails`
+- `GlReportsGeneralLedgerReconciliation`
+- `GlReportsGeneralLedgerTrialBalance`
+- `IaSuiteUserApp`
+- `InvReportsInventoryControlInventoryCosting`
+- `InvReportsInventoryControlInventoryRegister`
+- `InvReportsInventoryControlInventoryStatus`
+- `InvReportsInventoryControlInventoryValuation`
+- `InvReportsInventoryControlItemActivity`
+- `InvReportsInventoryControlItemList`
+- `InvReportsInventoryControlLotTracking`
+- `InvReportsInventoryControlPhysicalInventory`
+- `InvReportsInventoryControlSerialTracking`
+- `Loanstatementrunsummary`
+- `PACkageownership`
+- `PACkagepushhistory`
+- `PACkagepushqueue`
+- `PACkagerepository`
+- `PACkagesubscriber`
+- `PACkagetracking`
+- `PASwebhookqueue`
+- `PASwebhookqueuehistory`
+- `Poautomatedtransactionfileupload`
+- `Podigitalnetworksyncqueue`
+- `Podigitalnetworksyncqueuehistory`
+- `Projectrunsummary`
+- `Ptapplication`
+- `Ptnamespace`
+- `PurchasingReportsPurchasingPriceList`
+- `Qdepositpayment`
+- `Recordgeneratorqueue`
+- `Recordgeneratorqueuehistory`
+- `Runobject`
+- `Runobjectdetail`
+- `Runobjectgroup`
+- `Runobjectsummary`
+- `SFORCEQueue`
+- `SFORCEQueuehistory`
+- `SFORCESyncqueuejobui`
+- `SalesReportsOrderEntryPriceList`
+- `Schemamap`
+- `Stdrepeat`
+- `Stxexternalqueue`
+- `Stxexternalqueuehistory`
+- `Stxfileuploadqueue`
+- `Stxfileuploadqueuehistory`
+- `Stxwebhookqueue`
+- `Stxwebhookqueuehistory`
+- `TAXSummary`
+- `Transactionmap`
+- `Triggerlogs`
+- `Tsdocentryresolve`
 
 ### symbols acting as root for multiple entities
 
-- `(94, 2)`
-- `(380, 2)`
-- `(3494, 2)`
-- `(3636, 2)`
-- `(3663, 2)`
-- `(3947, 2)`
-- `(3953, 2)`
-- `(4034, 2)`
-- `(4332, 2)`
-- `(4333, 2)`
-- `(4726, 2)`
-- `(5448, 2)`
-- `(5657, 2)`
-- `(6240, 2)`
-- `(6571, 2)`
-- `(7269, 2)`
-- `(7282, 2)`
-- `(7406, 2)`
-- `(7530, 2)`
-- `(7785, 2)`
-- `(7795, 2)`
-- `(7828, 2)`
-- `(8476, 2)`
-- `(8531, 2)`
-- `(8660, 2)`
-- `(8790, 2)`
-- `(9142, 2)`
-- `(9153, 2)`
-- `(9284, 2)`
-- `(9286, 2)`
-- `(9294, 2)`
-- `(9315, 2)`
-- `(9318, 2)`
-- `(9426, 2)`
-- `(9797, 2)`
-- `(9887, 2)`
-- `(9910, 2)`
-- `(10308, 2)`
-- `(10383, 2)`
-- `(10463, 2)`
-- `(10627, 2)`
-- `(11226, 2)`
-- `(11446, 2)`
-- `(11640, 2)`
-- `(11646, 2)`
-- `(11698, 2)`
-- `(12438, 2)`
-- `(12440, 2)`
-- `(12527, 2)`
-- `(13248, 2)`
-- `(13279, 2)`
-- `(13880, 2)`
-- `(13939, 2)`
-- `(14220, 2)`
-- `(14403, 2)`
-- `(15314, 2)`
-- `(15410, 2)`
-- `(15458, 2)`
-- `(15873, 2)`
-- `(15904, 2)`
-- `(16120, 2)`
-- `(16133, 2)`
-- `(16567, 2)`
-- `(16787, 2)`
-- `(17181, 2)`
-- `(17196, 2)`
-- `(17214, 2)`
-- `(17390, 2)`
-- `(17489, 2)`
-- `(17592, 2)`
-- `(17661, 2)`
-- `(18194, 2)`
-- `(18232, 2)`
-- `(18253, 2)`
-- `(18665, 2)`
-- `(18951, 2)`
-- `(19083, 2)`
-- `(19365, 2)`
-- `(19396, 2)`
-- `(19650, 2)`
-- `(19652, 2)`
-- `(19682, 2)`
-- `(19690, 2)`
-- `(19935, 2)`
-- `(21117, 2)`
-- `(21328, 2)`
-- `(21383, 2)`
-- `(21479, 2)`
-- `(21553, 2)`
-- `(21582, 2)`
-- `(21663, 2)`
-- `(21697, 2)`
-- `(22022, 2)`
-- `(22244, 2)`
-- `(22597, 2)`
-- `(22674, 2)`
-- `(23272, 2)`
-- `(23906, 2)`
+- `(4126, 2)`
+- `(4353, 2)`
+- `(4502, 2)`
+- `(4512, 2)`
+- `(5050, 2)`
+- `(5063, 2)`
+- `(5090, 2)`
+- `(5194, 2)`
+- `(5819, 2)`
+- `(5931, 2)`
+- `(6247, 2)`
+- `(6532, 2)`
+- `(6550, 2)`
+- `(6621, 2)`
+- `(6878, 2)`
+- `(6905, 2)`
+- `(6907, 2)`
+- `(6910, 2)`
+- `(6932, 2)`
+- `(7127, 2)`
+- `(7146, 2)`
+- `(7400, 2)`
+- `(7405, 2)`
+- `(7854, 2)`
+- `(8078, 2)`
+- `(8445, 2)`
+- `(8448, 2)`
+- `(9005, 2)`
+- `(9009, 2)`
+- `(9029, 2)`
+- `(9182, 2)`
+- `(9257, 2)`
+- `(9313, 2)`
+- `(9323, 2)`
+- `(9329, 2)`
+- `(23374, 2)`
+- `(23588, 2)`
+- `(23904, 2)`
+- `(24136, 2)`
+- `(24330, 2)`
+- `(24645, 2)`
+- `(24832, 2)`
+- `(24852, 2)`
 - `(25047, 2)`
-- `(26764, 2)`
-- `(26863, 2)`
-- `(27276, 2)`
-- `(27871, 2)`
-- `(27896, 2)`
-- `(28133, 2)`
-- `(28333, 2)`
-- `(29105, 2)`
-- `(29115, 2)`
-- `(29469, 2)`
-- `(29568, 2)`
-- `(30142, 2)`
-- `(30774, 2)`
-- `(30928, 2)`
-- `(31000, 2)`
-- `(31041, 2)`
-- `(31161, 2)`
-- `(31321, 2)`
-- `(31436, 2)`
-- `(31466, 2)`
-- `(31736, 2)`
-- `(32006, 2)`
-- `(32648, 2)`
-- `(33001, 2)`
-- `(33094, 2)`
-- `(33746, 2)`
-- `(33780, 2)`
-- `(34423, 2)`
-- `(34435, 2)`
-- `(36270, 2)`
-- `(36931, 2)`
-- `(37723, 2)`
-- `(37882, 2)`
-- `(38047, 2)`
-- `(38309, 2)`
-- `(38369, 2)`
-- `(38545, 2)`
-- `(38622, 2)`
-- `(38628, 2)`
-- `(38682, 2)`
-- `(38939, 2)`
-- `(39108, 2)`
-- `(39240, 2)`
-- `(39660, 2)`
-- `(42884, 2)`
-- `(42888, 2)`
-- `(42925, 2)`
-- `(42986, 2)`
-- `(57581, 2)`
-- `(57785, 2)`
-- `(57957, 2)`
-- `(57959, 2)`
-- `(58129, 2)`
-- `(58267, 2)`
-- `(58393, 2)`
-- `(58512, 2)`
-- `(58703, 2)`
-- `(58765, 2)`
-- `(59643, 2)`
-- `(59909, 2)`
-- `(60070, 2)`
-- `(60379, 2)`
-- `(60649, 2)`
-- `(60988, 2)`
-- `(61668, 2)`
-- `(63361, 2)`
-- `(68312, 2)`
-- `(79904, 2)`
-- `(80332, 2)`
-- `(80475, 2)`
-- `(81175, 2)`
-- `(81503, 2)`
-- `(82184, 2)`
-- `(82339, 2)`
-- `(82389, 2)`
-- `(82480, 2)`
-- `(85990, 2)`
-- `(90690, 2)`
-- `(90918, 2)`
-- `(90940, 2)`
-- `(90943, 2)`
-- `(91739, 2)`
-- `(91767, 2)`
-- `(91808, 2)`
-- `(92078, 2)`
-- `(92502, 2)`
-- `(93361, 2)`
-- `(93363, 2)`
-- `(93450, 2)`
-- `(93660, 2)`
-- `(93690, 2)`
-- `(93849, 2)`
-- `(93953, 2)`
-- `(94112, 2)`
-- `(94224, 2)`
-- `(94630, 2)`
-- `(94873, 2)`
-- `(94875, 2)`
-- `(95304, 2)`
-- `(95659, 2)`
-- `(95909, 2)`
+- `(25225, 2)`
+- `(25231, 2)`
+- `(25249, 2)`
+- `(26244, 2)`
+- `(26316, 2)`
+- `(26700, 2)`
+- `(26803, 2)`
+- `(26981, 2)`
+- `(27361, 2)`
+- `(33093, 2)`
+- `(33436, 2)`
+- `(33437, 2)`
+- `(33894, 2)`
+- `(33944, 2)`
+- `(33952, 2)`
+- `(34214, 2)`
+- `(34385, 2)`
+- `(34436, 2)`
+- `(35057, 2)`
+- `(35253, 2)`
+- `(35560, 2)`
+- `(35583, 2)`
+- `(42649, 2)`
+- `(42699, 2)`
+- `(42749, 2)`
+- `(42759, 2)`
+- `(43239, 2)`
+- `(43771, 2)`
+- `(44140, 2)`
+- `(50544, 2)`
+- `(52220, 2)`
+- `(53265, 2)`
+- `(59728, 2)`
+- `(59783, 2)`
+- `(59918, 2)`
+- `(60148, 2)`
+- `(60228, 2)`
+- `(60417, 2)`
+- `(61060, 2)`
+- `(61162, 2)`
+- `(62663, 2)`
+- `(63683, 2)`
+- `(63915, 2)`
+- `(63967, 2)`
+- `(64359, 2)`
+- `(64926, 2)`
+- `(65154, 2)`
+- `(65516, 2)`
+- `(66388, 2)`
+- `(67702, 2)`
+- `(67779, 2)`
+- `(67857, 2)`
+- `(68287, 2)`
+- `(69464, 2)`
+- `(72743, 2)`
+- `(72924, 2)`
+- `(72934, 2)`
+- `(73337, 2)`
+- `(73793, 2)`
+- `(74026, 2)`
+- `(74310, 2)`
+- `(74673, 2)`
+- `(74817, 2)`
+- `(74948, 2)`
+- `(75092, 2)`
+- `(75533, 2)`
+- `(75554, 2)`
+- `(75888, 2)`
+- `(75943, 2)`
+- `(76370, 2)`
+- `(76371, 2)`
+- `(76474, 2)`
+- `(76942, 2)`
+- `(77583, 2)`
+- `(77716, 2)`
+- `(77890, 2)`
+- `(77943, 2)`
+- `(78008, 2)`
+- `(78753, 2)`
+- `(79232, 2)`
+- `(79848, 2)`
+- `(79875, 2)`
+- `(79929, 2)`
+- `(79973, 2)`
+- `(79974, 2)`
+- `(80015, 2)`
+- `(80143, 2)`
+- `(80509, 2)`
+- `(82274, 2)`
+- `(83632, 2)`
+- `(83646, 2)`
+- `(83826, 2)`
+- `(83830, 2)`
+- `(84244, 2)`
+- `(84341, 2)`
+- `(84930, 2)`
+- `(85087, 2)`
+- `(85571, 2)`
+- `(85626, 2)`
+- `(85815, 2)`
+- `(85836, 2)`
+- `(86172, 2)`
+- `(86942, 2)`
+- `(87271, 2)`
+- `(87273, 2)`
+- `(87557, 2)`
+- `(87851, 2)`
+- `(89698, 2)`
+- `(89909, 2)`
+- `(90115, 2)`
+- `(90231, 2)`
+- `(90819, 2)`
+- `(91122, 2)`
+- `(91126, 2)`
+- `(91386, 2)`
+- `(91471, 2)`
+- `(91619, 2)`
+- `(91852, 2)`
+- `(91997, 2)`
+- `(92051, 2)`
+- `(92480, 2)`
+- `(92581, 2)`
+- `(92640, 2)`
+- `(93132, 2)`
+- `(93134, 2)`
+- `(93175, 2)`
+- `(93374, 2)`
+- `(93621, 2)`
+- `(93669, 2)`
+- `(94399, 2)`
+- `(94594, 2)`
+- `(94908, 2)`
+- `(94938, 2)`
+- `(95166, 2)`
+- `(95756, 2)`
+- `(96060, 2)`
+- `(96092, 2)`
+- `(96647, 2)`
+- `(96699, 2)`
+- `(96758, 2)`
+- `(97007, 2)`
+- `(97149, 2)`
+- `(97708, 2)`
+- `(98017, 2)`
+- `(98029, 2)`
+- `(98357, 2)`
+- `(98531, 2)`
+- `(98653, 2)`
+- `(98784, 2)`
+- `(99209, 2)`
+- `(99501, 2)`
+- `(99670, 2)`
+- `(99692, 2)`
+- `(99998, 2)`
+- `(100027, 2)`
+- `(100037, 2)`
 
 _(truncated — 247 total)_
 
 ## Filesystem checks
 
-### entity_nodes missing expected columns
-
-OK — no issues found.
-
 ### entity_nodes with .ent files missing on disk
 
-OK — no issues found.
+- `('AppToolsAppToolsSuiteUserListResponse', None)`
+- `('AppToolsAppToolsUserMyApplicationsResponse', None)`
+- `('CoCompanyConfigAudiTrailListResponse', None)`
+- `('CollaborationCollaborationSageIdInitializeUsersRequest', None)`
+- `('CollaborationCollaborationSageIdInitializeUsersResponse', None)`
+- `('CollaborationCollaborationSageIdUsersResponse', None)`
+- `('CommonCommonAuthAllOperationsRequest', None)`
+- `('CommonCommonAuthAllOperationsResponse', None)`
+- `('CommonCommonAuthAllowedOperationsRequest', None)`
+- `('CommonCommonAuthAllowedOperationsResponse', None)`
+- `('CommonCoreComposite', None)`
+- `('CommonCoreExport', None)`
+- `('CommonCoreKeyValueMap', None)`
+- `('CommonReportSubmittedStatus', None)`
+- `('CoreAdminProvisioningGrantSlideInPermissionsRequest', None)`
+- `('CoreAdminProvisioningGrantSlideInPermissionsResponse', None)`
+- `('CoreCoreAllowedOperationsRequest', None)`
+- `('CoreCoreAllowedOperationsResponse', None)`
+- `('CoreCoreAsyncJobStatus', None)`
+- `('CoreCoreAsyncOperationResponse', None)`
+- `('CoreCoreRelatedObjectsQuery', None)`
+- `('CoreIodlProxyFsComponentContentDeploy', None)`
+- `('CoreIodlProxyFsComponentContent', None)`
+- `('CoreIodlProxyFsComponentId', None)`
+- `('CoreReportStatusCanceled', None)`
+- `('CoreReportsStoredReports', None)`
+- `('GlGeneralLedgerAccountingBooksCloseBooksResponse', None)`
+- `('GlGeneralLedgerAccountingBooksLockStatutoryPeriodRequest', None)`
+- `('GlGeneralLedgerAccountingBooksLockStatutoryPeriodResponse', None)`
+- `('GlGeneralLedgerAccountingBooksOpenBooksResponse', None)`
+- `('GlReportsGeneralLedgerAccountBalanceByDimension', None)`
+- `('GlReportsGeneralLedgerAccountGroupHierarchy', None)`
+- `('GlReportsGeneralLedgerBasic', None)`
+- `('GlReportsGeneralLedgerDetails', None)`
+- `('GlReportsGeneralLedgerReconciliation', None)`
+- `('GlReportsGeneralLedgerTrialBalance', None)`
+- `('InvReportsInventoryControlInventoryCosting', None)`
+- `('InvReportsInventoryControlInventoryRegister', None)`
+- `('InvReportsInventoryControlInventoryStatus', None)`
+- `('InvReportsInventoryControlInventoryValuation', None)`
+- `('InvReportsInventoryControlItemActivity', None)`
+- `('InvReportsInventoryControlItemList', None)`
+- `('InvReportsInventoryControlLotTracking', None)`
+- `('InvReportsInventoryControlPhysicalInventory', None)`
+- `('InvReportsInventoryControlSerialTracking', None)`
+- `('PurchasingReportsPurchasingPriceList', None)`
+- `('SalesReportsOrderEntryPriceList', None)`
 
 ### companion class files referenced in entity_mappings missing on disk
 
 OK — no issues found.
 
 ## Repo vs DB coverage
-
-### entity_nodes missing expected columns
-
-OK — no issues found.
 
 ### .ent files present in repo but missing in DB
 
@@ -440,7 +671,7 @@ OK — no issues found.
 - `('editor', 605)`
 - `('lister', 555)`
 - `('picker', 360)`
-- `('allowed_operations_handler', 154)`
+- `('allowed_operations_handler', 156)`
 - `('entry_manager', 79)`
 - `('form_editor', 67)`
 - `('pick_manager', 52)`
@@ -458,25 +689,38 @@ OK — no issues found.
 
 ## Ground truth checks
 
-### ground truth summary (derived from entity_definitions + deterministic role weights)
+### ground truth: APBill
 
-- `entities_with_expected_roots=1769`
-- `entities_with_perfect_match=1769`
-- `total_expected_symbols=3345`
-- `total_actual_symbols=3345`
-- `total_correct_symbols=3345`
-- `precision=1.0000`
-- `recall=1.0000`
+- `precision=0.38`
+- `recall=1.00`
+- `missing=[]`
+- `extra_top=['APBillAllowedOperationsHandler', 'APBillApprovalManager', 'APBillBatchManager', 'APBillItemManager', 'APBillReverseManager']`
 
-### ground-truth entities missing in entity_nodes
+### ground truth: Vendor
 
-OK — no issues found.
+- `precision=0.43`
+- `recall=1.00`
+- `missing=[]`
+- `extra_top=['VendorAllowedOperationsHandler', 'VendorApprovalManager', 'VendorFormEditor', 'VendorPickManager']`
 
-### entities missing expected >=0.75 roots
+### ground truth: Customer
 
-OK — no issues found.
+- `precision=0.50`
+- `recall=1.00`
+- `missing=[]`
+- `extra_top=['CustomerAllowedOperationsHandler', 'CustomerFormEditor', 'CustomerPickManager']`
 
-### entities with unexpected >=0.75 extra roots
+### ground truth: GLAccount
 
-OK — no issues found.
+- `precision=0.75`
+- `recall=1.00`
+- `missing=[]`
+- `extra_top=['GLAccountPickManager']`
+
+### ground truth: GLBatch
+
+- `precision=0.20`
+- `recall=1.00`
+- `missing=[]`
+- `extra_top=['GLBatchAllowedOperationsHandler', 'GLBatchApprovalManager', 'GLBatchEditor', 'GLBatchLister']`
 
