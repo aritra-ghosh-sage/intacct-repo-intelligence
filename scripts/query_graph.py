@@ -175,6 +175,7 @@ def _query_surfaces_from_entities(
         "workflows": [],
         "security_ops": [],
         "security_menus": [],
+        "test_requests": [],
     }
     if not entity_ids:
         return empty
@@ -224,12 +225,35 @@ def _query_surfaces_from_entities(
             """,
             lambda row: {"security_menu_id": row[0], "menu_name": row[1]},
         ),
+        "test_requests": (
+            """
+            MATCH (c:TestCase)-[:TEST_CASE_HAS_REQUEST]->(tr:TestRequest)
+                  -[:TEST_REQUEST_COVERS_ENTITY]->(e:Entity)
+            WHERE e.entity_id IN $entity_ids
+            RETURN DISTINCT c.test_case_id, c.case_name, c.eligibility,
+                   tr.test_request_id, tr.method, tr.normalized_path,
+                   tr.request_version, tr.expected_status, tr.operation_kind
+            ORDER BY c.test_case_id, tr.test_request_id
+            """,
+            lambda row: {
+                "test_case_id": row[0], "case_name": row[1], "eligibility": row[2],
+                "test_request_id": row[3], "method": row[4], "normalized_path": row[5],
+                "request_version": row[6], "expected_status": row[7], "operation_kind": row[8],
+            },
+        ),
     }
     results = {}
     for key, (query, convert) in queries.items():
-        results[key] = [
-            convert(row) for row in graph_conn.execute(query, params).get_all()
-        ]
+        try:
+            results[key] = [
+                convert(row) for row in graph_conn.execute(query, params).get_all()
+            ]
+        except Exception:
+            # Pre-coverage graph files do not have the optional Test* tables.
+            # Preserve the existing entity-context query until the next build.
+            if key != "test_requests":
+                raise
+            results[key] = []
     return results
 
 
@@ -559,6 +583,10 @@ def entity_context(
                 "workflow_count": len(surfaces["workflows"]),
                 "security_op_count": len(surfaces["security_ops"]),
                 "security_menu_count": len(surfaces["security_menus"]),
+                "test_request_count": len(surfaces["test_requests"]),
+                "active_test_request_count": sum(
+                    item["eligibility"] == "active" for item in surfaces["test_requests"]
+                ),
                 "db_table_count": len(db_schema),
             }
             emit_json(
@@ -570,12 +598,13 @@ def entity_context(
                 )
             )
         else:
-            click.echo(f"Entity: {entity["name"]} (id={entity["id"]})")
+            click.echo(f"Entity: {entity['name']} (id={entity['id']})")
             click.echo(f"Mapped symbols: {len(symbols)}")
-            click.echo(f"REST endpoints: {len(surfaces["rest_endpoints"])}")
-            click.echo(f"Workflows: {len(surfaces["workflows"])}")
-            click.echo(f"Security operations: {len(surfaces["security_ops"])}")
-            click.echo(f"Security menus: {len(surfaces["security_menus"])}")
+            click.echo(f"REST endpoints: {len(surfaces['rest_endpoints'])}")
+            click.echo(f"Workflows: {len(surfaces['workflows'])}")
+            click.echo(f"Security operations: {len(surfaces['security_ops'])}")
+            click.echo(f"Security menus: {len(surfaces['security_menus'])}")
+            click.echo(f"Gherkin test requests: {len(surfaces['test_requests'])}")
             click.echo(f"Database tables: {len(db_schema)}")
 
     finally:
@@ -737,12 +766,12 @@ def who_uses(
             )
         else:
             click.echo(f"Symbol: {symbol_name or target_id}")
-            click.echo(f"Callers: {len(usages["callers"])}")
+            click.echo(f"Callers: {len(usages['callers'])}")
             for row in usages["callers"]:
-                click.echo(f"  {row["name"]} ({row["kind"]})")
-            click.echo(f"Referencers: {len(usages["referencers"])}")
+                click.echo(f"  {row['name']} ({row['kind']})")
+            click.echo(f"Referencers: {len(usages['referencers'])}")
             for row in usages["referencers"]:
-                click.echo(f"  {row["name"]} ({row["kind"]})")
+                click.echo(f"  {row['name']} ({row['kind']})")
 
     finally:
         if graph_conn:
@@ -910,15 +939,15 @@ def security_surface(
                 )
             )
         else:
-            click.echo(f"Entity: {entity["name"]} (id={entity["id"]})")
-            click.echo(f"Resources: {len(surface["resources"])}")
+            click.echo(f"Entity: {entity['name']} (id={entity['id']})")
+            click.echo(f"Resources: {len(surface['resources'])}")
             for row in surface["resources"]:
-                click.echo(f"  {row["op_key"]}")
-            click.echo(f"Operations: {len(surface["operations"])}")
+                click.echo(f"  {row['op_key']}")
+            click.echo(f"Operations: {len(surface['operations'])}")
             for row in surface["operations"]:
-                click.echo(f"  {row["op_key"]}")
-            click.echo(f"Policies: {len(surface["policies"])}")
-            click.echo(f"Menus: {len(surface["menus"])}")
+                click.echo(f"  {row['op_key']}")
+            click.echo(f"Policies: {len(surface['policies'])}")
+            click.echo(f"Menus: {len(surface['menus'])}")
 
     finally:
         if graph_conn:
