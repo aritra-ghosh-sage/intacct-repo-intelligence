@@ -74,6 +74,7 @@ class CaseEvidence:
     tags: tuple[str, ...]
     jira_refs: tuple[str, ...]
     eligibility: str
+    version_conflicted: bool
     versions: tuple[str, ...]
     version_sources: tuple[tuple[str, str, int], ...]
     requests: tuple[RequestEvidence, ...]
@@ -142,6 +143,14 @@ def _eligible(tags: tuple[str, ...]) -> str:
     return "active"
 
 
+def _parent_alias_for_lookup(token: str) -> str:
+    """Match the runtime's narrow unwrapping of a {{parent-alias}} token."""
+    normalized = token.strip()
+    if normalized.startswith("{{") and normalized.endswith("}}"):
+        return normalized[2:-2].strip()
+    return normalized
+
+
 def _path_for_request(text: str, object_token: str | None, mapping: dict[str, str], fallback: str | None) -> tuple[str | None, str | None, str, list[Diagnostic]]:
     diagnostics: list[Diagnostic] = []
     if not object_token:
@@ -160,7 +169,7 @@ def _path_for_request(text: str, object_token: str | None, mapping: dict[str, st
     parent = PARENT.search(text)
     if parent:
         parent_token, parent_key = parent.groups()
-        parent_target = mapping.get(parent_token)
+        parent_target = mapping.get(_parent_alias_for_lookup(parent_token))
         if not parent_target:
             return object_token, None, "child", [Diagnostic("unresolved_parent", f"No unambiguous mapping for parent '{parent_token}'")]
         child = target.strip("/")
@@ -228,7 +237,9 @@ def parse_feature(path: Path, mapping: dict[str, str]) -> list[CaseEvidence]:
     feature_versions = tuple(version for version, _line_no in feature_version_tags)
     property_version = metadata.get("version")
     common_diagnostics = list(property_diagnostics)
+    version_conflicted = False
     if property_version and feature_versions and property_version not in feature_versions:
+        version_conflicted = True
         common_diagnostics.append(Diagnostic("version_conflict", f"Feature versions {feature_versions} conflict with properties version '{property_version}'"))
         declared_versions: tuple[str, ...] = ()
         version_sources: tuple[tuple[str, str, int], ...] = ()
@@ -273,14 +284,19 @@ def parse_feature(path: Path, mapping: dict[str, str]) -> list[CaseEvidence]:
                     if prior:
                         expected[prior[-1]] = int(status.group(1))
             requests = [RequestEvidence(r.ordinal, r.line, r.method, r.object_token, r.raw_path, r.normalized_path, r.version, expected.get(i), r.operation_kind, r.explicit_version) for i, r in enumerate(requests)]
-            out.append(CaseEvidence(feature.get("name", ""), name, case_name, example_row, _line(feature), _line(scenario), scenario_tags, jira, _eligible(scenario_tags), declared_versions, version_sources, tuple(requests), tuple(diagnostics)))
+            out.append(CaseEvidence(feature.get("name", ""), name, case_name, example_row, _line(feature), _line(scenario), scenario_tags, jira, _eligible(scenario_tags), version_conflicted, declared_versions, version_sources, tuple(requests), tuple(diagnostics)))
     return out
 
 
 def _file_id(conn: sqlite3.Connection, repository_id: int, root: Path, path: Path) -> int:
     relative = str(path.relative_to(root))
     sha1 = hashlib.sha1(path.read_bytes()).hexdigest()
-    conn.execute("INSERT INTO files(repository_id,path,language,size_bytes,sha1) VALUES(?,?,?,?,?) ON CONFLICT(repository_id,path) DO UPDATE SET language=excluded.language,size_bytes=excluded.size_bytes,sha1=excluded.sha1", (repository_id, relative, "gherkin" if path.suffix == ".feature" else "json", path.stat().st_size, sha1))
+    language = {
+        ".feature": "gherkin",
+        ".properties": "properties",
+        ".json": "json",
+    }.get(path.suffix, "unknown")
+    conn.execute("INSERT INTO files(repository_id,path,language,size_bytes,sha1) VALUES(?,?,?,?,?) ON CONFLICT(repository_id,path) DO UPDATE SET language=excluded.language,size_bytes=excluded.size_bytes,sha1=excluded.sha1", (repository_id, relative, language, path.stat().st_size, sha1))
     return int(conn.execute("SELECT id FROM files WHERE repository_id=? AND path=?", (repository_id, relative)).fetchone()[0])
 
 
@@ -320,7 +336,23 @@ def build(
     conn.execute("DELETE FROM test_cases WHERE repository_id=?", (repository_id,))
     for diagnostic in mapping_diagnostics:
         conn.execute("INSERT INTO test_diagnostics(repository_id,file_id,kind,message) VALUES(?,?,?,?)", (repository_id, mapping_file_id, diagnostic.kind, diagnostic.message))
-    for feature_path in sorted(features_root.rglob("*.feature")):
+    feature_paths = sorted(features_root.rglob("*.feature"))
+    paired_properties = {path.with_suffix(".properties").resolve() for path in feature_paths}
+    for properties_path in sorted(features_root.rglob("*.properties")):
+        if properties_path.resolve() in paired_properties:
+            continue
+        properties_file_id = _file_id(conn, repository_id, suite_root, properties_path)
+        conn.execute(
+            "INSERT INTO test_diagnostics(repository_id,file_id,kind,message) VALUES(?,?,?,?)",
+            (
+                repository_id,
+                properties_file_id,
+                "orphan_properties",
+                f"No same-stem feature file for: {properties_path.name}",
+            ),
+        )
+        stats["diagnostics"] += 1
+    for feature_path in feature_paths:
         file_id = _file_id(conn, repository_id, suite_root, feature_path)
         stats["features"] += 1
         try:
@@ -346,7 +378,7 @@ def build(
                 stats["requests"] += 1
                 if request.explicit_version and request.version:
                     conn.execute("INSERT INTO test_case_versions(test_case_id,version_label,source_kind,source_file_id,source_line,raw_value) VALUES(?,?,?,?,?,?)", (case_id,request.version,"request_override",file_id,request.line,request.version))
-                if request.normalized_path and case.eligibility != "known_issue":
+                if request.normalized_path and not case.version_conflicted:
                     versions = (request.version,) if request.version else case.versions
                     for endpoint, compatibility_id, kind in _endpoint_matches(conn, request.method, request.normalized_path, versions):
                         conn.execute("INSERT INTO test_endpoint_links(test_request_id,rest_endpoint_id,compatibility_id,resolution_kind) VALUES(?,?,?,?)", (request_id,endpoint["id"],compatibility_id,"exact_version" if kind == "exact" else "compatible_version"))
