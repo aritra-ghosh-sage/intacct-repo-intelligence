@@ -165,7 +165,8 @@ def validate_exact_parity(
     checks = [
         ("Entity", "SELECT id,name,entity_type,module,table_name,ent_file,dummy FROM entity_nodes ORDER BY id", "MATCH (n:Entity) RETURN n.entity_id,n.name,n.entity_type,n.module,n.table_name,n.ent_file,n.dummy ORDER BY n.entity_id"),
         ("Symbol", "SELECT id,name,kind,start_line,end_line,signature FROM symbols ORDER BY id", "MATCH (n:Symbol) RETURN n.symbol_id,n.name,n.kind,n.start_line,n.end_line,n.signature ORDER BY n.symbol_id"),
-        ("File", "SELECT id,path,language FROM files ORDER BY id", "MATCH (n:File) RETURN n.file_id,n.path,n.language ORDER BY n.file_id"),
+        ("Repository", "SELECT id,repo_key,tracked_branch,indexed_commit_sha,last_indexed_at,index_status FROM repos ORDER BY id", "MATCH (n:Repository) RETURN n.repo_id,n.repo_key,n.tracked_branch,n.indexed_commit_sha,n.last_indexed_at,n.index_status ORDER BY n.repo_id"),
+        ("File", "SELECT f.id,f.repo_id,r.repo_key,f.path,f.language FROM files f JOIN repos r ON r.id=f.repo_id ORDER BY f.id", "MATCH (n:File) RETURN n.file_id,n.repo_id,n.repo_key,n.path,n.language ORDER BY n.file_id"),
         ("Workflow", "SELECT id,name,workflow_type FROM workflows ORDER BY id", "MATCH (n:Workflow) RETURN n.workflow_id,n.name,n.workflow_type ORDER BY n.workflow_id"),
         ("RestEndpoint", "SELECT id,method,path FROM rest_endpoints ORDER BY id", "MATCH (n:RestEndpoint) RETURN n.rest_endpoint_id,n.method,n.path ORDER BY n.rest_endpoint_id"),
         ("WorkflowNode", "SELECT id,workflow_id,entity_id,node_kind,node_key,name,ordinal,action,source_kind,file_id,symbol_id,metadata_json,created_at FROM workflow_nodes ORDER BY id", "MATCH (n:WorkflowNode) RETURN n.workflow_node_id,n.workflow_id,n.entity_id,n.node_kind,n.node_key,n.name,n.ordinal,n.action,n.source_kind,n.file_id,n.symbol_id,n.metadata_json,n.created_at ORDER BY n.workflow_node_id"),
@@ -187,6 +188,7 @@ def validate_exact_parity(
         ("REFERENCES", "SELECT source_symbol_id,target_symbol_id FROM relationships WHERE relationship_type='REFERENCES' AND source_symbol_id IS NOT NULL AND target_symbol_id IS NOT NULL ORDER BY source_symbol_id,target_symbol_id", "MATCH (a:Symbol)-[:REFERENCES]->(b:Symbol) RETURN a.symbol_id,b.symbol_id ORDER BY a.symbol_id,b.symbol_id"),
         ("CALLS", "SELECT source_symbol_id,target_symbol_id FROM relationships WHERE relationship_type IN ('CALLS','STATIC_CALLS') AND source_symbol_id IS NOT NULL AND target_symbol_id IS NOT NULL ORDER BY source_symbol_id,target_symbol_id", "MATCH (a:Symbol)-[:CALLS]->(b:Symbol) RETURN a.symbol_id,b.symbol_id ORDER BY a.symbol_id,b.symbol_id"),
         ("DECLARED_IN", "SELECT id,file_id FROM symbols ORDER BY id,file_id", "MATCH (a:Symbol)-[:DECLARED_IN]->(b:File) RETURN a.symbol_id,b.file_id ORDER BY a.symbol_id,b.file_id"),
+        ("REPOSITORY_CONTAINS_FILE", "SELECT repo_id,id FROM files ORDER BY repo_id,id", "MATCH (a:Repository)-[:REPOSITORY_CONTAINS_FILE]->(b:File) RETURN a.repo_id,b.file_id ORDER BY a.repo_id,b.file_id"),
         ("HAS_WORKFLOW", "SELECT entity_id,id FROM workflows WHERE entity_id IS NOT NULL ORDER BY entity_id,id", "MATCH (a:Entity)-[:HAS_WORKFLOW]->(b:Workflow) RETURN a.entity_id,b.workflow_id ORDER BY a.entity_id,b.workflow_id"),
         ("EXPOSES_ENTITY", "SELECT id,entity_id FROM rest_endpoints WHERE entity_id IS NOT NULL ORDER BY id,entity_id", "MATCH (a:RestEndpoint)-[:EXPOSES_ENTITY]->(b:Entity) RETURN a.rest_endpoint_id,b.entity_id ORDER BY a.rest_endpoint_id,b.entity_id"),
         ("HANDLED_BY", "SELECT id,handler_symbol_id FROM rest_endpoints WHERE handler_symbol_id IS NOT NULL ORDER BY id,handler_symbol_id", "MATCH (a:RestEndpoint)-[:HANDLED_BY]->(b:Symbol) RETURN a.rest_endpoint_id,b.symbol_id ORDER BY a.rest_endpoint_id,b.symbol_id"),
@@ -219,6 +221,28 @@ def validate_exact_parity(
         ("POLICY_VALUE_GRANTS_OPERATION", "SELECT DISTINCT spv.id,so.id FROM security_policy_values spv JOIN security_policy_eops spe ON spe.policy_value_id=spv.id JOIN security_operations so ON so.op_key=spe.op_key WHERE spe.op_key IN (SELECT op_key FROM security_operations GROUP BY op_key HAVING COUNT(*)=1) ORDER BY spv.id,so.id", "MATCH (a:SecurityPolicyValue)-[:POLICY_VALUE_GRANTS_OPERATION]->(b:SecurityOperation) RETURN a.security_policy_value_id,b.security_operation_id ORDER BY a.security_policy_value_id,b.security_operation_id"),
         ("ALLOWS_SECURITY_OPERATION", "SELECT operation_id,allowed_operation_id,COALESCE(allowed_op_key,''),COALESCE(resolution_reason,'') FROM security_operation_allowops WHERE allowed_operation_id IS NOT NULL ORDER BY operation_id,allowed_operation_id,id", "MATCH (a:SecurityOperation)-[r:ALLOWS_SECURITY_OPERATION]->(b:SecurityOperation) RETURN a.security_operation_id,b.security_operation_id,r.allowed_op_key,r.resolution_reason ORDER BY a.security_operation_id,b.security_operation_id,r.allowed_op_key,r.resolution_reason"),
     ]
+    integration_columns = {
+        row[1]
+        for row in sqlite_conn.execute("PRAGMA table_info(integration_links)")
+    }
+    if {"id", "source_file_id", "target_file_id"} <= integration_columns:
+        relation_col = "relation_type" if "relation_type" in integration_columns else "'integration'"
+        confidence_col = "confidence" if "confidence" in integration_columns else "0.0"
+        status_col = "resolution_status" if "resolution_status" in integration_columns else "'resolved'"
+        resolution_filter = (
+            " AND resolution_status IN ('resolved', 'validated')"
+            if "resolution_status" in integration_columns
+            else ""
+        )
+        checks.append(
+            (
+                "CROSS_REPO_INTEGRATION",
+                f"SELECT source_file_id,target_file_id,id,{relation_col},COALESCE({confidence_col},0.0),COALESCE({status_col},'resolved') "
+                "FROM integration_links WHERE source_file_id IS NOT NULL AND target_file_id IS NOT NULL"
+                f"{resolution_filter} ORDER BY id",
+                "MATCH (a:File)-[r:CROSS_REPO_INTEGRATION]->(b:File) RETURN a.file_id,b.file_id,r.integration_link_id,r.relation_type,r.confidence,r.resolution_status ORDER BY r.integration_link_id",
+            )
+        )
     return [
         _compare_exact_check(name, sqlite_conn, graph_conn, sql_query, graph_query)
         for name, sql_query, graph_query in checks

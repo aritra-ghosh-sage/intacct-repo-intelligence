@@ -83,9 +83,10 @@ def enrich_symbols_from_sql(
         placeholders = ",".join("?" for _ in chunk)
         rows = sql_conn.execute(
             f"""
-            SELECT s.id, f.path, s.start_line, s.end_line, s.signature
+            SELECT s.id, r.repo_key, f.path, s.start_line, s.end_line, s.signature
             FROM symbols s
             LEFT JOIN files f ON f.id = s.file_id
+            LEFT JOIN repos r ON r.id = f.repo_id
             WHERE s.id IN ({placeholders})
             """,
             chunk,
@@ -100,10 +101,11 @@ def enrich_symbols_from_sql(
         if metadata is not None:
             result.update(
                 {
-                    "file_path": metadata[1],
-                    "start_line": metadata[2],
-                    "end_line": metadata[3],
-                    "signature": metadata[4],
+                    "repo_key": metadata[1],
+                    "file_path": metadata[2],
+                    "start_line": metadata[3],
+                    "end_line": metadata[4],
+                    "signature": metadata[5],
                 }
             )
         enriched.append(result)
@@ -122,18 +124,19 @@ def cli() -> None:
 
 
 def _query_file_symbols_from_graph(
-    graph_conn: lb.Connection, file_path: str
+    graph_conn: lb.Connection, file_path: str, repo_key: str | None = None
 ) -> list[dict[str, Any]]:
     """Query graph for all symbols declared in a file."""
     query = """
     MATCH (f:File {path: $file_path})-[r:DECLARED_IN]-(s:Symbol)
+    WHERE $repo_key IS NULL OR f.repo_key = $repo_key
     RETURN 
         s.symbol_id AS symbol_id,
         s.name AS name,
         s.kind AS kind
     ORDER BY s.name, s.symbol_id
     """
-    results = graph_conn.execute(query, {"file_path": file_path})
+    results = graph_conn.execute(query, {"file_path": file_path, "repo_key": repo_key})
     rows = results.get_all()
     return [
         {"symbol_id": row[0], "name": row[1], "kind": row[2]} for row in rows
@@ -288,6 +291,7 @@ def _query_bounded_incoming_traversal(
 
 @cli.command("file-impact")
 @click.argument("file_path")
+@click.option("--repo", "repo_key", default=None, help="Repository key; required when a path exists in multiple repositories.")
 @click.option(
     "--db",
     default=DEFAULT_DB,
@@ -306,6 +310,7 @@ def _query_bounded_incoming_traversal(
 @graph_error_boundary
 def file_impact(
     file_path: str,
+    repo_key: str | None,
     db: str,
     graph: str,
     json_output: bool,
@@ -322,12 +327,23 @@ def file_impact(
         graph_db, graph_conn = get_graph_connection(graph)
 
         # Verify file exists
-        file_record = sql_conn.execute(
-            "SELECT id, path FROM files WHERE path = ?", (file_path,)
-        ).fetchone()
+        file_rows = sql_conn.execute(
+            "SELECT f.id,f.path,r.repo_key FROM files f JOIN repos r ON r.id=f.repo_id "
+            "WHERE f.path=? AND (? IS NULL OR r.repo_key=?) ORDER BY r.repo_key,f.id",
+            (file_path, repo_key, repo_key),
+        ).fetchall()
+
+        if repo_key is None and len(file_rows) > 1:
+            details = {"candidates": [dict(row) for row in file_rows]}
+            args = {"file_path": file_path, "repo_key": None}
+            if json_output:
+                emit_json(error_response(command="file-impact", args=args, code="ambiguous_file", message="File path exists in multiple repositories; retry with --repo", details=details))
+                return
+            raise click.ClickException("File path is ambiguous; retry with --repo (" + ", ".join(row[2] for row in file_rows) + ")")
+        file_record = file_rows[0] if file_rows else None
 
         if not file_record:
-            args = {"file_path": file_path}
+            args = {"file_path": file_path, "repo_key": repo_key}
             error_payload = error_response(
                 command="file-impact",
                 args=args,
@@ -341,7 +357,7 @@ def file_impact(
             raise click.ClickException(error_payload["error"]["message"])
 
         # Query graph
-        seed_symbols = _query_file_symbols_from_graph(graph_conn, file_path)
+        seed_symbols = _query_file_symbols_from_graph(graph_conn, file_path, repo_key)
         seed_ids = [s["symbol_id"] for s in seed_symbols]
         traversed_symbols, traversal_edges = _query_bounded_incoming_traversal(
             graph_conn, seed_ids, depth, max_edges_per_symbol
@@ -361,9 +377,9 @@ def file_impact(
         surfaces = _query_surfaces_from_entities(graph_conn, entity_ids)
 
         if json_output:
-            args = {"file_path": file_path, "depth": depth, "max_edges_per_symbol": max_edges_per_symbol}
+            args = {"file_path": file_path, "repo_key": repo_key, "depth": depth, "max_edges_per_symbol": max_edges_per_symbol}
             data = {
-                "file": {"path": file_path, "id": file_record[0]},
+                "file": {"path": file_path, "id": file_record[0], "repo_key": file_record[2]},
                 "seed_symbols": enrich_symbols_from_sql(sql_conn, seed_nodes),
                 "direct_entities": direct_entities,
                 "affected_symbols": symbols,

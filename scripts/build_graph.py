@@ -122,8 +122,19 @@ def ensure_schema(conn: lb.Connection) -> None:
         "signature STRING)"
     )
     conn.execute(
+        "CREATE NODE TABLE IF NOT EXISTS Repository("
+        "repo_id INT64 PRIMARY KEY, "
+        "repo_key STRING, "
+        "tracked_branch STRING, "
+        "indexed_commit_sha STRING, "
+        "last_indexed_at STRING, "
+        "index_status STRING)"
+    )
+    conn.execute(
         "CREATE NODE TABLE IF NOT EXISTS File("
         "file_id INT64 PRIMARY KEY, "
+        "repo_id INT64, "
+        "repo_key STRING, "
         "path STRING, "
         "language STRING)"
     )
@@ -280,6 +291,22 @@ def ensure_schema(conn: lb.Connection) -> None:
     conn.execute("CREATE REL TABLE IF NOT EXISTS REFERENCES(FROM Symbol TO Symbol)")
     conn.execute("CREATE REL TABLE IF NOT EXISTS CALLS(FROM Symbol TO Symbol)")
     conn.execute("CREATE REL TABLE IF NOT EXISTS DECLARED_IN(FROM Symbol TO File)")
+    conn.execute(
+        "CREATE REL TABLE IF NOT EXISTS REPOSITORY_CONTAINS_FILE("
+        "FROM Repository TO File)"
+    )
+    # Cross-repository evidence is deliberately projected through a single
+    # relation type.  The source evidence retains its semantic type in the
+    # relationship property rather than turning untrusted text into a graph
+    # schema identifier.
+    conn.execute(
+        "CREATE REL TABLE IF NOT EXISTS CROSS_REPO_INTEGRATION("
+        "FROM File TO File, "
+        "integration_link_id INT64, "
+        "relation_type STRING, "
+        "confidence DOUBLE, "
+        "resolution_status STRING)"
+    )
     conn.execute("CREATE REL TABLE IF NOT EXISTS HAS_WORKFLOW(FROM Entity TO Workflow)")
     conn.execute(
         "CREATE REL TABLE IF NOT EXISTS EXPOSES_ENTITY(FROM RestEndpoint TO Entity)"
@@ -654,6 +681,12 @@ def load_nodes(sql: sqlite3.Connection, g: lb.Connection) -> None:
     copy_table_from_sql(
         sql,
         g,
+        "SELECT id AS repo_id,repo_key,tracked_branch,indexed_commit_sha,last_indexed_at,index_status FROM repos ORDER BY id",
+        "Repository",
+    )
+    copy_table_from_sql(
+        sql,
+        g,
         "SELECT id AS entity_id, name, entity_type, module, table_name, ent_file, dummy FROM entity_nodes ORDER BY id",
         "Entity",
     )
@@ -666,7 +699,8 @@ def load_nodes(sql: sqlite3.Connection, g: lb.Connection) -> None:
     copy_table_from_sql(
         sql,
         g,
-        "SELECT id AS file_id, path, language FROM files ORDER BY id",
+        "SELECT f.id AS file_id,f.repo_id,r.repo_key,f.path,f.language "
+        "FROM files f JOIN repos r ON r.id=f.repo_id ORDER BY f.id",
         "File",
     )
     copy_table_from_sql(
@@ -843,6 +877,48 @@ def load_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
         """,
         "DECLARED_IN",
     )
+
+    copy_rel_table_from_sql(
+        sql,
+        g,
+        '''
+        SELECT repo_id AS "FROM", id AS "TO"
+        FROM files
+        ORDER BY repo_id, id
+        ''',
+        "REPOSITORY_CONTAINS_FILE",
+    )
+
+    # integration_links is introduced with multi-repository support.  Only
+    # links with resolved source and target files are graph edges; unresolved
+    # evidence remains queryable in SQLite without inventing a target.
+    if sql.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='integration_links'"
+    ).fetchone():
+        columns = {row[1] for row in sql.execute("PRAGMA table_info(integration_links)")}
+        required = {"id", "source_file_id", "target_file_id"}
+        if required <= columns:
+            relation_col = "relation_type" if "relation_type" in columns else "'integration'"
+            confidence_col = "confidence" if "confidence" in columns else "0.0"
+            status_col = "resolution_status" if "resolution_status" in columns else "'resolved'"
+            resolution_filter = (
+                " AND resolution_status IN ('resolved', 'validated')"
+                if "resolution_status" in columns
+                else ""
+            )
+            copy_rel_table_from_sql(
+                sql,
+                g,
+                f'''SELECT source_file_id AS "FROM", target_file_id AS "TO",
+                           id AS integration_link_id, {relation_col} AS relation_type,
+                           COALESCE({confidence_col}, 0.0) AS confidence,
+                           COALESCE({status_col}, 'resolved') AS resolution_status
+                    FROM integration_links
+                    WHERE source_file_id IS NOT NULL AND target_file_id IS NOT NULL
+                    {resolution_filter}
+                    ORDER BY id''',
+                "CROSS_REPO_INTEGRATION",
+            )
 
     _process_edge_rows(
         "SELECT id, entity_id FROM workflows WHERE entity_id IS NOT NULL",
