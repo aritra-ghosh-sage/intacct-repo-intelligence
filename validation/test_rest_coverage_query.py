@@ -58,3 +58,11 @@ class RestCoverageQueryTests(unittest.TestCase):
     def test_version_filter_uses_endpoint_source_version(self):
         endpoints, _ = _coverage_rows(self.conn, 9, 's2', 20)
         self.assertEqual([], endpoints)
+
+    def test_version_filter_keeps_unresolved_endpoints_visible(self):
+        self.conn.execute(
+            "INSERT INTO rest_endpoints VALUES (3, 'DELETE', '/objects/ap-bill/3', 9, NULL)"
+        )
+        endpoints, _ = _coverage_rows(self.conn, 9, 's1', 20)
+        self.assertEqual([3, 1, 2], [item['endpoint_id'] for item in endpoints])
+        self.assertIsNone(endpoints[0]['source_version'])

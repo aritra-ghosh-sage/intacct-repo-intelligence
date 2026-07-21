@@ -241,8 +241,11 @@ def parse_feature(path: Path, mapping: dict[str, str]) -> list[CaseEvidence]:
     if property_version and feature_versions and property_version not in feature_versions:
         version_conflicted = True
         common_diagnostics.append(Diagnostic("version_conflict", f"Feature versions {feature_versions} conflict with properties version '{property_version}'"))
-        declared_versions: tuple[str, ...] = ()
-        version_sources: tuple[tuple[str, str, int], ...] = ()
+        declared_versions = ()
+        version_sources = tuple(
+            [(version, "feature_tag", line) for version, line in feature_version_tags]
+            + [(property_version, "properties", property_lines.get("version", 0))]
+        )
     elif property_version:
         declared_versions = (property_version,)
         version_sources = ((property_version, "properties", property_lines.get("version", 0)),)
@@ -288,9 +291,16 @@ def parse_feature(path: Path, mapping: dict[str, str]) -> list[CaseEvidence]:
     return out
 
 
-def _file_id(conn: sqlite3.Connection, repository_id: int, root: Path, path: Path) -> int:
+def _file_id(
+    conn: sqlite3.Connection,
+    repository_id: int,
+    root: Path,
+    path: Path,
+    *,
+    read_contents: bool = True,
+) -> int:
     relative = str(path.relative_to(root))
-    sha1 = hashlib.sha1(path.read_bytes()).hexdigest()
+    sha1 = hashlib.sha1(path.read_bytes()).hexdigest() if read_contents else None
     language = {
         ".feature": "gherkin",
         ".properties": "properties",
@@ -341,7 +351,13 @@ def build(
     for properties_path in sorted(features_root.rglob("*.properties")):
         if properties_path.resolve() in paired_properties:
             continue
-        properties_file_id = _file_id(conn, repository_id, suite_root, properties_path)
+        properties_file_id = _file_id(
+            conn,
+            repository_id,
+            suite_root,
+            properties_path,
+            read_contents=False,
+        )
         conn.execute(
             "INSERT INTO test_diagnostics(repository_id,file_id,kind,message) VALUES(?,?,?,?)",
             (

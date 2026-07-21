@@ -5,6 +5,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from scripts.build_gherkin_coverage import (
     _endpoint_matches,
@@ -199,6 +200,19 @@ Feature: Account
             build(conn, "suite-a", root, self._mapping(root), root)
         self.assertEqual(1, conn.execute("SELECT COUNT(*) FROM test_requests").fetchone()[0])
         self.assertEqual(
+            3,
+            conn.execute("SELECT COUNT(*) FROM test_case_versions").fetchone()[0],
+        )
+        self.assertEqual(
+            {"feature_tag", "properties", "request_override"},
+            {
+                row[0]
+                for row in conn.execute(
+                    "SELECT source_kind FROM test_case_versions ORDER BY source_kind"
+                ).fetchall()
+            },
+        )
+        self.assertEqual(
             1,
             conn.execute(
                 "SELECT COUNT(*) FROM test_case_versions WHERE source_kind = 'request_override'"
@@ -230,13 +244,26 @@ Feature: Account
             )
             conn = self._database(root)
             self.addCleanup(conn.close)
-            build(conn, "suite-a", root, self._mapping(root), root)
-            build(conn, "suite-a", root, self._mapping(root), root)
+            original_read_bytes = Path.read_bytes
+
+            def _guard(self: Path) -> bytes:
+                if self.name == "orphan.properties":
+                    raise AssertionError("orphan.properties should not be read for contents")
+                return original_read_bytes(self)
+
+            with patch("pathlib.Path.read_bytes", autospec=True, side_effect=_guard):
+                build(conn, "suite-a", root, self._mapping(root), root)
+                build(conn, "suite-a", root, self._mapping(root), root)
         orphan = conn.execute(
             "SELECT test_case_id, message FROM test_diagnostics WHERE kind = 'orphan_properties'"
         ).fetchone()
         self.assertEqual((None, "No same-stem feature file for: orphan.properties"), tuple(orphan))
         self.assertEqual(1, conn.execute("SELECT COUNT(*) FROM test_cases").fetchone()[0])
+        self.assertIsNone(
+            conn.execute(
+                "SELECT sha1 FROM files WHERE path = 'orphan.properties'"
+            ).fetchone()[0]
+        )
         self.assertEqual(
             0,
             conn.execute(

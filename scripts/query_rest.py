@@ -321,7 +321,7 @@ def _coverage_rows(
     Links are intentionally the only source of coverage credit.  A feature name,
     folder, or unresolved object token cannot make an endpoint look tested.
     """
-    version_predicate = "AND re.source_version = ?" if version else ""
+    version_predicate = "AND (re.source_version = ? OR re.source_version IS NULL)" if version else ""
     params: tuple[object, ...] = (entity_id, *( (version,) if version else () ), limit)
     endpoints = conn.execute(
         f"""
