@@ -230,11 +230,16 @@ def parse_feature(path: Path, mapping: dict[str, str]) -> list[CaseEvidence]:
     common_diagnostics = list(property_diagnostics)
     if property_version and feature_versions and property_version not in feature_versions:
         common_diagnostics.append(Diagnostic("version_conflict", f"Feature versions {feature_versions} conflict with properties version '{property_version}'"))
-        declared_versions: tuple[str, ...] = (); version_sources: tuple[tuple[str, str, int], ...] = ()
+        declared_versions: tuple[str, ...] = ()
+        version_sources: tuple[tuple[str, str, int], ...] = ()
     elif property_version:
-        declared_versions = (property_version,); version_sources = ((property_version, "properties", property_lines.get("version", 0)),)
+        declared_versions = (property_version,)
+        version_sources = ((property_version, "properties", property_lines.get("version", 0)),)
     else:
-        declared_versions = feature_versions; version_sources = tuple((version, "feature_tag", line) for version, line in feature_version_tags)
+        declared_versions = feature_versions
+        version_sources = tuple(
+            (version, "feature_tag", line) for version, line in feature_version_tags
+        )
     out: list[CaseEvidence] = []
     for child in feature.get("children", []):
         scenario = child.get("scenario")
@@ -293,28 +298,42 @@ def _endpoint_matches(conn: sqlite3.Connection, method: str, path: str, test_ver
     return matches
 
 
-def build(conn: sqlite3.Connection, suite_id: str, suite_root: Path, object_mapping_path: Path) -> dict[str, int]:
+def build(
+    conn: sqlite3.Connection,
+    suite_id: str,
+    suite_root: Path,
+    object_mapping_path: Path,
+    features_root: Path | None = None,
+) -> dict[str, int]:
     repo = conn.execute("SELECT id FROM source_repositories WHERE suite_id=? AND enabled=1", (suite_id,)).fetchone()
     if not repo:
         raise ValueError(f"No enabled source_repositories record for suite '{suite_id}'")
-    repository_id = int(repo[0]); mapping, mapping_diagnostics = load_object_mapping(object_mapping_path)
+    suite_root = suite_root.resolve()
+    features_root = (features_root or suite_root / "src/test/resources/features/rest-api").resolve()
+    if not features_root.is_relative_to(suite_root):
+        raise ValueError("features_root must be located inside suite_root")
+    repository_id = int(repo[0])
+    mapping, mapping_diagnostics = load_object_mapping(object_mapping_path)
     mapping_file_id = _file_id(conn, repository_id, suite_root, object_mapping_path) if object_mapping_path.is_relative_to(suite_root) else None
     stats = {"features": 0, "cases": 0, "requests": 0, "links": 0, "diagnostics": len(mapping_diagnostics)}
     conn.execute("DELETE FROM test_diagnostics WHERE repository_id=?", (repository_id,))
     conn.execute("DELETE FROM test_cases WHERE repository_id=?", (repository_id,))
     for diagnostic in mapping_diagnostics:
         conn.execute("INSERT INTO test_diagnostics(repository_id,file_id,kind,message) VALUES(?,?,?,?)", (repository_id, mapping_file_id, diagnostic.kind, diagnostic.message))
-    for feature_path in sorted(suite_root.rglob("*.feature")):
-        file_id = _file_id(conn, repository_id, suite_root, feature_path); stats["features"] += 1
+    for feature_path in sorted(features_root.rglob("*.feature")):
+        file_id = _file_id(conn, repository_id, suite_root, feature_path)
+        stats["features"] += 1
         try:
             cases = parse_feature(feature_path, mapping)
         except Exception as exc:
             stats["diagnostics"] += 1
             conn.execute("INSERT INTO test_diagnostics(repository_id,file_id,kind,message) VALUES(?,?,?,?)", (repository_id, file_id, "feature_parse_error", str(exc)))
             continue
+        feature_hash = hashlib.sha1(feature_path.read_bytes()).hexdigest()
         for case in cases:
-            cursor = conn.execute("INSERT INTO test_cases(repository_id,file_id,feature_name,scenario_name,case_name,example_row,feature_line,scenario_line,eligibility,tags_json,jira_refs_json,source_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", (repository_id,file_id,case.feature_name,case.scenario_name,case.case_name,case.example_row,case.feature_line,case.scenario_line,case.eligibility,json.dumps(case.tags),json.dumps(case.jira_refs),hashlib.sha1(feature_path.read_bytes()).hexdigest()))
-            case_id = int(cursor.lastrowid); stats["cases"] += 1
+            cursor = conn.execute("INSERT INTO test_cases(repository_id,file_id,feature_name,scenario_name,case_name,example_row,feature_line,scenario_line,eligibility,tags_json,jira_refs_json,source_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", (repository_id,file_id,case.feature_name,case.scenario_name,case.case_name,case.example_row,case.feature_line,case.scenario_line,case.eligibility,json.dumps(case.tags),json.dumps(case.jira_refs),feature_hash))
+            case_id = int(cursor.lastrowid)
+            stats["cases"] += 1
             properties_path = feature_path.with_suffix(".properties")
             properties_file_id = _file_id(conn, repository_id, suite_root, properties_path) if properties_path.exists() else None
             for version, source_kind, source_line in case.version_sources:
@@ -323,7 +342,8 @@ def build(conn: sqlite3.Connection, suite_id: str, suite_root: Path, object_mapp
                 conn.execute("INSERT INTO test_diagnostics(repository_id,file_id,test_case_id,kind,message,source_line) VALUES(?,?,?,?,?,?)", (repository_id,file_id,case_id,diagnostic.kind,diagnostic.message,diagnostic.line))
             for request in case.requests:
                 cursor = conn.execute("INSERT INTO test_requests(test_case_id,ordinal,step_line,method,object_token,raw_path,normalized_path,request_version,expected_status,operation_kind) VALUES(?,?,?,?,?,?,?,?,?,?)", (case_id,request.ordinal,request.line,request.method,request.object_token,request.raw_path,request.normalized_path,request.version,request.expected_status,request.operation_kind))
-                request_id = int(cursor.lastrowid); stats["requests"] += 1
+                request_id = int(cursor.lastrowid)
+                stats["requests"] += 1
                 if request.explicit_version and request.version:
                     conn.execute("INSERT INTO test_case_versions(test_case_id,version_label,source_kind,source_file_id,source_line,raw_value) VALUES(?,?,?,?,?,?)", (case_id,request.version,"request_override",file_id,request.line,request.version))
                 if request.normalized_path and case.eligibility != "known_issue":
@@ -333,17 +353,39 @@ def build(conn: sqlite3.Connection, suite_id: str, suite_root: Path, object_mapp
                         if endpoint["entity_id"] is not None:
                             conn.execute("INSERT INTO test_entity_links(test_request_id,entity_id,rest_endpoint_id) VALUES(?,?,?)", (request_id,endpoint["entity_id"],endpoint["id"]))
                         stats["links"] += 1
-    conn.commit(); return stats
+    conn.commit()
+    return stats
 
 
 @click.command()
 @click.option("--db", "db_path", default=DEFAULT_DB, show_default=True)
 @click.option("--suite-id", required=True)
 @click.option("--suite-root", type=click.Path(path_type=Path, exists=True), required=True)
+@click.option(
+    "--features-root",
+    type=click.Path(path_type=Path, exists=True, file_okay=False),
+    help="Feature directory; defaults to src/test/resources/features/rest-api inside suite-root.",
+)
 @click.option("--object-mapping", "object_mapping", type=click.Path(path_type=Path, exists=True), required=True)
-def main(db_path: str, suite_id: str, suite_root: Path, object_mapping: Path) -> None:
+def main(
+    db_path: str,
+    suite_id: str,
+    suite_root: Path,
+    features_root: Path | None,
+    object_mapping: Path,
+) -> None:
     """Build deterministic Gherkin REST coverage evidence for one suite."""
-    click.echo(json.dumps(build(get_connection(db_path), suite_id, suite_root, object_mapping), sort_keys=True))
+    try:
+        stats = build(
+            get_connection(db_path),
+            suite_id,
+            suite_root,
+            object_mapping,
+            features_root,
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps(stats, sort_keys=True))
 
 
 if __name__ == "__main__":

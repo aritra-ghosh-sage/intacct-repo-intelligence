@@ -403,7 +403,7 @@ def _coverage_rows(
             JOIN test_entity_links te ON te.test_request_id = tr.id
             WHERE tr.test_case_id = tc.id AND te.entity_id = ?
         )
-        ORDER BY td.kind, sr.suite_id, f.path, td.line, td.id
+        ORDER BY td.kind, sr.suite_id, f.path, td.source_line, td.id
         """,
         (entity_id,),
     ).fetchall()

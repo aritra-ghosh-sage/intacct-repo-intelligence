@@ -438,12 +438,8 @@ def build(
         click.echo(f"📊 Found {len(specs)} OpenAPI specification files with paths")
 
         for spec_row in tqdm(specs, desc="Building REST endpoints", unit="spec"):
-            spec_id, file_id, file_path, kind = (
-                spec_row["id"],
-                spec_row["file_id"],
-                spec_row["file_path"],
-                spec_row["kind"],
-            )
+            file_id = spec_row["file_id"]
+            file_path = spec_row["file_path"]
             stats.specs_processed += 1
 
             if file_id is None:
