@@ -66,10 +66,20 @@ class Catalog:
             if self.table(c, "graph_builds")
             else None
         )
+        sqlite_sha256 = hashlib.sha256(self.db.read_bytes()).hexdigest()
+        repositories = (
+            [_row(row) for row in c.execute(
+                "SELECT repo_key,tracked_branch,indexed_commit_sha,last_scanned_at,last_built_at,index_status,diagnostic_error,last_attempt_status,last_attempted_at,last_attempt_error FROM repos ORDER BY repo_key"
+            )]
+            if self.table(c, "repos")
+            else []
+        )
         return {
-            "sqlite_sha256": hashlib.sha256(self.db.read_bytes()).hexdigest(),
+            "sqlite_sha256": sqlite_sha256,
             "graph_exists": self.graph.is_file(),
             "active_graph_build": _row(build) if build else None,
+            "graph_fresh": bool(build and build["source_fingerprint"] == sqlite_sha256),
+            "repositories": repositories,
         }
 
     def out(
@@ -99,35 +109,35 @@ class Catalog:
         ) > lim else None
 
     def search(
-        self, query: str, kind: str, limit: int, cursor: str | None
+        self, query: str, kind: str, limit: int, cursor: str | None, repo_key: str | None = None
     ) -> dict[str, Any]:
         if not query.strip():
             raise ValueError("query must not be empty")
         lim, off, like = _limit(limit), _offset(cursor), f"%{query.strip()}%"
         queries = {
             "entity": (
-                "SELECT id,name,entity_type,confidence FROM entity_nodes WHERE name LIKE ? ORDER BY name,id",
-                (like,),
+                "SELECT e.id,e.name,e.entity_type,e.confidence,r.repo_key,eo.ent_file,eo.module,eo.table_name,eo.view_name,eo.dummy,eo.source_file_id,eo.extractor,eo.confidence occurrence_confidence FROM entity_nodes e JOIN entity_occurrences eo ON eo.entity_id=e.id JOIN repos r ON r.id=eo.repo_id WHERE e.name LIKE ? AND (? IS NULL OR r.repo_key=?) ORDER BY e.name,r.repo_key,e.id",
+                (like, repo_key, repo_key),
             ),
             "file": (
-                "SELECT id,path,language,size_bytes,sha1 FROM files WHERE path LIKE ? ORDER BY path,id",
-                (like,),
+                "SELECT f.id,r.repo_key,f.path,f.language,f.size_bytes,f.sha1 FROM files f JOIN repos r ON r.id=f.repo_id WHERE f.path LIKE ? AND (? IS NULL OR r.repo_key=?) ORDER BY r.repo_key,f.path,f.id",
+                (like, repo_key, repo_key),
             ),
             "symbol": (
-                "SELECT s.id,s.name,s.kind,s.language,s.start_line,s.end_line,f.path file_path FROM symbols s JOIN files f ON f.id=s.file_id WHERE s.name LIKE ? ORDER BY s.name,s.id",
-                (like,),
+                "SELECT s.id,s.name,s.kind,s.language,s.start_line,s.end_line,r.repo_key,f.path file_path FROM symbols s JOIN files f ON f.id=s.file_id JOIN repos r ON r.id=f.repo_id WHERE s.name LIKE ? AND (? IS NULL OR r.repo_key=?) ORDER BY s.name,r.repo_key,s.id",
+                (like, repo_key, repo_key),
             ),
             "api": (
-                "SELECT id,file_path,module,kind,canonical_name,resource_path,x_mapped_to FROM openapispec_index WHERE canonical_name LIKE ? OR resource_path LIKE ? ORDER BY file_path,id",
-                (like, like),
+                "SELECT o.id,r.repo_key,o.file_path,o.module,o.kind,o.canonical_name,o.resource_path,o.x_mapped_to FROM openapispec_index o JOIN repos r ON r.id=o.repo_id WHERE (o.canonical_name LIKE ? OR o.resource_path LIKE ?) AND (? IS NULL OR r.repo_key=?) ORDER BY r.repo_key,o.file_path,o.id",
+                (like, like, repo_key, repo_key),
             ),
             "workflow": (
-                "SELECT w.id,w.name,w.workflow_type,w.source_file,e.name entity_name FROM workflows w JOIN entity_nodes e ON e.id=w.entity_id WHERE w.name LIKE ? OR e.name LIKE ? ORDER BY e.name,w.name,w.id",
-                (like, like),
+                "SELECT w.id,r.repo_key,w.name,w.workflow_type,w.source_file,e.name entity_name FROM workflows w JOIN entity_nodes e ON e.id=w.entity_id JOIN repos r ON r.id=w.repo_id WHERE (w.name LIKE ? OR e.name LIKE ?) AND (? IS NULL OR r.repo_key=?) ORDER BY e.name,w.name,r.repo_key,w.id",
+                (like, like, repo_key, repo_key),
             ),
             "security": (
-                "SELECT id,op_key,title,action,source_file,source_line FROM security_operations WHERE op_key LIKE ? OR title LIKE ? ORDER BY op_key,id",
-                (like, like),
+                "SELECT o.id,r.repo_key,o.op_key,o.title,o.action,o.source_file,o.source_line FROM security_operations o JOIN repos r ON r.id=o.repo_id WHERE (o.op_key LIKE ? OR o.title LIKE ?) AND (? IS NULL OR r.repo_key=?) ORDER BY o.op_key,r.repo_key,o.id",
+                (like, like, repo_key, repo_key),
             ),
         }
         selected = queries if kind == "all" else {kind: queries[kind]}
@@ -141,10 +151,10 @@ class Catalog:
             records.sort(key=lambda r: (r["kind"], str(r["record"])))
             nxt = _cursor(off + lim) if len(records) > lim else None
             return self.out(
-                "catalog_search", {"results": records[:lim]}, c, next_cursor=nxt
+                "catalog_search", {"repo_key": repo_key, "results": records[:lim]}, c, next_cursor=nxt
             )
 
-    def entity(self, name: str) -> dict[str, Any]:
+    def entity(self, name: str, repo_key: str | None = None) -> dict[str, Any]:
         with self.conn() as c:
             e = c.execute(
                 "SELECT id,name,entity_type,confidence FROM entity_nodes WHERE name=? COLLATE NOCASE",
@@ -160,13 +170,17 @@ class Catalog:
                 )
             i = e["id"]
             data = {"entity": _row(e)}
+            data["occurrences"] = [_row(r) for r in c.execute(
+                "SELECT eo.id,r.repo_key,eo.ent_file,eo.module,eo.table_name,eo.view_name,eo.dummy,eo.source_file_id,eo.extractor,eo.confidence,eo.created_at,eo.updated_at FROM entity_occurrences eo JOIN repos r ON r.id=eo.repo_id WHERE eo.entity_id=? AND (? IS NULL OR r.repo_key=?) ORDER BY r.repo_key,eo.id",
+                (i, repo_key, repo_key),
+            )]
             for key, sql in {
-                "mappings": "SELECT em.id,em.mapping_type,em.confidence,em.source_text,s.id symbol_id,s.name symbol_name,f.path file_path,s.start_line,s.end_line FROM entity_mappings em LEFT JOIN symbols s ON s.id=em.symbol_id LEFT JOIN files f ON f.id=COALESCE(em.file_id,s.file_id) WHERE em.entity_id=? ORDER BY em.id",
-                "roots": "SELECT er.id,er.role,er.weight,er.reason,er.is_shared,s.id symbol_id,s.name symbol_name,f.path file_path,s.start_line,s.end_line FROM entity_roots er JOIN symbols s ON s.id=er.symbol_id JOIN files f ON f.id=s.file_id WHERE er.entity_id=? ORDER BY er.weight DESC,er.id",
-                "workflows": "SELECT id,name,workflow_type,source_kind,source_file,source_symbol_id,confidence,reason FROM workflows WHERE entity_id=? ORDER BY workflow_type,name,id",
-                "rest_endpoints": "SELECT r.id,r.method,r.path,r.handler_symbol_id,f.path file_path FROM rest_endpoints r LEFT JOIN files f ON f.id=r.file_id WHERE r.entity_id=? ORDER BY r.path,r.method,r.id",
+                "mappings": "SELECT em.id,r.repo_key,em.mapping_type,em.confidence,em.source_text,s.id symbol_id,s.name symbol_name,f.path file_path,s.start_line,s.end_line FROM entity_mappings em JOIN repos r ON r.id=em.repo_id LEFT JOIN symbols s ON s.id=em.symbol_id LEFT JOIN files f ON f.id=COALESCE(em.file_id,s.file_id) WHERE em.entity_id=? AND (? IS NULL OR r.repo_key=?) ORDER BY r.repo_key,em.id",
+                "roots": "SELECT er.id,r.repo_key,er.role,er.weight,er.reason,er.is_shared,s.id symbol_id,s.name symbol_name,f.path file_path,s.start_line,s.end_line FROM entity_roots er JOIN repos r ON r.id=er.repo_id JOIN symbols s ON s.id=er.symbol_id JOIN files f ON f.id=s.file_id WHERE er.entity_id=? AND (? IS NULL OR r.repo_key=?) ORDER BY r.repo_key,er.weight DESC,er.id",
+                "workflows": "SELECT w.id,r.repo_key,w.name,w.workflow_type,w.source_kind,w.source_file,w.source_symbol_id,w.confidence,w.reason FROM workflows w JOIN repos r ON r.id=w.repo_id WHERE w.entity_id=? AND (? IS NULL OR r.repo_key=?) ORDER BY r.repo_key,w.workflow_type,w.name,w.id",
+                "rest_endpoints": "SELECT ep.id,r.repo_key,ep.method,ep.path,ep.handler_symbol_id,f.path file_path FROM rest_endpoints ep JOIN repos r ON r.id=ep.repo_id LEFT JOIN files f ON f.id=ep.file_id WHERE ep.entity_id=? AND (? IS NULL OR r.repo_key=?) ORDER BY r.repo_key,ep.path,ep.method,ep.id",
             }.items():
-                data[key] = [_row(r) for r in c.execute(sql, (i,))]
+                data[key] = [_row(r) for r in c.execute(sql, (i, repo_key, repo_key))]
             return self.out("entity_context", data, c)
 
     def records(
@@ -188,12 +202,12 @@ class Catalog:
 
     def provenance(self, kind: str, ident: int) -> dict[str, Any]:
         q = {
-            "file": "SELECT id,path,language,size_bytes,sha1,last_indexed FROM files WHERE id=?",
-            "symbol": "SELECT s.id,s.name,s.kind,s.language,s.start_line,s.end_line,s.signature,f.id file_id,f.path file_path FROM symbols s JOIN files f ON f.id=s.file_id WHERE s.id=?",
-            "relationship": "SELECT id,source_symbol_id,target_symbol_id,relationship_type,file_path,confidence,evidence,resolution_class,resolution_reason,extractor,created_at FROM relationships WHERE id=?",
-            "entity_mapping": "SELECT em.id,em.mapping_type,em.confidence,em.source_text,e.name entity_name,s.id symbol_id,f.path file_path,s.start_line,s.end_line FROM entity_mappings em JOIN entity_nodes e ON e.id=em.entity_id LEFT JOIN symbols s ON s.id=em.symbol_id LEFT JOIN files f ON f.id=COALESCE(em.file_id,s.file_id) WHERE em.id=?",
-            "workflow": "SELECT w.id,w.name,w.workflow_type,w.source_kind,w.source_file,w.source_symbol_id,w.confidence,w.reason,e.name entity_name FROM workflows w JOIN entity_nodes e ON e.id=w.entity_id WHERE w.id=?",
-            "rest_endpoint": "SELECT r.id,r.method,r.path,e.name entity_name,r.handler_symbol_id,f.path file_path FROM rest_endpoints r LEFT JOIN entity_nodes e ON e.id=r.entity_id LEFT JOIN files f ON f.id=r.file_id WHERE r.id=?",
+            "file": "SELECT f.id,r.repo_key,r.tracked_branch,r.indexed_commit_sha,r.last_scanned_at,r.last_built_at,r.index_status,f.path,f.language,f.size_bytes,f.sha1,f.last_indexed FROM files f JOIN repos r ON r.id=f.repo_id WHERE f.id=?",
+            "symbol": "SELECT s.id,s.name,s.kind,s.language,s.start_line,s.end_line,s.signature,f.id file_id,r.repo_key,r.tracked_branch,r.indexed_commit_sha,f.path file_path FROM symbols s JOIN files f ON f.id=s.file_id JOIN repos r ON r.id=f.repo_id WHERE s.id=?",
+            "relationship": "SELECT rel.id,r.repo_key,r.tracked_branch,r.indexed_commit_sha,rel.source_symbol_id,rel.target_symbol_id,rel.relationship_type,rel.file_path,rel.confidence,rel.evidence,rel.resolution_class,rel.resolution_reason,rel.extractor,rel.created_at FROM relationships rel JOIN repos r ON r.id=rel.repo_id WHERE rel.id=?",
+            "entity_mapping": "SELECT em.id,r.repo_key,em.mapping_type,em.confidence,em.source_text,e.name entity_name,eo.ent_file,eo.module,eo.table_name,eo.view_name,s.id symbol_id,f.path file_path,s.start_line,s.end_line FROM entity_mappings em JOIN repos r ON r.id=em.repo_id JOIN entity_nodes e ON e.id=em.entity_id LEFT JOIN entity_occurrences eo ON eo.repo_id=em.repo_id AND eo.entity_id=em.entity_id LEFT JOIN symbols s ON s.id=em.symbol_id LEFT JOIN files f ON f.id=COALESCE(em.file_id,s.file_id) WHERE em.id=?",
+            "workflow": "SELECT w.id,r.repo_key,w.name,w.workflow_type,w.source_kind,w.source_file,w.source_symbol_id,w.confidence,w.reason,e.name entity_name,eo.ent_file,eo.module,eo.table_name,eo.view_name FROM workflows w JOIN repos r ON r.id=w.repo_id JOIN entity_nodes e ON e.id=w.entity_id LEFT JOIN entity_occurrences eo ON eo.repo_id=w.repo_id AND eo.entity_id=w.entity_id WHERE w.id=?",
+            "rest_endpoint": "SELECT ep.id,r.repo_key,ep.method,ep.path,e.name entity_name,eo.ent_file,eo.module,eo.table_name,eo.view_name,ep.handler_symbol_id,f.path file_path FROM rest_endpoints ep JOIN repos r ON r.id=ep.repo_id LEFT JOIN entity_nodes e ON e.id=ep.entity_id LEFT JOIN entity_occurrences eo ON eo.repo_id=ep.repo_id AND eo.entity_id=ep.entity_id LEFT JOIN files f ON f.id=ep.file_id WHERE ep.id=?",
             "security_operation": "SELECT id,op_key,title,action,source_file,source_line,source_kind,raw_hash FROM security_operations WHERE id=?",
         }[kind]
         with self.conn() as c:
@@ -212,19 +226,29 @@ class Catalog:
             )
 
     def graph_state(self, c):
-        return (
+        active = (
+            c.execute("SELECT source_fingerprint FROM graph_builds WHERE status='active' ORDER BY id DESC LIMIT 1").fetchone()
+            if self.table(c, "graph_builds")
+            else None
+        )
+        return bool(
             self.graph.is_file()
-            and self.table(c, "graph_builds")
-            and bool(
-                c.execute("SELECT 1 FROM graph_builds WHERE status='active'").fetchone()
-            )
+            and active
+            and active["source_fingerprint"] == hashlib.sha256(self.db.read_bytes()).hexdigest()
         )
 
-    def usages(self, name: str | None, ident: int | None) -> dict[str, Any]:
+    def repositories(self) -> dict[str, Any]:
+        with self.conn() as c:
+            rows = [_row(row) for row in c.execute(
+                "SELECT repo_key,tracked_branch,indexed_commit_sha,last_scanned_at,last_built_at,index_status,diagnostic_error,last_attempt_status,last_attempted_at,last_attempt_error FROM repos ORDER BY repo_key"
+            )]
+            return self.out("repository_list", {"repositories": rows}, c)
+
+    def usages(self, name: str | None, ident: int | None, repo_key: str | None = None) -> dict[str, Any]:
         with self.conn() as c:
             hits = c.execute(
-                "SELECT s.id,s.name,s.kind,f.path file_path,s.start_line,s.end_line FROM symbols s JOIN files f ON f.id=s.file_id WHERE (? IS NOT NULL AND s.id=?) OR (? IS NULL AND s.name=?) ORDER BY s.id",
-                (ident, ident, ident, name),
+                "SELECT s.id,s.name,s.kind,r.repo_key,f.path file_path,s.start_line,s.end_line FROM symbols s JOIN files f ON f.id=s.file_id JOIN repos r ON r.id=f.repo_id WHERE ((? IS NOT NULL AND s.id=?) OR (? IS NULL AND s.name=?)) AND (? IS NULL OR r.repo_key=?) ORDER BY r.repo_key,s.id",
+                (ident, ident, ident, name, repo_key, repo_key),
             ).fetchall()
             if not hits:
                 return self.out(
@@ -315,24 +339,31 @@ def create_server(db_path: str | None = None, graph_path: str | None = None) -> 
         ] = "all",
         limit: int = DEFAULT_LIMIT,
         cursor: str | None = None,
+        repo_key: str | None = None,
     ) -> dict[str, Any]:
-        return cat.search(query, kind, limit, cursor)
+        return cat.search(query, kind, limit, cursor, repo_key)
 
     @s.tool()
-    def entity_context(entity_name: str) -> dict[str, Any]:
-        return cat.entity(entity_name)
+    def repository_list() -> dict[str, Any]:
+        """List repositories and their branch/revision/index freshness."""
+        return cat.repositories()
+
+    @s.tool()
+    def entity_context(entity_name: str, repo_key: str | None = None) -> dict[str, Any]:
+        return cat.entity(entity_name, repo_key)
 
     @s.tool()
     def relationship_query(
         name: str,
         direction: Literal["outgoing", "incoming"],
         resolution_classes: list[str] | None = None,
+        repo_key: str | None = None,
         limit: int = DEFAULT_LIMIT,
         cursor: str | None = None,
     ) -> dict[str, Any]:
         column = "source_name" if direction == "outgoing" else "target_name"
-        sql = f"SELECT id,source_symbol_id,source_name,source_kind,target_symbol_id,target_name,target_kind,relationship_type,file_path,language,confidence,evidence,resolution_class,resolution_reason,extractor FROM relationships WHERE {column}=?"
-        args = [name]
+        sql = f"SELECT rel.id,r.repo_key,rel.source_symbol_id,rel.source_name,rel.source_kind,rel.target_symbol_id,rel.target_name,rel.target_kind,rel.relationship_type,rel.file_path,rel.language,rel.confidence,rel.evidence,rel.resolution_class,rel.resolution_reason,rel.extractor FROM relationships rel JOIN repos r ON r.id=rel.repo_id WHERE rel.{column}=? AND (? IS NULL OR r.repo_key=?)"
+        args = [name, repo_key, repo_key]
         if resolution_classes:
             sql += (
                 " AND resolution_class IN ("
@@ -353,13 +384,14 @@ def create_server(db_path: str | None = None, graph_path: str | None = None) -> 
     def api_surface(
         entity_name: str | None = None,
         path_fragment: str | None = None,
+        repo_key: str | None = None,
         limit: int = DEFAULT_LIMIT,
         cursor: str | None = None,
     ) -> dict[str, Any]:
         if not entity_name and not path_fragment:
             raise ValueError("entity_name or path_fragment is required")
-        sql = "SELECT r.id,r.method,r.path,e.id entity_id,e.name entity_name,r.handler_symbol_id,f.path file_path FROM rest_endpoints r LEFT JOIN entity_nodes e ON e.id=r.entity_id LEFT JOIN files f ON f.id=r.file_id WHERE 1=1"
-        args = []
+        sql = "SELECT r.id,rp.repo_key,r.method,r.path,e.id entity_id,e.name entity_name,r.handler_symbol_id,f.path file_path FROM rest_endpoints r JOIN repos rp ON rp.id=r.repo_id LEFT JOIN entity_nodes e ON e.id=r.entity_id LEFT JOIN files f ON f.id=r.file_id WHERE (? IS NULL OR rp.repo_key=?)"
+        args = [repo_key, repo_key]
         if entity_name:
             sql += " AND e.name=? COLLATE NOCASE"
             args.append(entity_name)
@@ -377,10 +409,10 @@ def create_server(db_path: str | None = None, graph_path: str | None = None) -> 
 
     @s.tool()
     def workflow_context(
-        entity_name: str, workflow_type: str | None = None
+        entity_name: str, workflow_type: str | None = None, repo_key: str | None = None
     ) -> dict[str, Any]:
-        sql = "SELECT w.id,w.name,w.workflow_type,w.source_kind,w.source_file,w.source_symbol_id,w.confidence,w.reason FROM workflows w JOIN entity_nodes e ON e.id=w.entity_id WHERE e.name=? COLLATE NOCASE"
-        args = [entity_name]
+        sql = "SELECT w.id,r.repo_key,w.name,w.workflow_type,w.source_kind,w.source_file,w.source_symbol_id,w.confidence,w.reason FROM workflows w JOIN entity_nodes e ON e.id=w.entity_id JOIN repos r ON r.id=w.repo_id WHERE e.name=? COLLATE NOCASE AND (? IS NULL OR r.repo_key=?)"
+        args = [entity_name, repo_key, repo_key]
         if workflow_type:
             sql += " AND w.workflow_type=?"
             args.append(workflow_type)
@@ -395,12 +427,12 @@ def create_server(db_path: str | None = None, graph_path: str | None = None) -> 
 
     @s.tool()
     def security_surface(
-        key_fragment: str, limit: int = DEFAULT_LIMIT, cursor: str | None = None
+        key_fragment: str, limit: int = DEFAULT_LIMIT, cursor: str | None = None, repo_key: str | None = None
     ) -> dict[str, Any]:
         return cat.records(
             "security_surface",
-            "SELECT id,op_key,op_numeric_id,title,action,script,source_file,source_line,source_kind FROM security_operations WHERE op_key LIKE ? OR title LIKE ? ORDER BY op_key,id",
-            ("%" + key_fragment + "%", "%" + key_fragment + "%"),
+            "SELECT o.id,r.repo_key,o.op_key,o.op_numeric_id,o.title,o.action,o.script,o.source_file,o.source_line,o.source_kind FROM security_operations o JOIN repos r ON r.id=o.repo_id WHERE (o.op_key LIKE ? OR o.title LIKE ?) AND (? IS NULL OR r.repo_key=?) ORDER BY o.op_key,r.repo_key,o.id",
+            ("%" + key_fragment + "%", "%" + key_fragment + "%", repo_key, repo_key),
             limit,
             cursor,
             "operations",
@@ -408,20 +440,28 @@ def create_server(db_path: str | None = None, graph_path: str | None = None) -> 
 
     @s.tool()
     def symbol_references(
-        symbol_name: str | None = None, symbol_id: int | None = None
+        symbol_name: str | None = None, symbol_id: int | None = None, repo_key: str | None = None
     ) -> dict[str, Any]:
-        return cat.usages(symbol_name, symbol_id)
+        return cat.usages(symbol_name, symbol_id, repo_key)
 
     @s.tool()
     def file_impact(
-        file_path: str, depth: int = 1, max_edges_per_symbol: int = 25
+        file_path: str, repo_key: str | None = None, depth: int = 1, max_edges_per_symbol: int = 25
     ) -> dict[str, Any]:
         if not 1 <= depth <= 3 or not 1 <= max_edges_per_symbol <= 1000:
             raise ValueError("depth must be 1..3 and max_edges_per_symbol 1..1000")
         with cat.conn() as c:
-            f = c.execute(
-                "SELECT id,path FROM files WHERE path=?", (file_path,)
-            ).fetchone()
+            files = c.execute(
+                "SELECT f.id,f.path,r.repo_key FROM files f JOIN repos r ON r.id=f.repo_id "
+                "WHERE f.path=? AND (? IS NULL OR r.repo_key=?) ORDER BY r.repo_key,f.id",
+                (file_path, repo_key, repo_key),
+            ).fetchall()
+            if repo_key is None and len(files) > 1:
+                return cat.out(
+                    "file_impact", {"candidates": [_row(row) for row in files]}, c, "ambiguous",
+                    {"code": "ambiguous_file", "message": "File path exists in multiple repositories; retry with repo_key"},
+                )
+            f = files[0] if files else None
             if not f:
                 return cat.out(
                     "file_impact",
@@ -439,7 +479,7 @@ def create_server(db_path: str | None = None, graph_path: str | None = None) -> 
                     {"file": _row(f)},
                     c,
                     "graph_unavailable",
-                    {"code": "graph_unavailable", "message": "No active Ladybug graph"},
+                    {"code": "graph_stale", "message": "No active graph matches the current SQLite catalog"},
                 )
             from scripts.query_graph import (
                 _query_bounded_incoming_traversal,
@@ -450,7 +490,7 @@ def create_server(db_path: str | None = None, graph_path: str | None = None) -> 
 
             db, g = get_graph_connection(str(cat.graph))
             try:
-                seeds = _query_file_symbols_from_graph(g, file_path)
+                seeds = _query_file_symbols_from_graph(g, file_path, repo_key)
                 nodes, edges = _query_bounded_incoming_traversal(
                     g, [x["symbol_id"] for x in seeds], depth, max_edges_per_symbol
                 )

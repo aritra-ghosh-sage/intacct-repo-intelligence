@@ -6,8 +6,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from tqdm import tqdm
 
-from config import REPO_PATH, INCLUDE_EXTENSIONS, EXCLUDE_DIRS
+from config import INCLUDE_EXTENSIONS, EXCLUDE_DIRS
 from catalog.db import get_connection
+from parser.repo_context import RepoContext, require_repo_scoped_files, resolve_repo
 
 
 def detect_language(path: str) -> str:
@@ -60,9 +61,33 @@ def walk_repo(root: str):
             yield os.path.join(dirpath, name)
 
 
-def scan():
-    conn = get_connection()
+def _purge_deleted_files(conn, repo: RepoContext, seen_paths: set[str]) -> int:
+    """Remove generic facts for files no longer present in this repository."""
+    rows = conn.execute(
+        "SELECT id, path FROM files WHERE repo_id = ?", (repo.id,)
+    ).fetchall()
+    missing = [row for row in rows if row["path"] not in seen_paths]
+    if not missing:
+        return 0
+
+    file_ids = [row["id"] for row in missing]
+    placeholders = ",".join("?" for _ in file_ids)
+    # Do this explicitly: existing catalog connections do not universally enable
+    # SQLite foreign keys, and relationships have no file FK in the legacy
+    # schema.
+    conn.execute(
+        f"DELETE FROM relationships WHERE file_id IN ({placeholders})", file_ids
+    )
+    conn.execute(f"DELETE FROM symbols WHERE file_id IN ({placeholders})", file_ids)
+    conn.execute(f"DELETE FROM files WHERE id IN ({placeholders})", file_ids)
+    return len(missing)
+
+
+def scan(repo_key: str | None = None, db_path: str | None = None):
+    conn = get_connection(db_path)
     cur = conn.cursor()
+    require_repo_scoped_files(conn)
+    repo = resolve_repo(conn, repo_key)
 
     started = datetime.now(timezone.utc).isoformat()
     files_scanned = 0
@@ -70,14 +95,16 @@ def scan():
     files_updated = 0
     files_skipped = 0
 
-    print(f"📂 Scanning: {REPO_PATH}")
+    print(f"📂 Scanning [{repo.repo_key}]: {repo.local_root}")
 
-    all_files = list(walk_repo(REPO_PATH))
+    all_files = list(walk_repo(str(repo.local_root)))
     print(f"🔎 Found {len(all_files)} candidate files")
+    seen_paths: set[str] = set()
 
     for filepath in tqdm(all_files, desc="Indexing"):
         try:
-            rel_path = os.path.relpath(filepath, REPO_PATH)
+            rel_path = os.path.relpath(filepath, repo.local_root)
+            seen_paths.add(rel_path)
             size = os.path.getsize(filepath)
             mtime = datetime.fromtimestamp(
                 os.path.getmtime(filepath), tz=timezone.utc
@@ -85,7 +112,8 @@ def scan():
 
             # Fetch existing row
             row = cur.execute(
-                "SELECT sha1, last_modified FROM files WHERE path = ?", (rel_path,)
+                "SELECT sha1, last_modified FROM files WHERE repo_id = ? AND path = ?",
+                (repo.id, rel_path),
             ).fetchone()
 
             # Fast skip: same mtime + size heuristic
@@ -100,10 +128,10 @@ def scan():
                 cur.execute(
                     """
                     INSERT INTO files
-                    (path, language, size_bytes, sha1, last_modified, last_indexed)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    (repo_id, path, language, size_bytes, sha1, last_modified, last_indexed)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                    (rel_path, detect_language(rel_path), size, sha1, mtime, started),
+                    (repo.id, rel_path, detect_language(rel_path), size, sha1, mtime, started),
                 )
                 files_added += 1
             elif row["sha1"] != sha1:
@@ -115,9 +143,9 @@ def scan():
                         sha1 = ?,
                         last_modified = ?,
                         last_indexed = ?
-                    WHERE path = ?
+                    WHERE repo_id = ? AND path = ?
                 """,
-                    (detect_language(rel_path), size, sha1, mtime, started, rel_path),
+                    (detect_language(rel_path), size, sha1, mtime, started, repo.id, rel_path),
                 )
                 files_updated += 1
             else:
@@ -132,6 +160,7 @@ def scan():
         except Exception as e:
             print(f"⚠️  Error on {filepath}: {e}")
 
+    files_removed = _purge_deleted_files(conn, repo, seen_paths)
     conn.commit()
     conn.close()
 
@@ -140,7 +169,14 @@ def scan():
     print(f"   Added:    {files_added}")
     print(f"   Updated:  {files_updated}")
     print(f"   Skipped:  {files_skipped}")
+    print(f"   Removed:  {files_removed}")
 
 
 if __name__ == "__main__":
-    scan()
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--repo", help="Registered repo_key to scan")
+    parser.add_argument("--db", help="Catalog database path")
+    args = parser.parse_args()
+    scan(repo_key=args.repo, db_path=args.db)

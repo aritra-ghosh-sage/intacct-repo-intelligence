@@ -57,11 +57,11 @@ def ensure_entity_roots_columns(conn: Any) -> None:
         conn.commit()
 
 
-def build_entity_roots(conn: Any, reset: bool) -> int:
+def build_entity_roots(conn: Any, reset: bool, repo_id: int) -> int:
     ensure_entity_roots_columns(conn)
 
     if reset:
-        conn.execute("DELETE FROM entity_roots")
+        conn.execute("DELETE FROM entity_roots WHERE repo_id = ?", (repo_id,))
         conn.commit()
 
     inserted = 0
@@ -72,9 +72,13 @@ def build_entity_roots(conn: Any, reset: bool) -> int:
             em.symbol_id,
             em.mapping_type
         FROM entity_mappings em
+        JOIN entity_occurrences eo
+          ON eo.repo_id = em.repo_id
+         AND eo.entity_id = em.entity_id
         WHERE em.symbol_id IS NOT NULL
+          AND em.repo_id = ?
         """
-    ).fetchall()
+    , (repo_id,)).fetchall()
 
     for row in rows:
         role = row["mapping_type"]
@@ -84,6 +88,7 @@ def build_entity_roots(conn: Any, reset: bool) -> int:
         conn.execute(
             """
             INSERT INTO entity_roots(
+                repo_id,
                 entity_id,
                 symbol_id,
                 role,
@@ -91,14 +96,15 @@ def build_entity_roots(conn: Any, reset: bool) -> int:
                 reason,
                 is_shared
             )
-            VALUES (?, ?, ?, ?, ?, 0)
-            ON CONFLICT(entity_id, symbol_id) DO UPDATE SET
+            VALUES (?, ?, ?, ?, ?, ?, 0)
+            ON CONFLICT(repo_id, entity_id, symbol_id) DO UPDATE SET
                 role = excluded.role,
                 weight = excluded.weight,
                 reason = excluded.reason,
                 is_shared = 0
             """,
             (
+                repo_id,
                 row["entity_id"],
                 row["symbol_id"],
                 role,
@@ -114,17 +120,20 @@ def build_entity_roots(conn: Any, reset: bool) -> int:
         """
         UPDATE entity_roots
         SET is_shared = 1
-        WHERE symbol_id IN (
+        WHERE repo_id = ? AND symbol_id IN (
             SELECT symbol_id
             FROM entity_roots
+            WHERE repo_id = ?
             GROUP BY symbol_id
             HAVING COUNT(DISTINCT entity_id) > 1
         )
-        """
+        """,
+        (repo_id, repo_id),
     )
 
     shared_rows = conn.execute(
-        "SELECT COUNT(*) AS c FROM entity_roots WHERE is_shared = 1"
+        "SELECT COUNT(*) AS c FROM entity_roots WHERE repo_id = ? AND is_shared = 1",
+        (repo_id,),
     ).fetchone()["c"]
     shared_symbols = conn.execute(
         """
@@ -132,10 +141,11 @@ def build_entity_roots(conn: Any, reset: bool) -> int:
         FROM (
             SELECT symbol_id
             FROM entity_roots
-            WHERE is_shared = 1
+            WHERE repo_id = ? AND is_shared = 1
             GROUP BY symbol_id
         ) x
-        """
+        """,
+        (repo_id,),
     ).fetchone()["c"]
 
     conn.commit()
@@ -425,10 +435,14 @@ def cli() -> None:
 @click.option(
     "--reset", is_flag=True, help="Reset entity_roots table before rebuilding."
 )
-def build_command(db: str, reset: bool) -> None:
+@click.option("--repo", "repo_key", required=True, help="Registered repository key.")
+def build_command(db: str, reset: bool, repo_key: str) -> None:
     conn = get_connection(db)
     try:
-        raise SystemExit(build_entity_roots(conn, reset=reset))
+        from catalog.repositories import get_repository
+
+        repo_id = int(get_repository(conn, repo_key)["id"])
+        raise SystemExit(build_entity_roots(conn, reset=reset, repo_id=repo_id))
     finally:
         conn.close()
 

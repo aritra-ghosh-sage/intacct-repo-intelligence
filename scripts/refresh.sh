@@ -1,260 +1,56 @@
 #!/usr/bin/env bash
-set -e
+# Compatibility entry point for the old full-refresh command.
+#
+# It deliberately delegates to the candidate-based workspace refresh.  It no
+# longer deletes catalog.db, runs single-repository parsers, or builds/promotes
+# a graph (graph construction remains an operator-owned workflow).
+set -euo pipefail
 
-# Navigate to the intacct-repo-intelligence directory
-cd ~/projects/intacct-repo-intelligence
-source .venv/bin/activate
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$PROJECT_ROOT"
 
-# Determine REPO_ROOT dynamically from projects/main
-REPO_ROOT="$(cd ~/projects && find . -maxdepth 1 -type d -name 'main' | head -1 | sed 's|^\./||')"
-if [ -z "$REPO_ROOT" ]; then
-  REPO_ROOT="main"
-fi
-REPO_ROOT="$HOME/projects/$REPO_ROOT"
-PROJECT_ROOT="$HOME/projects/intacct-repo-intelligence"
-
-# Track start time
-START_TIME=$(date +%s)
-echo "=================================================="
-echo "🚀 Catalog Database Refresh Started"
-echo "=================================================="
-echo ""
-
-# ===================================================================
-# Phase 1: Blank Slate Preparation
-# ===================================================================
-echo "🧹 Phase 1: Preparing blank slate..."
-if [ -f catalog/catalog.db ]; then
-  echo "   Removing existing catalog.db..."
-  rm -f catalog/catalog.db
+DB="catalog/catalog.db"
+MANIFEST="config/workspace_repos.yaml"
+REPO_KEY="ia-main"
+if [[ -z "${PYTHON_BIN:-}" ]]; then
+    if [[ -x .venv/bin/python ]]; then
+        PYTHON_BIN=".venv/bin/python"
+    else
+        PYTHON_BIN="python3"
+    fi
 fi
 
-echo "   Initializing fresh database schema..."
-python -c "
-from catalog.db import init_db
-try:
-    init_db()
-    print('   ✅ Database initialized successfully')
-except Exception as e:
-    print(f'   ❌ Error initializing database: {e}')
-    exit(1)
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --db) DB="$2"; shift 2 ;;
+        --manifest) MANIFEST="$2"; shift 2 ;;
+        --repo) REPO_KEY="$2"; shift 2 ;;
+        *) echo "usage: $0 [--db PATH] [--manifest PATH] [--repo KEY]" >&2; exit 2 ;;
+    esac
+done
+
+if [[ ! -f "$DB" ]]; then
+DB="$DB" "$PYTHON_BIN" -c "
+import os
+from pathlib import Path
+from catalog import db
+db.CATALOG_DB = Path(os.environ['DB'])
+db.init_db()
 "
-echo ""
-
-# ===================================================================
-# Phase 2: Repository Scanning
-# ===================================================================
-echo "📂 Phase 2: Scanning repository..."
-echo "   Indexing all source files from $REPO_ROOT"
-python -m parser.scan_repo
-echo "   ✅ Repository scan complete"
-echo ""
-
-# ===================================================================
-# Phase 3: Symbol Extraction
-# ===================================================================
-echo "🔍 Phase 3: Extracting symbols..."
-echo "   Parsing files for symbols, classes, functions, and relationships"
-python -m parser.extract_symbols --full
-echo "   ✅ Symbol extraction complete"
-echo ""
-
-# ===================================================================
-# Phase 4: ENT File Processing
-# ===================================================================
-echo "📋 Phase 4: Processing ENT files..."
-echo "   Scanning PHP entity files for entity metadata"
-python scripts/scan_ent_files.py --repo-root "$REPO_ROOT" --out "$PROJECT_ROOT/outputs/entity_definitions.jsonl"
-if [ $? -ne 0 ]; then
-  echo "   ⚠️  ENT file scanning completed with warnings (non-fatal)"
-else
-  echo "   ✅ ENT file scan complete"
-fi
-echo ""
-
-# ===================================================================
-# Phase 5: Entity Building
-# ===================================================================
-echo "🏗️  Phase 5: Building entity nodes..."
-echo "   Creating entity_nodes from entity definitions"
-python scripts/build_entities.py build --entities "$PROJECT_ROOT/outputs/entity_definitions.jsonl" --db "$PROJECT_ROOT/catalog/catalog.db"
-if [ $? -ne 0 ]; then
-  echo "   ⚠️  Entity building completed with warnings (non-fatal)"
-else
-  echo "   ✅ Entity building complete"
-fi
-echo ""
-
-# ===================================================================
-# Phase 6: Entity Root Linking
-# ===================================================================
-echo "🔗 Phase 6: Building entity roots..."
-echo "   Linking symbols to entities as root definitions"
-python scripts/build_entity_roots.py build
-if [ $? -ne 0 ]; then
-  echo "   ⚠️  Entity root building completed with warnings (non-fatal)"
-else
-  echo "   ✅ Entity roots built successfully"
-fi
-echo ""
-
-# ===================================================================
-# Phase 7: Relationship Extraction
-# ===================================================================
-echo "🔗 Phase 7: Extracting symbol relationships..."
-echo "   Analyzing code to identify relationships (INHERITS, IMPLEMENTS, IMPORTS, etc.)"
-python -m parser.extract_relationships --repo-root "$REPO_ROOT"
-if [ $? -ne 0 ]; then
-  echo "   ⚠️  Relationship extraction completed with warnings (non-fatal)"
-else
-  echo "   ✅ Relationship extraction complete"
-fi
-echo ""
-
-# ===================================================================
-# Phase 8: Workflow Building
-# ===================================================================
-echo "🔄 Phase 8: Building workflows..."
-echo "   Extracting workflow definitions from entity mappings and YAML handlers"
-python scripts/build_workflows.py build --db "$PROJECT_ROOT/catalog/catalog.db" --repo-root "$REPO_ROOT"
-if [ $? -ne 0 ]; then
-  echo "   ⚠️  Workflow building completed with warnings (non-fatal)"
-else
-  echo "   ✅ Workflow building complete"
-fi
-echo ""
-
-# ===================================================================
-# Phase 9: Security Mapping Build
-# ===================================================================
-echo "🔐 Phase 9: Building security/menu/dbschema mappings..."
-echo "   Extracting security operation keys/ids, policy eops, menu links, and dbschema metadata"
-python scripts/build_security_mappings.py build --db "$PROJECT_ROOT/catalog/catalog.db" --repo-root "$REPO_ROOT"
-if [ $? -ne 0 ]; then
-  echo "   ⚠️  Security mapping build completed with warnings (non-fatal)"
-else
-  echo "   ✅ Security mapping build complete"
-fi
-echo ""
-
-# ===================================================================
-# Phase 10: OpenAPI Specification Scanning
-# ===================================================================
-echo "📚 Phase 10: Scanning OpenAPI specifications..."
-echo "   Indexing OpenAPI YAML specification files"
-python scripts/scan_openapispec.py scan --db "$PROJECT_ROOT/catalog/catalog.db" --repo-root "$REPO_ROOT"
-if [ $? -ne 0 ]; then
-  echo "   ⚠️  OpenAPI scanning completed with warnings (non-fatal)"
-else
-  echo "   ✅ OpenAPI scanning complete"
-fi
-echo ""
-
-# ===================================================================
-# Phase 11: OpenAPI Specification Linking
-# ===================================================================
-echo "🔗 Phase 11: Linking OpenAPI specifications to entities..."
-echo "   Connecting API entities to OpenAPI spec files (kinds: operations, schemas, etc.)"
-python scripts/link_openapispec.py link --db "$PROJECT_ROOT/catalog/catalog.db"
-if [ $? -ne 0 ]; then
-  echo "   ⚠️  OpenAPI linking completed with warnings (non-fatal)"
-else
-  echo "   ✅ OpenAPI linking complete"
-fi
-echo ""
-
-# ===================================================================
-# Phase 12: REST Endpoints Extraction
-# ===================================================================
-echo "🌐 Phase 12: Extracting REST endpoints..."
-echo "   Parsing OpenAPI files from openapispec_index to extract REST API paths and methods"
-python scripts/build_rest_endpoints.py build --db "$PROJECT_ROOT/catalog/catalog.db" --repo-root "$REPO_ROOT"
-if [ $? -ne 0 ]; then
-  echo "   ⚠️  REST endpoints extraction completed with warnings (non-fatal)"
-else
-  echo "   ✅ REST endpoints extraction complete"
-fi
-echo ""
-
-# ===================================================================
-# Phase 13: Entity Access Graph Linking
-# ===================================================================
-echo "🔗 Phase 13: Building entity access graph links..."
-echo "   Creating deterministic entity bridges for security/menu/dbschema/workflow/rest evidence"
-python scripts/build_entity_access_links.py build --db "$PROJECT_ROOT/catalog/catalog.db" --reset
-if [ $? -ne 0 ]; then
-  echo "   ⚠️  Entity access linking completed with warnings (non-fatal)"
-else
-  echo "   ✅ Entity access linking complete"
-fi
-echo ""
-
-# ===================================================================
-# Phase 14: Ladybug Graph Projection
-# ===================================================================
-echo "🕸️  Phase 14: Building Ladybug graph projection..."
-python -m scripts.build_graph
-if [ $? -ne 0 ]; then
-  echo "   ❌ Ladybug graph projection failed"
-  exit 1
-else
-  echo "   ✅ Ladybug graph projection complete"
-fi
-echo ""
-
-# ===================================================================
-# Phase 15: Ladybug Graph Validation
-# ===================================================================
-echo "✅ Phase 15: Validating Ladybug graph parity..."
-python -m validation.validate_graph
-if [ $? -ne 0 ]; then
-  echo "   ❌ Ladybug graph validation failed"
-  exit 1
-else
-  echo "   ✅ Ladybug graph validation passed"
 fi
 
-echo ""
-# ===================================================================
-# Summary
-# ===================================================================
-END_TIME=$(date +%s)
-DURATION=$((END_TIME - START_TIME))
-echo "=================================================="
-echo "✅ Catalog Refresh Complete!"
-echo "=================================================="
-echo "Duration: ${DURATION}s"
-echo ""
-echo "📊 Database Status:"
-echo "   Location: $PROJECT_ROOT/catalog/catalog.db"
-python -c "
-import sqlite3
-conn = sqlite3.connect('$PROJECT_ROOT/catalog/catalog.db')
-cur = conn.cursor()
-tables = [
-    ('files', 'Source files indexed'),
-    ('symbols', 'Symbols extracted'),
-    ('entity_nodes', 'Entity definitions'),
-    ('entity_roots', 'Entity root mappings'),
-    ('entity_mappings', 'Entity-symbol mappings'),
-    ('relationships', 'Symbol relationships'),
-    ('workflows', 'Workflow definitions'),
-    ('security_operations', 'Security operation keys and metadata'),
-    ('security_policy_eops', 'Policy values to operation keys'),
-    ('security_menu_items', 'Menu items and MENU_KEY mappings'),
-    ('dbschema_fields', 'dbschema table fields'),
-    ('openapispec_index', 'OpenAPI specs indexed'),
-    ('rest_endpoints', 'REST API endpoints'),
-    ('entity_access_links', 'Entity access graph links'),
-]
-for table, desc in tables:
-    try:
-        count = cur.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]
-        status = '✓' if count > 0 else '⚠'
-        print(f'   {status} {table:20} {count:>10,} records ({desc})')
-    except:
-        print(f'   ✗ {table:20} Error reading table')
-conn.close()
+# Apply the table-rebuild migration before registering or refreshing.  The
+# manifest supplies the legacy checkout root/branch so no machine-specific
+# source path is embedded in this wrapper.
+DB="$DB" MANIFEST="$MANIFEST" REPO_KEY="$REPO_KEY" "$PYTHON_BIN" -c "
+import os
+from catalog.db import migrate_multi_repo
+from catalog.repositories import load_workspace_manifest
+manifest = load_workspace_manifest(os.environ['MANIFEST'])
+entry = next((r for r in manifest['repositories'] if r['repo_key'] == os.environ['REPO_KEY']), None)
+if entry is None:
+    raise SystemExit('repository not found in manifest: ' + os.environ['REPO_KEY'])
+migrate_multi_repo(db_path=os.environ['DB'], local_root=entry['local_root'], tracked_branch=entry['tracked_branch'])
 "
-echo ""
-echo "=================================================="
+
+exec "$PYTHON_BIN" -m scripts.refresh_workspace --db "$DB" --manifest "$MANIFEST" --repo "$REPO_KEY"

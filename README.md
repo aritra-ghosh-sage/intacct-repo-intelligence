@@ -255,29 +255,6 @@ not be started during an agentic session. Agents should restrict themselves to
 read-only parity validation and focused unit tests. SQLite query commands remain
 the authoritative evidence path; Ladybug is a rebuildable traversal projection.
 
-### REST Automation Coverage
-
-Apply `migrations/019_versioned_rest_test_coverage.sql` once to an existing
-catalog, then register each automation suite before ingesting its Gherkin
-evidence. The ingestion reads only feature files, same-stem properties metadata
-(`version` and `testObject`), and the suite object mapping.
-
-```bash
-sqlite3 catalog/catalog.db ".read migrations/019_versioned_rest_test_coverage.sql"
-
-python scripts/register_rest_automation_suite.py \
-  --suite-id ia-restapi-automation \
-  --suite-root /Users/aritra.ghosh/projects/ia-restapi-automation \
-  --object-mapping /Users/aritra.ghosh/projects/ia-restapi-automation/src/test/resources/object-mapping.json
-
-python scripts/build_gherkin_coverage.py \
-  --suite-id ia-restapi-automation \
-  --suite-root /Users/aritra.ghosh/projects/ia-restapi-automation \
-  --object-mapping /Users/aritra.ghosh/projects/ia-restapi-automation/src/test/resources/object-mapping.json
-
-python scripts/query_rest.py coverage APBill --version s1
-```
-
 `graph_ready_entities` is an advisory triage view for entities with strong root
 evidence. It intentionally excludes weak or unrooted entities and must not be
 used to filter authoritative queries or the complete graph projection.
@@ -442,3 +419,43 @@ menu links for the entity.
 Graph-specific errors use stable codes including `ambiguous_symbol`,
 `symbol_not_found`, `entity_not_found`, `file_not_found`, and `graph_query_failed`.
 In JSON mode, ambiguity candidates are returned in `error.details.candidates`.
+
+### Multi-repository workspaces
+
+The catalog can index multiple repositories through
+[`config/workspace_repos.yaml`](config/workspace_repos.yaml). Each repository
+has one explicitly tracked branch and an explicit builder list; dependencies
+are expanded by `scripts/builder_registry.py`.
+
+`scripts/refresh.sh` remains as a compatibility entry point. It initializes a
+missing catalog, applies the workspace migration, and refreshes `ia-main`; it
+does not delete the active catalog or build a graph:
+
+```bash
+bash scripts/refresh.sh
+```
+
+For automation and every additional repository, use the explicit workspace
+command below. Migrate an existing single-repository catalog once, then
+register its manifest:
+
+```bash
+python -c "from catalog.db import migrate_multi_repo; migrate_multi_repo(local_root='/path/to/main')"
+python scripts/catalog_repos.py --db catalog/catalog.db register --manifest config/workspace_repos.yaml
+```
+
+Refresh one repository with a clean checkout:
+
+```bash
+python scripts/refresh_workspace.py --db catalog/catalog.db --manifest config/workspace_repos.yaml --repo ia-main
+```
+
+Refresh runs against a candidate SQLite copy and promotes it only after
+validation. The result records the exact indexed commit SHA. A failed attempt
+does not replace the last active revision; it is retained separately as the
+repository's latest-attempt status and diagnostic. Migration rebuilds empty
+legacy source-table families into repository-qualified tables. A populated
+legacy family that cannot preserve its IDs and child references fails closed;
+rebuild that catalog from source before adding another repository. A catalog
+promotion invalidates the prior graph projection; build a new Ladybug graph
+through the normal operator workflow before issuing graph queries.

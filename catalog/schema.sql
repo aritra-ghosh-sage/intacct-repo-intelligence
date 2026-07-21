@@ -1,25 +1,30 @@
--- A repository is the ownership boundary for files and extracted facts.  The
--- production source is seeded so existing extractors can keep using it as the
--- default while external test suites receive their own stable identity.
-CREATE TABLE IF NOT EXISTS source_repositories (
+CREATE TABLE IF NOT EXISTS repos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    suite_id TEXT NOT NULL UNIQUE,
-    repo_root TEXT NOT NULL,
-    kind TEXT NOT NULL DEFAULT 'source',
-    revision TEXT,
-    enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
-    object_mapping_path TEXT,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    repo_key TEXT NOT NULL UNIQUE,
+    name TEXT,
+    kind TEXT,
+    language TEXT,
+    remote_url TEXT,
+    local_root TEXT NOT NULL,
+    tracked_branch TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    profile TEXT,
+    effective_builders_json TEXT NOT NULL DEFAULT '[]',
+    indexed_commit_sha TEXT,
+    last_scanned_at TEXT,
+    last_built_at TEXT,
+    index_status TEXT NOT NULL DEFAULT 'never_indexed',
+    diagnostic_error TEXT,
+    -- These describe the latest attempted refresh.  They deliberately do not
+    -- replace the active catalog status when a candidate fails.
+    last_attempt_status TEXT NOT NULL DEFAULT 'never_attempted',
+    last_attempted_at TEXT,
+    last_attempt_error TEXT
 );
-
-INSERT OR IGNORE INTO source_repositories (
-    id, suite_id, repo_root, kind, enabled
-) VALUES (1, 'production-source', '/home/aritraghosh/projects/main', 'source', 1);
 
 CREATE TABLE IF NOT EXISTS files (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    repository_id INTEGER NOT NULL DEFAULT 1,
+    repo_id INTEGER NOT NULL,
     path TEXT NOT NULL,
     language TEXT,
     size_bytes INTEGER,
@@ -28,18 +33,15 @@ CREATE TABLE IF NOT EXISTS files (
     last_indexed TEXT,
     last_symbols_extracted TEXT,
     last_relationships_extracted TEXT,
-    FOREIGN KEY(repository_id) REFERENCES source_repositories(id) ON DELETE CASCADE,
-    UNIQUE(repository_id, path)
+    FOREIGN KEY (repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    UNIQUE(repo_id, path)
 );
 
-CREATE INDEX IF NOT EXISTS idx_files_path
-    ON files(path);
+CREATE INDEX IF NOT EXISTS idx_files_repo_path
+    ON files(repo_id, path);
 
-CREATE INDEX IF NOT EXISTS idx_files_repository_path
-    ON files(repository_id, path);
-
-CREATE INDEX IF NOT EXISTS idx_files_language
-    ON files(language);
+CREATE INDEX IF NOT EXISTS idx_files_repo_language
+    ON files(repo_id, language);
 
 CREATE TABLE IF NOT EXISTS symbols (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -68,6 +70,7 @@ CREATE INDEX IF NOT EXISTS idx_symbols_language
 
 CREATE TABLE IF NOT EXISTS relationships (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
 
     source_symbol_id INTEGER,
     source_name TEXT,
@@ -91,7 +94,9 @@ CREATE TABLE IF NOT EXISTS relationships (
     extractor TEXT DEFAULT 'phase2_regex_mvp',
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
 
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
     UNIQUE (
+        repo_id,
         source_symbol_id,
         source_name,
         target_symbol_id,
@@ -134,8 +139,33 @@ CREATE TABLE IF NOT EXISTS entity_nodes (
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+-- ``entity_nodes`` is canonical identity only.  All facts extracted from a
+-- particular checkout belong to its occurrence, not to the shared name.
+CREATE TABLE IF NOT EXISTS entity_occurrences (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
+    entity_id INTEGER NOT NULL,
+    ent_file TEXT,
+    module TEXT,
+    table_name TEXT,
+    view_name TEXT,
+    dummy INTEGER,
+    source_file_id INTEGER,
+    extractor TEXT,
+    confidence REAL DEFAULT 1.0,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(repo_id, entity_id),
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    FOREIGN KEY(entity_id) REFERENCES entity_nodes(id) ON DELETE CASCADE,
+    FOREIGN KEY(source_file_id) REFERENCES files(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_entity_occurrences_entity
+    ON entity_occurrences(entity_id);
+
 CREATE TABLE IF NOT EXISTS entity_mappings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
 
     entity_id INTEGER NOT NULL,
 
@@ -147,12 +177,14 @@ CREATE TABLE IF NOT EXISTS entity_mappings (
 
     source_text TEXT,
 
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
     FOREIGN KEY(entity_id)
         REFERENCES entity_nodes(id)
 );
 
 CREATE TABLE IF NOT EXISTS entity_roots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
 
     entity_id INTEGER NOT NULL,
     symbol_id INTEGER NOT NULL,
@@ -164,8 +196,9 @@ CREATE TABLE IF NOT EXISTS entity_roots (
 
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
 
-    UNIQUE(entity_id, symbol_id),
+    UNIQUE(repo_id, entity_id, symbol_id),
 
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
     FOREIGN KEY(entity_id) REFERENCES entity_nodes(id),
     FOREIGN KEY(symbol_id) REFERENCES symbols(id)
 );
@@ -184,6 +217,7 @@ ON entity_roots(is_shared);
 
 CREATE TABLE IF NOT EXISTS workflows (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
 
     entity_id INTEGER NOT NULL,
 
@@ -199,8 +233,9 @@ CREATE TABLE IF NOT EXISTS workflows (
 
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
 
-    UNIQUE(entity_id, name, workflow_type, source_file),
+    UNIQUE(repo_id, entity_id, name, workflow_type, source_file),
 
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
     FOREIGN KEY(entity_id) REFERENCES entity_nodes(id) ON DELETE CASCADE,
     FOREIGN KEY(source_symbol_id) REFERENCES symbols(id) ON DELETE SET NULL
 );
@@ -280,15 +315,17 @@ CREATE INDEX IF NOT EXISTS idx_workflow_edges_ordinal
 -- Shared OpenAPI file-level graph edges for reusable refs.
 CREATE TABLE IF NOT EXISTS openapi_file_ref_edges (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
     source_file_id INTEGER NOT NULL,
     target_file_id INTEGER NOT NULL,
     ref_value TEXT NOT NULL,                 -- raw $ref
     ref_path TEXT,                           -- YAML location evidence
     confidence REAL NOT NULL DEFAULT 1.0,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
     FOREIGN KEY(source_file_id) REFERENCES files(id) ON DELETE CASCADE,
     FOREIGN KEY(target_file_id) REFERENCES files(id) ON DELETE CASCADE,
-    UNIQUE(source_file_id, target_file_id, ref_value, ref_path)
+    UNIQUE(repo_id, source_file_id, target_file_id, ref_value, ref_path)
 );
 
 CREATE INDEX IF NOT EXISTS idx_openapi_ref_source
@@ -297,150 +334,14 @@ CREATE INDEX IF NOT EXISTS idx_openapi_ref_target
     ON openapi_file_ref_edges(target_file_id);
 
 CREATE TABLE IF NOT EXISTS rest_endpoints (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    method TEXT NOT NULL,               -- GET | POST | PATCH | DELETE
-    path TEXT NOT NULL,                 -- /services/v3/objects/ap-bill
-    source_version TEXT,                -- exact openapispec_index.version evidence
+    id INTEGER PRIMARY KEY,
+    repo_id INTEGER NOT NULL,
+    method TEXT,               -- GET | POST | PATCH | DELETE
+    path TEXT,                 -- /services/v3/objects/ap-bill
     entity_id INTEGER,
     handler_symbol_id INTEGER,
-    file_id INTEGER NOT NULL,
-    FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE CASCADE,
-    FOREIGN KEY(entity_id) REFERENCES entity_nodes(id) ON DELETE SET NULL,
-    FOREIGN KEY(handler_symbol_id) REFERENCES symbols(id) ON DELETE SET NULL,
-    UNIQUE(file_id, method, path, source_version)
-);
-
-CREATE INDEX IF NOT EXISTS idx_rest_endpoints_versioned_route
-    ON rest_endpoints(source_version, method, path);
-
--- Static REST automation evidence.  These tables deliberately retain source
--- locations and resolution state instead of inferring coverage from names.
-CREATE TABLE IF NOT EXISTS api_version_compatibility (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    test_version TEXT NOT NULL,
-    endpoint_version TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'active'
-        CHECK(status IN ('active', 'deprecated', 'disabled')),
-    rationale TEXT NOT NULL,
-    evidence TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(test_version, endpoint_version)
-);
-
-CREATE TABLE IF NOT EXISTS test_cases (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    repository_id INTEGER NOT NULL,
-    file_id INTEGER NOT NULL,
-    feature_name TEXT NOT NULL,
-    scenario_name TEXT NOT NULL,
-    case_name TEXT NOT NULL,
-    example_row INTEGER,
-    feature_line INTEGER NOT NULL,
-    scenario_line INTEGER NOT NULL,
-    eligibility TEXT NOT NULL DEFAULT 'active'
-        CHECK(eligibility IN ('active', 'known_issue', 'ci_only', 'conditional')),
-    tags_json TEXT NOT NULL DEFAULT '[]',
-    jira_refs_json TEXT NOT NULL DEFAULT '[]',
-    source_hash TEXT,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(repository_id) REFERENCES source_repositories(id) ON DELETE CASCADE,
-    FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE CASCADE,
-    UNIQUE(repository_id, file_id, scenario_line, example_row)
-);
-
-CREATE INDEX IF NOT EXISTS idx_test_cases_repository ON test_cases(repository_id);
-CREATE INDEX IF NOT EXISTS idx_test_cases_file ON test_cases(file_id);
-CREATE INDEX IF NOT EXISTS idx_test_cases_eligibility ON test_cases(eligibility);
-
-CREATE TABLE IF NOT EXISTS test_case_versions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    test_case_id INTEGER NOT NULL,
-    version_label TEXT NOT NULL,
-    source_kind TEXT NOT NULL
-        CHECK(source_kind IN ('feature_tag', 'properties', 'request_override')),
-    source_file_id INTEGER,
-    source_line INTEGER,
-    raw_value TEXT NOT NULL,
-    FOREIGN KEY(test_case_id) REFERENCES test_cases(id) ON DELETE CASCADE,
-    FOREIGN KEY(source_file_id) REFERENCES files(id) ON DELETE SET NULL,
-    UNIQUE(test_case_id, version_label, source_kind, source_file_id, source_line)
-);
-
-CREATE INDEX IF NOT EXISTS idx_test_case_versions_case ON test_case_versions(test_case_id);
-CREATE INDEX IF NOT EXISTS idx_test_case_versions_label ON test_case_versions(version_label);
-
-CREATE TABLE IF NOT EXISTS test_requests (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    test_case_id INTEGER NOT NULL,
-    ordinal INTEGER NOT NULL,
-    step_line INTEGER NOT NULL,
-    method TEXT,
-    object_token TEXT,
-    raw_path TEXT,
-    normalized_path TEXT,
-    request_version TEXT,
-    expected_status INTEGER,
-    operation_kind TEXT NOT NULL DEFAULT 'unknown'
-        CHECK(operation_kind IN ('collection', 'item', 'child', 'workflow', 'custom', 'unknown')),
-    FOREIGN KEY(test_case_id) REFERENCES test_cases(id) ON DELETE CASCADE,
-    UNIQUE(test_case_id, ordinal)
-);
-
-CREATE INDEX IF NOT EXISTS idx_test_requests_case ON test_requests(test_case_id);
-CREATE INDEX IF NOT EXISTS idx_test_requests_route ON test_requests(method, normalized_path, request_version);
-
-CREATE TABLE IF NOT EXISTS test_endpoint_links (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    test_request_id INTEGER NOT NULL,
-    rest_endpoint_id INTEGER NOT NULL,
-    compatibility_id INTEGER,
-    resolution_kind TEXT NOT NULL
-        CHECK(resolution_kind IN ('exact_version', 'compatible_version')),
-    FOREIGN KEY(test_request_id) REFERENCES test_requests(id) ON DELETE CASCADE,
-    FOREIGN KEY(rest_endpoint_id) REFERENCES rest_endpoints(id) ON DELETE CASCADE,
-    FOREIGN KEY(compatibility_id) REFERENCES api_version_compatibility(id) ON DELETE SET NULL,
-    UNIQUE(test_request_id, rest_endpoint_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_test_endpoint_links_endpoint ON test_endpoint_links(rest_endpoint_id);
-
-CREATE TABLE IF NOT EXISTS test_entity_links (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    test_request_id INTEGER NOT NULL,
-    entity_id INTEGER NOT NULL,
-    rest_endpoint_id INTEGER NOT NULL,
-    FOREIGN KEY(test_request_id) REFERENCES test_requests(id) ON DELETE CASCADE,
-    FOREIGN KEY(entity_id) REFERENCES entity_nodes(id) ON DELETE CASCADE,
-    FOREIGN KEY(rest_endpoint_id) REFERENCES rest_endpoints(id) ON DELETE CASCADE,
-    UNIQUE(test_request_id, entity_id, rest_endpoint_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_test_entity_links_entity ON test_entity_links(entity_id);
-
-CREATE TABLE IF NOT EXISTS test_diagnostics (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    repository_id INTEGER NOT NULL,
     file_id INTEGER,
-    test_case_id INTEGER,
-    test_request_id INTEGER,
-    kind TEXT NOT NULL,
-    message TEXT NOT NULL,
-    source_line INTEGER,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(repository_id) REFERENCES source_repositories(id) ON DELETE CASCADE,
-    FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE SET NULL,
-    FOREIGN KEY(test_case_id) REFERENCES test_cases(id) ON DELETE CASCADE,
-    FOREIGN KEY(test_request_id) REFERENCES test_requests(id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_test_diagnostics_repository_kind
-    ON test_diagnostics(repository_id, kind);
-
-CREATE TABLE repos (
-    id INTEGER PRIMARY KEY,
-    name TEXT,                 -- ia-app | ia-core | ia-restapi-automation-tests | vendor-domain-service
-    kind TEXT,                 -- monorepo | domain_service | test_suite
-    language TEXT              -- php | java | ts
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS knowledge_items (
@@ -455,6 +356,7 @@ CREATE TABLE IF NOT EXISTS knowledge_items (
 
 CREATE TABLE IF NOT EXISTS openapispec_index (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
     file_id INTEGER,
     file_path TEXT,
     module TEXT,
@@ -466,7 +368,8 @@ CREATE TABLE IF NOT EXISTS openapispec_index (
     x_mapped_to TEXT,
     title TEXT,
     state TEXT,
-    last_seen_at TEXT
+    last_seen_at TEXT,
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_openapispec_file_id ON openapispec_index(file_id);
@@ -477,6 +380,7 @@ CREATE INDEX IF NOT EXISTS idx_openapispec_x_mapped_to ON openapispec_index(x_ma
 
 CREATE TABLE IF NOT EXISTS security_operations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
     op_key TEXT NOT NULL,
     op_numeric_id INTEGER,
     title TEXT,
@@ -490,7 +394,8 @@ CREATE TABLE IF NOT EXISTS security_operations (
     source_line INTEGER,
     source_kind TEXT NOT NULL,
     raw_hash TEXT,
-    UNIQUE(op_key, op_numeric_id, source_file, source_kind)
+    UNIQUE(repo_id, op_key, op_numeric_id, source_file, source_kind),
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_security_operations_key ON security_operations(op_key);
@@ -520,13 +425,15 @@ CREATE INDEX IF NOT EXISTS idx_security_allowops_operation_id
 
 CREATE TABLE IF NOT EXISTS security_policies (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
     policy_name TEXT NOT NULL,
     module TEXT,
     label TEXT,
     source_file TEXT NOT NULL,
     file_id INTEGER,
     source_line INTEGER,
-    UNIQUE(policy_name, source_file)
+    UNIQUE(repo_id, policy_name, source_file),
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_security_policies_name ON security_policies(policy_name);
@@ -557,10 +464,13 @@ CREATE INDEX IF NOT EXISTS idx_security_policy_eops_key ON security_policy_eops(
 
 CREATE TABLE IF NOT EXISTS security_menus (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
     module TEXT,
     menu_name TEXT,
-    source_file TEXT NOT NULL UNIQUE,
-    file_id INTEGER
+    source_file TEXT NOT NULL,
+    file_id INTEGER,
+    UNIQUE(repo_id, source_file),
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS security_menu_items (
@@ -595,13 +505,15 @@ CREATE INDEX IF NOT EXISTS idx_security_menu_op_links_op_key
 
 CREATE TABLE IF NOT EXISTS dbschema_tables (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
     table_name TEXT NOT NULL,
     primary_keys TEXT,
     source_file TEXT NOT NULL,
     file_id INTEGER,
     source_line INTEGER,
     raw_hash TEXT,
-    UNIQUE(table_name, source_file)
+    UNIQUE(repo_id, table_name, source_file),
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_dbschema_tables_name ON dbschema_tables(table_name);
@@ -621,6 +533,7 @@ CREATE INDEX IF NOT EXISTS idx_dbschema_fields_name ON dbschema_fields(field_nam
 
 CREATE TABLE IF NOT EXISTS entity_access_links (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
     entity_id INTEGER NOT NULL,
     surface TEXT NOT NULL,
     record_id INTEGER NOT NULL,
@@ -630,10 +543,11 @@ CREATE TABLE IF NOT EXISTS entity_access_links (
     confidence_mode TEXT NOT NULL DEFAULT 'deterministic_exact',
     notes TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
     FOREIGN KEY(entity_id) REFERENCES entity_nodes(id) ON DELETE CASCADE,
     FOREIGN KEY(evidence_file_id) REFERENCES files(id) ON DELETE SET NULL,
     FOREIGN KEY(evidence_symbol_id) REFERENCES symbols(id) ON DELETE SET NULL,
-    UNIQUE(entity_id, surface, record_id, link_type, evidence_file_id, evidence_symbol_id)
+    UNIQUE(repo_id, entity_id, surface, record_id, link_type, evidence_file_id, evidence_symbol_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_entity_access_links_entity_surface
@@ -642,6 +556,69 @@ CREATE INDEX IF NOT EXISTS idx_entity_access_links_surface_record
     ON entity_access_links(surface, record_id);
 CREATE INDEX IF NOT EXISTS idx_entity_access_links_evidence_file
     ON entity_access_links(evidence_file_id);
+
+CREATE TABLE IF NOT EXISTS repo_index_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
+    tracked_branch TEXT NOT NULL,
+    commit_sha TEXT,
+    manifest_hash TEXT,
+    builder_plan_hash TEXT,
+    catalog_fingerprint TEXT,
+    status TEXT NOT NULL CHECK(status IN ('building', 'validated', 'active', 'failed')),
+    started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at TEXT,
+    validation_summary TEXT,
+    diagnostic_error TEXT,
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_repo_index_runs_repo_started
+    ON repo_index_runs(repo_id, started_at DESC);
+
+CREATE TABLE IF NOT EXISTS repo_index_stages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL,
+    builder_name TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('pending', 'running', 'succeeded', 'failed', 'skipped')),
+    started_at TEXT,
+    completed_at TEXT,
+    record_count INTEGER,
+    diagnostic_error TEXT,
+    UNIQUE(run_id, builder_name),
+    FOREIGN KEY(run_id) REFERENCES repo_index_runs(id) ON DELETE CASCADE
+);
+
+-- Cross-repository traversal is permitted only for an explicitly extracted,
+-- evidence-backed link.  Unresolved identifiers are retained for triage.
+CREATE TABLE IF NOT EXISTS integration_links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_repo_id INTEGER NOT NULL,
+    target_repo_id INTEGER,
+    source_file_id INTEGER,
+    target_file_id INTEGER,
+    source_symbol_id INTEGER,
+    target_symbol_id INTEGER,
+    relation_type TEXT NOT NULL,
+    resolution_status TEXT NOT NULL CHECK(resolution_status IN ('resolved', 'unresolved', 'ambiguous', 'invalid')),
+    external_identifier TEXT,
+    evidence TEXT NOT NULL,
+    confidence REAL NOT NULL DEFAULT 1.0,
+    source_commit_sha TEXT,
+    target_commit_sha TEXT,
+    extractor TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    validated_at TEXT,
+    FOREIGN KEY(source_repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    FOREIGN KEY(target_repo_id) REFERENCES repos(id) ON DELETE SET NULL,
+    FOREIGN KEY(source_file_id) REFERENCES files(id) ON DELETE SET NULL,
+    FOREIGN KEY(target_file_id) REFERENCES files(id) ON DELETE SET NULL,
+    FOREIGN KEY(source_symbol_id) REFERENCES symbols(id) ON DELETE SET NULL,
+    FOREIGN KEY(target_symbol_id) REFERENCES symbols(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_integration_links_source_repo
+    ON integration_links(source_repo_id, resolution_status);
+CREATE INDEX IF NOT EXISTS idx_integration_links_target_repo
+    ON integration_links(target_repo_id, resolution_status);
 
 
 -- Advisory quality/triage view only. It intentionally excludes entities without

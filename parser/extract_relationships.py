@@ -45,8 +45,8 @@ try:
 except ModuleNotFoundError:
     yaml = None
 
-from config import REPO_PATH
 from catalog.db import get_connection
+from parser.repo_context import require_repo_scoped_files, resolve_repo
 
 RELATIONSHIP_EXTRACTOR = "phase2_regex_mvp"
 
@@ -187,15 +187,16 @@ def pick_col(columns: set[str], candidates: list[str]) -> Optional[str]:
 
 def load_files(
     conn: sqlite3.Connection,
+    repo_id: int,
     only_changed: bool,
     languages: list[str],
     limit: Optional[int],
     file_filter: Optional[str],
 ) -> list[FileRow]:
     placeholders = ",".join(["?"] * len(languages))
-    params: list[object] = list(languages)
+    params: list[object] = [repo_id, *languages]
 
-    where = [f"language IN ({placeholders})"]
+    where = [f"repo_id = ?", f"language IN ({placeholders})"]
     if only_changed:
         where.append(
             "(last_relationships_extracted IS NULL OR last_indexed > last_relationships_extracted)"
@@ -229,6 +230,7 @@ def load_files(
 
 def load_symbols(
     conn: sqlite3.Connection,
+    repo_id: int,
 ) -> tuple[
     dict[str, list[SymbolRow]], dict[int, list[SymbolRow]], dict[str, list[SymbolRow]]
 ]:
@@ -246,21 +248,23 @@ def load_symbols(
 
     sql = f"""
         SELECT
-            {id_col} AS id,
-            {name_col} AS name,
-            {kind_col if kind_col else "'unknown'"} AS kind,
-            {parent_col if parent_col else "NULL"} AS parent_symbol,
-            {file_id_col if file_id_col else "NULL"} AS file_id,
-            {file_path_col if file_path_col else "NULL"} AS file_path
-        FROM symbols
-        WHERE {name_col} IS NOT NULL
+            s.{id_col} AS id,
+            s.{name_col} AS name,
+            {f"s.{kind_col}" if kind_col else "'unknown'"} AS kind,
+            {f"s.{parent_col}" if parent_col else "NULL"} AS parent_symbol,
+            {f"s.{file_id_col}" if file_id_col else "NULL"} AS file_id,
+            {f"s.{file_path_col}" if file_path_col else "NULL"} AS file_path
+        FROM symbols s
+        JOIN files f ON f.id = s.{file_id_col}
+        WHERE s.{name_col} IS NOT NULL
+          AND f.repo_id = ?
     """
 
     by_name: dict[str, list[SymbolRow]] = {}
     by_file: dict[int, list[SymbolRow]] = {}
     by_qualified_name: dict[str, list[SymbolRow]] = {}
 
-    for r in conn.execute(sql).fetchall():
+    for r in conn.execute(sql, (repo_id,)).fetchall():
         s = SymbolRow(
             id=r["id"],
             name=r["name"],
@@ -1132,34 +1136,31 @@ def extract_relationships_for_file(
     )
 
 
-def insert_relationships(conn: sqlite3.Connection, rels: Iterable[Relationship]) -> int:
+def insert_relationships(
+    conn: sqlite3.Connection, rels: Iterable[Relationship], repo_id: int
+) -> int:
     inserted = 0
 
-    sql = """
+    columns = [
+        "source_symbol_id", "source_name", "source_kind", "target_symbol_id",
+        "target_name", "target_kind", "relationship_type", "file_id", "file_path",
+        "language", "confidence", "evidence", "resolution_class",
+        "resolution_reason", "extractor",
+    ]
+    has_repo_id = "repo_id" in table_columns(conn, "relationships")
+    if has_repo_id:
+        columns.insert(0, "repo_id")
+    sql = f"""
         INSERT OR IGNORE INTO relationships (
-            source_symbol_id,
-            source_name,
-            source_kind,
-            target_symbol_id,
-            target_name,
-            target_kind,
-            relationship_type,
-            file_id,
-            file_path,
-            language,
-            confidence,
-            evidence,
-            resolution_class,
-            resolution_reason,
-            extractor
+            {", ".join(columns)}
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES ({", ".join("?" for _ in columns)})
     """
 
     for r in rels:
         cur = conn.execute(
             sql,
-            (
+            ((repo_id,) if has_repo_id else ()) + (
                 r.source_symbol_id,
                 r.source_name,
                 r.source_kind,
@@ -1183,24 +1184,36 @@ def insert_relationships(conn: sqlite3.Connection, rels: Iterable[Relationship])
     return inserted
 
 
-def reset_relationships(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        "DELETE FROM relationships WHERE extractor = ?", (RELATIONSHIP_EXTRACTOR,)
-    )
+def reset_relationships(conn: sqlite3.Connection, repo_id: int) -> None:
+    if "repo_id" in table_columns(conn, "relationships"):
+        conn.execute(
+            "DELETE FROM relationships WHERE extractor = ? AND repo_id = ?",
+            (RELATIONSHIP_EXTRACTOR, repo_id),
+        )
+    else:
+        conn.execute(
+            "DELETE FROM relationships WHERE extractor = ? "
+            "AND file_id IN (SELECT id FROM files WHERE repo_id = ?)",
+            (RELATIONSHIP_EXTRACTOR, repo_id),
+        )
     conn.commit()
 
 
 def extract_all(
     only_changed: bool = True,
     languages: list[str] | None = None,
-    repo_root: str = REPO_PATH,
+    repo_root: str | None = None,
+    repo_key: str | None = None,
     reset: bool = False,
     commit_every: int = 1000,
     limit: int | None = None,
     file_filter: str | None = None,
+    db_path: str | None = None,
 ) -> None:
-    conn = get_connection()
+    conn = get_connection(db_path)
     cur = conn.cursor()
+    require_repo_scoped_files(conn)
+    repo = resolve_repo(conn, repo_key)
     started = datetime.now(timezone.utc).isoformat()
 
     ensure_relationship_tracking_schema(conn)
@@ -1218,11 +1231,12 @@ def extract_all(
         reset_yaml_rel_stats()
 
     if reset:
-        reset_relationships(conn)
+        reset_relationships(conn, repo.id)
 
-    symbols_by_name, symbols_by_file, symbols_by_qualified_name = load_symbols(conn)
+    symbols_by_name, symbols_by_file, symbols_by_qualified_name = load_symbols(conn, repo.id)
     files = load_files(
         conn=conn,
+        repo_id=repo.id,
         only_changed=only_changed,
         languages=selected_languages,
         limit=limit,
@@ -1230,7 +1244,9 @@ def extract_all(
     )
     print(f"🔎 Extracting relationships from {len(files)} files")
 
-    repo_root_path = Path(repo_root).resolve()
+    if repo_root and Path(repo_root).resolve() != repo.local_root:
+        raise RuntimeError("--repo-root must match the registered repository local_root")
+    repo_root_path = repo.local_root
     total_inserted = 0
     errors = 0
     processed = 0
@@ -1244,7 +1260,7 @@ def extract_all(
                 symbols_by_file,
                 symbols_by_qualified_name,
             )
-            total_inserted += insert_relationships(conn, rels)
+            total_inserted += insert_relationships(conn, rels, repo.id)
             processed += 1
             cur.execute(
                 "UPDATE files SET last_relationships_extracted = ? WHERE id = ?",
@@ -1287,7 +1303,8 @@ if __name__ == "__main__":
         choices=sorted(EXTRACTORS.keys()),
         help="Limit extraction to one or more languages (repeat flag to pass multiple).",
     )
-    parser.add_argument("--repo-root", default=REPO_PATH)
+    parser.add_argument("--repo", help="Registered repo_key to extract")
+    parser.add_argument("--repo-root", help="Must match registered local_root")
     parser.add_argument("--limit", type=int)
     parser.add_argument(
         "--file", help="Only process files whose path contains this string"
@@ -1298,14 +1315,17 @@ if __name__ == "__main__":
         help=f"Delete previous {RELATIONSHIP_EXTRACTOR} relationships",
     )
     parser.add_argument("--commit-every", type=int, default=1000)
+    parser.add_argument("--db", help="Catalog database path")
     args = parser.parse_args()
 
     extract_all(
         only_changed=not args.full,
         languages=args.language,
         repo_root=args.repo_root,
+        repo_key=args.repo,
         reset=args.reset,
         commit_every=args.commit_every,
         limit=args.limit,
         file_filter=args.file,
+        db_path=args.db,
     )

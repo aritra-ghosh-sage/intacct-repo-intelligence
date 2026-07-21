@@ -1,0 +1,7 @@
+-- 019_multi_repo.sql
+--
+-- This migration rebuilds files while preserving file IDs, so it is executed
+-- by catalog.migrations.apply_multi_repo_migration rather than directly via
+-- sqlite3.  The Python runner performs the transaction, legacy repo backfill,
+-- foreign-key check, and creation of repo_index_runs, repo_index_stages, and
+-- integration_links.

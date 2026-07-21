@@ -28,9 +28,11 @@ from tqdm import tqdm
 
 try:
     from catalog.db import get_connection
+    from catalog.repositories import get_repository, resolve_repository_root
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from catalog.db import get_connection
+    from catalog.repositories import get_repository, resolve_repository_root
 
 try:
     import yaml
@@ -142,23 +144,23 @@ def _extract_endpoints_from_symbols(
 
 def _insert_endpoints(
     conn: sqlite3.Connection,
-    endpoints: list[tuple[str, str, str | None, int, int | None, int | None]],
+    repo_id: int,
+    endpoints: list[tuple[str, str, int, int | None, int | None]],
 ) -> int:
     """
     Insert REST endpoints into the database.
     Args:
         conn: Database connection
-        endpoints: List of (method, path, source_version, file_id, entity_id,
-            handler_symbol_id) tuples
+        endpoints: List of (method, path, file_id, entity_id, handler_symbol_id) tuples
     Returns:
         Count of inserted endpoints
     """
     inserted = 0
     sql = """
         INSERT OR IGNORE INTO rest_endpoints (
+            repo_id,
             method,
             path,
-            source_version,
             file_id,
             entity_id,
             handler_symbol_id
@@ -166,11 +168,21 @@ def _insert_endpoints(
         VALUES (?, ?, ?, ?, ?, ?)
     """
 
-    for method, path, source_version, file_id, entity_id, handler_symbol_id in endpoints:
+    for method, path, file_id, entity_id, handler_symbol_id in endpoints:
         try:
+            existing = conn.execute(
+                """
+                SELECT 1 FROM rest_endpoints
+                WHERE repo_id = ? AND method = ? AND path = ? AND file_id = ?
+                LIMIT 1
+                """,
+                (repo_id, method, path, file_id),
+            ).fetchone()
+            if existing is not None:
+                continue
             cur = conn.execute(
                 sql,
-                (method, path, source_version, file_id, entity_id, handler_symbol_id),
+                (repo_id, method, path, file_id, entity_id, handler_symbol_id),
             )
             if cur.rowcount > 0:
                 inserted += 1
@@ -182,7 +194,8 @@ def _insert_endpoints(
 
 def _update_endpoints(
     conn: sqlite3.Connection,
-    endpoints: list[tuple[str, str, str | None, int, int | None, int | None]],
+    repo_id: int,
+    endpoints: list[tuple[str, str, int, int | None, int | None]],
 ) -> int:
     """
     Backfill nullable columns for endpoints that already exist.
@@ -194,14 +207,14 @@ def _update_endpoints(
             handler_symbol_id = COALESCE(handler_symbol_id, ?)
         WHERE method = ?
           AND path = ?
-          AND source_version IS ?
           AND file_id = ?
+          AND repo_id = ?
     """
 
-    for method, path, source_version, file_id, entity_id, handler_symbol_id in endpoints:
+    for method, path, file_id, entity_id, handler_symbol_id in endpoints:
         cur = conn.execute(
             sql,
-            (entity_id, handler_symbol_id, method, path, source_version, file_id),
+            (entity_id, handler_symbol_id, method, path, file_id, repo_id),
         )
         if cur.rowcount > 0:
             updated += 1
@@ -209,7 +222,7 @@ def _update_endpoints(
     return updated
 
 
-def _resolve_entity_ids_by_file(conn: sqlite3.Connection) -> dict[int, int]:
+def _resolve_entity_ids_by_file(conn: sqlite3.Connection, repo_id: int) -> dict[int, int]:
     """
     Build a deterministic file_id -> entity_id map from OpenAPI-derived mappings.
 
@@ -224,10 +237,11 @@ def _resolve_entity_ids_by_file(conn: sqlite3.Connection) -> dict[int, int]:
         FROM entity_mappings
         WHERE file_id IS NOT NULL
           AND entity_id IS NOT NULL
+          AND repo_id = ?
           AND mapping_type LIKE 'openapispec_%'
         GROUP BY file_id
         """
-    ).fetchall()
+    , (repo_id,)).fetchall()
 
     resolved: dict[int, int] = {}
     for row in rows:
@@ -244,6 +258,7 @@ def _openapi_family_from_path(file_path: str) -> str:
 
 def _build_schema_entity_bridge(
     conn: sqlite3.Connection,
+    repo_id: int,
 ) -> dict[tuple[str, str, str], int]:
     """
     Build deterministic (module, canonical_name, family) -> entity_id mapping from schema rows.
@@ -259,15 +274,16 @@ def _build_schema_entity_bridge(
             em.entity_id
         FROM openapispec_index oi
         JOIN entity_mappings em
-          ON em.file_id = oi.file_id
+          ON em.file_id = oi.file_id AND em.repo_id = oi.repo_id
         WHERE oi.kind = 'schema'
           AND COALESCE(oi.state, 'active') = 'active'
           AND COALESCE(TRIM(oi.module), '') <> ''
           AND COALESCE(TRIM(oi.canonical_name), '') <> ''
           AND em.entity_id IS NOT NULL
           AND em.mapping_type LIKE 'openapispec_%'
+          AND oi.repo_id = ?
         """
-    ).fetchall()
+    , (repo_id,)).fetchall()
 
     grouped: dict[tuple[str, str, str], set[int]] = {}
     for row in rows:
@@ -288,13 +304,16 @@ def _normalize_name(value: str) -> str:
 
 def _build_entity_indexes(
     conn: sqlite3.Connection,
+    repo_id: int,
 ) -> tuple[dict[str, int], dict[str, list[int]]]:
     rows = conn.execute(
         """
-        SELECT id, name, ent_file
-        FROM entity_nodes
+        SELECT DISTINCT e.id, e.name, e.ent_file
+        FROM entity_nodes e
+        JOIN entity_mappings em ON em.entity_id = e.id
+        WHERE em.repo_id = ?
         """
-    ).fetchall()
+    , (repo_id,)).fetchall()
 
     by_ent_stem: dict[str, int] = {}
     by_normalized_name: dict[str, list[int]] = {}
@@ -393,6 +412,7 @@ def _resolve_handler_symbol_ids(
 def build(
     db: str,
     repo_root: Path,
+    repo_id: int,
     reset: bool = False,
 ) -> BuildStats:
     """
@@ -414,32 +434,38 @@ def build(
     conn = get_connection(db)
     try:
         if reset:
-            conn.execute("DELETE FROM rest_endpoints")
+            conn.execute("DELETE FROM rest_endpoints WHERE repo_id = ?", (repo_id,))
             conn.commit()
 
         stats = BuildStats()
-        entity_by_file_id = _resolve_entity_ids_by_file(conn)
-        entity_by_ent_stem, entity_by_name = _build_entity_indexes(conn)
-        schema_entity_bridge = _build_schema_entity_bridge(conn)
+        entity_by_file_id = _resolve_entity_ids_by_file(conn, repo_id)
+        entity_by_ent_stem, entity_by_name = _build_entity_indexes(conn, repo_id)
+        schema_entity_bridge = _build_schema_entity_bridge(conn, repo_id)
 
         # Get all OpenAPI spec files from openapispec_index
         # Focus on files in paths directories which contain REST endpoint definitions
         specs = conn.execute(
             """
-            SELECT id, file_id, file_path, kind, canonical_name, x_mapped_to,
-                   module, version
+            SELECT id, file_id, file_path, kind, canonical_name, x_mapped_to
+                 , module
             FROM openapispec_index
-                        WHERE (file_path LIKE '%/paths/%' OR kind = 'operations')
+                        WHERE repo_id = ?
+                            AND (file_path LIKE '%/paths/%' OR kind = 'operations')
                             AND file_path NOT LIKE '%/paths/workflows.%'
             ORDER BY file_path
-            """
+            """,
+            (repo_id,),
         ).fetchall()
 
         click.echo(f"📊 Found {len(specs)} OpenAPI specification files with paths")
 
         for spec_row in tqdm(specs, desc="Building REST endpoints", unit="spec"):
-            file_id = spec_row["file_id"]
-            file_path = spec_row["file_path"]
+            spec_id, file_id, file_path, kind = (
+                spec_row["id"],
+                spec_row["file_id"],
+                spec_row["file_path"],
+                spec_row["kind"],
+            )
             stats.specs_processed += 1
 
             if file_id is None:
@@ -473,13 +499,7 @@ def build(
                 stats.symbol_fallback_files += 1
                 stats.symbol_fallback_endpoints += len(endpoints)
 
-            # Endpoint version comes from the exact indexed OpenAPI row.  A
-            # missing value remains NULL and must not be treated as equivalent
-            # to another version by downstream test coverage linking.
-            source_version = str(spec_row["version"] or "").strip() or None
-
-            # Prepare data for insertion: (method, path, source_version,
-            # file_id, entity_id, handler_symbol_id).
+            # Prepare data for insertion: (method, path, file_id, entity_id, handler_symbol_id)
             # entity_id is populated only when deterministic evidence resolves to one entity.
             resolved_entity_id = entity_by_file_id.get(int(file_id))
             bridged_candidate = _resolve_entity_schema_bridge(
@@ -509,7 +529,6 @@ def build(
                 (
                     method,
                     path,
-                    source_version,
                     int(file_id),
                     resolved_entity_id,
                     handler_by_endpoint.get((method, path)),
@@ -518,9 +537,9 @@ def build(
             ]
 
             # Insert into database
-            inserted = _insert_endpoints(conn, endpoints_to_insert)
+            inserted = _insert_endpoints(conn, repo_id, endpoints_to_insert)
             stats.endpoints_inserted += inserted
-            stats.endpoints_updated += _update_endpoints(conn, endpoints_to_insert)
+            stats.endpoints_updated += _update_endpoints(conn, repo_id, endpoints_to_insert)
 
             # Commit periodically to avoid holding locks
             if stats.specs_processed % 100 == 0:
@@ -540,6 +559,7 @@ def cli() -> None:
 
 
 @cli.command("build")
+@click.option("--repo", required=True, help="Registered repository key to build.")
 @click.option(
     "--db",
     default=DEFAULT_DB,
@@ -549,8 +569,7 @@ def cli() -> None:
 @click.option(
     "--repo-root",
     type=click.Path(path_type=Path, exists=True, file_okay=False),
-    default=Path(DEFAULT_REPO_ROOT),
-    show_default=True,
+    default=None,
     help="Repository root path used to resolve OpenAPI YAML files.",
 )
 @click.option(
@@ -560,13 +579,21 @@ def cli() -> None:
 )
 def build_command(
     db: str,
-    repo_root: Path,
+    repo: str,
+    repo_root: Path | None,
     reset: bool,
 ) -> None:
     """Build REST endpoints from OpenAPI specification files."""
+    conn = get_connection(db)
+    try:
+        repository = get_repository(conn, repo)
+        resolved_root = repo_root.resolve() if repo_root is not None else resolve_repository_root(conn, repo)
+    finally:
+        conn.close()
     stats = build(
         db=db,
-        repo_root=repo_root.resolve(),
+        repo_root=resolved_root,
+        repo_id=int(repository["id"]),
         reset=reset,
     )
 
