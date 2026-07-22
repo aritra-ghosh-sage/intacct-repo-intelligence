@@ -293,7 +293,7 @@ def parse_feature(path: Path, mapping: dict[str, str]) -> list[CaseEvidence]:
 
 def _file_id(
     conn: sqlite3.Connection,
-    repository_id: int,
+    repo_id: int,
     root: Path,
     path: Path,
     *,
@@ -306,12 +306,21 @@ def _file_id(
         ".properties": "properties",
         ".json": "json",
     }.get(path.suffix, "unknown")
-    conn.execute("INSERT INTO files(repository_id,path,language,size_bytes,sha1) VALUES(?,?,?,?,?) ON CONFLICT(repository_id,path) DO UPDATE SET language=excluded.language,size_bytes=excluded.size_bytes,sha1=excluded.sha1", (repository_id, relative, language, path.stat().st_size, sha1))
-    return int(conn.execute("SELECT id FROM files WHERE repository_id=? AND path=?", (repository_id, relative)).fetchone()[0])
+    conn.execute("INSERT INTO files(repo_id,path,language,size_bytes,sha1) VALUES(?,?,?,?,?) ON CONFLICT(repo_id,path) DO UPDATE SET language=excluded.language,size_bytes=excluded.size_bytes,sha1=excluded.sha1", (repo_id, relative, language, path.stat().st_size, sha1))
+    return int(conn.execute("SELECT id FROM files WHERE repo_id=? AND path=?", (repo_id, relative)).fetchone()[0])
 
 
-def _endpoint_matches(conn: sqlite3.Connection, method: str, path: str, test_versions: tuple[str, ...]) -> list[sqlite3.Row]:
-    rows = conn.execute("SELECT id,entity_id,source_version,path FROM rest_endpoints WHERE method=?", (method,)).fetchall()
+def _endpoint_matches(
+    conn: sqlite3.Connection,
+    production_repo_id: int,
+    method: str,
+    path: str,
+    test_versions: tuple[str, ...],
+) -> list[sqlite3.Row]:
+    rows = conn.execute(
+        "SELECT id,entity_id,source_version,path FROM rest_endpoints WHERE repo_id=? AND method=?",
+        (production_repo_id, method),
+    ).fetchall()
     matches = []
     for row in rows:
         if canonicalize_path(row["path"]) != path or not row["source_version"]:
@@ -326,26 +335,32 @@ def _endpoint_matches(conn: sqlite3.Connection, method: str, path: str, test_ver
 
 def build(
     conn: sqlite3.Connection,
-    suite_id: str,
+    repo_key: str,
     suite_root: Path,
     object_mapping_path: Path,
     features_root: Path | None = None,
 ) -> dict[str, int]:
-    repo = conn.execute("SELECT id FROM source_repositories WHERE suite_id=? AND enabled=1", (suite_id,)).fetchone()
+    repo = conn.execute("SELECT id FROM repos WHERE repo_key=? AND enabled=1", (repo_key,)).fetchone()
     if not repo:
-        raise ValueError(f"No enabled source_repositories record for suite '{suite_id}'")
+        raise ValueError(f"No enabled repos record for REST automation repository '{repo_key}'")
+    production_repo = conn.execute(
+        "SELECT id FROM repos WHERE repo_key='ia-main' AND enabled=1"
+    ).fetchone()
+    if not production_repo:
+        raise ValueError("No enabled repos record for production REST repository 'ia-main'")
     suite_root = suite_root.resolve()
     features_root = (features_root or suite_root / "src/test/resources/features/rest-api").resolve()
     if not features_root.is_relative_to(suite_root):
         raise ValueError("features_root must be located inside suite_root")
-    repository_id = int(repo[0])
+    repo_id = int(repo[0])
+    production_repo_id = int(production_repo[0])
     mapping, mapping_diagnostics = load_object_mapping(object_mapping_path)
-    mapping_file_id = _file_id(conn, repository_id, suite_root, object_mapping_path) if object_mapping_path.is_relative_to(suite_root) else None
+    mapping_file_id = _file_id(conn, repo_id, suite_root, object_mapping_path) if object_mapping_path.is_relative_to(suite_root) else None
     stats = {"features": 0, "cases": 0, "requests": 0, "links": 0, "diagnostics": len(mapping_diagnostics)}
-    conn.execute("DELETE FROM test_diagnostics WHERE repository_id=?", (repository_id,))
-    conn.execute("DELETE FROM test_cases WHERE repository_id=?", (repository_id,))
+    conn.execute("DELETE FROM test_diagnostics WHERE repo_id=?", (repo_id,))
+    conn.execute("DELETE FROM test_cases WHERE repo_id=?", (repo_id,))
     for diagnostic in mapping_diagnostics:
-        conn.execute("INSERT INTO test_diagnostics(repository_id,file_id,kind,message) VALUES(?,?,?,?)", (repository_id, mapping_file_id, diagnostic.kind, diagnostic.message))
+        conn.execute("INSERT INTO test_diagnostics(repo_id,file_id,kind,message) VALUES(?,?,?,?)", (repo_id, mapping_file_id, diagnostic.kind, diagnostic.message))
     feature_paths = sorted(features_root.rglob("*.feature"))
     paired_properties = {path.with_suffix(".properties").resolve() for path in feature_paths}
     for properties_path in sorted(features_root.rglob("*.properties")):
@@ -353,15 +368,15 @@ def build(
             continue
         properties_file_id = _file_id(
             conn,
-            repository_id,
+            repo_id,
             suite_root,
             properties_path,
             read_contents=False,
         )
         conn.execute(
-            "INSERT INTO test_diagnostics(repository_id,file_id,kind,message) VALUES(?,?,?,?)",
+            "INSERT INTO test_diagnostics(repo_id,file_id,kind,message) VALUES(?,?,?,?)",
             (
-                repository_id,
+                repo_id,
                 properties_file_id,
                 "orphan_properties",
                 f"No same-stem feature file for: {properties_path.name}",
@@ -369,25 +384,25 @@ def build(
         )
         stats["diagnostics"] += 1
     for feature_path in feature_paths:
-        file_id = _file_id(conn, repository_id, suite_root, feature_path)
+        file_id = _file_id(conn, repo_id, suite_root, feature_path)
         stats["features"] += 1
         try:
             cases = parse_feature(feature_path, mapping)
         except Exception as exc:
             stats["diagnostics"] += 1
-            conn.execute("INSERT INTO test_diagnostics(repository_id,file_id,kind,message) VALUES(?,?,?,?)", (repository_id, file_id, "feature_parse_error", str(exc)))
+            conn.execute("INSERT INTO test_diagnostics(repo_id,file_id,kind,message) VALUES(?,?,?,?)", (repo_id, file_id, "feature_parse_error", str(exc)))
             continue
         feature_hash = hashlib.sha1(feature_path.read_bytes()).hexdigest()
         for case in cases:
-            cursor = conn.execute("INSERT INTO test_cases(repository_id,file_id,feature_name,scenario_name,case_name,example_row,feature_line,scenario_line,eligibility,tags_json,jira_refs_json,source_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", (repository_id,file_id,case.feature_name,case.scenario_name,case.case_name,case.example_row,case.feature_line,case.scenario_line,case.eligibility,json.dumps(case.tags),json.dumps(case.jira_refs),feature_hash))
+            cursor = conn.execute("INSERT INTO test_cases(repo_id,file_id,feature_name,scenario_name,case_name,example_row,feature_line,scenario_line,eligibility,tags_json,jira_refs_json,source_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", (repo_id,file_id,case.feature_name,case.scenario_name,case.case_name,case.example_row,case.feature_line,case.scenario_line,case.eligibility,json.dumps(case.tags),json.dumps(case.jira_refs),feature_hash))
             case_id = int(cursor.lastrowid)
             stats["cases"] += 1
             properties_path = feature_path.with_suffix(".properties")
-            properties_file_id = _file_id(conn, repository_id, suite_root, properties_path) if properties_path.exists() else None
+            properties_file_id = _file_id(conn, repo_id, suite_root, properties_path) if properties_path.exists() else None
             for version, source_kind, source_line in case.version_sources:
                 conn.execute("INSERT INTO test_case_versions(test_case_id,version_label,source_kind,source_file_id,source_line,raw_value) VALUES(?,?,?,?,?,?)", (case_id,version,source_kind,properties_file_id if source_kind == "properties" else file_id,source_line,version))
             for diagnostic in case.diagnostics:
-                conn.execute("INSERT INTO test_diagnostics(repository_id,file_id,test_case_id,kind,message,source_line) VALUES(?,?,?,?,?,?)", (repository_id,file_id,case_id,diagnostic.kind,diagnostic.message,diagnostic.line))
+                conn.execute("INSERT INTO test_diagnostics(repo_id,file_id,test_case_id,kind,message,source_line) VALUES(?,?,?,?,?,?)", (repo_id,file_id,case_id,diagnostic.kind,diagnostic.message,diagnostic.line))
             for request in case.requests:
                 cursor = conn.execute("INSERT INTO test_requests(test_case_id,ordinal,step_line,method,object_token,raw_path,normalized_path,request_version,expected_status,operation_kind) VALUES(?,?,?,?,?,?,?,?,?,?)", (case_id,request.ordinal,request.line,request.method,request.object_token,request.raw_path,request.normalized_path,request.version,request.expected_status,request.operation_kind))
                 request_id = int(cursor.lastrowid)
@@ -396,7 +411,13 @@ def build(
                     conn.execute("INSERT INTO test_case_versions(test_case_id,version_label,source_kind,source_file_id,source_line,raw_value) VALUES(?,?,?,?,?,?)", (case_id,request.version,"request_override",file_id,request.line,request.version))
                 if request.normalized_path and not case.version_conflicted:
                     versions = (request.version,) if request.version else case.versions
-                    for endpoint, compatibility_id, kind in _endpoint_matches(conn, request.method, request.normalized_path, versions):
+                    for endpoint, compatibility_id, kind in _endpoint_matches(
+                        conn,
+                        production_repo_id,
+                        request.method,
+                        request.normalized_path,
+                        versions,
+                    ):
                         conn.execute("INSERT INTO test_endpoint_links(test_request_id,rest_endpoint_id,compatibility_id,resolution_kind) VALUES(?,?,?,?)", (request_id,endpoint["id"],compatibility_id,"exact_version" if kind == "exact" else "compatible_version"))
                         if endpoint["entity_id"] is not None:
                             conn.execute("INSERT INTO test_entity_links(test_request_id,entity_id,rest_endpoint_id) VALUES(?,?,?)", (request_id,endpoint["entity_id"],endpoint["id"]))
@@ -407,7 +428,7 @@ def build(
 
 @click.command()
 @click.option("--db", "db_path", default=DEFAULT_DB, show_default=True)
-@click.option("--suite-id", required=True)
+@click.option("--repo", "repo_key", required=True, help="Registered workspace repo_key.")
 @click.option("--suite-root", type=click.Path(path_type=Path, exists=True), required=True)
 @click.option(
     "--features-root",
@@ -417,7 +438,7 @@ def build(
 @click.option("--object-mapping", "object_mapping", type=click.Path(path_type=Path, exists=True), required=True)
 def main(
     db_path: str,
-    suite_id: str,
+    repo_key: str,
     suite_root: Path,
     features_root: Path | None,
     object_mapping: Path,
@@ -426,7 +447,7 @@ def main(
     try:
         stats = build(
             get_connection(db_path),
-            suite_id,
+            repo_key,
             suite_root,
             object_mapping,
             features_root,

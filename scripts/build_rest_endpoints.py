@@ -145,13 +145,13 @@ def _extract_endpoints_from_symbols(
 def _insert_endpoints(
     conn: sqlite3.Connection,
     repo_id: int,
-    endpoints: list[tuple[str, str, int, int | None, int | None]],
+    endpoints: list[tuple[str, str, int, int | None, int | None, str | None]],
 ) -> int:
     """
     Insert REST endpoints into the database.
     Args:
         conn: Database connection
-        endpoints: List of (method, path, file_id, entity_id, handler_symbol_id) tuples
+        endpoints: List of (method, path, file_id, entity_id, handler_symbol_id, source_version) tuples
     Returns:
         Count of inserted endpoints
     """
@@ -163,12 +163,14 @@ def _insert_endpoints(
             path,
             file_id,
             entity_id,
-            handler_symbol_id
+            handler_symbol_id,
+            source_version
         )
-        VALUES (?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
     """
 
-    for method, path, file_id, entity_id, handler_symbol_id in endpoints:
+    for method, path, file_id, entity_id, handler_symbol_id, *versions in endpoints:
+        source_version = versions[0] if versions else None
         try:
             existing = conn.execute(
                 """
@@ -182,7 +184,7 @@ def _insert_endpoints(
                 continue
             cur = conn.execute(
                 sql,
-                (repo_id, method, path, file_id, entity_id, handler_symbol_id),
+                (repo_id, method, path, file_id, entity_id, handler_symbol_id, source_version),
             )
             if cur.rowcount > 0:
                 inserted += 1
@@ -195,7 +197,7 @@ def _insert_endpoints(
 def _update_endpoints(
     conn: sqlite3.Connection,
     repo_id: int,
-    endpoints: list[tuple[str, str, int, int | None, int | None]],
+    endpoints: list[tuple[str, str, int, int | None, int | None, str | None]],
 ) -> int:
     """
     Backfill nullable columns for endpoints that already exist.
@@ -204,17 +206,19 @@ def _update_endpoints(
     sql = """
         UPDATE rest_endpoints
         SET entity_id = COALESCE(entity_id, ?),
-            handler_symbol_id = COALESCE(handler_symbol_id, ?)
+            handler_symbol_id = COALESCE(handler_symbol_id, ?),
+            source_version = COALESCE(?, source_version)
         WHERE method = ?
           AND path = ?
           AND file_id = ?
           AND repo_id = ?
     """
 
-    for method, path, file_id, entity_id, handler_symbol_id in endpoints:
+    for method, path, file_id, entity_id, handler_symbol_id, *versions in endpoints:
+        source_version = versions[0] if versions else None
         cur = conn.execute(
             sql,
-            (entity_id, handler_symbol_id, method, path, file_id, repo_id),
+            (entity_id, handler_symbol_id, source_version, method, path, file_id, repo_id),
         )
         if cur.rowcount > 0:
             updated += 1
@@ -446,8 +450,7 @@ def build(
         # Focus on files in paths directories which contain REST endpoint definitions
         specs = conn.execute(
             """
-            SELECT id, file_id, file_path, kind, canonical_name, x_mapped_to
-                 , module
+            SELECT id, file_id, file_path, kind, canonical_name, x_mapped_to, module, version
             FROM openapispec_index
                         WHERE repo_id = ?
                             AND (file_path LIKE '%/paths/%' OR kind = 'operations')
@@ -532,6 +535,7 @@ def build(
                     int(file_id),
                     resolved_entity_id,
                     handler_by_endpoint.get((method, path)),
+                    str(spec_row["version"] or "").strip() or None,
                 )
                 for method, path in endpoints
             ]

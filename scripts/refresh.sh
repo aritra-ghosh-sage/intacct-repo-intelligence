@@ -39,18 +39,4 @@ db.init_db()
 "
 fi
 
-# Apply the table-rebuild migration before registering or refreshing.  The
-# manifest supplies the legacy checkout root/branch so no machine-specific
-# source path is embedded in this wrapper.
-DB="$DB" MANIFEST="$MANIFEST" REPO_KEY="$REPO_KEY" "$PYTHON_BIN" -c "
-import os
-from catalog.db import migrate_multi_repo
-from catalog.repositories import load_workspace_manifest
-manifest = load_workspace_manifest(os.environ['MANIFEST'])
-entry = next((r for r in manifest['repositories'] if r['repo_key'] == os.environ['REPO_KEY']), None)
-if entry is None:
-    raise SystemExit('repository not found in manifest: ' + os.environ['REPO_KEY'])
-migrate_multi_repo(db_path=os.environ['DB'], local_root=entry['local_root'], tracked_branch=entry['tracked_branch'])
-"
-
 exec "$PYTHON_BIN" -m scripts.refresh_workspace --db "$DB" --manifest "$MANIFEST" --repo "$REPO_KEY"

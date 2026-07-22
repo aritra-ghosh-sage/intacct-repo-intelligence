@@ -5,8 +5,8 @@ repositories:
     name: Intacct Main
     kind: monorepo
     language: php
-    remote_url: git@example.invalid:intacct/main.git
-    local_root: /home/aritraghosh/projects/main
+    remote_url: git@github.com:intacct/ia-app.git
+    local_root: ~/projects/main
     tracked_branch: main
     enabled: true
     profile: intacct_app
@@ -22,3 +22,21 @@ repositories:
       - openapi_link
       - rest_endpoints
       - entity_access_links
+  - repo_key: ia-restapi-automation
+    name: IA REST API Automation
+    kind: monorepo
+    language: gherkin
+    remote_url: git@github.com:intacct/ia-restapi-automation.git
+    local_root: ~/projects/ia-restapi-automation
+    tracked_branch: main
+    enabled: true
+    profile: rest_automation
+    builders:
+      - scan
+      - symbols
+      - relationships
+      - integration_links
+      - gherkin_coverage
+    rest_automation:
+      features_root: src/test/resources/features/rest-api
+      object_mapping: src/test/resources/object-mapping.json

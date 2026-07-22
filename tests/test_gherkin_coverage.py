@@ -117,37 +117,51 @@ class GherkinCoverageTests(unittest.TestCase):
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
         conn.executescript("""
-            CREATE TABLE rest_endpoints(id INTEGER, method TEXT, path TEXT, source_version TEXT, entity_id INTEGER);
+            CREATE TABLE rest_endpoints(id INTEGER, repo_id INTEGER, method TEXT, path TEXT, source_version TEXT, entity_id INTEGER);
             CREATE TABLE api_version_compatibility(id INTEGER, test_version TEXT, endpoint_version TEXT, status TEXT);
-            INSERT INTO rest_endpoints VALUES(1, 'GET', '/services/s1/objects/accounts-payable/account/{key}', 's1', 9);
+            INSERT INTO rest_endpoints VALUES(1, 1, 'GET', '/services/s1/objects/accounts-payable/account/{key}', 's1', 9);
             INSERT INTO api_version_compatibility VALUES(10, 'v0', 's1', 'active');
         """)
         self.assertEqual(canonicalize_path('/services/s1/objects/accounts-payable/account/{key}'), '/objects/accounts-payable/account/{key}')
-        compatible = _endpoint_matches(conn, "GET", "/objects/accounts-payable/account/{key}", ("v0",))
+        compatible = _endpoint_matches(
+            conn,
+            1,
+            "GET",
+            "/objects/accounts-payable/account/{key}",
+            ("v0",),
+        )
         self.assertEqual([(row[0]["id"], row[1], row[2]) for row in compatible], [(1, 10, "compatible")])
-        self.assertEqual(_endpoint_matches(conn, "GET", "/objects/accounts-payable/account/{key}", ("v2",)), [])
+        self.assertEqual(
+            _endpoint_matches(conn, 1, "GET", "/objects/accounts-payable/account/{key}", ("v2",)),
+            [],
+        )
 
     def _database(self, root: Path) -> sqlite3.Connection:
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
         schema = (Path(__file__).parents[1] / "catalog" / "schema.sql").read_text()
         conn.executescript(schema)
+        production_repo_id = conn.execute(
+            "INSERT INTO repos(repo_key, local_root, tracked_branch) VALUES ('ia-main', ?, 'main')",
+            (str(root / "main"),),
+        ).lastrowid
         conn.execute(
-            "INSERT INTO source_repositories(suite_id, repo_root, kind) VALUES (?, ?, 'test_suite')",
-            ("suite-a", str(root)),
+            "INSERT INTO repos(repo_key, local_root, tracked_branch) VALUES ('suite-a', ?, 'main')",
+            (str(root),),
         )
         endpoint_file_id = conn.execute(
-            "INSERT INTO files(repository_id, path, language) VALUES (1, 'openapi/account.yaml', 'yaml')"
+            "INSERT INTO files(repo_id, path, language) VALUES (?, 'openapi/account.yaml', 'yaml')",
+            (production_repo_id,),
         ).lastrowid
         entity_id = conn.execute(
             "INSERT INTO entity_nodes(name) VALUES ('Account')"
         ).lastrowid
         conn.execute(
             """
-            INSERT INTO rest_endpoints(method, path, source_version, entity_id, file_id)
-            VALUES ('POST', '/objects/accounts-payable/account', 'v1', ?, ?)
+            INSERT INTO rest_endpoints(repo_id, method, path, source_version, entity_id, file_id)
+            VALUES (?, 'POST', '/objects/accounts-payable/account', 'v1', ?, ?)
             """,
-            (entity_id, endpoint_file_id),
+            (production_repo_id, entity_id, endpoint_file_id),
         )
         conn.commit()
         return conn

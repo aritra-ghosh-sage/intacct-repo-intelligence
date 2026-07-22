@@ -13,6 +13,7 @@ from pathlib import Path
 
 
 MULTI_REPO_MIGRATION = "019_multi_repo"
+REST_AUTOMATION_COVERAGE_MIGRATION = "020_rest_automation_coverage"
 LEGACY_REPO_KEY = "ia-main"
 
 
@@ -237,7 +238,7 @@ _EMPTY_REBUILD_FAMILIES = (
     "security_menu_op_links", "security_menu_items", "dbschema_fields",
     "security_operations", "security_policies", "security_menus", "dbschema_tables",
     "relationships", "entity_roots", "openapi_file_ref_edges", "openapispec_index",
-    "rest_endpoints", "entity_access_links",
+    "rest_endpoints",
 )
 
 
@@ -296,6 +297,59 @@ def _rebuild_empty_legacy_families(conn: sqlite3.Connection) -> None:
                     conn.execute(ddl)
         finally:
             template.close()
+
+
+def _rebuild_entity_access_links(conn: sqlite3.Connection, repo_id: int) -> None:
+    """Replace the legacy global uniqueness contract with repo-scoped identity."""
+
+    if not _table_exists(conn, "entity_access_links"):
+        return
+    columns = _columns(conn, "entity_access_links")
+    if "repo_id" in columns:
+        return
+    conn.execute(
+        """CREATE TABLE entity_access_links_multi_repo_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo_id INTEGER NOT NULL,
+            entity_id INTEGER NOT NULL,
+            surface TEXT NOT NULL,
+            record_id INTEGER NOT NULL,
+            link_type TEXT NOT NULL,
+            evidence_file_id INTEGER,
+            evidence_symbol_id INTEGER,
+            confidence_mode TEXT NOT NULL DEFAULT 'deterministic_exact',
+            notes TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(entity_id) REFERENCES entity_nodes(id) ON DELETE CASCADE,
+            FOREIGN KEY(evidence_file_id) REFERENCES files(id) ON DELETE SET NULL,
+            FOREIGN KEY(evidence_symbol_id) REFERENCES symbols(id) ON DELETE SET NULL,
+            UNIQUE(repo_id, entity_id, surface, record_id, link_type, evidence_file_id, evidence_symbol_id)
+        )"""
+    )
+    available = columns
+    required = (
+        "id", "repo_id", "entity_id", "surface", "record_id", "link_type",
+        "evidence_file_id", "evidence_symbol_id", "confidence_mode", "notes", "created_at",
+    )
+    values = ", ".join(
+        "? AS repo_id" if column == "repo_id" else column if column in available else f"NULL AS {column}"
+        for column in required
+    )
+    conn.execute(
+        "INSERT INTO entity_access_links_multi_repo_new(" + ", ".join(required) + ") SELECT " + values + " FROM entity_access_links",
+        (repo_id,),
+    )
+    conn.execute("DROP TABLE entity_access_links")
+    conn.execute("ALTER TABLE entity_access_links_multi_repo_new RENAME TO entity_access_links")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_entity_access_links_entity_surface ON entity_access_links(entity_id, surface)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_entity_access_links_surface_record ON entity_access_links(surface, record_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_entity_access_links_evidence_file ON entity_access_links(evidence_file_id)"
+    )
 
 
 def _ensure_entity_occurrences(conn: sqlite3.Connection, repo_id: int | None) -> None:
@@ -394,6 +448,92 @@ def _create_multi_repo_tables(conn: sqlite3.Connection) -> None:
             conn.execute(statement)
 
 
+def _create_rest_automation_coverage_tables(conn: sqlite3.Connection) -> None:
+    """Install additive Gherkin coverage tables using the canonical repo registry."""
+    _add_columns(conn, "rest_endpoints", ("source_version TEXT",))
+    script = """
+        CREATE TABLE IF NOT EXISTS api_version_compatibility (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, test_version TEXT NOT NULL,
+            endpoint_version TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active'
+                CHECK(status IN ('active','deprecated','disabled')),
+            rationale TEXT NOT NULL, evidence TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(test_version, endpoint_version)
+        );
+        CREATE TABLE IF NOT EXISTS test_cases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, repo_id INTEGER NOT NULL,
+            file_id INTEGER NOT NULL, feature_name TEXT NOT NULL,
+            scenario_name TEXT NOT NULL, case_name TEXT NOT NULL, example_row INTEGER,
+            feature_line INTEGER NOT NULL, scenario_line INTEGER NOT NULL,
+            eligibility TEXT NOT NULL DEFAULT 'active'
+                CHECK(eligibility IN ('active','known_issue','ci_only','conditional')),
+            tags_json TEXT NOT NULL DEFAULT '[]', jira_refs_json TEXT NOT NULL DEFAULT '[]',
+            source_hash TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+            FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE CASCADE,
+            UNIQUE(repo_id, file_id, scenario_line, example_row)
+        );
+        CREATE INDEX IF NOT EXISTS idx_test_cases_repo ON test_cases(repo_id);
+        CREATE INDEX IF NOT EXISTS idx_test_cases_file ON test_cases(file_id);
+        CREATE INDEX IF NOT EXISTS idx_test_cases_eligibility ON test_cases(eligibility);
+        CREATE TABLE IF NOT EXISTS test_case_versions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, test_case_id INTEGER NOT NULL,
+            version_label TEXT NOT NULL, source_kind TEXT NOT NULL
+                CHECK(source_kind IN ('feature_tag','properties','request_override')),
+            source_file_id INTEGER, source_line INTEGER, raw_value TEXT NOT NULL,
+            FOREIGN KEY(test_case_id) REFERENCES test_cases(id) ON DELETE CASCADE,
+            FOREIGN KEY(source_file_id) REFERENCES files(id) ON DELETE SET NULL,
+            UNIQUE(test_case_id, version_label, source_kind, source_file_id, source_line)
+        );
+        CREATE INDEX IF NOT EXISTS idx_test_case_versions_case ON test_case_versions(test_case_id);
+        CREATE INDEX IF NOT EXISTS idx_test_case_versions_label ON test_case_versions(version_label);
+        CREATE TABLE IF NOT EXISTS test_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, test_case_id INTEGER NOT NULL,
+            ordinal INTEGER NOT NULL, step_line INTEGER NOT NULL, method TEXT,
+            object_token TEXT, raw_path TEXT, normalized_path TEXT, request_version TEXT,
+            expected_status INTEGER, operation_kind TEXT NOT NULL DEFAULT 'unknown'
+                CHECK(operation_kind IN ('collection','item','child','workflow','custom','unknown')),
+            FOREIGN KEY(test_case_id) REFERENCES test_cases(id) ON DELETE CASCADE,
+            UNIQUE(test_case_id, ordinal)
+        );
+        CREATE INDEX IF NOT EXISTS idx_test_requests_case ON test_requests(test_case_id);
+        CREATE INDEX IF NOT EXISTS idx_test_requests_route ON test_requests(method, normalized_path, request_version);
+        CREATE TABLE IF NOT EXISTS test_endpoint_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, test_request_id INTEGER NOT NULL,
+            rest_endpoint_id INTEGER NOT NULL, compatibility_id INTEGER,
+            resolution_kind TEXT NOT NULL CHECK(resolution_kind IN ('exact_version','compatible_version')),
+            FOREIGN KEY(test_request_id) REFERENCES test_requests(id) ON DELETE CASCADE,
+            FOREIGN KEY(rest_endpoint_id) REFERENCES rest_endpoints(id) ON DELETE CASCADE,
+            FOREIGN KEY(compatibility_id) REFERENCES api_version_compatibility(id) ON DELETE SET NULL,
+            UNIQUE(test_request_id, rest_endpoint_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_test_endpoint_links_endpoint ON test_endpoint_links(rest_endpoint_id);
+        CREATE TABLE IF NOT EXISTS test_entity_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, test_request_id INTEGER NOT NULL,
+            entity_id INTEGER NOT NULL, rest_endpoint_id INTEGER NOT NULL,
+            FOREIGN KEY(test_request_id) REFERENCES test_requests(id) ON DELETE CASCADE,
+            FOREIGN KEY(entity_id) REFERENCES entity_nodes(id) ON DELETE CASCADE,
+            FOREIGN KEY(rest_endpoint_id) REFERENCES rest_endpoints(id) ON DELETE CASCADE,
+            UNIQUE(test_request_id, entity_id, rest_endpoint_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_test_entity_links_entity ON test_entity_links(entity_id);
+        CREATE TABLE IF NOT EXISTS test_diagnostics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, repo_id INTEGER NOT NULL,
+            file_id INTEGER, test_case_id INTEGER, test_request_id INTEGER,
+            kind TEXT NOT NULL, message TEXT NOT NULL, source_line INTEGER,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+            FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE SET NULL,
+            FOREIGN KEY(test_case_id) REFERENCES test_cases(id) ON DELETE CASCADE,
+            FOREIGN KEY(test_request_id) REFERENCES test_requests(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_test_diagnostics_repo_kind ON test_diagnostics(repo_id, kind);
+    """
+    for statement in script.split(";"):
+        if statement.strip():
+            conn.execute(statement)
+
+
 def apply_multi_repo_migration(
     conn: sqlite3.Connection, *, local_root: str, tracked_branch: str = "main"
 ) -> None:
@@ -420,9 +560,20 @@ def apply_multi_repo_migration(
             _rebuild_files(conn, repo_id)
             _rebuild_empty_legacy_families(conn)
             _rebuild_workflows(conn, repo_id)
+            _rebuild_entity_access_links(conn, repo_id)
             _add_repo_ownership(conn, repo_id)
             _create_multi_repo_tables(conn)
             conn.execute("INSERT INTO schema_migrations(name) VALUES (?)", (MULTI_REPO_MIGRATION,))
+        coverage_applied = conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name = ?",
+            (REST_AUTOMATION_COVERAGE_MIGRATION,),
+        ).fetchone()
+        if coverage_applied is None:
+            _create_rest_automation_coverage_tables(conn)
+            conn.execute(
+                "INSERT INTO schema_migrations(name) VALUES (?)",
+                (REST_AUTOMATION_COVERAGE_MIGRATION,),
+            )
         legacy = conn.execute("SELECT id FROM repos WHERE repo_key = ?", (LEGACY_REPO_KEY,)).fetchone()
         _ensure_entity_occurrences(conn, int(legacy[0]) if legacy is not None else None)
         conn.execute("COMMIT")

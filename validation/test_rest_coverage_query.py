@@ -12,9 +12,9 @@ class RestCoverageQueryTests(unittest.TestCase):
             """
             CREATE TABLE rest_endpoints (id INTEGER PRIMARY KEY, method TEXT, path TEXT,
                 entity_id INTEGER, source_version TEXT);
-            CREATE TABLE source_repositories (id INTEGER PRIMARY KEY, suite_id TEXT);
+            CREATE TABLE repos (id INTEGER PRIMARY KEY, repo_key TEXT);
             CREATE TABLE files (id INTEGER PRIMARY KEY, path TEXT);
-            CREATE TABLE test_cases (id INTEGER PRIMARY KEY, repository_id INTEGER, file_id INTEGER,
+            CREATE TABLE test_cases (id INTEGER PRIMARY KEY, repo_id INTEGER, file_id INTEGER,
                 case_name TEXT, scenario_name TEXT, example_row TEXT, eligibility TEXT, jira_refs_json TEXT);
             CREATE TABLE test_requests (id INTEGER PRIMARY KEY, test_case_id INTEGER, step_line INTEGER,
                 request_version TEXT, expected_status INTEGER, operation_kind TEXT);
@@ -24,7 +24,7 @@ class RestCoverageQueryTests(unittest.TestCase):
                 entity_id INTEGER, rest_endpoint_id INTEGER);
             CREATE TABLE api_version_compatibility (id INTEGER PRIMARY KEY, test_version TEXT,
                 endpoint_version TEXT, status TEXT);
-            CREATE TABLE test_diagnostics (id INTEGER PRIMARY KEY, repository_id INTEGER, file_id INTEGER,
+            CREATE TABLE test_diagnostics (id INTEGER PRIMARY KEY, repo_id INTEGER, file_id INTEGER,
                 test_case_id INTEGER, test_request_id INTEGER, kind TEXT, message TEXT, source_line INTEGER);
             """
         )
@@ -32,7 +32,7 @@ class RestCoverageQueryTests(unittest.TestCase):
             """
             INSERT INTO rest_endpoints VALUES (1, 'GET', '/objects/ap-bill', 9, 's1');
             INSERT INTO rest_endpoints VALUES (2, 'POST', '/objects/ap-bill', 9, 's1');
-            INSERT INTO source_repositories VALUES (1, 'suite-a');
+            INSERT INTO repos VALUES (1, 'suite-a');
             INSERT INTO files VALUES (1, 'features/ap-bill.feature');
             INSERT INTO test_cases VALUES (1, 1, 1, 'Read bill', 'Read bill', NULL, 'active', '["JIRA-1"]');
             INSERT INTO test_cases VALUES (2, 1, 1, 'Create bill', 'Create bill', NULL, 'known_issue', '[]');

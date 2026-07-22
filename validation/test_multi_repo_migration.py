@@ -53,6 +53,17 @@ class MultiRepoMigrationTests(unittest.TestCase):
         apply_multi_repo_migration(conn, local_root="/tmp/main")
         apply_multi_repo_migration(conn, local_root="/tmp/main")
         self.assertEqual(conn.execute("SELECT COUNT(*) FROM schema_migrations WHERE name = '019_multi_repo'").fetchone()[0], 1)
+        self.assertEqual(
+            conn.execute(
+                "SELECT COUNT(*) FROM schema_migrations WHERE name = '020_rest_automation_coverage'"
+            ).fetchone()[0],
+            1,
+        )
+        self.assertIsNotNone(
+            conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='test_cases'"
+            ).fetchone()
+        )
 
     def test_migration_makes_workflow_identity_repo_qualified(self) -> None:
         conn = self.legacy_connection()
@@ -138,6 +149,61 @@ class MultiRepoMigrationTests(unittest.TestCase):
         self.assertEqual(conn.execute("SELECT COUNT(*) FROM openapispec_index").fetchone()[0], 2)
         self.assertEqual(conn.execute("SELECT COUNT(*) FROM entity_access_links").fetchone()[0], 2)
 
+    def test_entity_access_links_are_rebuilt_with_repo_scope(self) -> None:
+        conn = self.legacy_connection()
+        conn.executescript(
+            """
+            CREATE TABLE entity_nodes (id INTEGER PRIMARY KEY, name TEXT);
+            CREATE TABLE entity_access_links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                entity_id INTEGER NOT NULL,
+                surface TEXT NOT NULL,
+                record_id INTEGER NOT NULL,
+                link_type TEXT NOT NULL,
+                evidence_file_id INTEGER,
+                evidence_symbol_id INTEGER,
+                confidence_mode TEXT NOT NULL DEFAULT 'deterministic_exact',
+                notes TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(entity_id, surface, record_id, link_type, evidence_file_id, evidence_symbol_id)
+            );
+            INSERT INTO entity_nodes(id, name) VALUES (1, 'Invoice');
+            INSERT INTO entity_access_links(entity_id, surface, record_id, link_type, evidence_file_id)
+                VALUES (1, 'rest_endpoint', 22, 'file_id_overlap', 7);
+            """
+        )
+        conn.commit()
+        apply_multi_repo_migration(conn, local_root="/tmp/main")
+        main_id = get_repository(conn, "ia-main")["id"]
+        second_id = conn.execute(
+            "INSERT INTO repos(repo_key, local_root, tracked_branch) VALUES ('service', '/tmp/service', 'main')"
+        ).lastrowid
+        conn.execute(
+            """INSERT INTO entity_access_links(repo_id, entity_id, surface, record_id, link_type, evidence_file_id)
+               VALUES (?, 1, 'rest_endpoint', 22, 'file_id_overlap', 7)""",
+            (second_id,),
+        )
+        self.assertEqual(
+            conn.execute(
+                "SELECT COUNT(*) FROM entity_access_links WHERE entity_id = 1 AND record_id = 22"
+            ).fetchone()[0],
+            2,
+        )
+        self.assertEqual(
+            conn.execute(
+                "SELECT COUNT(*) FROM entity_access_links WHERE repo_id = ?",
+                (main_id,),
+            ).fetchone()[0],
+            1,
+        )
+        self.assertEqual(
+            conn.execute(
+                "SELECT COUNT(*) FROM entity_access_links WHERE repo_id = ?",
+                (second_id,),
+            ).fetchone()[0],
+            1,
+        )
+
     def test_manifest_registration_and_root_resolution(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "checkout"
@@ -159,6 +225,20 @@ class MultiRepoMigrationTests(unittest.TestCase):
             self.assertEqual(resolve_repository_root(conn, "service"), root.resolve())
             with self.assertRaises(RepositoryError):
                 get_repository(conn, "missing")
+
+    def test_rest_automation_manifest_requires_relative_evidence_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_path = Path(directory) / "repos.yaml"
+            manifest_path.write_text(
+                "version: 1\nrepositories:\n  - repo_key: suite\n"
+                "    local_root: /tmp/suite\n    tracked_branch: main\n"
+                "    profile: rest_automation\n"
+                "    rest_automation:\n      features_root: /outside\n"
+                "      object_mapping: object-mapping.json\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(RepositoryError, "relative path"):
+                load_workspace_manifest(manifest_path)
 
 
 if __name__ == "__main__":

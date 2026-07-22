@@ -339,7 +339,7 @@ def _coverage_rows(
             """
             SELECT DISTINCT
                 tc.id AS test_case_id,
-                sr.suite_id,
+                r.repo_key AS suite_id,
                 tc.case_name,
                 tc.scenario_name,
                 tc.example_row,
@@ -357,7 +357,7 @@ def _coverage_rows(
             FROM test_endpoint_links tel
             JOIN test_requests tr ON tr.id = tel.test_request_id
             JOIN test_cases tc ON tc.id = tr.test_case_id
-            JOIN source_repositories sr ON sr.id = tc.repository_id
+            JOIN repos r ON r.id = tc.repo_id
             LEFT JOIN files f ON f.id = tc.file_id
             LEFT JOIN api_version_compatibility avc ON avc.id = tel.compatibility_id
             WHERE tel.rest_endpoint_id = ?
@@ -365,7 +365,7 @@ def _coverage_rows(
                   SELECT 1 FROM test_entity_links te
                   WHERE te.test_request_id = tr.id AND te.entity_id = ?
               )
-            ORDER BY tc.eligibility, sr.suite_id, tc.case_name, tr.step_line, tc.id
+            ORDER BY tc.eligibility, r.repo_key, tc.case_name, tr.step_line, tc.id
             """,
             (endpoint["id"], entity_id),
         ).fetchall()
@@ -392,18 +392,18 @@ def _coverage_rows(
 
     diagnostics = conn.execute(
         """
-        SELECT DISTINCT td.kind, td.message, td.source_line AS line, sr.suite_id,
+        SELECT DISTINCT td.kind, td.message, td.source_line AS line, r.repo_key AS suite_id,
                f.path AS feature_path, tc.case_name, tc.id AS test_case_id
         FROM test_diagnostics td
         JOIN test_cases tc ON tc.id = td.test_case_id
-        JOIN source_repositories sr ON sr.id = tc.repository_id
+        JOIN repos r ON r.id = tc.repo_id
         LEFT JOIN files f ON f.id = td.file_id
         WHERE EXISTS (
             SELECT 1 FROM test_requests tr
             JOIN test_entity_links te ON te.test_request_id = tr.id
             WHERE tr.test_case_id = tc.id AND te.entity_id = ?
         )
-        ORDER BY td.kind, sr.suite_id, f.path, td.source_line, td.id
+        ORDER BY td.kind, r.repo_key, f.path, td.source_line, td.id
         """,
         (entity_id,),
     ).fetchall()
@@ -554,7 +554,7 @@ def coverage_command(
         _require_tables(
             conn,
             [
-                "rest_endpoints", "entity_nodes", "source_repositories",
+                "rest_endpoints", "entity_nodes", "repos",
                 "test_cases", "test_requests", "test_endpoint_links",
                 "test_entity_links", "test_diagnostics", "api_version_compatibility",
             ],

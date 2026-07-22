@@ -19,6 +19,40 @@ class RepositoryError(ValueError):
     """Raised when workspace repository configuration is invalid."""
 
 
+def rest_automation_paths(entry: dict[str, Any], root: Path) -> tuple[Path, Path]:
+    """Resolve and validate manifest-owned Gherkin evidence paths."""
+    config = entry.get("rest_automation")
+    if not isinstance(config, dict):
+        raise RepositoryError(
+            f"repository {entry.get('repo_key')} requires a rest_automation mapping"
+        )
+    values: list[Path] = []
+    for key, expected_kind in (("features_root", "directory"), ("object_mapping", "file")):
+        value = config.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise RepositoryError(
+                f"repository {entry.get('repo_key')} rest_automation.{key} must be a non-empty relative path"
+            )
+        candidate = Path(value)
+        if candidate.is_absolute():
+            raise RepositoryError(
+                f"repository {entry.get('repo_key')} rest_automation.{key} must be relative to local_root"
+            )
+        resolved = (root / candidate).resolve()
+        if not resolved.is_relative_to(root):
+            raise RepositoryError(
+                f"repository {entry.get('repo_key')} rest_automation.{key} must stay inside local_root"
+            )
+        if (expected_kind == "directory" and not resolved.is_dir()) or (
+            expected_kind == "file" and not resolved.is_file()
+        ):
+            raise RepositoryError(
+                f"repository {entry.get('repo_key')} rest_automation.{key} {expected_kind} does not exist: {resolved}"
+            )
+        values.append(resolved)
+    return values[0], values[1]
+
+
 def load_workspace_manifest(path: str | Path) -> dict[str, Any]:
     """Load and validate a version 1 workspace repository manifest.
 
@@ -54,6 +88,16 @@ def load_workspace_manifest(path: str | Path) -> dict[str, Any]:
         builders = entry.get("builders", [])
         if not isinstance(builders, list) or not all(isinstance(item, str) and item for item in builders):
             raise RepositoryError(f"repository {repo_key} builders must be a list of non-empty strings")
+        if entry.get("profile") == "rest_automation":
+            config = entry.get("rest_automation")
+            if not isinstance(config, dict):
+                raise RepositoryError(f"repository {repo_key} requires a rest_automation mapping")
+            for key in ("features_root", "object_mapping"):
+                value = config.get(key)
+                if not isinstance(value, str) or not value.strip() or Path(value).is_absolute():
+                    raise RepositoryError(
+                        f"repository {repo_key} rest_automation.{key} must be a non-empty relative path"
+                    )
     return document
 
 

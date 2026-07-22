@@ -18,6 +18,13 @@ class BuilderRegistryTests(unittest.TestCase):
         with self.assertRaisesRegex(BuilderPlanError, "not supported"):
             build_plan("generic", ["security"])
 
+    def test_rest_automation_runs_coverage_after_generic_cataloging(self) -> None:
+        plan = build_plan("rest_automation")
+        self.assertEqual(
+            plan,
+            ["scan", "symbols", "relationships", "integration_links", "gherkin_coverage"],
+        )
+
     def test_unknown_builder_is_rejected(self) -> None:
         with self.assertRaisesRegex(BuilderPlanError, "unknown builder"):
             build_plan("generic", ["made_up"])

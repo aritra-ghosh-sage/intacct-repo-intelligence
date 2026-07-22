@@ -450,6 +450,20 @@ Refresh one repository with a clean checkout:
 python scripts/refresh_workspace.py --db catalog/catalog.db --manifest config/workspace_repos.yaml --repo ia-main
 ```
 
+REST automation coverage is a repository-scoped candidate builder. Refresh
+`ia-main` first so its versioned REST endpoint and entity evidence is present,
+then refresh the Gherkin suite:
+
+```bash
+python scripts/refresh_workspace.py --db catalog/catalog.db --manifest config/workspace_repos.yaml --repo ia-main
+python scripts/refresh_workspace.py --db catalog/catalog.db --manifest config/workspace_repos.yaml --repo ia-restapi-automation
+```
+
+The suite reads only `.feature`, same-stem `.properties`, and the manifest
+configured `object-mapping.json`. It creates entity coverage only through an
+exact or explicitly compatible versioned REST endpoint link; Java support code
+is cataloged separately by the generic builders.
+
 Refresh runs against a candidate SQLite copy and promotes it only after
 validation. The result records the exact indexed commit SHA. A failed attempt
 does not replace the last active revision; it is retained separately as the

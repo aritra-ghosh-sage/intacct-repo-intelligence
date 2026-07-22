@@ -92,6 +92,70 @@ class WorkspaceRefreshTests(unittest.TestCase):
         finally:
             conn.close()
 
+    def test_rest_automation_refresh_builds_candidate_coverage(self) -> None:
+        directory, checkout, database, manifest = self._fixture()
+        self.addCleanup(directory.cleanup)
+        features = checkout / "features"
+        features.mkdir()
+        (features / "account.feature").write_text(
+            '''@version:v1
+Feature: Account
+  Scenario: Create account
+    When "POST" to "account" with key "" and file ""
+''',
+            encoding="utf-8",
+        )
+        (checkout / "object-mapping.json").write_text(
+            '{"accounts": {"account": "accounts-payable/account"}}',
+            encoding="utf-8",
+        )
+        self._git(checkout, "add", "features/account.feature", "object-mapping.json")
+        self._git(checkout, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "add coverage")
+        manifest.write_text(
+            "version: 1\nrepositories:\n"
+            "  - repo_key: service\n"
+            f"    local_root: {checkout}\n"
+            "    tracked_branch: main\n"
+            "    profile: rest_automation\n"
+            "    rest_automation:\n"
+            "      features_root: features\n"
+            "      object_mapping: object-mapping.json\n",
+            encoding="utf-8",
+        )
+        conn = sqlite3.connect(database)
+        try:
+            production_repo_id = conn.execute(
+                "INSERT INTO repos(repo_key,local_root,tracked_branch) VALUES ('ia-main','/tmp/main','main')"
+            ).lastrowid
+            endpoint_file_id = conn.execute(
+                "INSERT INTO files(repo_id,path,language) VALUES (?, 'openapi/account.yaml', 'yaml')",
+                (production_repo_id,),
+            ).lastrowid
+            entity_id = conn.execute("INSERT INTO entity_nodes(name) VALUES ('Account')").lastrowid
+            conn.execute(
+                """INSERT INTO rest_endpoints(repo_id,method,path,source_version,entity_id,file_id)
+                   VALUES (?, 'POST', '/objects/accounts-payable/account', 'v1', ?, ?)""",
+                (production_repo_id, entity_id, endpoint_file_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        refresh_repository(database, manifest, "service")
+        conn = sqlite3.connect(database)
+        try:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM test_cases").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM test_endpoint_links").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM test_entity_links").fetchone()[0], 1)
+            self.assertEqual(
+                conn.execute(
+                    "SELECT status FROM repo_index_stages WHERE builder_name='gherkin_coverage'"
+                ).fetchone()[0],
+                "succeeded",
+            )
+        finally:
+            conn.close()
+
     def test_compatibility_refresh_script_uses_workspace_runner(self) -> None:
         directory, _checkout, database, manifest = self._fixture()
         self.addCleanup(directory.cleanup)

@@ -14,7 +14,7 @@ from typing import Iterable
 class Builder:
     name: str
     dependencies: tuple[str, ...] = ()
-    profiles: frozenset[str] = frozenset({"generic", "intacct_app"})
+    profiles: frozenset[str] = frozenset({"generic", "intacct_app", "rest_automation"})
 
 
 BUILDERS: dict[str, Builder] = {
@@ -44,10 +44,16 @@ BUILDERS: dict[str, Builder] = {
         frozenset({"intacct_app"}),
     ),
     "integration_links": Builder("integration_links", ("relationships",)),
+    "gherkin_coverage": Builder(
+        "gherkin_coverage", ("integration_links",), frozenset({"rest_automation"})
+    ),
 }
 
 PROFILE_DEFAULTS: dict[str, tuple[str, ...]] = {
     "generic": ("scan", "symbols", "relationships", "integration_links"),
+    "rest_automation": (
+        "scan", "symbols", "relationships", "integration_links", "gherkin_coverage",
+    ),
     "intacct_app": (
         "scan",
         "symbols",

@@ -17,14 +17,15 @@ import subprocess
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
 
 from catalog.repositories import (
     get_repository,
     load_workspace_manifest,
     register_manifest,
+    rest_automation_paths,
     resolve_repository_root,
 )
+from catalog.db import migrate_multi_repo
 from scripts.builder_registry import build_plan
 
 
@@ -74,6 +75,13 @@ def _backup_database(source: Path, target: Path) -> None:
         source_conn.close()
 
 
+def _manifest_repository(manifest: dict, repo_key: str) -> dict:
+    entry = next((item for item in manifest["repositories"] if item["repo_key"] == repo_key), None)
+    if entry is None:
+        raise RefreshError(f"repository not found in manifest: {repo_key}")
+    return entry
+
+
 def _record_run(
     conn: sqlite3.Connection, repo_id: int, branch: str, sha: str, plan: list[str]
 ) -> int:
@@ -108,7 +116,14 @@ def _stage(conn: sqlite3.Connection, run_id: int, builder: str, status: str, err
     conn.commit()
 
 
-def _run_builder(builder: str, repo_key: str, repo_id: int, root: Path, candidate_db: str) -> None:
+def _run_builder(
+    builder: str,
+    repo_key: str,
+    repo_id: int,
+    root: Path,
+    candidate_db: str,
+    manifest_entry: dict,
+) -> None:
     if builder == "scan":
         from parser.scan_repo import scan
 
@@ -200,6 +215,33 @@ def _run_builder(builder: str, repo_key: str, repo_id: int, root: Path, candidat
         from scripts.build_entity_access_links import build
 
         build(candidate_db, reset=True, repo_key=repo_key)
+    elif builder == "gherkin_coverage":
+        from catalog.db import get_connection
+        from scripts.build_gherkin_coverage import build
+
+        features_root, object_mapping = rest_automation_paths(manifest_entry, root)
+        conn = get_connection(candidate_db)
+        try:
+            production_endpoints = conn.execute(
+                """
+                SELECT COUNT(*) FROM rest_endpoints re
+                JOIN repos r ON r.id = re.repo_id
+                WHERE r.repo_key = 'ia-main' AND re.source_version IS NOT NULL
+                """
+            ).fetchone()[0]
+            if not production_endpoints:
+                raise RefreshError(
+                    "ia-main REST endpoints are absent; refresh ia-main before REST automation coverage"
+                )
+            build(
+                conn,
+                repo_key=repo_key,
+                suite_root=root,
+                object_mapping_path=object_mapping,
+                features_root=features_root,
+            )
+        finally:
+            conn.close()
     else:
         raise RefreshError(
             f"builder {builder!r} has no repository-scoped runner yet; "
@@ -256,6 +298,11 @@ def refresh_repository(db_path: str | Path, manifest_path: str | Path, repo_key:
     if not active.is_file():
         raise RefreshError(f"catalog database does not exist: {active}")
     manifest = load_workspace_manifest(manifest_path)
+    manifest_entry = _manifest_repository(manifest, repo_key)
+    legacy_entry = next(
+        (entry for entry in manifest["repositories"] if entry["repo_key"] == "ia-main"),
+        None,
+    )
     candidate = active.with_name(f"{active.name}.candidate.{uuid.uuid4().hex}")
     previous = active.with_name(f"{active.name}.previous")
 
@@ -264,6 +311,12 @@ def refresh_repository(db_path: str | Path, manifest_path: str | Path, repo_key:
         conn = sqlite3.connect(candidate)
         conn.row_factory = sqlite3.Row
         try:
+            if legacy_entry is not None:
+                migrate_multi_repo(
+                    db_path=str(candidate),
+                    local_root=str(legacy_entry["local_root"]),
+                    tracked_branch=str(legacy_entry["tracked_branch"]),
+                )
             register_manifest(conn, manifest)
             conn.commit()
             repo = get_repository(conn, repo_key)
@@ -283,7 +336,14 @@ def refresh_repository(db_path: str | Path, manifest_path: str | Path, repo_key:
             for builder in plan:
                 _stage(conn, run_id, builder, "running")
                 try:
-                    _run_builder(builder, repo_key, int(repo["id"]), root, str(candidate))
+                    _run_builder(
+                        builder,
+                        repo_key,
+                        int(repo["id"]),
+                        root,
+                        str(candidate),
+                        manifest_entry,
+                    )
                 except Exception as exc:
                     _stage(conn, run_id, builder, "failed", str(exc))
                     raise
