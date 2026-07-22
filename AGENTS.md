@@ -114,7 +114,7 @@ python scripts/query_graph.py security-surface APBill
 - `openapispec_index.x_mapped_to` must match a valid `.ent` stem from `app/source/**/*.ent`; treat values outside this set as invalid metadata.
 - `openapispec_index.module` should exclude template-only files (`template*`) from graph/index flows unless explicitly modeled.
 - `openapispec_index.kind='unknown'` should be treated as triage-required and not silently considered equivalent to known kinds.
-- `entity_nodes.module` must represent normalized business module semantics, not raw folder names.
+- `entity_nodes` is canonical identity only. Repo-local entity facts such as `ent_file`, `module`, `table_name`, `view_name`, `dummy`, and `source_file_id` belong in `entity_occurrences`.
 - `relationships.target_kind` values like `unknown` and `cqry` require explicit evidence and should be audited for extraction misclassification.
 
 See [validation/phase2d1_remediation.md](validation/phase2d1_remediation.md) for current remediation rules and acceptance boundaries.
@@ -159,7 +159,7 @@ python scripts/query_catalog.py sql \
 
 # Entity module normalization spot-check.
 python scripts/query_catalog.py sql \
-	"SELECT id, name, module FROM entity_nodes ORDER BY id LIMIT 200"
+	"SELECT en.id, en.name, eo.module FROM entity_nodes en JOIN entity_occurrences eo ON eo.entity_id = en.id ORDER BY en.id, eo.repo_id LIMIT 200"
 
 # Relationship target_kind distribution to inspect unknown/cqry leakage.
 python scripts/query_catalog.py sql \

@@ -111,9 +111,13 @@ def _get_entities_by_name(
 ) -> dict[str, dict[str, list[int]]]:
     rows = conn.execute(
         """
-        SELECT DISTINCT en.id, en.name, en.module
+        SELECT DISTINCT en.id, en.name, eo.module
         FROM entity_nodes en
-        JOIN entity_mappings em ON em.entity_id = en.id
+        JOIN entity_occurrences eo
+          ON eo.entity_id = en.id
+        JOIN entity_mappings em
+          ON em.repo_id = eo.repo_id
+         AND em.entity_id = en.id
         WHERE em.repo_id = ?
         """,
         (repo_id,),

@@ -256,8 +256,9 @@ read-only parity validation and focused unit tests. SQLite query commands remain
 the authoritative evidence path; Ladybug is a rebuildable traversal projection.
 
 `graph_ready_entities` is an advisory triage view for entities with strong root
-evidence. It intentionally excludes weak or unrooted entities and must not be
-used to filter authoritative queries or the complete graph projection.
+evidence. It is derived from `entity_nodes` identity plus `entity_roots`
+strength signals. It intentionally excludes weak or unrooted entities and must
+not be used to filter authoritative queries or the complete graph projection.
 
 ### Query JSON Contract v1
 
@@ -462,7 +463,8 @@ python scripts/refresh_workspace.py --db catalog/catalog.db --manifest config/wo
 The suite reads only `.feature`, same-stem `.properties`, and the manifest
 configured `object-mapping.json`. It creates entity coverage only through an
 exact or explicitly compatible versioned REST endpoint link; Java support code
-is cataloged separately by the generic builders.
+is cataloged separately by the generic builders, and Java files are not parsed
+for Gherkin coverage.
 
 Refresh runs against a candidate SQLite copy and promotes it only after
 validation. The result records the exact indexed commit SHA. A failed attempt

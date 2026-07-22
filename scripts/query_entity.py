@@ -235,6 +235,35 @@ def _workflow_type_counts(workflows_by_type: dict[str, list[dict[str, Any]]]) ->
     }
 
 
+def _collect_entity_db_tables(
+    conn: sqlite3.Connection, entity_id: int
+) -> list[sqlite3.Row]:
+    return conn.execute(
+        """
+        WITH matched_tables AS (
+            SELECT DISTINCT dt.id, dt.table_name, dt.primary_keys
+            FROM entity_occurrences eo
+            JOIN dbschema_tables dt
+                ON LOWER(dt.table_name) = LOWER(eo.table_name)
+            WHERE eo.entity_id = ?
+              AND eo.table_name IS NOT NULL
+              AND TRIM(eo.table_name) <> ''
+        )
+        SELECT
+            mt.id,
+            mt.table_name,
+            mt.primary_keys,
+            COUNT(df.id) AS field_count
+        FROM matched_tables mt
+        LEFT JOIN dbschema_fields df
+            ON df.dbschema_table_id = mt.id
+        GROUP BY mt.id, mt.table_name, mt.primary_keys
+        ORDER BY mt.table_name
+        """,
+        (entity_id,),
+    ).fetchall()
+
+
 def _get_entity_or_error(
     conn: sqlite3.Connection,
     *,
@@ -335,19 +364,7 @@ def _collect_entity_flow_json(
         for row in get_root_symbols(conn, entity["id"], 0.75)
     ]
 
-    db_table_rows = conn.execute(
-        """
-        SELECT dt.id, dt.table_name, dt.primary_keys,
-               COUNT(df.id) AS field_count
-        FROM entity_nodes en
-        JOIN dbschema_tables dt ON LOWER(dt.table_name) = LOWER(en.table_name)
-        LEFT JOIN dbschema_fields df ON df.dbschema_table_id = dt.id
-        WHERE en.id = ?
-        GROUP BY dt.id
-        ORDER BY dt.table_name
-        """,
-        (entity["id"],),
-    ).fetchall()
+    db_table_rows = _collect_entity_db_tables(conn, entity["id"])
 
     db_tables: list[dict[str, Any]] = []
     for row in db_table_rows:
@@ -1814,19 +1831,7 @@ def show_flow_view(conn: sqlite3.Connection, entity_name: str) -> int:
     for r in roots:
         click.echo(f"  {r['role']:<28} {r['name']}")
 
-    db_tables = conn.execute(
-        """
-        SELECT dt.table_name, dt.primary_keys,
-               COUNT(df.id) AS field_count
-        FROM entity_nodes en
-        JOIN dbschema_tables dt ON LOWER(dt.table_name) = LOWER(en.table_name)
-        LEFT JOIN dbschema_fields df ON df.dbschema_table_id = dt.id
-        WHERE en.id = ?
-        GROUP BY dt.id
-        ORDER BY dt.table_name
-        """,
-        (entity["id"],),
-    ).fetchall()
+    db_tables = _collect_entity_db_tables(conn, entity["id"])
 
     print_section("DB Schema")
     if db_tables:
@@ -1835,7 +1840,9 @@ def show_flow_view(conn: sqlite3.Connection, entity_name: str) -> int:
             pkey_str = f"  pk=[{pkeys}]" if pkeys else ""
             click.echo(f"  {t['table_name']:<40} {t['field_count']} fields{pkey_str}")
     else:
-        click.echo("  no db table mapped (entity_nodes.table_name is NULL or not in dbschema)")
+        click.echo(
+            "  no db table mapped (entity_occurrences.table_name is NULL or not in dbschema)"
+        )
 
     wfs = get_workflows(conn, entity["id"])
 

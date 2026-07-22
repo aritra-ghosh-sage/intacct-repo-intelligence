@@ -204,6 +204,77 @@ class MultiRepoMigrationTests(unittest.TestCase):
             1,
         )
 
+    def test_schema_contract_moves_repo_local_entity_metadata_to_occurrences(self) -> None:
+        conn = self.legacy_connection()
+        conn.executescript(
+            """
+            CREATE TABLE entity_nodes (id INTEGER PRIMARY KEY, name TEXT);
+            CREATE TABLE entity_access_links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                entity_id INTEGER NOT NULL,
+                surface TEXT NOT NULL,
+                record_id INTEGER NOT NULL,
+                link_type TEXT NOT NULL,
+                evidence_file_id INTEGER,
+                evidence_symbol_id INTEGER,
+                confidence_mode TEXT NOT NULL DEFAULT 'deterministic_exact',
+                notes TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(entity_id, surface, record_id, link_type, evidence_file_id, evidence_symbol_id)
+            );
+            INSERT INTO entity_nodes(id, name) VALUES (1, 'Invoice');
+            INSERT INTO entity_access_links(entity_id, surface, record_id, link_type, evidence_file_id)
+                VALUES (1, 'rest_endpoint', 22, 'file_id_overlap', 7);
+            """
+        )
+        apply_multi_repo_migration(conn, local_root="/tmp/main")
+
+        entity_node_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(entity_nodes)").fetchall()
+        }
+        self.assertTrue(
+            {"ent_file", "module", "table_name", "view_name", "dummy"}.isdisjoint(
+                entity_node_columns
+            )
+        )
+
+        occurrence_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(entity_occurrences)").fetchall()
+        }
+        self.assertTrue(
+            {
+                "repo_id",
+                "entity_id",
+                "ent_file",
+                "module",
+                "table_name",
+                "view_name",
+                "dummy",
+                "source_file_id",
+                "extractor",
+            }.issubset(occurrence_columns)
+        )
+
+        index_rows = conn.execute("PRAGMA index_list(entity_access_links)").fetchall()
+        unique_index_names = [row["name"] for row in index_rows if row["unique"]]
+        unique_column_sets = [
+            [info["name"] for info in conn.execute(f"PRAGMA index_info('{index_name}')").fetchall()]
+            for index_name in unique_index_names
+        ]
+        self.assertIn(
+            [
+                "repo_id",
+                "entity_id",
+                "surface",
+                "record_id",
+                "link_type",
+                "evidence_file_id",
+                "evidence_symbol_id",
+            ],
+            unique_column_sets,
+        )
+
     def test_manifest_registration_and_root_resolution(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "checkout"

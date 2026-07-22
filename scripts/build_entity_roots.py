@@ -47,6 +47,15 @@ def q(conn: Any, sql: str, params: tuple[Any, ...] = ()) -> list[Any]:
     return conn.execute(sql, params).fetchall()
 
 
+def _resolve_repo_id(conn: Any, repo_root: str) -> int | None:
+    normalized_root = str(Path(repo_root).resolve())
+    row = conn.execute(
+        "SELECT id FROM repos WHERE local_root = ?",
+        (normalized_root,),
+    ).fetchone()
+    return int(row["id"]) if row else None
+
+
 def ensure_entity_roots_columns(conn: Any) -> None:
     cols = {
         row["name"]
@@ -155,18 +164,22 @@ def build_entity_roots(conn: Any, reset: bool, repo_id: int) -> int:
     return 0
 
 
-def check_structural(conn: Any) -> list[tuple[str, list[Any]]]:
+def check_structural(conn: Any, repo_root: str = DEFAULT_REPO_ROOT) -> list[tuple[str, list[Any]]]:
     findings: list[tuple[str, list[Any]]] = []
+    repo_id = _resolve_repo_id(conn, repo_root)
 
-    missing_ent = q(
-        conn,
-        """
-        SELECT name
-        FROM entity_nodes
-        WHERE ent_file IS NULL OR ent_file = ''
-        """,
-    )
-    findings.append(("entity_nodes without ent_file", [r["name"] for r in missing_ent]))
+    sql = """
+        SELECT DISTINCT en.name
+        FROM entity_occurrences eo
+        JOIN entity_nodes en ON en.id = eo.entity_id
+        WHERE (eo.ent_file IS NULL OR eo.ent_file = '')
+    """
+    params: tuple[Any, ...] = ()
+    if repo_id is not None:
+        sql += " AND eo.repo_id = ?"
+        params = (repo_id,)
+    missing_ent = q(conn, sql, params)
+    findings.append(("entity_occurrences without ent_file", [r["name"] for r in missing_ent]))
 
     orphan_mappings = q(
         conn,
@@ -244,14 +257,25 @@ def check_structural(conn: Any) -> list[tuple[str, list[Any]]]:
 
 def check_filesystem(conn: Any, repo_root: str) -> list[tuple[str, list[Any]]]:
     findings: list[tuple[str, list[Any]]] = []
+    repo_id = _resolve_repo_id(conn, repo_root)
 
     missing_ent_files: list[tuple[str, str | None]] = []
-    for row in q(conn, "SELECT name, ent_file FROM entity_nodes"):
+    sql = """
+        SELECT en.name, eo.ent_file
+        FROM entity_occurrences eo
+        JOIN entity_nodes en ON en.id = eo.entity_id
+        WHERE eo.ent_file IS NOT NULL AND eo.ent_file <> ''
+    """
+    params: tuple[Any, ...] = ()
+    if repo_id is not None:
+        sql += " AND eo.repo_id = ?"
+        params = (repo_id,)
+    for row in q(conn, sql, params):
         full = os.path.join(repo_root, row["ent_file"] or "")
         if not row["ent_file"] or not os.path.exists(full):
             missing_ent_files.append((row["name"], row["ent_file"]))
 
-    findings.append(("entity_nodes with .ent files missing on disk", missing_ent_files))
+    findings.append(("entity_occurrences with .ent files missing on disk", missing_ent_files))
 
     missing_class_files: list[tuple[str, str | None, str | None]] = []
     rows = q(
@@ -285,6 +309,7 @@ def check_filesystem(conn: Any, repo_root: str) -> list[tuple[str, list[Any]]]:
 
 def check_repo_vs_db(conn: Any, repo_root: str) -> list[tuple[str, list[Any]]]:
     findings: list[tuple[str, list[Any]]] = []
+    repo_id = _resolve_repo_id(conn, repo_root)
 
     repo_ents: set[str] = set()
     app_root = os.path.join(repo_root, "app")
@@ -295,11 +320,12 @@ def check_repo_vs_db(conn: Any, repo_root: str) -> list[tuple[str, list[Any]]]:
             rel = os.path.relpath(os.path.join(root, name), repo_root)
             repo_ents.add(rel.replace(os.sep, "/"))
 
-    db_ents = {
-        r["ent_file"]
-        for r in q(conn, "SELECT ent_file FROM entity_nodes")
-        if r["ent_file"]
-    }
+    sql = "SELECT ent_file FROM entity_occurrences WHERE ent_file IS NOT NULL AND ent_file <> ''"
+    params: tuple[Any, ...] = ()
+    if repo_id is not None:
+        sql += " AND repo_id = ?"
+        params = (repo_id,)
+    db_ents = {r["ent_file"] for r in q(conn, sql, params)}
     only_in_repo = sorted(repo_ents - db_ents)
     only_in_db = sorted(db_ents - repo_ents)
 

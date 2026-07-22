@@ -27,10 +27,6 @@ class RepoScopedOpenApiTests(unittest.TestCase):
         self.conn.row_factory = sqlite3.Row
         schema = (Path(__file__).parents[1] / "catalog/schema.sql").read_text()
         self.conn.executescript(schema)
-        self.conn.executescript(
-            "ALTER TABLE entity_nodes ADD COLUMN module TEXT;"
-            "ALTER TABLE entity_nodes ADD COLUMN ent_file TEXT;"
-        )
         self.conn.executemany(
             "INSERT INTO repos(id, repo_key, local_root, tracked_branch) VALUES (?, ?, ?, 'main')",
             [(1, "one", str(self.one)), (2, "two", str(self.two))],
@@ -71,7 +67,6 @@ class RepoScopedOpenApiTests(unittest.TestCase):
             )[0],
             21,
         )
-        self.conn.execute("INSERT INTO entity_nodes(id, name, module) VALUES (1, 'Bill', 'ap')")
         self.assertTrue(
             link_openapispec._insert_mapping(self.conn, 1, 1, 11, "openapispec_paths", "same")
         )

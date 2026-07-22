@@ -32,6 +32,26 @@ DEFAULT_DB = "catalog/catalog.db"
 DEFAULT_REPO_ROOT = "/home/aritraghosh/projects/main"
 DEFAULT_REPORT = "validation/phase2b_report.md"
 DEFAULT_ENTITIES = "config/entity_definitions.jsonl"
+ENTITY_NODE_REPO_LOCAL_COLUMNS = {
+    "ent_file",
+    "module",
+    "table_name",
+    "view_name",
+    "dummy",
+    "source_file_id",
+}
+ENTITY_OCCURRENCE_REQUIRED_COLUMNS = {
+    "id",
+    "repo_id",
+    "entity_id",
+    "ent_file",
+    "module",
+    "table_name",
+    "view_name",
+    "dummy",
+    "source_file_id",
+    "extractor",
+}
 
 
 def connect(db_path: str) -> sqlite3.Connection:
@@ -53,6 +73,15 @@ def missing_columns(
     conn: sqlite3.Connection, table: str, required: set[str]
 ) -> list[str]:
     return sorted(list(required - table_columns(conn, table)))
+
+
+def resolve_repo_id(conn: sqlite3.Connection, repo_root: str) -> int | None:
+    normalized_root = str(Path(repo_root).resolve())
+    row = conn.execute(
+        "SELECT id FROM repos WHERE local_root = ?",
+        (normalized_root,),
+    ).fetchone()
+    return int(row["id"]) if row else None
 
 
 def load_entities_jsonl(path: str) -> list[dict]:
@@ -97,29 +126,54 @@ def check_scan_output_roles(entities_rows: list[dict]) -> list:
     return findings
 
 
+def check_schema_contract(conn: sqlite3.Connection) -> list:
+    findings = []
+
+    entity_node_columns = table_columns(conn, "entity_nodes")
+    forbidden = sorted(entity_node_columns & ENTITY_NODE_REPO_LOCAL_COLUMNS)
+    findings.append(
+        ("entity_nodes must not expose repo-local declaration columns", forbidden)
+    )
+    missing_occurrence_columns = missing_columns(
+        conn, "entity_occurrences", ENTITY_OCCURRENCE_REQUIRED_COLUMNS
+    )
+    findings.append(
+        ("entity_occurrences missing expected columns", missing_occurrence_columns)
+    )
+    return findings
+
+
 def check_entities_jsonl_vs_db(
-    conn: sqlite3.Connection, entities_rows: list[dict]
+    conn: sqlite3.Connection, entities_rows: list[dict], repo_root: str
 ) -> list:
     findings = []
 
-    required = {"id", "name", "ent_file", "module", "table_name", "view_name", "dummy"}
+    required = {"id", "name", "entity_type"}
     missing = missing_columns(conn, "entity_nodes", required)
     findings.append(("entity_nodes missing expected columns", missing))
     if missing:
         return findings
 
+    repo_id = resolve_repo_id(conn, repo_root)
     file_entities = {r["entity_name"]: r for r in entities_rows if r.get("entity_name")}
-    db_rows = q(
-        conn,
-        "SELECT id, name, ent_file, module, table_name, view_name, dummy FROM entity_nodes",
-    )
+    sql = """
+        SELECT en.id, en.name, eo.ent_file, eo.module, eo.table_name, eo.view_name, eo.dummy
+        FROM entity_occurrences eo
+        JOIN entity_nodes en ON en.id = eo.entity_id
+    """
+    params: tuple = ()
+    if repo_id is not None:
+        sql += " WHERE eo.repo_id = ?"
+        params = (repo_id,)
+    sql += " ORDER BY en.name"
+    db_rows = q(conn, sql, params)
     db_entities = {r["name"]: r for r in db_rows}
 
     missing_in_db = sorted(set(file_entities) - set(db_entities))
-    findings.append(("entities in JSONL but missing in entity_nodes", missing_in_db))
+    findings.append(("entities in JSONL but missing in entity_occurrences", missing_in_db))
 
     missing_in_jsonl = sorted(set(db_entities) - set(file_entities))
-    findings.append(("entities in entity_nodes but missing in JSONL", missing_in_jsonl))
+    findings.append(("entities in entity_occurrences but missing in JSONL", missing_in_jsonl))
 
     metadata_mismatches = []
     for name in sorted(set(file_entities) & set(db_entities)):
@@ -142,7 +196,7 @@ def check_entities_jsonl_vs_db(
 
     findings.append(
         (
-            "entity metadata mismatches between JSONL and entity_nodes",
+            "entity metadata mismatches between JSONL and entity_occurrences",
             metadata_mismatches,
         )
     )
@@ -229,28 +283,31 @@ def check_mapping_roles_and_roots(conn: sqlite3.Connection) -> list:
 
 def check_structural(conn: sqlite3.Connection) -> list:
     findings = []
+    repo_id = resolve_repo_id(conn, DEFAULT_REPO_ROOT)
 
-    required = {"name", "ent_file", "entity_type"}
+    required = {"name", "entity_type"}
     missing = missing_columns(conn, "entity_nodes", required)
     findings.append(("entity_nodes missing expected columns", missing))
     if missing:
         return findings
 
+    repo_clause = " AND eo.repo_id = ?" if repo_id is not None else ""
+    repo_params = (repo_id,) if repo_id is not None else ()
     missing_ent = q(
         conn,
         """
-        SELECT name
-        FROM entity_nodes
-        WHERE (ent_file IS NULL OR ent_file = '')
-          AND id IN (
-              SELECT DISTINCT entity_id
-              FROM entity_mappings
-              WHERE mapping_type IN ({roles})
-          )
-    """.format(roles=", ".join(["?"] * len(ROLE_WEIGHT))),
-        tuple(ROLE_WEIGHT.keys()),
+        SELECT DISTINCT en.name
+        FROM entity_occurrences eo
+        JOIN entity_nodes en ON en.id = eo.entity_id
+        JOIN entity_mappings em
+            ON em.repo_id = eo.repo_id
+           AND em.entity_id = eo.entity_id
+        WHERE (eo.ent_file IS NULL OR eo.ent_file = '')
+          AND em.mapping_type IN ({roles})
+    """.format(roles=", ".join(["?"] * len(ROLE_WEIGHT))) + repo_clause,
+        tuple(ROLE_WEIGHT.keys()) + repo_params,
     )
-    findings.append(("entity_nodes without ent_file", [r["name"] for r in missing_ent]))
+    findings.append(("entity_occurrences without ent_file", [r["name"] for r in missing_ent]))
 
     orphan_mappings = q(
         conn,
@@ -373,22 +430,22 @@ def check_structural(conn: sqlite3.Connection) -> list:
     domain_without_type = q(
         conn,
         """
-        SELECT en.name
-        FROM entity_nodes en
+        SELECT DISTINCT en.name
+        FROM entity_occurrences eo
+        JOIN entity_nodes en ON en.id = eo.entity_id
+        JOIN entity_mappings em
+            ON em.repo_id = eo.repo_id
+           AND em.entity_id = eo.entity_id
         WHERE en.entity_type IN ('business_entity', 'domain_object')
-                    AND (en.ent_file IS NULL OR en.ent_file = '')
-          AND en.id IN (
-              SELECT DISTINCT entity_id
-              FROM entity_mappings
-              WHERE mapping_type IN ({roles})
-          )
+          AND (eo.ent_file IS NULL OR eo.ent_file = '')
+          AND em.mapping_type IN ({roles})
     """.format(roles=", ".join(["?"] * len(ROLE_WEIGHT))),
         tuple(ROLE_WEIGHT.keys()),
     )
     if domain_without_type:
         findings.append(
             (
-                "domain entities missing ent_file despite classification",
+                "domain entities missing entity_occurrences.ent_file despite classification",
                 [r["name"] for r in domain_without_type],
             )
         )
@@ -417,22 +474,34 @@ def check_filesystem(
     repo_root: str,
 ) -> list:
     findings = []
+    repo_id = resolve_repo_id(conn, repo_root)
 
-    required = {"name", "ent_file"}
+    required = {"name"}
     missing = missing_columns(conn, "entity_nodes", required)
     findings.append(("entity_nodes missing expected columns", missing))
     if missing:
         return findings
 
     missing_ent_files = []
-    for r in q(conn, "SELECT name, ent_file FROM entity_nodes"):
+    sql = """
+        SELECT en.name, eo.ent_file
+        FROM entity_occurrences eo
+        JOIN entity_nodes en ON en.id = eo.entity_id
+        WHERE eo.ent_file IS NOT NULL
+          AND eo.ent_file <> ''
+    """
+    params: tuple = ()
+    if repo_id is not None:
+        sql += " AND eo.repo_id = ?"
+        params = (repo_id,)
+    for r in q(conn, sql, params):
         if not r["ent_file"]:
             continue
         full = os.path.join(repo_root, r["ent_file"])
         if not os.path.exists(full):
             missing_ent_files.append((r["name"], r["ent_file"]))
 
-    findings.append(("entity_nodes with .ent files missing on disk", missing_ent_files))
+    findings.append(("entity_occurrences with .ent files missing on disk", missing_ent_files))
 
     missing_class_files = []
     rows = q(
@@ -472,12 +541,7 @@ def check_repo_vs_db(
     repo_root: str,
 ) -> list:
     findings = []
-
-    required = {"ent_file"}
-    missing = missing_columns(conn, "entity_nodes", required)
-    findings.append(("entity_nodes missing expected columns", missing))
-    if missing:
-        return findings
+    repo_id = resolve_repo_id(conn, repo_root)
 
     repo_ents = set()
     for root, _, files in os.walk(os.path.join(repo_root, "app")):
@@ -489,11 +553,17 @@ def check_repo_vs_db(
                 )
                 repo_ents.add(rel.replace(os.sep, "/"))
 
-    db_ents = {
-        r["ent_file"]
-        for r in q(conn, "SELECT ent_file FROM entity_nodes")
-        if r["ent_file"]
-    }
+    sql = """
+        SELECT ent_file
+        FROM entity_occurrences
+        WHERE ent_file IS NOT NULL
+          AND ent_file <> ''
+    """
+    params: tuple = ()
+    if repo_id is not None:
+        sql += " AND repo_id = ?"
+        params = (repo_id,)
+    db_ents = {r["ent_file"] for r in q(conn, sql, params)}
 
     only_in_repo = sorted(repo_ents - db_ents)
     only_in_db = sorted(db_ents - repo_ents)
@@ -676,6 +746,7 @@ def main() -> None:
 
     all_findings = [
         ("Scan output checks", check_scan_output_roles(entities_rows)),
+        ("Schema contract checks", check_schema_contract(conn)),
         ("JSONL vs DB checks", check_entities_jsonl_vs_db(conn, entities_rows)),
         ("Mapping/roots checks", check_mapping_roles_and_roots(conn)),
         ("Structural checks", check_structural(conn)),
