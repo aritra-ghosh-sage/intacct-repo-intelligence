@@ -466,6 +466,26 @@ exact or explicitly compatible versioned REST endpoint link; Java support code
 is cataloged separately by the generic builders, and Java files are not parsed
 for Gherkin coverage.
 
+Coverage evidence is stored and queried in SQLite, not projected into Ladybug.
+The CLI report is available with:
+
+```bash
+python scripts/query_rest.py coverage GLAccount --json
+```
+
+The read-only MCP server exposes the same report through the `rest_coverage`
+tool. Pass the canonical entity name and, when needed, an endpoint source
+version such as `s1`. The result includes each endpoint's coverage status,
+matching Gherkin cases, linked resolution/compatibility evidence, and directly
+attributable parser diagnostics. The CLI and MCP use the same query helper so
+their endpoint, case, and diagnostic results cannot drift independently.
+
+Coverage is intentionally not a Ladybug graph edge today: the SQLite rows are
+the authoritative evidence and retain the detailed test-case provenance. Use
+the graph for code/entity traversal and SQLite or `rest_coverage` for coverage
+auditing. A stale graph does not invalidate a SQLite coverage report, but a
+catalog refresh does require the normal graph rebuild before graph queries.
+
 Refresh runs against a candidate SQLite copy and promotes it only after
 validation. The result records the exact indexed commit SHA. A failed attempt
 does not replace the last active revision; it is retained separately as the

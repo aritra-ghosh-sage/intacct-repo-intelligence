@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Literal
 from mcp.server.fastmcp import FastMCP
 from config import CATALOG_DB, GRAPH_DB
+from catalog.rest_coverage import REQUIRED_TABLES, coverage_rows, coverage_summary
 
 DEFAULT_LIMIT, MAX_LIMIT = 25, 100
 
@@ -183,6 +184,51 @@ class Catalog:
                 data[key] = [_row(r) for r in c.execute(sql, (i, repo_key, repo_key))]
             return self.out("entity_context", data, c)
 
+    def coverage(
+        self, name: str, version: str | None = None, limit: int = DEFAULT_LIMIT
+    ) -> dict[str, Any]:
+        lim = _limit(limit)
+        with self.conn() as c:
+            missing = [table for table in REQUIRED_TABLES if not self.table(c, table)]
+            if missing:
+                return self.out(
+                    "rest_coverage",
+                    {},
+                    c,
+                    "error",
+                    {
+                        "code": "coverage_tables_missing",
+                        "message": "REST coverage tables are unavailable",
+                        "details": {"missing_tables": missing},
+                    },
+                )
+            entity = c.execute(
+                "SELECT id,name FROM entity_nodes WHERE name=? COLLATE NOCASE",
+                (name,),
+            ).fetchone()
+            if not entity:
+                return self.out(
+                    "rest_coverage",
+                    {},
+                    c,
+                    "not_found",
+                    {
+                        "code": "entity_not_found",
+                        "message": f"No entity named {name}",
+                    },
+                )
+            endpoints, diagnostics = coverage_rows(c, int(entity["id"]), version, lim)
+            return self.out(
+                "rest_coverage",
+                {
+                    "entity": {"id": entity["id"], "name": entity["name"]},
+                    "endpoint_coverage": endpoints,
+                    "diagnostics": diagnostics,
+                    "summary": coverage_summary(endpoints, diagnostics),
+                },
+                c,
+            )
+
     def records(
         self,
         operation: str,
@@ -351,6 +397,15 @@ def create_server(db_path: str | None = None, graph_path: str | None = None) -> 
     @s.tool()
     def entity_context(entity_name: str, repo_key: str | None = None) -> dict[str, Any]:
         return cat.entity(entity_name, repo_key)
+
+    @s.tool()
+    def rest_coverage(
+        entity_name: str,
+        version: str | None = None,
+        limit: int = DEFAULT_LIMIT,
+    ) -> dict[str, Any]:
+        """Show evidence-backed Gherkin REST coverage for an entity."""
+        return cat.coverage(entity_name, version, limit)
 
     @s.tool()
     def relationship_query(
