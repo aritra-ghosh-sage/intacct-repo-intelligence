@@ -22,7 +22,7 @@ def column_exists(conn: sqlite3.Connection, table_name: str, column_name: str) -
 
 
 def check_security_entity_access_links(conn: sqlite3.Connection) -> dict:
-    required = {"entity_access_links", "security_operations", "entity_nodes"}
+    required = {"entity_access_links", "security_operations", "entity_nodes", "entity_occurrences"}
     existing = {
         row["name"]
         for row in conn.execute(
@@ -37,12 +37,15 @@ def check_security_entity_access_links(conn: sqlite3.Connection) -> dict:
     )
     rows = conn.execute(
         """
-        SELECT eal.surface, so.op_key, e.name, e.module
+        SELECT eal.surface, so.op_key, e.name, eo.module
         FROM entity_access_links eal
         JOIN security_operations so
           ON so.id = eal.record_id
         JOIN entity_nodes e
           ON e.id = eal.entity_id
+        JOIN entity_occurrences eo
+          ON eo.entity_id = e.id
+         AND eo.repo_id = eal.repo_id
         WHERE eal.surface IN ('security_resource', 'security_operation')
         """
     ).fetchall()

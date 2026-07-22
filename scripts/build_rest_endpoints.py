@@ -312,12 +312,18 @@ def _build_entity_indexes(
 ) -> tuple[dict[str, int], dict[str, list[int]]]:
     rows = conn.execute(
         """
-        SELECT DISTINCT e.id, e.name, e.ent_file
+        SELECT DISTINCT e.id, e.name, eo.ent_file
         FROM entity_nodes e
-        JOIN entity_mappings em ON em.entity_id = e.id
-        WHERE em.repo_id = ?
+        JOIN entity_occurrences eo
+          ON eo.entity_id = e.id
+         AND eo.repo_id = ?
+        JOIN entity_mappings em
+          ON em.entity_id = e.id
+         AND em.repo_id = eo.repo_id
         """
-    , (repo_id,)).fetchall()
+        ,
+        (repo_id,),
+    ).fetchall()
 
     by_ent_stem: dict[str, int] = {}
     by_normalized_name: dict[str, list[int]] = {}
