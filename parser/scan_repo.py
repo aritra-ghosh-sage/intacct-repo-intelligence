@@ -131,7 +131,15 @@ def scan(repo_key: str | None = None, db_path: str | None = None):
                     (repo_id, path, language, size_bytes, sha1, last_modified, last_indexed)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                    (repo.id, rel_path, detect_language(rel_path), size, sha1, mtime, started),
+                    (
+                        repo.id,
+                        rel_path,
+                        detect_language(rel_path),
+                        size,
+                        sha1,
+                        mtime,
+                        started,
+                    ),
                 )
                 files_added += 1
             elif row["sha1"] != sha1:
@@ -145,7 +153,15 @@ def scan(repo_key: str | None = None, db_path: str | None = None):
                         last_indexed = ?
                     WHERE repo_id = ? AND path = ?
                 """,
-                    (detect_language(rel_path), size, sha1, mtime, started, repo.id, rel_path),
+                    (
+                        detect_language(rel_path),
+                        size,
+                        sha1,
+                        mtime,
+                        started,
+                        repo.id,
+                        rel_path,
+                    ),
                 )
                 files_updated += 1
             else:

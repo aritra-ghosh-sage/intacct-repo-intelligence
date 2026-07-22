@@ -69,9 +69,12 @@ class Catalog:
         )
         sqlite_sha256 = hashlib.sha256(self.db.read_bytes()).hexdigest()
         repositories = (
-            [_row(row) for row in c.execute(
-                "SELECT repo_key,tracked_branch,indexed_commit_sha,last_scanned_at,last_built_at,index_status,diagnostic_error,last_attempt_status,last_attempted_at,last_attempt_error FROM repos ORDER BY repo_key"
-            )]
+            [
+                _row(row)
+                for row in c.execute(
+                    "SELECT repo_key,tracked_branch,indexed_commit_sha,last_scanned_at,last_built_at,index_status,diagnostic_error,last_attempt_status,last_attempted_at,last_attempt_error FROM repos ORDER BY repo_key"
+                )
+            ]
             if self.table(c, "repos")
             else []
         )
@@ -110,7 +113,12 @@ class Catalog:
         ) > lim else None
 
     def search(
-        self, query: str, kind: str, limit: int, cursor: str | None, repo_key: str | None = None
+        self,
+        query: str,
+        kind: str,
+        limit: int,
+        cursor: str | None,
+        repo_key: str | None = None,
     ) -> dict[str, Any]:
         if not query.strip():
             raise ValueError("query must not be empty")
@@ -152,7 +160,10 @@ class Catalog:
             records.sort(key=lambda r: (r["kind"], str(r["record"])))
             nxt = _cursor(off + lim) if len(records) > lim else None
             return self.out(
-                "catalog_search", {"repo_key": repo_key, "results": records[:lim]}, c, next_cursor=nxt
+                "catalog_search",
+                {"repo_key": repo_key, "results": records[:lim]},
+                c,
+                next_cursor=nxt,
             )
 
     def entity(self, name: str, repo_key: str | None = None) -> dict[str, Any]:
@@ -171,10 +182,13 @@ class Catalog:
                 )
             i = e["id"]
             data = {"entity": _row(e)}
-            data["occurrences"] = [_row(r) for r in c.execute(
-                "SELECT eo.id,r.repo_key,eo.ent_file,eo.module,eo.table_name,eo.view_name,eo.dummy,eo.source_file_id,eo.extractor,eo.confidence,eo.created_at,eo.updated_at FROM entity_occurrences eo JOIN repos r ON r.id=eo.repo_id WHERE eo.entity_id=? AND (? IS NULL OR r.repo_key=?) ORDER BY r.repo_key,eo.id",
-                (i, repo_key, repo_key),
-            )]
+            data["occurrences"] = [
+                _row(r)
+                for r in c.execute(
+                    "SELECT eo.id,r.repo_key,eo.ent_file,eo.module,eo.table_name,eo.view_name,eo.dummy,eo.source_file_id,eo.extractor,eo.confidence,eo.created_at,eo.updated_at FROM entity_occurrences eo JOIN repos r ON r.id=eo.repo_id WHERE eo.entity_id=? AND (? IS NULL OR r.repo_key=?) ORDER BY r.repo_key,eo.id",
+                    (i, repo_key, repo_key),
+                )
+            ]
             for key, sql in {
                 "mappings": "SELECT em.id,r.repo_key,em.mapping_type,em.confidence,em.source_text,s.id symbol_id,s.name symbol_name,f.path file_path,s.start_line,s.end_line FROM entity_mappings em JOIN repos r ON r.id=em.repo_id LEFT JOIN symbols s ON s.id=em.symbol_id LEFT JOIN files f ON f.id=COALESCE(em.file_id,s.file_id) WHERE em.entity_id=? AND (? IS NULL OR r.repo_key=?) ORDER BY r.repo_key,em.id",
                 "roots": "SELECT er.id,r.repo_key,er.role,er.weight,er.reason,er.is_shared,s.id symbol_id,s.name symbol_name,f.path file_path,s.start_line,s.end_line FROM entity_roots er JOIN repos r ON r.id=er.repo_id JOIN symbols s ON s.id=er.symbol_id JOIN files f ON f.id=s.file_id WHERE er.entity_id=? AND (? IS NULL OR r.repo_key=?) ORDER BY r.repo_key,er.weight DESC,er.id",
@@ -273,24 +287,32 @@ class Catalog:
 
     def graph_state(self, c):
         active = (
-            c.execute("SELECT source_fingerprint FROM graph_builds WHERE status='active' ORDER BY id DESC LIMIT 1").fetchone()
+            c.execute(
+                "SELECT source_fingerprint FROM graph_builds WHERE status='active' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
             if self.table(c, "graph_builds")
             else None
         )
         return bool(
             self.graph.is_file()
             and active
-            and active["source_fingerprint"] == hashlib.sha256(self.db.read_bytes()).hexdigest()
+            and active["source_fingerprint"]
+            == hashlib.sha256(self.db.read_bytes()).hexdigest()
         )
 
     def repositories(self) -> dict[str, Any]:
         with self.conn() as c:
-            rows = [_row(row) for row in c.execute(
-                "SELECT repo_key,tracked_branch,indexed_commit_sha,last_scanned_at,last_built_at,index_status,diagnostic_error,last_attempt_status,last_attempted_at,last_attempt_error FROM repos ORDER BY repo_key"
-            )]
+            rows = [
+                _row(row)
+                for row in c.execute(
+                    "SELECT repo_key,tracked_branch,indexed_commit_sha,last_scanned_at,last_built_at,index_status,diagnostic_error,last_attempt_status,last_attempted_at,last_attempt_error FROM repos ORDER BY repo_key"
+                )
+            ]
             return self.out("repository_list", {"repositories": rows}, c)
 
-    def usages(self, name: str | None, ident: int | None, repo_key: str | None = None) -> dict[str, Any]:
+    def usages(
+        self, name: str | None, ident: int | None, repo_key: str | None = None
+    ) -> dict[str, Any]:
         with self.conn() as c:
             hits = c.execute(
                 "SELECT s.id,s.name,s.kind,r.repo_key,f.path file_path,s.start_line,s.end_line FROM symbols s JOIN files f ON f.id=s.file_id JOIN repos r ON r.id=f.repo_id WHERE ((? IS NOT NULL AND s.id=?) OR (? IS NULL AND s.name=?)) AND (? IS NULL OR r.repo_key=?) ORDER BY r.repo_key,s.id",
@@ -372,7 +394,10 @@ def create_server(db_path: str | None = None, graph_path: str | None = None) -> 
         graph_path or os.getenv("GRAPH_DB", GRAPH_DB),
     )
     transport = os.getenv("MCP_TRANSPORT", "streamable-http")
-    kwargs = {"name": "intacct-catalog", "instructions": "Read-only evidence-first catalog. Search first, cite returned source paths, line ranges, record IDs and confidence; do not infer missing evidence."}
+    kwargs = {
+        "name": "intacct-catalog",
+        "instructions": "Read-only evidence-first catalog. Search first, cite returned source paths, line ranges, record IDs and confidence; do not infer missing evidence.",
+    }
     if transport in {"sse", "streamable-http"}:
         kwargs["port"] = int(os.getenv("MCP_PORT", "8010"))
     s = FastMCP(**kwargs)
@@ -482,7 +507,10 @@ def create_server(db_path: str | None = None, graph_path: str | None = None) -> 
 
     @s.tool()
     def security_surface(
-        key_fragment: str, limit: int = DEFAULT_LIMIT, cursor: str | None = None, repo_key: str | None = None
+        key_fragment: str,
+        limit: int = DEFAULT_LIMIT,
+        cursor: str | None = None,
+        repo_key: str | None = None,
     ) -> dict[str, Any]:
         return cat.records(
             "security_surface",
@@ -495,13 +523,18 @@ def create_server(db_path: str | None = None, graph_path: str | None = None) -> 
 
     @s.tool()
     def symbol_references(
-        symbol_name: str | None = None, symbol_id: int | None = None, repo_key: str | None = None
+        symbol_name: str | None = None,
+        symbol_id: int | None = None,
+        repo_key: str | None = None,
     ) -> dict[str, Any]:
         return cat.usages(symbol_name, symbol_id, repo_key)
 
     @s.tool()
     def file_impact(
-        file_path: str, repo_key: str | None = None, depth: int = 1, max_edges_per_symbol: int = 25
+        file_path: str,
+        repo_key: str | None = None,
+        depth: int = 1,
+        max_edges_per_symbol: int = 25,
     ) -> dict[str, Any]:
         if not 1 <= depth <= 3 or not 1 <= max_edges_per_symbol <= 1000:
             raise ValueError("depth must be 1..3 and max_edges_per_symbol 1..1000")
@@ -513,8 +546,14 @@ def create_server(db_path: str | None = None, graph_path: str | None = None) -> 
             ).fetchall()
             if repo_key is None and len(files) > 1:
                 return cat.out(
-                    "file_impact", {"candidates": [_row(row) for row in files]}, c, "ambiguous",
-                    {"code": "ambiguous_file", "message": "File path exists in multiple repositories; retry with repo_key"},
+                    "file_impact",
+                    {"candidates": [_row(row) for row in files]},
+                    c,
+                    "ambiguous",
+                    {
+                        "code": "ambiguous_file",
+                        "message": "File path exists in multiple repositories; retry with repo_key",
+                    },
                 )
             f = files[0] if files else None
             if not f:
@@ -534,7 +573,10 @@ def create_server(db_path: str | None = None, graph_path: str | None = None) -> 
                     {"file": _row(f)},
                     c,
                     "graph_unavailable",
-                    {"code": "graph_stale", "message": "No active graph matches the current SQLite catalog"},
+                    {
+                        "code": "graph_stale",
+                        "message": "No active graph matches the current SQLite catalog",
+                    },
                 )
             from scripts.query_graph import (
                 _query_bounded_incoming_traversal,

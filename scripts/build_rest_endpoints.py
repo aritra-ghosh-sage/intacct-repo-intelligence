@@ -184,7 +184,15 @@ def _insert_endpoints(
                 continue
             cur = conn.execute(
                 sql,
-                (repo_id, method, path, file_id, entity_id, handler_symbol_id, source_version),
+                (
+                    repo_id,
+                    method,
+                    path,
+                    file_id,
+                    entity_id,
+                    handler_symbol_id,
+                    source_version,
+                ),
             )
             if cur.rowcount > 0:
                 inserted += 1
@@ -218,7 +226,15 @@ def _update_endpoints(
         source_version = versions[0] if versions else None
         cur = conn.execute(
             sql,
-            (entity_id, handler_symbol_id, source_version, method, path, file_id, repo_id),
+            (
+                entity_id,
+                handler_symbol_id,
+                source_version,
+                method,
+                path,
+                file_id,
+                repo_id,
+            ),
         )
         if cur.rowcount > 0:
             updated += 1
@@ -226,7 +242,9 @@ def _update_endpoints(
     return updated
 
 
-def _resolve_entity_ids_by_file(conn: sqlite3.Connection, repo_id: int) -> dict[int, int]:
+def _resolve_entity_ids_by_file(
+    conn: sqlite3.Connection, repo_id: int
+) -> dict[int, int]:
     """
     Build a deterministic file_id -> entity_id map from OpenAPI-derived mappings.
 
@@ -244,8 +262,9 @@ def _resolve_entity_ids_by_file(conn: sqlite3.Connection, repo_id: int) -> dict[
           AND repo_id = ?
           AND mapping_type LIKE 'openapispec_%'
         GROUP BY file_id
-        """
-    , (repo_id,)).fetchall()
+        """,
+        (repo_id,),
+    ).fetchall()
 
     resolved: dict[int, int] = {}
     for row in rows:
@@ -286,8 +305,9 @@ def _build_schema_entity_bridge(
           AND em.entity_id IS NOT NULL
           AND em.mapping_type LIKE 'openapispec_%'
           AND oi.repo_id = ?
-        """
-    , (repo_id,)).fetchall()
+        """,
+        (repo_id,),
+    ).fetchall()
 
     grouped: dict[tuple[str, str, str], set[int]] = {}
     for row in rows:
@@ -320,8 +340,7 @@ def _build_entity_indexes(
         JOIN entity_mappings em
           ON em.entity_id = e.id
          AND em.repo_id = eo.repo_id
-        """
-        ,
+        """,
         (repo_id,),
     ).fetchall()
 
@@ -469,7 +488,7 @@ def build(
         click.echo(f"📊 Found {len(specs)} OpenAPI specification files with paths")
 
         for spec_row in tqdm(specs, desc="Building REST endpoints", unit="spec"):
-            spec_id, file_id, file_path, kind = (
+            _spec_id, file_id, file_path, _kind = (
                 spec_row["id"],
                 spec_row["file_id"],
                 spec_row["file_path"],
@@ -549,7 +568,9 @@ def build(
             # Insert into database
             inserted = _insert_endpoints(conn, repo_id, endpoints_to_insert)
             stats.endpoints_inserted += inserted
-            stats.endpoints_updated += _update_endpoints(conn, repo_id, endpoints_to_insert)
+            stats.endpoints_updated += _update_endpoints(
+                conn, repo_id, endpoints_to_insert
+            )
 
             # Commit periodically to avoid holding locks
             if stats.specs_processed % 100 == 0:
@@ -597,7 +618,11 @@ def build_command(
     conn = get_connection(db)
     try:
         repository = get_repository(conn, repo)
-        resolved_root = repo_root.resolve() if repo_root is not None else resolve_repository_root(conn, repo)
+        resolved_root = (
+            repo_root.resolve()
+            if repo_root is not None
+            else resolve_repository_root(conn, repo)
+        )
     finally:
         conn.close()
     stats = build(

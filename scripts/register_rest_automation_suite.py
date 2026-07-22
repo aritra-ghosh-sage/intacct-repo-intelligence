@@ -25,8 +25,16 @@ def validate_suite(suite_root: Path, object_mapping: Path) -> str:
 
 
 @click.command()
-@click.option("--suite-root", type=click.Path(path_type=Path, exists=True, file_okay=False), required=True)
-@click.option("--object-mapping", type=click.Path(path_type=Path, exists=True, dir_okay=False), required=True)
+@click.option(
+    "--suite-root",
+    type=click.Path(path_type=Path, exists=True, file_okay=False),
+    required=True,
+)
+@click.option(
+    "--object-mapping",
+    type=click.Path(path_type=Path, exists=True, dir_okay=False),
+    required=True,
+)
 def main(suite_root: Path, object_mapping: Path) -> None:
     """Validate paths before adding them to workspace_repos.yaml."""
     try:

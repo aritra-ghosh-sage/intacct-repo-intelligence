@@ -10,6 +10,7 @@ Commands:
   - who-uses <symbol>         : Find all code that uses/references a symbol
   - security-surface <entity> : Analyze security surface of an entity (ops, policies, menus)
 """
+
 from __future__ import annotations
 
 import os
@@ -61,11 +62,24 @@ def graph_error_boundary(func):
         except Exception as exc:
             ctx = click.get_current_context()
             command = ctx.command.name or func.__name__
-            params = {k: v for k, v in ctx.params.items() if k not in {"db", "graph", "json_output"}}
+            params = {
+                k: v
+                for k, v in ctx.params.items()
+                if k not in {"db", "graph", "json_output"}
+            }
             if kwargs.get("json_output", False):
-                emit_json(error_response(command=command, args=params, code="graph_query_failed", message=str(exc), details={"exception_type": type(exc).__name__}))
+                emit_json(
+                    error_response(
+                        command=command,
+                        args=params,
+                        code="graph_query_failed",
+                        message=str(exc),
+                        details={"exception_type": type(exc).__name__},
+                    )
+                )
                 return
             raise click.ClickException(f"Graph query failed: {exc}") from exc
+
     return wrapped
 
 
@@ -148,9 +162,7 @@ def _query_file_symbols_from_graph(
     """
     results = graph_conn.execute(query, {"file_path": file_path, "repo_key": repo_key})
     rows = results.get_all()
-    return [
-        {"symbol_id": row[0], "name": row[1], "kind": row[2]} for row in rows
-    ]
+    return [{"symbol_id": row[0], "name": row[1], "kind": row[2]} for row in rows]
 
 
 def _query_entities_from_symbols(
@@ -205,9 +217,7 @@ def _query_surfaces_from_occurrences(
             RETURN DISTINCT re.rest_endpoint_id, re.path, re.method
             ORDER BY re.rest_endpoint_id
             """,
-            lambda row: {
-                "rest_endpoint_id": row[0], "path": row[1], "method": row[2]
-            },
+            lambda row: {"rest_endpoint_id": row[0], "path": row[1], "method": row[2]},
         ),
         "workflows": (
             """
@@ -217,7 +227,9 @@ def _query_surfaces_from_occurrences(
             ORDER BY wf.workflow_id
             """,
             lambda row: {
-                "workflow_id": row[0], "name": row[1], "workflow_type": row[2]
+                "workflow_id": row[0],
+                "name": row[1],
+                "workflow_type": row[2],
             },
         ),
         "security_ops": (
@@ -229,7 +241,9 @@ def _query_surfaces_from_occurrences(
             ORDER BY so.security_operation_id
             """,
             lambda row: {
-                "security_operation_id": row[0], "op_key": row[1], "title": row[2]
+                "security_operation_id": row[0],
+                "op_key": row[1],
+                "title": row[2],
             },
         ),
         "security_menus": (
@@ -301,12 +315,19 @@ def _query_bounded_incoming_traversal(
                         "is_seed": False,
                     }
         frontier = next_frontier
-    return sorted(nodes.values(), key=lambda node: (node["depth"], node["symbol_id"])), edges
+    return sorted(
+        nodes.values(), key=lambda node: (node["depth"], node["symbol_id"])
+    ), edges
 
 
 @cli.command("file-impact")
 @click.argument("file_path")
-@click.option("--repo", "repo_key", default=None, help="Repository key; required when a path is ambiguous.")
+@click.option(
+    "--repo",
+    "repo_key",
+    default=None,
+    help="Repository key; required when a path is ambiguous.",
+)
 @click.option(
     "--db",
     default=DEFAULT_DB,
@@ -320,8 +341,20 @@ def _query_bounded_incoming_traversal(
     help="Path to Ladybug graph database.",
 )
 @click.option("--json", "json_output", is_flag=True, help="Emit JSON output.")
-@click.option("--depth", type=click.IntRange(1, 3), default=1, show_default=True, help="Incoming traversal depth (planned bound).")
-@click.option("--max-edges-per-symbol", type=click.IntRange(1, 1000), default=25, show_default=True, help="Maximum incoming edges examined per symbol.")
+@click.option(
+    "--depth",
+    type=click.IntRange(1, 3),
+    default=1,
+    show_default=True,
+    help="Incoming traversal depth (planned bound).",
+)
+@click.option(
+    "--max-edges-per-symbol",
+    type=click.IntRange(1, 1000),
+    default=25,
+    show_default=True,
+    help="Maximum incoming edges examined per symbol.",
+)
 @graph_error_boundary
 def file_impact(
     file_path: str,
@@ -351,7 +384,15 @@ def file_impact(
             details = {"candidates": [dict(row) for row in file_rows]}
             args = {"file_path": file_path, "repo_key": None}
             if json_output:
-                emit_json(error_response(command="file-impact", args=args, code="ambiguous_file", message="File path exists in multiple repositories; retry with --repo", details=details))
+                emit_json(
+                    error_response(
+                        command="file-impact",
+                        args=args,
+                        code="ambiguous_file",
+                        message="File path exists in multiple repositories; retry with --repo",
+                        details=details,
+                    )
+                )
                 return
             raise click.ClickException("File path is ambiguous; retry with --repo")
         file_record = file_rows[0] if file_rows else None
@@ -376,9 +417,9 @@ def file_impact(
         traversed_symbols, traversal_edges = _query_bounded_incoming_traversal(
             graph_conn, seed_ids, depth, max_edges_per_symbol
         )
-        affected_ids = list(dict.fromkeys(
-            seed_ids + [s["symbol_id"] for s in traversed_symbols]
-        ))
+        affected_ids = list(
+            dict.fromkeys(seed_ids + [s["symbol_id"] for s in traversed_symbols])
+        )
         seed_nodes = [
             {**symbol, "depth": 0, "is_seed": True} for symbol in seed_symbols
         ]
@@ -391,9 +432,18 @@ def file_impact(
         surfaces = _query_surfaces_from_occurrences(graph_conn, occurrence_ids)
 
         if json_output:
-            args = {"file_path": file_path, "repo_key": repo_key, "depth": depth, "max_edges_per_symbol": max_edges_per_symbol}
+            args = {
+                "file_path": file_path,
+                "repo_key": repo_key,
+                "depth": depth,
+                "max_edges_per_symbol": max_edges_per_symbol,
+            }
             data = {
-                "file": {"path": file_path, "id": file_record[0], "repo_key": file_record[2]},
+                "file": {
+                    "path": file_path,
+                    "id": file_record[0],
+                    "repo_key": file_record[2],
+                },
                 "seed_symbols": enrich_symbols_from_sql(sql_conn, seed_nodes),
                 "direct_entities": direct_entities,
                 "affected_symbols": symbols,
@@ -428,8 +478,12 @@ def file_impact(
         else:
             click.echo(f"\nFile Impact: {file_path}")
             click.echo("=" * 100)
-            click.echo(f"Seeds: {len(seed_symbols)}, affected symbols: {len(symbols)}, traversal edges: {len(traversal_edges)}")
-            click.echo(f"Entities: {len(entities)}, Endpoints: {len(surfaces['rest_endpoints'])}")
+            click.echo(
+                f"Seeds: {len(seed_symbols)}, affected symbols: {len(symbols)}, traversal edges: {len(traversal_edges)}"
+            )
+            click.echo(
+                f"Entities: {len(entities)}, Endpoints: {len(surfaces['rest_endpoints'])}"
+            )
 
     finally:
         if graph_conn:
@@ -535,7 +589,9 @@ def _query_mapped_symbols_for_entity(
     help="Path to Ladybug graph database.",
 )
 @click.option("--json", "json_output", is_flag=True, help="Emit JSON output.")
-@click.option("--repo", "repo_key", default=None, help="Repository key from the catalog registry.")
+@click.option(
+    "--repo", "repo_key", default=None, help="Repository key from the catalog registry."
+)
 @graph_error_boundary
 def entity_context(
     entity_name: str,
@@ -585,7 +641,9 @@ def entity_context(
         symbols = _query_mapped_symbols_for_entity(graph_conn, entity["occurrence_id"])
         symbols = enrich_symbols_from_sql(sql_conn, symbols)
 
-        surfaces = _query_surfaces_from_occurrences(graph_conn, [entity["occurrence_id"]])
+        surfaces = _query_surfaces_from_occurrences(
+            graph_conn, [entity["occurrence_id"]]
+        )
 
         db_schema = []
         if entity["table_name"]:
@@ -762,14 +820,29 @@ def who_uses(
         if not candidates:
             args = {"symbol_name": symbol_name, "symbol_id": symbol_id}
             if json_output:
-                emit_json(error_response(command="who-uses", args=args, code="symbol_not_found", message="Symbol not found"))
+                emit_json(
+                    error_response(
+                        command="who-uses",
+                        args=args,
+                        code="symbol_not_found",
+                        message="Symbol not found",
+                    )
+                )
                 return
             raise click.ClickException("Symbol not found")
         if symbol_id is None and len(candidates) > 1:
             details = {"candidates": [dict(row) for row in candidates]}
             args = {"symbol_name": symbol_name, "symbol_id": None}
             if json_output:
-                emit_json(error_response(command="who-uses", args=args, code="ambiguous_symbol", message="Symbol name is ambiguous", details=details))
+                emit_json(
+                    error_response(
+                        command="who-uses",
+                        args=args,
+                        code="ambiguous_symbol",
+                        message="Symbol name is ambiguous",
+                        details=details,
+                    )
+                )
                 return
             click.echo("Ambiguous symbol name; choose one of:")
             for row in candidates:
@@ -780,8 +853,8 @@ def who_uses(
         all_symbols = usages["callers"] + usages["referencers"]
         enriched = enrich_symbols_from_sql(sql_conn, all_symbols)
 
-        usages["callers"] = enriched[:len(usages["callers"])]
-        usages["referencers"] = enriched[len(usages["callers"]):]
+        usages["callers"] = enriched[: len(usages["callers"])]
+        usages["referencers"] = enriched[len(usages["callers"]) :]
 
         if json_output:
             args = {"symbol_name": symbol_name, "symbol_id": symbol_id}
@@ -848,7 +921,9 @@ def _query_entity_security_surface(
     ORDER BY op_key, security_operation_id
     """
     try:
-        resource_results = graph_conn.execute(resource_query, {"occurrence_id": occurrence_id})
+        resource_results = graph_conn.execute(
+            resource_query, {"occurrence_id": occurrence_id}
+        )
         surface["resources"] = [
             {"security_operation_id": row[0], "op_key": row[1], "title": row[2]}
             for row in resource_results.get_all()
@@ -883,7 +958,9 @@ def _query_entity_security_surface(
     ORDER BY policy_name, security_policy_id
     """
     try:
-        policy_results = graph_conn.execute(policy_query, {"occurrence_id": occurrence_id})
+        policy_results = graph_conn.execute(
+            policy_query, {"occurrence_id": occurrence_id}
+        )
         surface["policies"] = [
             {"security_policy_id": row[0], "policy_name": row[1]}
             for row in policy_results.get_all()
@@ -926,7 +1003,9 @@ def _query_entity_security_surface(
     help="Path to Ladybug graph database.",
 )
 @click.option("--json", "json_output", is_flag=True, help="Emit JSON output.")
-@click.option("--repo", "repo_key", default=None, help="Repository key from the catalog registry.")
+@click.option(
+    "--repo", "repo_key", default=None, help="Repository key from the catalog registry."
+)
 @graph_error_boundary
 def security_surface(
     entity_name: str,

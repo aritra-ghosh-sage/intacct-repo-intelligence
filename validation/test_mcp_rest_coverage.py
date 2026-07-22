@@ -14,7 +14,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class McpRestCoverageTests(unittest.TestCase):
-    def _catalog(self) -> tuple[tempfile.TemporaryDirectory[str], Catalog, sqlite3.Connection]:
+    def _catalog(
+        self,
+    ) -> tuple[tempfile.TemporaryDirectory[str], Catalog, sqlite3.Connection]:
         directory = tempfile.TemporaryDirectory()
         db_path = Path(directory.name) / "catalog.db"
         conn = sqlite3.connect(db_path)
@@ -44,7 +46,11 @@ class McpRestCoverageTests(unittest.TestCase):
             """
         )
         conn.commit()
-        return directory, Catalog(str(db_path), str(Path(directory.name) / "missing.lbug")), conn
+        return (
+            directory,
+            Catalog(str(db_path), str(Path(directory.name) / "missing.lbug")),
+            conn,
+        )
 
     def test_mcp_coverage_matches_shared_cli_query(self):
         directory, catalog, conn = self._catalog()
@@ -61,7 +67,9 @@ class McpRestCoverageTests(unittest.TestCase):
             coverage_summary(expected, diagnostics), actual["data"]["summary"]
         )
         self.assertEqual("active", actual["data"]["endpoint_coverage"][0]["coverage"])
-        self.assertEqual("uncovered", actual["data"]["endpoint_coverage"][1]["coverage"])
+        self.assertEqual(
+            "uncovered", actual["data"]["endpoint_coverage"][1]["coverage"]
+        )
 
     def test_mcp_coverage_reports_missing_entity(self):
         directory, catalog, conn = self._catalog()
@@ -82,7 +90,9 @@ class McpRestCoverageTests(unittest.TestCase):
         conn.commit()
         conn.close()
 
-        result = Catalog(str(db_path), str(Path(directory.name) / "missing.lbug")).coverage("Customer")
+        result = Catalog(
+            str(db_path), str(Path(directory.name) / "missing.lbug")
+        ).coverage("Customer")
 
         self.assertEqual("error", result["status"])
         self.assertEqual("coverage_tables_missing", result["error"]["code"])

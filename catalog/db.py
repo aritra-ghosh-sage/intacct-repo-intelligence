@@ -53,7 +53,9 @@ def init_db():
         conn.close()
 
 
-def migrate_multi_repo(*, db_path: str | None = None, local_root: str, tracked_branch: str = "main"):
+def migrate_multi_repo(
+    *, db_path: str | None = None, local_root: str, tracked_branch: str = "main"
+):
     """Apply the repository-scoping migration to an existing catalog.
 
     This is intentionally separate from ``init_db``: fresh databases receive
@@ -65,7 +67,9 @@ def migrate_multi_repo(*, db_path: str | None = None, local_root: str, tracked_b
     path = db_path or CATALOG_DB
     conn = sqlite3.connect(path)
     try:
-        apply_multi_repo_migration(conn, local_root=local_root, tracked_branch=tracked_branch)
+        apply_multi_repo_migration(
+            conn, local_root=local_root, tracked_branch=tracked_branch
+        )
     finally:
         conn.close()
 

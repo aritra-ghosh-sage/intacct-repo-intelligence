@@ -22,12 +22,17 @@ def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
 
 
 def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
-    return conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
-    ).fetchone() is not None
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+        ).fetchone()
+        is not None
+    )
 
 
-def _add_columns(conn: sqlite3.Connection, table: str, definitions: Iterable[str]) -> None:
+def _add_columns(
+    conn: sqlite3.Connection, table: str, definitions: Iterable[str]
+) -> None:
     if not _table_exists(conn, table):
         return
     existing = _columns(conn, table)
@@ -77,14 +82,20 @@ def _ensure_registry_columns(conn: sqlite3.Connection) -> None:
     )
 
 
-def _legacy_repo_id(conn: sqlite3.Connection, *, local_root: str, tracked_branch: str) -> int:
+def _legacy_repo_id(
+    conn: sqlite3.Connection, *, local_root: str, tracked_branch: str
+) -> int:
     _ensure_registry_columns(conn)
-    row = conn.execute("SELECT id FROM repos WHERE repo_key = ?", (LEGACY_REPO_KEY,)).fetchone()
+    row = conn.execute(
+        "SELECT id FROM repos WHERE repo_key = ?", (LEGACY_REPO_KEY,)
+    ).fetchone()
     if row is not None:
         return int(row[0])
     # A legacy repos table was an unused placeholder.  Preserve its first row's
     # descriptive fields, if present, but make the stable key authoritative.
-    legacy = conn.execute("SELECT id, name, kind, language FROM repos ORDER BY id LIMIT 1").fetchone()
+    legacy = conn.execute(
+        "SELECT id, name, kind, language FROM repos ORDER BY id LIMIT 1"
+    ).fetchone()
     if legacy is not None:
         conn.execute(
             """UPDATE repos SET repo_key = ?, local_root = ?, tracked_branch = ?,
@@ -93,7 +104,9 @@ def _legacy_repo_id(conn: sqlite3.Connection, *, local_root: str, tracked_branch
                index_status = COALESCE(index_status, 'never_indexed') WHERE id = ?""",
             (LEGACY_REPO_KEY, local_root, tracked_branch, legacy[0]),
         )
-        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_repos_repo_key ON repos(repo_key)")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_repos_repo_key ON repos(repo_key)"
+        )
         return int(legacy[0])
     cursor = conn.execute(
         """INSERT INTO repos(repo_key, name, local_root, tracked_branch, enabled,
@@ -101,7 +114,9 @@ def _legacy_repo_id(conn: sqlite3.Connection, *, local_root: str, tracked_branch
            VALUES (?, ?, ?, ?, 1, '[]', 'never_indexed')""",
         (LEGACY_REPO_KEY, "Intacct Main", local_root, tracked_branch),
     )
-    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_repos_repo_key ON repos(repo_key)")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_repos_repo_key ON repos(repo_key)"
+    )
     return int(cursor.lastrowid)
 
 
@@ -116,6 +131,7 @@ def _rebuild_files(conn: sqlite3.Connection, repo_id: int) -> None:
         return
     conn.execute("DROP INDEX IF EXISTS idx_files_path")
     conn.execute("DROP INDEX IF EXISTS idx_files_language")
+
     def source(column: str) -> str:
         return column if column in columns else f"NULL AS {column}"
 
@@ -134,8 +150,15 @@ def _rebuild_files(conn: sqlite3.Connection, repo_id: int) -> None:
     select_columns = ", ".join(
         source(column)
         for column in (
-            "id", "path", "language", "size_bytes", "sha1", "last_modified",
-            "last_indexed", "last_symbols_extracted", "last_relationships_extracted",
+            "id",
+            "path",
+            "language",
+            "size_bytes",
+            "sha1",
+            "last_modified",
+            "last_indexed",
+            "last_symbols_extracted",
+            "last_relationships_extracted",
         )
     )
     conn.execute(
@@ -144,7 +167,9 @@ def _rebuild_files(conn: sqlite3.Connection, repo_id: int) -> None:
             last_indexed, last_symbols_extracted, last_relationships_extracted
         ) SELECT id, ?, path, language, size_bytes, sha1, last_modified,
                  last_indexed, last_symbols_extracted, last_relationships_extracted
-           FROM (SELECT """ + select_columns + " FROM files)",
+           FROM (SELECT """
+        + select_columns
+        + " FROM files)",
         (repo_id,),
     )
     conn.execute("DROP TABLE files")
@@ -157,16 +182,28 @@ def _add_repo_ownership(conn: sqlite3.Connection, repo_id: int) -> None:
     # These tables own source-derived records directly.  Child tables inherit
     # ownership through their parent and deliberately do not duplicate repo_id.
     for table in (
-        "relationships", "entity_mappings", "entity_roots", "workflows",
-        "openapi_file_ref_edges", "rest_endpoints", "openapispec_index",
-        "security_operations", "security_policies", "security_menus",
-        "dbschema_tables", "entity_access_links",
+        "relationships",
+        "entity_mappings",
+        "entity_roots",
+        "workflows",
+        "openapi_file_ref_edges",
+        "rest_endpoints",
+        "openapispec_index",
+        "security_operations",
+        "security_policies",
+        "security_menus",
+        "dbschema_tables",
+        "entity_access_links",
     ):
         if not _table_exists(conn, table):
             continue
         _add_columns(conn, table, ("repo_id INTEGER",))
-        conn.execute(f"UPDATE {table} SET repo_id = ? WHERE repo_id IS NULL", (repo_id,))
-        conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{table}_repo_id ON {table}(repo_id)")
+        conn.execute(
+            f"UPDATE {table} SET repo_id = ? WHERE repo_id IS NULL", (repo_id,)
+        )
+        conn.execute(
+            f"CREATE INDEX IF NOT EXISTS idx_{table}_repo_id ON {table}(repo_id)"
+        )
 
 
 def _rebuild_workflows(conn: sqlite3.Connection, repo_id: int) -> None:
@@ -205,15 +242,33 @@ def _rebuild_workflows(conn: sqlite3.Connection, repo_id: int) -> None:
     )
     available = _columns(conn, "workflows")
     required = (
-        "id", "repo_id", "entity_id", "name", "workflow_type", "source_kind",
-        "source_file", "file_id", "source_symbol_id", "confidence", "reason", "created_at",
+        "id",
+        "repo_id",
+        "entity_id",
+        "name",
+        "workflow_type",
+        "source_kind",
+        "source_file",
+        "file_id",
+        "source_symbol_id",
+        "confidence",
+        "reason",
+        "created_at",
     )
     values = ", ".join(
-        "? AS repo_id" if column == "repo_id" else column if column in available else f"NULL AS {column}"
+        "? AS repo_id"
+        if column == "repo_id"
+        else column
+        if column in available
+        else f"NULL AS {column}"
         for column in required
     )
     conn.execute(
-        "INSERT INTO workflows_multi_repo_new(" + ", ".join(required) + ") SELECT " + values + " FROM workflows",
+        "INSERT INTO workflows_multi_repo_new("
+        + ", ".join(required)
+        + ") SELECT "
+        + values
+        + " FROM workflows",
         (repo_id,),
     )
     conn.execute("DROP INDEX IF EXISTS idx_workflows_entity")
@@ -234,10 +289,20 @@ def _rebuild_workflows(conn: sqlite3.Connection, repo_id: int) -> None:
 _EMPTY_REBUILD_FAMILIES = (
     # Parents are listed after their children so DROP TABLE works with foreign
     # key enforcement temporarily disabled and leaves no old child constraint.
-    "security_operation_allowops", "security_policy_eops", "security_policy_values",
-    "security_menu_op_links", "security_menu_items", "dbschema_fields",
-    "security_operations", "security_policies", "security_menus", "dbschema_tables",
-    "relationships", "entity_roots", "openapi_file_ref_edges", "openapispec_index",
+    "security_operation_allowops",
+    "security_policy_eops",
+    "security_policy_values",
+    "security_menu_op_links",
+    "security_menu_items",
+    "dbschema_fields",
+    "security_operations",
+    "security_policies",
+    "security_menus",
+    "dbschema_tables",
+    "relationships",
+    "entity_roots",
+    "openapi_file_ref_edges",
+    "openapispec_index",
     "rest_endpoints",
 )
 
@@ -252,15 +317,17 @@ def _reject_populated_unsafe_legacy_families(conn: sqlite3.Connection) -> None:
     """
 
     populated = [
-        table for table in _EMPTY_REBUILD_FAMILIES
-        if _table_exists(conn, table) and conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone()
+        table
+        for table in _EMPTY_REBUILD_FAMILIES
+        if _table_exists(conn, table)
+        and conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone()
     ]
     if populated:
         raise RuntimeError(
             "019_multi_repo cannot safely migrate populated legacy unique tables: "
             + ", ".join(populated)
             + ". Rebuild this catalog from source with the new schema, or apply a future "
-              "table-family migration that rewrites their uniqueness constraints."
+            "table-family migration that rewrites their uniqueness constraints."
         )
 
 
@@ -274,7 +341,9 @@ def _rebuild_empty_legacy_families(conn: sqlite3.Connection) -> None:
     indexes without fabricating provenance.
     """
 
-    existing = [table for table in _EMPTY_REBUILD_FAMILIES if _table_exists(conn, table)]
+    existing = [
+        table for table in _EMPTY_REBUILD_FAMILIES if _table_exists(conn, table)
+    ]
     for table in existing:
         conn.execute(f"DROP TABLE {table}")
     if existing:
@@ -286,7 +355,8 @@ def _rebuild_empty_legacy_families(conn: sqlite3.Connection) -> None:
             template.executescript((Path(__file__).with_name("schema.sql")).read_text())
             for table in existing:
                 ddl = template.execute(
-                    "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+                    (table,),
                 ).fetchone()[0]
                 conn.execute(ddl)
             for table in existing:
@@ -328,19 +398,38 @@ def _rebuild_entity_access_links(conn: sqlite3.Connection, repo_id: int) -> None
     )
     available = columns
     required = (
-        "id", "repo_id", "entity_id", "surface", "record_id", "link_type",
-        "evidence_file_id", "evidence_symbol_id", "confidence_mode", "notes", "created_at",
+        "id",
+        "repo_id",
+        "entity_id",
+        "surface",
+        "record_id",
+        "link_type",
+        "evidence_file_id",
+        "evidence_symbol_id",
+        "confidence_mode",
+        "notes",
+        "created_at",
     )
     values = ", ".join(
-        "? AS repo_id" if column == "repo_id" else column if column in available else f"NULL AS {column}"
+        "? AS repo_id"
+        if column == "repo_id"
+        else column
+        if column in available
+        else f"NULL AS {column}"
         for column in required
     )
     conn.execute(
-        "INSERT INTO entity_access_links_multi_repo_new(" + ", ".join(required) + ") SELECT " + values + " FROM entity_access_links",
+        "INSERT INTO entity_access_links_multi_repo_new("
+        + ", ".join(required)
+        + ") SELECT "
+        + values
+        + " FROM entity_access_links",
         (repo_id,),
     )
     conn.execute("DROP TABLE entity_access_links")
-    conn.execute("ALTER TABLE entity_access_links_multi_repo_new RENAME TO entity_access_links")
+    conn.execute(
+        "ALTER TABLE entity_access_links_multi_repo_new RENAME TO entity_access_links"
+    )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_entity_access_links_entity_surface ON entity_access_links(entity_id, surface)"
     )
@@ -379,7 +468,15 @@ def _ensure_entity_occurrences(conn: sqlite3.Connection, repo_id: int | None) ->
     columns = _columns(conn, "entity_nodes")
     # Legacy entity_nodes carried these checkout-local fields.  Copy only
     # fields actually present; a current schema has none and starts empty.
-    metadata = ("ent_file", "module", "table_name", "view_name", "dummy", "source_file_id", "confidence")
+    metadata = (
+        "ent_file",
+        "module",
+        "table_name",
+        "view_name",
+        "dummy",
+        "source_file_id",
+        "confidence",
+    )
     if not any(column in columns for column in metadata):
         return
     select = ", ".join(
@@ -393,7 +490,9 @@ def _ensure_entity_occurrences(conn: sqlite3.Connection, repo_id: int | None) ->
            )
            SELECT ?, id, ent_file, module, table_name, view_name, dummy,
                   source_file_id, confidence, '019_legacy_entity_backfill'
-           FROM (SELECT """ + select + " FROM entity_nodes)",
+           FROM (SELECT """
+        + select
+        + " FROM entity_nodes)",
         (repo_id,),
     )
 
@@ -545,15 +644,23 @@ def apply_multi_repo_migration(
     """
 
     if conn.in_transaction:
-        raise RuntimeError("apply_multi_repo_migration requires a connection without an open transaction")
+        raise RuntimeError(
+            "apply_multi_repo_migration requires a connection without an open transaction"
+        )
     conn.execute("PRAGMA foreign_keys = OFF")
     try:
         conn.execute("BEGIN IMMEDIATE")
-        conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        )
         _ensure_registry_columns(conn)
-        applied = conn.execute("SELECT 1 FROM schema_migrations WHERE name = ?", (MULTI_REPO_MIGRATION,)).fetchone()
+        applied = conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name = ?", (MULTI_REPO_MIGRATION,)
+        ).fetchone()
         if applied is None:
-            repo_id = _legacy_repo_id(conn, local_root=local_root, tracked_branch=tracked_branch)
+            repo_id = _legacy_repo_id(
+                conn, local_root=local_root, tracked_branch=tracked_branch
+            )
             # Check before changing anything: populated parent/child families
             # cannot be rebuilt without a provenance-preserving migration.
             _reject_populated_unsafe_legacy_families(conn)
@@ -563,7 +670,10 @@ def apply_multi_repo_migration(
             _rebuild_entity_access_links(conn, repo_id)
             _add_repo_ownership(conn, repo_id)
             _create_multi_repo_tables(conn)
-            conn.execute("INSERT INTO schema_migrations(name) VALUES (?)", (MULTI_REPO_MIGRATION,))
+            conn.execute(
+                "INSERT INTO schema_migrations(name) VALUES (?)",
+                (MULTI_REPO_MIGRATION,),
+            )
         coverage_applied = conn.execute(
             "SELECT 1 FROM schema_migrations WHERE name = ?",
             (REST_AUTOMATION_COVERAGE_MIGRATION,),
@@ -574,7 +684,9 @@ def apply_multi_repo_migration(
                 "INSERT INTO schema_migrations(name) VALUES (?)",
                 (REST_AUTOMATION_COVERAGE_MIGRATION,),
             )
-        legacy = conn.execute("SELECT id FROM repos WHERE repo_key = ?", (LEGACY_REPO_KEY,)).fetchone()
+        legacy = conn.execute(
+            "SELECT id FROM repos WHERE repo_key = ?", (LEGACY_REPO_KEY,)
+        ).fetchone()
         _ensure_entity_occurrences(conn, int(legacy[0]) if legacy is not None else None)
         conn.execute("COMMIT")
     except Exception:
@@ -584,4 +696,6 @@ def apply_multi_repo_migration(
         conn.execute("PRAGMA foreign_keys = ON")
     violations = conn.execute("PRAGMA foreign_key_check").fetchall()
     if violations:
-        raise RuntimeError(f"foreign key check failed after {MULTI_REPO_MIGRATION}: {violations[:3]}")
+        raise RuntimeError(
+            f"foreign key check failed after {MULTI_REPO_MIGRATION}: {violations[:3]}"
+        )

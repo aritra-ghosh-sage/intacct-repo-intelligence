@@ -43,7 +43,7 @@ def extract(source: bytes) -> list[Symbol]:
                 start_line=query_line,
                 end_line=query_line,
                 parent_symbol=None,
-                signature=f"array(QUERY, ARGTYPES)",
+                signature="array(QUERY, ARGTYPES)",
             )
         )
 
@@ -86,7 +86,7 @@ def extract(source: bytes) -> list[Symbol]:
                             start_line=table_line,
                             end_line=table_line,
                             parent_symbol=query_name,
-                            signature=f"table reference in query",
+                            signature="table reference in query",
                         )
                     )
 
@@ -143,7 +143,7 @@ def extract(source: bytes) -> list[Symbol]:
                                 start_line=field_line,
                                 end_line=field_line,
                                 parent_symbol=query_name,
-                                signature=f"field/column reference",
+                                signature="field/column reference",
                             )
                         )
 

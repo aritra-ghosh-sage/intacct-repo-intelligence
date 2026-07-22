@@ -25,9 +25,7 @@ def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
 
 
-def resolve_repo(
-    conn: sqlite3.Connection, repo_key: str | None = None
-) -> RepoContext:
+def resolve_repo(conn: sqlite3.Connection, repo_key: str | None = None) -> RepoContext:
     """Return the requested repository, or the sole registered repository.
 
     Legacy no-argument invocations remain safe only while exactly one repo is

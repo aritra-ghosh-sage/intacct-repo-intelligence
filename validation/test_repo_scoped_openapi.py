@@ -7,7 +7,12 @@ import sqlite3
 import tempfile
 import unittest
 
-from scripts import build_rest_endpoints, build_workflows, link_openapispec, scan_openapispec
+from scripts import (
+    build_rest_endpoints,
+    build_workflows,
+    link_openapispec,
+    scan_openapispec,
+)
 
 
 class RepoScopedOpenApiTests(unittest.TestCase):
@@ -52,7 +57,9 @@ class RepoScopedOpenApiTests(unittest.TestCase):
         rows = self.conn.execute(
             "SELECT repo_id, file_id FROM openapispec_index ORDER BY repo_id"
         ).fetchall()
-        self.assertEqual([(row["repo_id"], row["file_id"]) for row in rows], [(1, 11), (2, 21)])
+        self.assertEqual(
+            [(row["repo_id"], row["file_id"]) for row in rows], [(1, 11), (2, 21)]
+        )
 
     def test_workflow_path_resolution_and_mapping_are_repo_scoped(self) -> None:
         self.assertEqual(
@@ -68,10 +75,14 @@ class RepoScopedOpenApiTests(unittest.TestCase):
             21,
         )
         self.assertTrue(
-            link_openapispec._insert_mapping(self.conn, 1, 1, 11, "openapispec_paths", "same")
+            link_openapispec._insert_mapping(
+                self.conn, 1, 1, 11, "openapispec_paths", "same"
+            )
         )
         self.assertTrue(
-            link_openapispec._insert_mapping(self.conn, 2, 1, 21, "openapispec_paths", "same")
+            link_openapispec._insert_mapping(
+                self.conn, 2, 1, 21, "openapispec_paths", "same"
+            )
         )
         self.assertEqual(
             self.conn.execute("SELECT COUNT(*) FROM entity_mappings").fetchone()[0], 2
@@ -79,9 +90,15 @@ class RepoScopedOpenApiTests(unittest.TestCase):
 
     def test_rest_endpoint_insert_does_not_cross_repository_boundaries(self) -> None:
         endpoint = [("GET", "/bills", 11, None, None)]
-        self.assertEqual(build_rest_endpoints._insert_endpoints(self.conn, 1, endpoint), 1)
-        self.assertEqual(build_rest_endpoints._insert_endpoints(self.conn, 1, endpoint), 0)
-        self.assertEqual(build_rest_endpoints._insert_endpoints(self.conn, 2, endpoint), 1)
+        self.assertEqual(
+            build_rest_endpoints._insert_endpoints(self.conn, 1, endpoint), 1
+        )
+        self.assertEqual(
+            build_rest_endpoints._insert_endpoints(self.conn, 1, endpoint), 0
+        )
+        self.assertEqual(
+            build_rest_endpoints._insert_endpoints(self.conn, 2, endpoint), 1
+        )
         self.assertEqual(
             self.conn.execute("SELECT COUNT(*) FROM rest_endpoints").fetchone()[0], 2
         )

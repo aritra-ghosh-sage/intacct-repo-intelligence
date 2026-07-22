@@ -17,10 +17,11 @@ This repository builds an evidence-backed SQLite catalog of the Intacct codebase
 
 ## Required Local Assumptions
 
-- Most scripts assume the source repository lives at `/home/aritraghosh/projects/main`.
-- `config.py` sets `REPO_PATH` to `/home/aritraghosh/projects/main`.
-- Some scripts also hard-code `--repo-root "/home/aritraghosh/projects/main"` in examples and shell helpers.
+- Most scripts assume the source repository lives at `$HOME/projects/main`.
+- `config.py` sets `REPO_PATH` to `$HOME/projects/main`.
+- Some scripts also hard-code `--repo-root "$HOME/projects/main"` in examples and shell helpers.
 - Before running pipeline commands on another machine, verify the source repo path first. If the path differs, update `config.py` and any explicit `--repo-root` arguments you use.
+- Repo-root preflight is mandatory before proposing commands: verify the effective path from `config.py` and the current workspace, then echo the exact resolved repo-root path in the response before giving pipeline or scan commands.
 
 ## Canonical Commands
 
@@ -47,15 +48,15 @@ bash scripts/refresh.sh
 ```bash
 python -m parser.scan_repo
 python -m parser.extract_symbols --full
-python scripts/scan_ent_files.py --repo-root "/home/aritraghosh/projects/main" --out catalog/entity_definitions.jsonl
+python scripts/scan_ent_files.py --repo-root "$HOME/projects/main" --out catalog/entity_definitions.jsonl
 python scripts/build_entities.py build --entities catalog/entity_definitions.jsonl --db catalog/catalog.db
 python scripts/build_entity_roots.py build
-python -m parser.extract_relationships --repo-root "/home/aritraghosh/projects/main"
-python scripts/build_workflows.py build --db catalog/catalog.db --repo-root "/home/aritraghosh/projects/main"
-python scripts/build_security_mappings.py build --db catalog/catalog.db --repo-root "/home/aritraghosh/projects/main"
-python scripts/scan_openapispec.py scan --db catalog/catalog.db --repo-root "/home/aritraghosh/projects/main"
+python -m parser.extract_relationships --repo-root "$HOME/projects/main"
+python scripts/build_workflows.py build --db catalog/catalog.db --repo-root "$HOME/projects/main"
+python scripts/build_security_mappings.py build --db catalog/catalog.db --repo-root "$HOME/projects/main"
+python scripts/scan_openapispec.py scan --db catalog/catalog.db --repo-root "$HOME/projects/main"
 python scripts/link_openapispec.py link --db catalog/catalog.db
-python scripts/build_rest_endpoints.py build --db catalog/catalog.db --repo-root "/home/aritraghosh/projects/main"
+python scripts/build_rest_endpoints.py build --db catalog/catalog.db --repo-root "$HOME/projects/main"
 python scripts/build_entity_access_links.py build --db catalog/catalog.db --reset
 ```
 
@@ -103,6 +104,8 @@ python scripts/query_graph.py security-surface APBill
 ## Common Pitfalls
 
 - Path defaults are inconsistent in places. Do not assume every script uses the same repo root without checking.
+- For SQL guidance, always verify referenced tables and columns against `catalog/schema.sql` and current migrations before proposing or running queries.
+- If a column/table reference is uncertain after schema checks, stop and ask for confirmation instead of inferring a mapping.
 - Query scripts expect a populated `catalog/catalog.db`; they are not setup commands.
 - `parser.extract_symbols` is incremental unless `--full` is passed.
 - Validation documents may be more operationally accurate than the README for current edge cases and failure modes.
@@ -125,6 +128,7 @@ See [validation/phase2d1_remediation.md](validation/phase2d1_remediation.md) for
 - Update docs only when behavior or operator guidance changes.
 - If you touch extraction logic, run the narrowest validator or query that can falsify the change.
 - If you need broader project context, read the linked docs instead of copying them here.
+- When triaging runtime failures (tracebacks, SQL exceptions, HTTP errors), respond in this order: failing command, first failing file/line, likely root cause, smallest falsifying check, then narrowest repair path.
 
 ## Useful Validation Commands
 

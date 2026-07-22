@@ -38,7 +38,7 @@ COMPANION_ROLES: list[str] = [
     "entity_manager",
     "entry_manager",
     "pick_manager",
-    "pick_picker"
+    "pick_picker",
 ]
 
 WORKFLOW_FILE_ROLES: list[str] = [
@@ -47,14 +47,7 @@ WORKFLOW_FILE_ROLES: list[str] = [
     "workflow_api_files",
 ]
 
-RELATED_FILE_ROLES: list[str] = [
-    "yaml",
-    "xslt",
-    "inc",
-    "xml",
-    "sql",
-    "rpt"
-]
+RELATED_FILE_ROLES: list[str] = ["yaml", "xslt", "inc", "xml", "sql", "rpt"]
 
 OPENAPI_SCHEMA_MAPPING_TYPE = "openapispec_schema"
 OPENAPI_OPERATIONS_MAPPING_TYPE = "openapispec_operations"
@@ -69,6 +62,7 @@ MODULE_ALIASES: dict[str, str] = {
 }
 
 _cache: defaultdict[str, dict[str, tuple]] = defaultdict(dict)
+
 
 @dataclass
 class BuildStats:
@@ -370,7 +364,9 @@ def upsert_entity_occurrence(
         (
             repo_id,
             entity_id,
-            ent_file.strip() if isinstance(ent_file, str) and ent_file.strip() else None,
+            ent_file.strip()
+            if isinstance(ent_file, str) and ent_file.strip()
+            else None,
             _normalize_entity_module(entity),
             entity.get("table"),
             entity.get("view"),
@@ -505,7 +501,6 @@ def resolve_companion_symbol(
             symbol_id, resolution_reason = int(row["id"]), "any_symbol_in_file"
             _cache[key] = (symbol_id, resolution_reason)
             return symbol_id, resolution_reason
-
 
     return symbol_id, resolution_reason
 
@@ -680,7 +675,7 @@ def build(db: str, entities: Path, reset: bool, repo_key: str) -> BuildStats:
             # Canonical entity_nodes intentionally remain shared and are not deleted.
             conn.execute("DELETE FROM entity_occurrences WHERE repo_id = ?", (repo_id,))
             conn.commit()
-        
+
         openapispec_mappings = [
             ("workflow_schema_file", WORKFLOW_FILE_ROLES[0]),
             ("workflow_history_file", WORKFLOW_FILE_ROLES[1]),
@@ -746,11 +741,10 @@ def build(db: str, entities: Path, reset: bool, repo_key: str) -> BuildStats:
                 )
                 if inserted:
                     stats.mappings_inserted += 1
-                
-        # Ingest workflow and OpenAPI files from top-level fields in entity_definitions.jsonl.
-        # These are file-backed mappings, not companion class symbols.
-      
-        
+
+            # Ingest workflow and OpenAPI files from top-level fields in entity_definitions.jsonl.
+            # These are file-backed mappings, not companion class symbols.
+
             for field_name, mapping_type in openapispec_mappings:
                 file_path = entity.get(field_name)
                 if isinstance(file_path, str) and file_path.strip():
@@ -769,7 +763,10 @@ def build(db: str, entities: Path, reset: bool, repo_key: str) -> BuildStats:
             workflow_api_files = entity.get("workflow_api_files")
             if isinstance(workflow_api_files, list):
                 for workflow_api_path in workflow_api_files:
-                    if not isinstance(workflow_api_path, str) or not workflow_api_path.strip():
+                    if (
+                        not isinstance(workflow_api_path, str)
+                        or not workflow_api_path.strip()
+                    ):
                         continue
                     inserted = insert_mapping(
                         conn=conn,

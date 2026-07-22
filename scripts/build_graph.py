@@ -28,6 +28,7 @@ NODE_CHUNK_SIZE = 50000
 EDGE_STMT_BATCH = 3000
 EDGE_ROW_CHUNK_SIZE = 50000
 
+
 def copy_table_from_sql(
     sql: sqlite3.Connection,
     g: lb.Connection,
@@ -51,7 +52,9 @@ def copy_table_from_sql(
     # Create DataFrame once with all data
     with tqdm(desc=f"COPY {target_table}", unit="row") as pbar:
         if all_rows:
-            df = pd.DataFrame(all_rows, schema=columns, orient="row", infer_schema_length=None)  # noqa: F841 - required by Ladybug COPY ... FROM df
+            df = pd.DataFrame(
+                all_rows, schema=columns, orient="row", infer_schema_length=None
+            )  # noqa: F841 - required by Ladybug COPY ... FROM df
             _ = df
             g.execute(f"COPY {target_table} FROM df")
             pbar.update(len(all_rows))
@@ -99,6 +102,7 @@ def execute_queries_in_batches(
 
 def q(text: str) -> str:
     return text.replace("\\", "\\\\").replace("'", "\\'")
+
 
 def ensure_schema(conn: lb.Connection) -> None:
     # Base V1 node tables
@@ -289,15 +293,33 @@ def ensure_schema(conn: lb.Connection) -> None:
     conn.execute("CREATE REL TABLE IF NOT EXISTS REFERENCES(FROM Symbol TO Symbol)")
     conn.execute("CREATE REL TABLE IF NOT EXISTS CALLS(FROM Symbol TO Symbol)")
     conn.execute("CREATE REL TABLE IF NOT EXISTS DECLARED_IN(FROM Symbol TO File)")
-    conn.execute("CREATE REL TABLE IF NOT EXISTS REPOSITORY_CONTAINS_FILE(FROM Repository TO File)")
-    conn.execute("CREATE REL TABLE IF NOT EXISTS REPOSITORY_HAS_ENTITY_OCCURRENCE(FROM Repository TO EntityOccurrence)")
-    conn.execute("CREATE REL TABLE IF NOT EXISTS ENTITY_HAS_OCCURRENCE(FROM Entity TO EntityOccurrence)")
-    conn.execute("CREATE REL TABLE IF NOT EXISTS ENTITY_OCCURRENCE_FILE(FROM EntityOccurrence TO File)")
-    conn.execute("CREATE REL TABLE IF NOT EXISTS ENTITY_OCCURRENCE_ROOT(FROM EntityOccurrence TO Symbol, role STRING, weight DOUBLE)")
-    conn.execute("CREATE REL TABLE IF NOT EXISTS ENTITY_OCCURRENCE_MAPPING(FROM EntityOccurrence TO Symbol, mapping_type STRING, confidence DOUBLE)")
-    conn.execute("CREATE REL TABLE IF NOT EXISTS ENTITY_OCCURRENCE_WORKFLOW(FROM EntityOccurrence TO Workflow)")
-    conn.execute("CREATE REL TABLE IF NOT EXISTS ENTITY_OCCURRENCE_REST_ENDPOINT(FROM EntityOccurrence TO RestEndpoint)")
-    conn.execute("CREATE REL TABLE IF NOT EXISTS ENTITY_ACCESS_LINK_ENTITY_OCCURRENCE(FROM EntityAccessLink TO EntityOccurrence)")
+    conn.execute(
+        "CREATE REL TABLE IF NOT EXISTS REPOSITORY_CONTAINS_FILE(FROM Repository TO File)"
+    )
+    conn.execute(
+        "CREATE REL TABLE IF NOT EXISTS REPOSITORY_HAS_ENTITY_OCCURRENCE(FROM Repository TO EntityOccurrence)"
+    )
+    conn.execute(
+        "CREATE REL TABLE IF NOT EXISTS ENTITY_HAS_OCCURRENCE(FROM Entity TO EntityOccurrence)"
+    )
+    conn.execute(
+        "CREATE REL TABLE IF NOT EXISTS ENTITY_OCCURRENCE_FILE(FROM EntityOccurrence TO File)"
+    )
+    conn.execute(
+        "CREATE REL TABLE IF NOT EXISTS ENTITY_OCCURRENCE_ROOT(FROM EntityOccurrence TO Symbol, role STRING, weight DOUBLE)"
+    )
+    conn.execute(
+        "CREATE REL TABLE IF NOT EXISTS ENTITY_OCCURRENCE_MAPPING(FROM EntityOccurrence TO Symbol, mapping_type STRING, confidence DOUBLE)"
+    )
+    conn.execute(
+        "CREATE REL TABLE IF NOT EXISTS ENTITY_OCCURRENCE_WORKFLOW(FROM EntityOccurrence TO Workflow)"
+    )
+    conn.execute(
+        "CREATE REL TABLE IF NOT EXISTS ENTITY_OCCURRENCE_REST_ENDPOINT(FROM EntityOccurrence TO RestEndpoint)"
+    )
+    conn.execute(
+        "CREATE REL TABLE IF NOT EXISTS ENTITY_ACCESS_LINK_ENTITY_OCCURRENCE(FROM EntityAccessLink TO EntityOccurrence)"
+    )
     conn.execute(
         "CREATE REL TABLE IF NOT EXISTS CROSS_REPO_INTEGRATION("
         "FROM File TO File, integration_link_id INT64, relation_type STRING, "
@@ -317,8 +339,7 @@ def ensure_schema(conn: lb.Connection) -> None:
         "FROM Workflow TO WorkflowNode)"
     )
     conn.execute(
-        "CREATE REL TABLE IF NOT EXISTS WORKFLOW_NODE_FILE("
-        "FROM WorkflowNode TO File)"
+        "CREATE REL TABLE IF NOT EXISTS WORKFLOW_NODE_FILE(FROM WorkflowNode TO File)"
     )
     conn.execute(
         "CREATE REL TABLE IF NOT EXISTS WORKFLOW_NODE_SYMBOL("
@@ -337,8 +358,7 @@ def ensure_schema(conn: lb.Connection) -> None:
     )
 
     conn.execute(
-        "CREATE REL TABLE IF NOT EXISTS OPENAPI_SPEC_FILE("
-        "FROM OpenApiSpec TO File)"
+        "CREATE REL TABLE IF NOT EXISTS OPENAPI_SPEC_FILE(FROM OpenApiSpec TO File)"
     )
     conn.execute(
         "CREATE REL TABLE IF NOT EXISTS OPENAPI_FILE_REF("
@@ -361,8 +381,7 @@ def ensure_schema(conn: lb.Connection) -> None:
         "FROM SecurityPolicy TO SecurityPolicyValue)"
     )
     conn.execute(
-        "CREATE REL TABLE IF NOT EXISTS SECURITY_MENU_FILE("
-        "FROM SecurityMenu TO File)"
+        "CREATE REL TABLE IF NOT EXISTS SECURITY_MENU_FILE(FROM SecurityMenu TO File)"
     )
     conn.execute(
         "CREATE REL TABLE IF NOT EXISTS SECURITY_MENU_HAS_ITEM("
@@ -375,13 +394,9 @@ def ensure_schema(conn: lb.Connection) -> None:
         "resolution_reason STRING)"
     )
 
+    conn.execute("CREATE REL TABLE IF NOT EXISTS DBTABLE_FILE(FROM DbTable TO File)")
     conn.execute(
-        "CREATE REL TABLE IF NOT EXISTS DBTABLE_FILE("
-        "FROM DbTable TO File)"
-    )
-    conn.execute(
-        "CREATE REL TABLE IF NOT EXISTS DBTABLE_HAS_FIELD("
-        "FROM DbTable TO DbField)"
+        "CREATE REL TABLE IF NOT EXISTS DBTABLE_HAS_FIELD(FROM DbTable TO DbField)"
     )
 
     conn.execute(
@@ -431,8 +446,7 @@ def ensure_schema(conn: lb.Connection) -> None:
 
     # Deferred edges now resolved with deterministic unique resolution checks
     conn.execute(
-        "CREATE REL TABLE IF NOT EXISTS DOCUMENTS_ENTITY("
-        "FROM OpenApiSpec TO Entity)"
+        "CREATE REL TABLE IF NOT EXISTS DOCUMENTS_ENTITY(FROM OpenApiSpec TO Entity)"
     )
     conn.execute(
         "CREATE REL TABLE IF NOT EXISTS POLICY_VALUE_GRANTS_OPERATION("
@@ -444,6 +458,7 @@ def ensure_schema(conn: lb.Connection) -> None:
         "allowed_op_key STRING, "
         "resolution_reason STRING)"
     )
+
 
 def process_edge_rows_many(
     sql: sqlite3.Connection,
@@ -673,9 +688,11 @@ def load_v2_nodes(sql: sqlite3.Connection, g: lb.Connection) -> None:
         "EntityAccessLink",
     )
 
+
 def load_nodes(sql: sqlite3.Connection, g: lb.Connection) -> None:
     copy_table_from_sql(
-        sql, g,
+        sql,
+        g,
         "SELECT id AS repo_id,repo_key,tracked_branch,indexed_commit_sha,"
         "COALESCE(last_built_at,last_scanned_at) AS last_indexed_at,index_status FROM repos ORDER BY id",
         "Repository",
@@ -720,12 +737,13 @@ def load_nodes(sql: sqlite3.Connection, g: lb.Connection) -> None:
         "RestEndpoint",
     )
 
+
 def load_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
     def _process_edge_rows(
-    select_sql: str,
-    row_to_query,
-    desc: str,
-) -> None:
+        select_sql: str,
+        row_to_query,
+        desc: str,
+    ) -> None:
         cursor = sql.execute(select_sql)
         pending_queries: list[str] = []
 
@@ -913,40 +931,57 @@ def load_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
         "DECLARED_IN",
     )
     copy_rel_table_from_sql(
-        sql, g,
+        sql,
+        g,
         'SELECT repo_id AS "FROM",id AS "TO" FROM files ORDER BY repo_id,id',
         "REPOSITORY_CONTAINS_FILE",
     )
     copy_rel_table_from_sql(
-        sql, g,
+        sql,
+        g,
         'SELECT repo_id AS "FROM",id AS "TO" FROM entity_occurrences ORDER BY repo_id,id',
         "REPOSITORY_HAS_ENTITY_OCCURRENCE",
     )
     copy_rel_table_from_sql(
-        sql, g,
+        sql,
+        g,
         'SELECT entity_id AS "FROM",id AS "TO" FROM entity_occurrences ORDER BY entity_id,id',
         "ENTITY_HAS_OCCURRENCE",
     )
     copy_rel_table_from_sql(
-        sql, g,
+        sql,
+        g,
         'SELECT id AS "FROM",source_file_id AS "TO" FROM entity_occurrences WHERE source_file_id IS NOT NULL ORDER BY id',
         "ENTITY_OCCURRENCE_FILE",
     )
-    if sql.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='integration_links'").fetchone():
-        columns = {row[1] for row in sql.execute("PRAGMA table_info(integration_links)")}
+    if sql.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='integration_links'"
+    ).fetchone():
+        columns = {
+            row[1] for row in sql.execute("PRAGMA table_info(integration_links)")
+        }
         if {"id", "source_file_id", "target_file_id"} <= columns:
-            relation_col = "relation_type" if "relation_type" in columns else "'integration'"
+            relation_col = (
+                "relation_type" if "relation_type" in columns else "'integration'"
+            )
             confidence_col = "confidence" if "confidence" in columns else "0.0"
-            status_col = "resolution_status" if "resolution_status" in columns else "'resolved'"
-            status_filter = " AND resolution_status IN ('resolved','validated')" if "resolution_status" in columns else ""
+            status_col = (
+                "resolution_status" if "resolution_status" in columns else "'resolved'"
+            )
+            status_filter = (
+                " AND resolution_status IN ('resolved','validated')"
+                if "resolution_status" in columns
+                else ""
+            )
             copy_rel_table_from_sql(
-                sql, g,
-                f'''SELECT source_file_id AS "FROM",target_file_id AS "TO",id AS integration_link_id,
+                sql,
+                g,
+                f"""SELECT source_file_id AS "FROM",target_file_id AS "TO",id AS integration_link_id,
                            {relation_col} AS relation_type,COALESCE({confidence_col},0.0) AS confidence,
                            COALESCE({status_col},'resolved') AS resolution_status
                     FROM integration_links WHERE source_file_id IS NOT NULL AND target_file_id IS NOT NULL
                     AND source_repo_id <> target_repo_id
-                    {status_filter} ORDER BY id''',
+                    {status_filter} ORDER BY id""",
                 "CROSS_REPO_INTEGRATION",
             )
 
@@ -1028,6 +1063,7 @@ def load_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
         "Loading HANDLED_BY edges",
     )
 
+
 def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
     process_edge_rows_many(
         sql,
@@ -1042,14 +1078,16 @@ def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
                 "MATCH (w:Workflow {workflow_id:%d}), "
                 "(n:WorkflowNode {workflow_node_id:%d}) "
                 "CREATE (w)-[:WORKFLOW_HAS_NODE]->(n)"
-            ) % (r[1], r[0]),
+            )
+            % (r[1], r[0]),
             *(
                 [
                     (
                         "MATCH (n:WorkflowNode {workflow_node_id:%d}), "
                         "(f:File {file_id:%d}) "
                         "CREATE (n)-[:WORKFLOW_NODE_FILE]->(f)"
-                    ) % (r[0], r[2])
+                    )
+                    % (r[0], r[2])
                 ]
                 if r[2] is not None
                 else []
@@ -1060,7 +1098,8 @@ def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
                         "MATCH (n:WorkflowNode {workflow_node_id:%d}), "
                         "(s:Symbol {symbol_id:%d}) "
                         "CREATE (n)-[:WORKFLOW_NODE_SYMBOL]->(s)"
-                    ) % (r[0], r[3])
+                    )
+                    % (r[0], r[3])
                 ]
                 if r[3] is not None
                 else []
@@ -1112,7 +1151,8 @@ def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
                 "MATCH (o:OpenApiSpec {openapi_id:%d}), "
                 "(f:File {file_id:%d}) "
                 "CREATE (o)-[:OPENAPI_SPEC_FILE]->(f)"
-            ) % (r[0], r[1])
+            )
+            % (r[0], r[1])
         ],
         "Loading openapi spec file edges",
     )
@@ -1156,7 +1196,8 @@ def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
                 "MATCH (o:SecurityOperation {security_operation_id:%d}), "
                 "(f:File {file_id:%d}) "
                 "CREATE (o)-[:SECURITY_OPERATION_FILE]->(f)"
-            ) % (r[0], r[1])
+            )
+            % (r[0], r[1])
         ],
         "Loading security operation file edges",
     )
@@ -1175,7 +1216,8 @@ def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
                 "MATCH (p:SecurityPolicy {security_policy_id:%d}), "
                 "(f:File {file_id:%d}) "
                 "CREATE (p)-[:SECURITY_POLICY_FILE]->(f)"
-            ) % (r[0], r[1])
+            )
+            % (r[0], r[1])
         ],
         "Loading security policy file edges",
     )
@@ -1193,7 +1235,8 @@ def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
                 "MATCH (p:SecurityPolicy {security_policy_id:%d}), "
                 "(v:SecurityPolicyValue {security_policy_value_id:%d}) "
                 "CREATE (p)-[:SECURITY_POLICY_HAS_VALUE]->(v)"
-            ) % (r[1], r[0])
+            )
+            % (r[1], r[0])
         ],
         "Loading security policy value edges",
     )
@@ -1212,7 +1255,8 @@ def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
                 "MATCH (m:SecurityMenu {security_menu_id:%d}), "
                 "(f:File {file_id:%d}) "
                 "CREATE (m)-[:SECURITY_MENU_FILE]->(f)"
-            ) % (r[0], r[1])
+            )
+            % (r[0], r[1])
         ],
         "Loading security menu file edges",
     )
@@ -1230,7 +1274,8 @@ def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
                 "MATCH (m:SecurityMenu {security_menu_id:%d}), "
                 "(i:SecurityMenuItem {security_menu_item_id:%d}) "
                 "CREATE (m)-[:SECURITY_MENU_HAS_ITEM]->(i)"
-            ) % (r[1], r[0])
+            )
+            % (r[1], r[0])
         ],
         "Loading security menu item edges",
     )
@@ -1249,7 +1294,8 @@ def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
                 "MATCH (i:SecurityMenuItem {security_menu_item_id:%d}), "
                 "(o:SecurityOperation {security_operation_id:%d}) "
                 "CREATE (i)-[:SECURITY_MENU_ITEM_TO_OPERATION {op_key:'%s', resolution_reason:'%s'}]->(o)"
-            ) % (r[0], r[1], q(r[2] or ""), q(r[3] or ""))
+            )
+            % (r[0], r[1], q(r[2] or ""), q(r[3] or ""))
         ],
         "Loading security menu operation edges",
     )
@@ -1268,7 +1314,8 @@ def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
                 "MATCH (t:DbTable {dbschema_table_id:%d}), "
                 "(f:File {file_id:%d}) "
                 "CREATE (t)-[:DBTABLE_FILE]->(f)"
-            ) % (r[0], r[1])
+            )
+            % (r[0], r[1])
         ],
         "Loading dbtable file edges",
     )
@@ -1286,7 +1333,8 @@ def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
                 "MATCH (t:DbTable {dbschema_table_id:%d}), "
                 "(f:DbField {dbschema_field_id:%d}) "
                 "CREATE (t)-[:DBTABLE_HAS_FIELD]->(f)"
-            ) % (r[1], r[0])
+            )
+            % (r[1], r[0])
         ],
         "Loading dbtable field edges",
     )
@@ -1307,14 +1355,16 @@ def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
                 "MATCH (l:EntityAccessLink {entity_access_link_id:%d}), "
                 "(e:Entity {entity_id:%d}) "
                 "CREATE (l)-[:ENTITY_ACCESS_LINK_ENTITY]->(e)"
-            ) % (r[0], r[2]),
+            )
+            % (r[0], r[2]),
             *(
                 [
                     (
                         "MATCH (l:EntityAccessLink {entity_access_link_id:%d}), "
                         "(e:EntityOccurrence {entity_occurrence_id:%d}) "
                         "CREATE (l)-[:ENTITY_ACCESS_LINK_ENTITY_OCCURRENCE]->(e)"
-                    ) % (r[0], r[5])
+                    )
+                    % (r[0], r[5])
                 ]
                 if r[5] is not None
                 else []
@@ -1325,7 +1375,8 @@ def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
                         "MATCH (l:EntityAccessLink {entity_access_link_id:%d}), "
                         "(f:File {file_id:%d}) "
                         "CREATE (l)-[:ENTITY_ACCESS_LINK_FILE]->(f)"
-                    ) % (r[0], r[3])
+                    )
+                    % (r[0], r[3])
                 ]
                 if r[3] is not None
                 else []
@@ -1336,7 +1387,8 @@ def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
                         "MATCH (l:EntityAccessLink {entity_access_link_id:%d}), "
                         "(s:Symbol {symbol_id:%d}) "
                         "CREATE (l)-[:ENTITY_ACCESS_LINK_SYMBOL]->(s)"
-                    ) % (r[0], r[4])
+                    )
+                    % (r[0], r[4])
                 ]
                 if r[4] is not None
                 else []
@@ -1359,7 +1411,8 @@ def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
                 "MATCH (l:EntityAccessLink {entity_access_link_id:%d}), "
                 "(w:Workflow {workflow_id:%d}) "
                 "CREATE (l)-[:ENTITY_ACCESS_LINK_WORKFLOW]->(w)"
-            ) % (r[0], r[1])
+            )
+            % (r[0], r[1])
         ],
         "Loading entity access workflow edges",
     )
@@ -1378,7 +1431,8 @@ def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
                 "MATCH (l:EntityAccessLink {entity_access_link_id:%d}), "
                 "(r:RestEndpoint {rest_endpoint_id:%d}) "
                 "CREATE (l)-[:ENTITY_ACCESS_LINK_REST_ENDPOINT]->(r)"
-            ) % (r[0], r[1])
+            )
+            % (r[0], r[1])
         ],
         "Loading entity access rest endpoint edges",
     )
@@ -1397,7 +1451,8 @@ def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
                 "MATCH (l:EntityAccessLink {entity_access_link_id:%d}), "
                 "(o:SecurityOperation {security_operation_id:%d}) "
                 "CREATE (l)-[:ENTITY_ACCESS_LINK_SECURITY_RESOURCE]->(o)"
-            ) % (r[0], r[1])
+            )
+            % (r[0], r[1])
         ],
         "Loading entity access security resource edges",
     )
@@ -1416,7 +1471,8 @@ def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
                 "MATCH (l:EntityAccessLink {entity_access_link_id:%d}), "
                 "(o:SecurityOperation {security_operation_id:%d}) "
                 "CREATE (l)-[:ENTITY_ACCESS_LINK_SECURITY_OPERATION]->(o)"
-            ) % (r[0], r[1])
+            )
+            % (r[0], r[1])
         ],
         "Loading entity access security operation edges",
     )
@@ -1435,7 +1491,8 @@ def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
                 "MATCH (l:EntityAccessLink {entity_access_link_id:%d}), "
                 "(p:SecurityPolicy {security_policy_id:%d}) "
                 "CREATE (l)-[:ENTITY_ACCESS_LINK_SECURITY_POLICY]->(p)"
-            ) % (r[0], r[1])
+            )
+            % (r[0], r[1])
         ],
         "Loading entity access security policy edges",
     )
@@ -1454,7 +1511,8 @@ def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
                 "MATCH (l:EntityAccessLink {entity_access_link_id:%d}), "
                 "(m:SecurityMenu {security_menu_id:%d}) "
                 "CREATE (l)-[:ENTITY_ACCESS_LINK_SECURITY_MENU]->(m)"
-            ) % (r[0], r[1])
+            )
+            % (r[0], r[1])
         ],
         "Loading entity access security menu edges",
     )
@@ -1473,7 +1531,8 @@ def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
                 "MATCH (l:EntityAccessLink {entity_access_link_id:%d}), "
                 "(i:SecurityMenuItem {security_menu_item_id:%d}) "
                 "CREATE (l)-[:ENTITY_ACCESS_LINK_SECURITY_MENU_ITEM]->(i)"
-            ) % (r[0], r[1])
+            )
+            % (r[0], r[1])
         ],
         "Loading entity access security menu item edges",
     )
@@ -1492,7 +1551,8 @@ def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
                 "MATCH (l:EntityAccessLink {entity_access_link_id:%d}), "
                 "(t:DbTable {dbschema_table_id:%d}) "
                 "CREATE (l)-[:ENTITY_ACCESS_LINK_DBTABLE]->(t)"
-            ) % (r[0], r[1])
+            )
+            % (r[0], r[1])
         ],
         "Loading entity access dbtable edges",
     )
@@ -1516,7 +1576,8 @@ def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
                 "MATCH (o:OpenApiSpec {openapi_id:%d}), "
                 "(e:Entity {entity_id:%d}) "
                 "CREATE (o)-[:DOCUMENTS_ENTITY]->(e)"
-            ) % (r[0], r[1])
+            )
+            % (r[0], r[1])
         ],
         "Loading DOCUMENTS_ENTITY edges (openapi to entity via x_mapped_to)",
     )
@@ -1535,7 +1596,8 @@ def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
                 "MATCH (a:SecurityOperation {security_operation_id:%d}), "
                 "(b:SecurityOperation {security_operation_id:%d}) "
                 "CREATE (a)-[:ALLOWS_SECURITY_OPERATION {allowed_op_key:'%s', resolution_reason:'%s'}]->(b)"
-            ) % (r[0], r[1], q(r[2] or ""), q(r[3] or ""))
+            )
+            % (r[0], r[1], q(r[2] or ""), q(r[3] or ""))
         ],
         "Loading ALLOWS_SECURITY_OPERATION edges",
     )
@@ -1559,10 +1621,12 @@ def load_v2_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
                 "MATCH (pv:SecurityPolicyValue {security_policy_value_id:%d}), "
                 "(o:SecurityOperation {security_operation_id:%d}) "
                 "CREATE (pv)-[:POLICY_VALUE_GRANTS_OPERATION]->(o)"
-            ) % (r[0], r[1])
+            )
+            % (r[0], r[1])
         ],
         "Loading POLICY_VALUE_GRANTS_OPERATION edges (with per-repository op_key guard)",
     )
+
 
 def build_graph(sqlite_path: str, graph_path: str) -> None:
     sql = db = g = None
@@ -1740,7 +1804,9 @@ def promote_validated_graph(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build and atomically promote the Ladybug graph.")
+    parser = argparse.ArgumentParser(
+        description="Build and atomically promote the Ladybug graph."
+    )
     parser.add_argument("--db", default=SQLITE_DB, help="SQLite catalog path")
     parser.add_argument("--graph", default=GRAPH_DB, help="Active Ladybug graph path")
     args = parser.parse_args()

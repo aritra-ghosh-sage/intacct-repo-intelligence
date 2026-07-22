@@ -228,7 +228,9 @@ def _mapping_type_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
     return {k: counts[k] for k in sorted(counts)}
 
 
-def _workflow_type_counts(workflows_by_type: dict[str, list[dict[str, Any]]]) -> dict[str, int]:
+def _workflow_type_counts(
+    workflows_by_type: dict[str, list[dict[str, Any]]],
+) -> dict[str, int]:
     return {
         workflow_type: len(workflows_by_type[workflow_type])
         for workflow_type in sorted(workflows_by_type)
@@ -676,7 +678,9 @@ def _collect_direct_impact_json(
                 "name": row["name"],
                 "kind": row["kind"],
                 "seed_type": "root" if "role" in row.keys() else "mapped_symbol",
-                "mapping_type": row["mapping_type"] if "mapping_type" in row.keys() else None,
+                "mapping_type": row["mapping_type"]
+                if "mapping_type" in row.keys()
+                else None,
                 "confidence": row["confidence"] if "confidence" in row.keys() else None,
                 "role": row["role"] if "role" in row.keys() else None,
                 "weight": row["weight"] if "weight" in row.keys() else None,
@@ -837,10 +841,7 @@ def _collect_impact_json(
         "node_count": len(nodes),
         "edge_count": len(edges),
         "by_kind": {k: by_kind_counts[k] for k in sorted(by_kind_counts)},
-        "by_depth": {
-            str(k): by_depth_counts[k]
-            for k in sorted(by_depth_counts)
-        },
+        "by_depth": {str(k): by_depth_counts[k] for k in sorted(by_depth_counts)},
     }
     return data, summary
 
@@ -1409,7 +1410,9 @@ def entity(
 )
 @click.option("--min-weight", type=float, default=0.75, show_default=True)
 @click.option("--json", "json_output", is_flag=True, help="Emit JSON output.")
-def root_symbols(entity_name: str, db: str, min_weight: float, json_output: bool) -> None:
+def root_symbols(
+    entity_name: str, db: str, min_weight: float, json_output: bool
+) -> None:
     """Show canonical roots for an entity."""
     conn = get_connection(db)
     try:
@@ -1602,7 +1605,9 @@ def impact(
             return
         raise click.ClickException("Use only one of --incoming-only or --outgoing-only")
 
-    include_incoming, include_outgoing = _resolve_direction_flags(incoming_only, outgoing_only)
+    include_incoming, include_outgoing = _resolve_direction_flags(
+        incoming_only, outgoing_only
+    )
 
     conn = get_connection(db)
     try:

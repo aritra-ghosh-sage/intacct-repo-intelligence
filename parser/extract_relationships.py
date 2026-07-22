@@ -196,7 +196,7 @@ def load_files(
     placeholders = ",".join(["?"] * len(languages))
     params: list[object] = [repo_id, *languages]
 
-    where = [f"repo_id = ?", f"language IN ({placeholders})"]
+    where = ["repo_id = ?", f"language IN ({placeholders})"]
     if only_changed:
         where.append(
             "(last_relationships_extracted IS NULL OR last_indexed > last_relationships_extracted)"
@@ -1142,10 +1142,21 @@ def insert_relationships(
     inserted = 0
 
     columns = [
-        "source_symbol_id", "source_name", "source_kind", "target_symbol_id",
-        "target_name", "target_kind", "relationship_type", "file_id", "file_path",
-        "language", "confidence", "evidence", "resolution_class",
-        "resolution_reason", "extractor",
+        "source_symbol_id",
+        "source_name",
+        "source_kind",
+        "target_symbol_id",
+        "target_name",
+        "target_kind",
+        "relationship_type",
+        "file_id",
+        "file_path",
+        "language",
+        "confidence",
+        "evidence",
+        "resolution_class",
+        "resolution_reason",
+        "extractor",
     ]
     has_repo_id = "repo_id" in table_columns(conn, "relationships")
     if has_repo_id:
@@ -1160,7 +1171,8 @@ def insert_relationships(
     for r in rels:
         cur = conn.execute(
             sql,
-            ((repo_id,) if has_repo_id else ()) + (
+            ((repo_id,) if has_repo_id else ())
+            + (
                 r.source_symbol_id,
                 r.source_name,
                 r.source_kind,
@@ -1233,7 +1245,9 @@ def extract_all(
     if reset:
         reset_relationships(conn, repo.id)
 
-    symbols_by_name, symbols_by_file, symbols_by_qualified_name = load_symbols(conn, repo.id)
+    symbols_by_name, symbols_by_file, symbols_by_qualified_name = load_symbols(
+        conn, repo.id
+    )
     files = load_files(
         conn=conn,
         repo_id=repo.id,
@@ -1245,7 +1259,9 @@ def extract_all(
     print(f"🔎 Extracting relationships from {len(files)} files")
 
     if repo_root and Path(repo_root).resolve() != repo.local_root:
-        raise RuntimeError("--repo-root must match the registered repository local_root")
+        raise RuntimeError(
+            "--repo-root must match the registered repository local_root"
+        )
     repo_root_path = repo.local_root
     total_inserted = 0
     errors = 0

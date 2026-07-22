@@ -19,10 +19,13 @@ def column_exists(conn: sqlite3.Connection, table_name: str, column_name: str) -
     return any(str(row["name"]) == column_name for row in rows)
 
 
-
-
 def check_security_entity_access_links(conn: sqlite3.Connection) -> dict:
-    required = {"entity_access_links", "security_operations", "entity_nodes", "entity_occurrences"}
+    required = {
+        "entity_access_links",
+        "security_operations",
+        "entity_nodes",
+        "entity_occurrences",
+    }
     existing = {
         row["name"]
         for row in conn.execute(
@@ -75,7 +78,11 @@ def check_security_entity_access_links(conn: sqlite3.Connection) -> dict:
 
 def check_allowops_resolution(conn: sqlite3.Connection) -> dict:
     if not column_exists(conn, "security_operation_allowops", "allowed_operation_id"):
-        return {"ok": False, "count": -1, "error": "missing_column:allowed_operation_id"}
+        return {
+            "ok": False,
+            "count": -1,
+            "error": "missing_column:allowed_operation_id",
+        }
     row = conn.execute(
         """
         SELECT COUNT(*) AS cnt
@@ -212,8 +219,6 @@ def check_unresolved_security_menus_file_ids(conn: sqlite3.Connection) -> dict:
         """
     ).fetchone()
     return {"ok": row["cnt"] == 0, "count": int(row["cnt"])}
-
-
 
 
 def check_security_derived_links(conn: sqlite3.Connection) -> dict:

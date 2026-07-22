@@ -49,20 +49,22 @@ class RestCoverageQueryTests(unittest.TestCase):
         self.conn.close()
 
     def test_only_active_cases_count_as_active_coverage(self):
-        endpoints, diagnostics = _coverage_rows(self.conn, 9, 's1', 20)
+        endpoints, diagnostics = _coverage_rows(self.conn, 9, "s1", 20)
         self.assertEqual([], diagnostics)
-        self.assertEqual(['active', 'known_issue_only'], [item['coverage'] for item in endpoints])
-        self.assertEqual(1, endpoints[0]['active_case_count'])
-        self.assertEqual(1, endpoints[1]['known_issue_case_count'])
+        self.assertEqual(
+            ["active", "known_issue_only"], [item["coverage"] for item in endpoints]
+        )
+        self.assertEqual(1, endpoints[0]["active_case_count"])
+        self.assertEqual(1, endpoints[1]["known_issue_case_count"])
 
     def test_version_filter_uses_endpoint_source_version(self):
-        endpoints, _ = _coverage_rows(self.conn, 9, 's2', 20)
+        endpoints, _ = _coverage_rows(self.conn, 9, "s2", 20)
         self.assertEqual([], endpoints)
 
     def test_version_filter_keeps_unresolved_endpoints_visible(self):
         self.conn.execute(
             "INSERT INTO rest_endpoints VALUES (3, 'DELETE', '/objects/ap-bill/3', 9, NULL)"
         )
-        endpoints, _ = _coverage_rows(self.conn, 9, 's1', 20)
-        self.assertEqual([3, 1, 2], [item['endpoint_id'] for item in endpoints])
-        self.assertIsNone(endpoints[0]['source_version'])
+        endpoints, _ = _coverage_rows(self.conn, 9, "s1", 20)
+        self.assertEqual([3, 1, 2], [item["endpoint_id"] for item in endpoints])
+        self.assertIsNone(endpoints[0]["source_version"])

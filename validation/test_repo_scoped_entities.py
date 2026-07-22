@@ -31,7 +31,10 @@ class RepoScopedEntityBuilderTests(unittest.TestCase):
                 INSERT INTO repos (id, repo_key, local_root, tracked_branch)
                 VALUES (?, ?, ?, 'main')
                 """,
-                [(1, "one", str(self.root / "one")), (2, "two", str(self.root / "two"))],
+                [
+                    (1, "one", str(self.root / "one")),
+                    (2, "two", str(self.root / "two")),
+                ],
             )
             conn.executemany(
                 """
@@ -97,23 +100,33 @@ class RepoScopedEntityBuilderTests(unittest.TestCase):
         build_entities.build(str(self.db), self.entities, reset=False, repo_key="two")
 
         self.assertEqual(
-            [(row["repo_id"], row["symbol_id"], row["file_id"]) for row in self._rows()],
+            [
+                (row["repo_id"], row["symbol_id"], row["file_id"])
+                for row in self._rows()
+            ],
             [(1, 100, 10), (2, 200, 20)],
         )
 
-    def test_reset_removes_only_selected_repository_mappings_and_preserves_entity(self) -> None:
+    def test_reset_removes_only_selected_repository_mappings_and_preserves_entity(
+        self,
+    ) -> None:
         build_entities.build(str(self.db), self.entities, reset=False, repo_key="one")
         build_entities.build(str(self.db), self.entities, reset=False, repo_key="two")
         build_entities.build(str(self.db), self.entities, reset=True, repo_key="one")
 
         self.assertEqual(
-            [(row["repo_id"], row["symbol_id"], row["file_id"]) for row in self._rows()],
+            [
+                (row["repo_id"], row["symbol_id"], row["file_id"])
+                for row in self._rows()
+            ],
             [(1, 100, 10), (2, 200, 20)],
         )
         conn = sqlite3.connect(self.db)
         try:
             self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM entity_nodes WHERE name = 'Customer'").fetchone()[0],
+                conn.execute(
+                    "SELECT COUNT(*) FROM entity_nodes WHERE name = 'Customer'"
+                ).fetchone()[0],
                 1,
             )
             self.assertEqual(
@@ -125,13 +138,18 @@ class RepoScopedEntityBuilderTests(unittest.TestCase):
 
     def test_cli_requires_repository_key(self) -> None:
         runner = CliRunner()
-        result = runner.invoke(build_entities.cli, ["build", "--db", str(self.db), "--entities", str(self.entities)])
+        result = runner.invoke(
+            build_entities.cli,
+            ["build", "--db", str(self.db), "--entities", str(self.entities)],
+        )
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("Missing option '--repo'", result.output)
 
     def test_same_canonical_entity_keeps_distinct_repo_occurrences(self) -> None:
         build_entities.build(str(self.db), self.entities, reset=False, repo_key="one")
-        build_entities.build(str(self.db), self.second_entities, reset=False, repo_key="two")
+        build_entities.build(
+            str(self.db), self.second_entities, reset=False, repo_key="two"
+        )
 
         conn = sqlite3.connect(self.db)
         conn.row_factory = sqlite3.Row

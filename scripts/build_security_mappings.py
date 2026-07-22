@@ -314,12 +314,18 @@ def ensure_security_tables(conn: sqlite3.Connection) -> None:
 
     allowops_cols = {
         row["name"]
-        for row in conn.execute("PRAGMA table_info(security_operation_allowops)").fetchall()
+        for row in conn.execute(
+            "PRAGMA table_info(security_operation_allowops)"
+        ).fetchall()
     }
     if "allowed_operation_id" not in allowops_cols:
-        conn.execute("ALTER TABLE security_operation_allowops ADD COLUMN allowed_operation_id INTEGER")
+        conn.execute(
+            "ALTER TABLE security_operation_allowops ADD COLUMN allowed_operation_id INTEGER"
+        )
     if "resolution_reason" not in allowops_cols:
-        conn.execute("ALTER TABLE security_operation_allowops ADD COLUMN resolution_reason TEXT")
+        conn.execute(
+            "ALTER TABLE security_operation_allowops ADD COLUMN resolution_reason TEXT"
+        )
 
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_security_operations_file_id ON security_operations(file_id)"
@@ -655,7 +661,8 @@ def insert_security_operation(
             raw_hash = excluded.raw_hash
         """,
         (
-            repo_id, op_key,
+            repo_id,
+            op_key,
             op_numeric_id,
             normalize_string(op_map.get("title")),
             normalize_string(op_map.get("action")),
@@ -809,8 +816,7 @@ def resolve_allowops(
             else "ambiguous_numeric_operation"
         )
         conn.execute(
-            "UPDATE security_operation_allowops "
-            "SET resolution_reason = ? WHERE id = ?",
+            "UPDATE security_operation_allowops SET resolution_reason = ? WHERE id = ?",
             (reason, row["id"]),
         )
         stats.allowops_unresolved += 1
@@ -825,7 +831,10 @@ def resolve_allowops(
 
 
 def detect_conflicts(
-    conn: sqlite3.Connection, repo_id: int, conflicts: list[dict[str, Any]], stats: BuildStats
+    conn: sqlite3.Connection,
+    repo_id: int,
+    conflicts: list[dict[str, Any]],
+    stats: BuildStats,
 ) -> None:
     dup_key_rows = conn.execute(
         """
@@ -1100,7 +1109,8 @@ def parse_menu_files(
             menu_id = int(cur.lastrowid)
         else:
             row = conn.execute(
-                "SELECT id FROM security_menus WHERE repo_id = ? AND source_file = ? LIMIT 1", (repo_id, rel)
+                "SELECT id FROM security_menus WHERE repo_id = ? AND source_file = ? LIMIT 1",
+                (repo_id, rel),
             ).fetchone()
             assert row is not None
             menu_id = int(row["id"])
@@ -1249,7 +1259,14 @@ def parse_dbschema(
                 file_id = excluded.file_id,
                 raw_hash = excluded.raw_hash
             """,
-            (repo_id, table_name, primary_keys, rel, dbschema_file_id, sha1_jsonable(table_map)),
+            (
+                repo_id,
+                table_name,
+                primary_keys,
+                rel,
+                dbschema_file_id,
+                sha1_jsonable(table_map),
+            ),
         )
         if cur.lastrowid:
             table_id = int(cur.lastrowid)

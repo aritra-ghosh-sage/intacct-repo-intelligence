@@ -26,8 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def schema_signature(conn: sqlite3.Connection):
     columns = [
-        tuple(row)
-        for row in conn.execute("PRAGMA table_info(graph_builds)").fetchall()
+        tuple(row) for row in conn.execute("PRAGMA table_info(graph_builds)").fetchall()
     ]
     indexes = [
         tuple(row[1:])
@@ -76,8 +75,28 @@ class GraphRemediationTests(unittest.TestCase):
     def test_entity_lookup_requires_repo_for_multiple_occurrences(self):
         graph = EntityGraphConnection(
             [
-                [1, "Customer", "entity", "one", 10, "ar", "ARCustomer", None, "one/Customer.ent"],
-                [1, "Customer", "entity", "two", 20, "co", "COCustomer", None, "two/Customer.ent"],
+                [
+                    1,
+                    "Customer",
+                    "entity",
+                    "one",
+                    10,
+                    "ar",
+                    "ARCustomer",
+                    None,
+                    "one/Customer.ent",
+                ],
+                [
+                    1,
+                    "Customer",
+                    "entity",
+                    "two",
+                    20,
+                    "co",
+                    "COCustomer",
+                    None,
+                    "two/Customer.ent",
+                ],
             ]
         )
         with self.assertRaises(EntityAmbiguityError) as caught:
@@ -85,8 +104,16 @@ class GraphRemediationTests(unittest.TestCase):
         self.assertEqual(
             caught.exception.candidates,
             [
-                {"repo_key": "one", "occurrence_id": 10, "ent_file": "one/Customer.ent"},
-                {"repo_key": "two", "occurrence_id": 20, "ent_file": "two/Customer.ent"},
+                {
+                    "repo_key": "one",
+                    "occurrence_id": 10,
+                    "ent_file": "one/Customer.ent",
+                },
+                {
+                    "repo_key": "two",
+                    "occurrence_id": 20,
+                    "ent_file": "two/Customer.ent",
+                },
             ],
         )
 
@@ -118,7 +145,9 @@ class GraphRemediationTests(unittest.TestCase):
                     (ROOT / "migrations/017_graph_builds.sql").read_text()
                 )
                 migrated.executescript(
-                    (ROOT / "migrations/018_graph_build_status_previous.sql").read_text()
+                    (
+                        ROOT / "migrations/018_graph_build_status_previous.sql"
+                    ).read_text()
                 )
                 self.assertEqual(schema_signature(fresh), schema_signature(migrated))
                 row = migrated.execute(
@@ -222,12 +251,8 @@ class GraphRemediationTests(unittest.TestCase):
                 self.assertEqual(statuses, [("previous",), ("active",)])
             finally:
                 conn.close()
-            self.assertEqual(
-                list(Path(directory).glob("graph.lbug.candidate.*")), []
-            )
-            self.assertEqual(
-                list(Path(directory).glob("graph.lbug.snapshot.*")), []
-            )
+            self.assertEqual(list(Path(directory).glob("graph.lbug.candidate.*")), [])
+            self.assertEqual(list(Path(directory).glob("graph.lbug.snapshot.*")), [])
 
     def test_policy_grant_count_deduplicates_source_rows(self):
         conn = sqlite3.connect(":memory:")
@@ -311,9 +336,9 @@ class GraphRemediationTests(unittest.TestCase):
             active.write_bytes(b"old-active")
             self._create_migrated_catalog(catalog)
 
-            mocked_build.side_effect = (
-                lambda _snapshot, candidate: Path(candidate).write_bytes(b"bad")
-            )
+            mocked_build.side_effect = lambda _snapshot, candidate: Path(
+                candidate
+            ).write_bytes(b"bad")
             mocked_validate.side_effect = RuntimeError("parity mismatch")
             with self.assertRaisesRegex(RuntimeError, "parity mismatch"):
                 promote_validated_graph(str(catalog), str(active))
@@ -352,9 +377,9 @@ class GraphRemediationTests(unittest.TestCase):
             active = Path(directory) / "graph.lbug"
             active.write_bytes(b"old-active")
             self._create_migrated_catalog(catalog)
-            mocked_build.side_effect = (
-                lambda _snapshot, candidate: Path(candidate).write_bytes(b"new")
-            )
+            mocked_build.side_effect = lambda _snapshot, candidate: Path(
+                candidate
+            ).write_bytes(b"new")
             mocked_validate.return_value = '{"exact_check_count": 52}'
             real_replace = os.replace
 
@@ -381,22 +406,25 @@ class GraphRemediationTests(unittest.TestCase):
         self.assertEqual(len(graph.calls), 2)
         self.assertTrue(all(call[1]["limit"] == 1 for call in graph.calls))
         self.assertEqual(len(edges), 2)
-        self.assertEqual(nodes, [
-            {
-                "symbol_id": 20,
-                "name": "consumer",
-                "kind": "method",
-                "depth": 1,
-                "is_seed": False,
-            },
-            {
-                "symbol_id": 30,
-                "name": "other",
-                "kind": "method",
-                "depth": 2,
-                "is_seed": False,
-            },
-        ])
+        self.assertEqual(
+            nodes,
+            [
+                {
+                    "symbol_id": 20,
+                    "name": "consumer",
+                    "kind": "method",
+                    "depth": 1,
+                    "is_seed": False,
+                },
+                {
+                    "symbol_id": 30,
+                    "name": "other",
+                    "kind": "method",
+                    "depth": 2,
+                    "is_seed": False,
+                },
+            ],
+        )
 
 
 if __name__ == "__main__":

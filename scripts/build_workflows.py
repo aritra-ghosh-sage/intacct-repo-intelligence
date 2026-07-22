@@ -159,6 +159,7 @@ def _resolve_file_id(
 
     return None, "exact_path,case_insensitive_path"
 
+
 def _resolve_ref_target_path(source_file_path: str, ref_value: str) -> str | None:
     ref_value = (ref_value or "").strip()
     if not ref_value:
@@ -368,11 +369,14 @@ def get_entities(conn: sqlite3.Connection, repo_id: int) -> list[sqlite3.Row]:
             WHERE em.entity_id = en.id AND em.repo_id = ?
         )
         ORDER BY name
-        """
-    , (repo_id,)).fetchall()
+        """,
+        (repo_id,),
+    ).fetchall()
 
 
-def get_entity_roots(conn: sqlite3.Connection, repo_id: int, entity_id: int) -> list[sqlite3.Row]:
+def get_entity_roots(
+    conn: sqlite3.Connection, repo_id: int, entity_id: int
+) -> list[sqlite3.Row]:
     return conn.execute(
         """
         SELECT
@@ -459,7 +463,9 @@ def normalize_action(text: str | None) -> str | None:
     return t if t in KNOWN_ACTIONS else None
 
 
-def get_entity_yaml_paths(conn: sqlite3.Connection, repo_id: int, entity_id: int) -> list[str]:
+def get_entity_yaml_paths(
+    conn: sqlite3.Connection, repo_id: int, entity_id: int
+) -> list[str]:
     """
     Return deterministic YAML candidates wired to this entity.
 
@@ -481,7 +487,7 @@ def get_entity_yaml_paths(conn: sqlite3.Connection, repo_id: int, entity_id: int
           )
         ORDER BY source_text
         """,
-                (entity_id, repo_id, f"{OPENAPI_MAPPING_PREFIX}%"),
+        (entity_id, repo_id, f"{OPENAPI_MAPPING_PREFIX}%"),
     ).fetchall()
 
     return [r["source_text"] for r in rows]
@@ -1372,7 +1378,9 @@ def build(db: str, repo_root: Path, repo_id: int, reset: bool) -> BuildStats:
                 (repo_id,),
             )
             conn.execute("DELETE FROM workflows WHERE repo_id = ?", (repo_id,))
-            conn.execute("DELETE FROM openapi_file_ref_edges WHERE repo_id = ?", (repo_id,))
+            conn.execute(
+                "DELETE FROM openapi_file_ref_edges WHERE repo_id = ?", (repo_id,)
+            )
             conn.commit()
 
         entities = get_entities(conn, repo_id)
@@ -1430,10 +1438,16 @@ def build_command(db: str, repo: str, repo_root: Path | None, reset: bool) -> No
     conn = get_connection(db)
     try:
         repository = get_repository(conn, repo)
-        resolved_root = repo_root.resolve() if repo_root is not None else resolve_repository_root(conn, repo)
+        resolved_root = (
+            repo_root.resolve()
+            if repo_root is not None
+            else resolve_repository_root(conn, repo)
+        )
     finally:
         conn.close()
-    stats = build(db=db, repo_root=resolved_root, repo_id=int(repository["id"]), reset=reset)
+    stats = build(
+        db=db, repo_root=resolved_root, repo_id=int(repository["id"]), reset=reset
+    )
     click.echo(f"Processed entities:  {stats.entities_processed}")
     click.echo(f"Workflows inserted:  {stats.workflows_inserted}")
     click.echo(f"Workflow nodes inserted:  {stats.workflow_nodes_inserted}")

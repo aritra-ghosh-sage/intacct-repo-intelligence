@@ -76,7 +76,10 @@ def _backup_database(source: Path, target: Path) -> None:
 
 
 def _manifest_repository(manifest: dict, repo_key: str) -> dict:
-    entry = next((item for item in manifest["repositories"] if item["repo_key"] == repo_key), None)
+    entry = next(
+        (item for item in manifest["repositories"] if item["repo_key"] == repo_key),
+        None,
+    )
     if entry is None:
         raise RefreshError(f"repository not found in manifest: {repo_key}")
     return entry
@@ -101,7 +104,13 @@ def _record_run(
     return run_id
 
 
-def _stage(conn: sqlite3.Connection, run_id: int, builder: str, status: str, error: str | None = None) -> None:
+def _stage(
+    conn: sqlite3.Connection,
+    run_id: int,
+    builder: str,
+    status: str,
+    error: str | None = None,
+) -> None:
     timestamp = datetime.now(timezone.utc).isoformat()
     if status == "running":
         conn.execute(
@@ -258,7 +267,9 @@ def _validate_candidate(conn: sqlite3.Connection, repo_id: int) -> None:
         (repo_id,),
     ).fetchall()
     if duplicate_paths:
-        raise RefreshError(f"candidate has duplicate repository paths: {duplicate_paths[:3]}")
+        raise RefreshError(
+            f"candidate has duplicate repository paths: {duplicate_paths[:3]}"
+        )
 
 
 def _record_failed_refresh(
@@ -293,7 +304,9 @@ def _record_failed_refresh(
         return
 
 
-def refresh_repository(db_path: str | Path, manifest_path: str | Path, repo_key: str) -> None:
+def refresh_repository(
+    db_path: str | Path, manifest_path: str | Path, repo_key: str
+) -> None:
     active = Path(db_path).resolve()
     if not active.is_file():
         raise RefreshError(f"catalog database does not exist: {active}")
@@ -325,7 +338,10 @@ def refresh_repository(db_path: str | Path, manifest_path: str | Path, repo_key:
             root = resolve_repository_root(conn, repo_key)
             branch = str(repo["tracked_branch"])
             start_sha = source_revision(root, branch)
-            plan = build_plan(str(repo["profile"] or "generic"), json.loads(repo["effective_builders_json"] or "[]"))
+            plan = build_plan(
+                str(repo["profile"] or "generic"),
+                json.loads(repo["effective_builders_json"] or "[]"),
+            )
             conn.execute(
                 "UPDATE repos SET effective_builders_json=? WHERE id=?",
                 (json.dumps(plan, separators=(",", ":")), int(repo["id"])),
@@ -355,7 +371,9 @@ def refresh_repository(db_path: str | Path, manifest_path: str | Path, repo_key:
             conn.row_factory = sqlite3.Row
             _validate_candidate(conn, int(repo["id"]))
             if source_revision(root, branch) != start_sha:
-                raise RefreshError("repository revision changed while candidate was built")
+                raise RefreshError(
+                    "repository revision changed while candidate was built"
+                )
             fingerprint = _fingerprint(candidate)
             conn.execute(
                 "UPDATE repo_index_runs SET status='validated', catalog_fingerprint=?, completed_at=CURRENT_TIMESTAMP WHERE id=?",
@@ -373,7 +391,9 @@ def refresh_repository(db_path: str | Path, manifest_path: str | Path, repo_key:
             if conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='graph_builds'"
             ).fetchone():
-                conn.execute("UPDATE graph_builds SET status='previous' WHERE status='active'")
+                conn.execute(
+                    "UPDATE graph_builds SET status='previous' WHERE status='active'"
+                )
             conn.execute(
                 "UPDATE repo_index_runs SET status='active' WHERE id=?", (run_id,)
             )
@@ -390,7 +410,9 @@ def refresh_repository(db_path: str | Path, manifest_path: str | Path, repo_key:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Refresh a repository through a validated SQLite candidate")
+    parser = argparse.ArgumentParser(
+        description="Refresh a repository through a validated SQLite candidate"
+    )
     parser.add_argument("--db", default="catalog/catalog.db")
     parser.add_argument("--manifest", default="config/workspace_repos.yaml")
     parser.add_argument("--repo", required=True)

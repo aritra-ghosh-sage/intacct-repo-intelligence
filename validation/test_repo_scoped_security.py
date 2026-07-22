@@ -60,11 +60,11 @@ class RepoScopedSecurityTests(unittest.TestCase):
             build_security_mappings.UNRESOLVED_FILE_IDS_LOG = log_dir / "files.jsonl"
             try:
                 build_security_mappings.build(
-                db=str(db_path),
-                repo_key="first",
-                reset=True,
-                max_parse_failures=-1,
-                max_unresolved=-1,
+                    db=str(db_path),
+                    repo_key="first",
+                    reset=True,
+                    max_parse_failures=-1,
+                    max_unresolved=-1,
                 )
             finally:
                 (

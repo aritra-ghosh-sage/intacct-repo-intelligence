@@ -170,10 +170,14 @@ def check_entities_jsonl_vs_db(
     db_entities = {r["name"]: r for r in db_rows}
 
     missing_in_db = sorted(set(file_entities) - set(db_entities))
-    findings.append(("entities in JSONL but missing in entity_occurrences", missing_in_db))
+    findings.append(
+        ("entities in JSONL but missing in entity_occurrences", missing_in_db)
+    )
 
     missing_in_jsonl = sorted(set(db_entities) - set(file_entities))
-    findings.append(("entities in entity_occurrences but missing in JSONL", missing_in_jsonl))
+    findings.append(
+        ("entities in entity_occurrences but missing in JSONL", missing_in_jsonl)
+    )
 
     metadata_mismatches = []
     for name in sorted(set(file_entities) & set(db_entities)):
@@ -181,13 +185,21 @@ def check_entities_jsonl_vs_db(
         db = db_entities[name]
         expected_dummy = True if src.get("dummy") else False
         mismatches = []
-        if (src.get("ent_file").lower() if src.get("ent_file") else None) != (db["ent_file"].lower() if db["ent_file"] else None):
+        if (src.get("ent_file").lower() if src.get("ent_file") else None) != (
+            db["ent_file"].lower() if db["ent_file"] else None
+        ):
             mismatches.append(("ent_file", src.get("ent_file"), db["ent_file"]))
-        if (src.get("module").lower() if src.get("module") else None) != (db["module"].lower() if db["module"] else None):
+        if (src.get("module").lower() if src.get("module") else None) != (
+            db["module"].lower() if db["module"] else None
+        ):
             mismatches.append(("module", src.get("module"), db["module"]))
-        if (src.get("table").lower() if src.get("table") else None) != (db["table_name"].lower() if db["table_name"] else None):
+        if (src.get("table").lower() if src.get("table") else None) != (
+            db["table_name"].lower() if db["table_name"] else None
+        ):
             mismatches.append(("table_name", src.get("table"), db["table_name"]))
-        if (src.get("view").lower() if src.get("view") else None) != (db["view_name"].lower() if db["view_name"] else None):
+        if (src.get("view").lower() if src.get("view") else None) != (
+            db["view_name"].lower() if db["view_name"] else None
+        ):
             mismatches.append(("view_name", src.get("view"), db["view_name"]))
         if expected_dummy != (db["dummy"] if db["dummy"] is not None else 0):
             mismatches.append(("dummy", expected_dummy, db["dummy"]))
@@ -221,7 +233,10 @@ def check_mapping_roles_and_roots(conn: sqlite3.Connection) -> list:
         r["mapping_type"]
         for r in unknown_mapping_roles
         if r["mapping_type"] not in valid_roles
-        and (not str(r["mapping_type"]).startswith("openapispec_") and not str(r["mapping_type"]).startswith("workflow_"))
+        and (
+            not str(r["mapping_type"]).startswith("openapispec_")
+            and not str(r["mapping_type"]).startswith("workflow_")
+        )
     ]
     findings.append(("entity_mappings with unknown mapping_type", unknown))
 
@@ -304,10 +319,13 @@ def check_structural(conn: sqlite3.Connection) -> list:
            AND em.entity_id = eo.entity_id
         WHERE (eo.ent_file IS NULL OR eo.ent_file = '')
           AND em.mapping_type IN ({roles})
-    """.format(roles=", ".join(["?"] * len(ROLE_WEIGHT))) + repo_clause,
+    """.format(roles=", ".join(["?"] * len(ROLE_WEIGHT)))
+        + repo_clause,
         tuple(ROLE_WEIGHT.keys()) + repo_params,
     )
-    findings.append(("entity_occurrences without ent_file", [r["name"] for r in missing_ent]))
+    findings.append(
+        ("entity_occurrences without ent_file", [r["name"] for r in missing_ent])
+    )
 
     orphan_mappings = q(
         conn,
@@ -501,7 +519,9 @@ def check_filesystem(
         if not os.path.exists(full):
             missing_ent_files.append((r["name"], r["ent_file"]))
 
-    findings.append(("entity_occurrences with .ent files missing on disk", missing_ent_files))
+    findings.append(
+        ("entity_occurrences with .ent files missing on disk", missing_ent_files)
+    )
 
     missing_class_files = []
     rows = q(

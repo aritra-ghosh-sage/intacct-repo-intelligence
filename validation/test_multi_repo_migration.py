@@ -40,19 +40,32 @@ class MultiRepoMigrationTests(unittest.TestCase):
         conn = self.legacy_connection()
         apply_multi_repo_migration(conn, local_root="/tmp/main")
         main = get_repository(conn, "ia-main")
-        self.assertEqual(tuple(conn.execute("SELECT id, repo_id FROM files").fetchone()), (7, main["id"]))
+        self.assertEqual(
+            tuple(conn.execute("SELECT id, repo_id FROM files").fetchone()),
+            (7, main["id"]),
+        )
         second_id = conn.execute(
             "INSERT INTO repos(repo_key, local_root, tracked_branch) VALUES ('service', '/tmp/service', 'main')"
         ).lastrowid
-        conn.execute("INSERT INTO files(repo_id, path) VALUES (?, ?)", (second_id, "app/source/Foo.cls"))
-        self.assertEqual(conn.execute("SELECT file_id FROM symbols WHERE id = 11").fetchone()[0], 7)
+        conn.execute(
+            "INSERT INTO files(repo_id, path) VALUES (?, ?)",
+            (second_id, "app/source/Foo.cls"),
+        )
+        self.assertEqual(
+            conn.execute("SELECT file_id FROM symbols WHERE id = 11").fetchone()[0], 7
+        )
         self.assertEqual(conn.execute("PRAGMA foreign_key_check").fetchall(), [])
 
     def test_migration_is_idempotent(self) -> None:
         conn = self.legacy_connection()
         apply_multi_repo_migration(conn, local_root="/tmp/main")
         apply_multi_repo_migration(conn, local_root="/tmp/main")
-        self.assertEqual(conn.execute("SELECT COUNT(*) FROM schema_migrations WHERE name = '019_multi_repo'").fetchone()[0], 1)
+        self.assertEqual(
+            conn.execute(
+                "SELECT COUNT(*) FROM schema_migrations WHERE name = '019_multi_repo'"
+            ).fetchone()[0],
+            1,
+        )
         self.assertEqual(
             conn.execute(
                 "SELECT COUNT(*) FROM schema_migrations WHERE name = '020_rest_automation_coverage'"
@@ -92,7 +105,9 @@ class MultiRepoMigrationTests(unittest.TestCase):
                VALUES (?, 1, 'post', 'posting', 'yaml', 'app/source/workflows.yml')""",
             (second_id,),
         )
-        self.assertEqual(conn.execute("SELECT COUNT(*) FROM workflows").fetchone()[0], 2)
+        self.assertEqual(
+            conn.execute("SELECT COUNT(*) FROM workflows").fetchone()[0], 2
+        )
 
     def test_migration_rejects_populated_unsafe_legacy_unique_table(self) -> None:
         conn = self.legacy_connection()
@@ -138,16 +153,24 @@ class MultiRepoMigrationTests(unittest.TestCase):
                    VALUES (?, 'openapi/shared.yaml')""",
                 (repo_id,),
             )
-        entity_id = conn.execute("INSERT INTO entity_nodes(name) VALUES ('Invoice')").lastrowid
+        entity_id = conn.execute(
+            "INSERT INTO entity_nodes(name) VALUES ('Invoice')"
+        ).lastrowid
         for repo_id in (main_id, second_id):
             conn.execute(
                 """INSERT INTO entity_access_links(repo_id, entity_id, surface, record_id, link_type)
                    VALUES (?, ?, 'security_operation', 1, 'exact')""",
                 (repo_id, entity_id),
             )
-        self.assertEqual(conn.execute("SELECT COUNT(*) FROM security_operations").fetchone()[0], 2)
-        self.assertEqual(conn.execute("SELECT COUNT(*) FROM openapispec_index").fetchone()[0], 2)
-        self.assertEqual(conn.execute("SELECT COUNT(*) FROM entity_access_links").fetchone()[0], 2)
+        self.assertEqual(
+            conn.execute("SELECT COUNT(*) FROM security_operations").fetchone()[0], 2
+        )
+        self.assertEqual(
+            conn.execute("SELECT COUNT(*) FROM openapispec_index").fetchone()[0], 2
+        )
+        self.assertEqual(
+            conn.execute("SELECT COUNT(*) FROM entity_access_links").fetchone()[0], 2
+        )
 
     def test_entity_access_links_are_rebuilt_with_repo_scope(self) -> None:
         conn = self.legacy_connection()
@@ -204,7 +227,9 @@ class MultiRepoMigrationTests(unittest.TestCase):
             1,
         )
 
-    def test_schema_contract_moves_repo_local_entity_metadata_to_occurrences(self) -> None:
+    def test_schema_contract_moves_repo_local_entity_metadata_to_occurrences(
+        self,
+    ) -> None:
         conn = self.legacy_connection()
         conn.executescript(
             """
@@ -230,7 +255,8 @@ class MultiRepoMigrationTests(unittest.TestCase):
         apply_multi_repo_migration(conn, local_root="/tmp/main")
 
         entity_node_columns = {
-            row["name"] for row in conn.execute("PRAGMA table_info(entity_nodes)").fetchall()
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(entity_nodes)").fetchall()
         }
         self.assertTrue(
             {"ent_file", "module", "table_name", "view_name", "dummy"}.isdisjoint(
@@ -259,7 +285,12 @@ class MultiRepoMigrationTests(unittest.TestCase):
         index_rows = conn.execute("PRAGMA index_list(entity_access_links)").fetchall()
         unique_index_names = [row["name"] for row in index_rows if row["unique"]]
         unique_column_sets = [
-            [info["name"] for info in conn.execute(f"PRAGMA index_info('{index_name}')").fetchall()]
+            [
+                info["name"]
+                for info in conn.execute(
+                    f"PRAGMA index_info('{index_name}')"
+                ).fetchall()
+            ]
             for index_name in unique_index_names
         ]
         self.assertIn(

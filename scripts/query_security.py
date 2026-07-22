@@ -63,11 +63,11 @@ def stats_command(db: str, json_output: bool) -> None:
         ]
         if json_output:
             counts = {
-                        table: conn.execute(
-                            f"SELECT COUNT(*) AS c FROM {table}"
-                        ).fetchone()["c"]
-                        for table in tables
-                    }
+                table: conn.execute(f"SELECT COUNT(*) AS c FROM {table}").fetchone()[
+                    "c"
+                ]
+                for table in tables
+            }
             emit_json(
                 success_response(
                     command="stats",

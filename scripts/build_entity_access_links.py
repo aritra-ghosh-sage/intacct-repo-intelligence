@@ -336,7 +336,6 @@ def link_by_table_name_match(conn: sqlite3.Connection, repo_id: int) -> int:
     )
 
 
-
 def parse_security_operation_key(op_key: str) -> dict[str, str] | None:
     parts = [part.strip() for part in op_key.strip("/").split("/")]
     if len(parts) < 3 or any(not part for part in parts[:3]):
@@ -421,8 +420,7 @@ def _write_security_key_diagnostics(records: list[dict]) -> None:
             if value.get("category") != ENTITY_SECURITY_UNRESOLVED_CATEGORY:
                 existing_lines.append(line)
     new_lines = [
-        json.dumps(value, ensure_ascii=False, sort_keys=True)
-        for value in records
+        json.dumps(value, ensure_ascii=False, sort_keys=True) for value in records
     ]
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [*existing_lines, *new_lines]
@@ -461,9 +459,7 @@ def link_security_surfaces(
     ):
         parsed = parse_security_operation_key(str(row["op_key"]))
         if parsed is None:
-            diagnostics.append(
-                _security_key_diagnostic(row, None, "malformed_key", [])
-            )
+            diagnostics.append(_security_key_diagnostic(row, None, "malformed_key", []))
             continue
         name_candidates = entities_by_name.get(parsed["entity"], [])
         candidates = [
@@ -472,11 +468,7 @@ def link_security_surfaces(
             if module == parsed["module"]
         ]
         if len(candidates) == 0:
-            reason = (
-                "module_mismatched"
-                if name_candidates
-                else "entity_unmatched"
-            )
+            reason = "module_mismatched" if name_candidates else "entity_unmatched"
             diagnostics.append(
                 _security_key_diagnostic(row, parsed, reason, name_candidates)
             )
@@ -518,8 +510,13 @@ def link_security_surfaces(
                 (repo_id, op_key),
             ):
                 total += _insert_access_link(
-                    conn, repo_id, entity_id, "security_policy", int(row["id"]),
-                    "operation_policy_grant", row["file_id"],
+                    conn,
+                    repo_id,
+                    entity_id,
+                    "security_policy",
+                    int(row["id"]),
+                    "operation_policy_grant",
+                    row["file_id"],
                     f"policy supported by security operation key={op_key}",
                 )
 
@@ -535,17 +532,26 @@ def link_security_surfaces(
                 (repo_id, op_key),
             ):
                 total += _insert_access_link(
-                    conn, repo_id, entity_id, "security_menu_item", int(row["item_id"]),
-                    "operation_menu_item", row["file_id"],
+                    conn,
+                    repo_id,
+                    entity_id,
+                    "security_menu_item",
+                    int(row["item_id"]),
+                    "operation_menu_item",
+                    row["file_id"],
                     f"menu item supported by security operation key={op_key}",
                 )
                 total += _insert_access_link(
-                    conn, repo_id, entity_id, "security_menu", int(row["menu_id"]),
-                    "operation_menu", row["file_id"],
+                    conn,
+                    repo_id,
+                    entity_id,
+                    "security_menu",
+                    int(row["menu_id"]),
+                    "operation_menu",
+                    row["file_id"],
                     f"menu supported by security operation key={op_key}",
                 )
     return total, linked_key_count
-
 
 
 def build(db: str, reset: bool, repo_key: str) -> BuildStats:
@@ -558,10 +564,14 @@ def build(db: str, reset: bool, repo_key: str) -> BuildStats:
         repo_id = int(get_repository(conn, repo_key)["id"])
         ensure_dbschema_file_id_column(conn, repo_id)
         if reset:
-            conn.execute("DELETE FROM entity_access_links WHERE repo_id = ?", (repo_id,))
+            conn.execute(
+                "DELETE FROM entity_access_links WHERE repo_id = ?", (repo_id,)
+            )
 
         stats.rows_inserted += link_by_file_overlap(conn, repo_id)
-        security_links, linked_key_count = link_security_surfaces(conn, repo_id, diagnostics)
+        security_links, linked_key_count = link_security_surfaces(
+            conn, repo_id, diagnostics
+        )
         stats.rows_inserted += security_links
         stats.security_keys_linked = linked_key_count
         stats.security_keys_unresolved = len(diagnostics)

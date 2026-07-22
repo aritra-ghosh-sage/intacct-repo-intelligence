@@ -45,12 +45,12 @@ def stats(json_output):
                 args={},
                 data={
                     "languages": [
-                    {
-                        "language": r["language"],
-                        "file_count": r["c"],
-                        "bytes": r["bytes"],
-                    }
-                    for r in rows
+                        {
+                            "language": r["language"],
+                            "file_count": r["c"],
+                            "bytes": r["bytes"],
+                        }
+                        for r in rows
                     ]
                 },
                 summary={
@@ -91,13 +91,13 @@ def find(keyword, limit, json_output):
 
     if json_output:
         matches = [
-                    {
-                        "path": r["path"],
-                        "language": r["language"],
-                        "size_bytes": r["size_bytes"],
-                    }
-                    for r in rows
-                ]
+            {
+                "path": r["path"],
+                "language": r["language"],
+                "size_bytes": r["size_bytes"],
+            }
+            for r in rows
+        ]
         emit_json(
             success_response(
                 command="find",
@@ -180,16 +180,16 @@ def symbols(keyword, kind, limit, json_output):
 
     if json_output:
         matches = [
-                    {
-                        "name": r["name"],
-                        "kind": r["kind"],
-                        "language": r["language"],
-                        "parent_symbol": r["parent_symbol"],
-                        "file_path": r["path"],
-                        "start_line": r["start_line"],
-                    }
-                    for r in rows
-                ]
+            {
+                "name": r["name"],
+                "kind": r["kind"],
+                "language": r["language"],
+                "parent_symbol": r["parent_symbol"],
+                "file_path": r["path"],
+                "start_line": r["start_line"],
+            }
+            for r in rows
+        ]
         emit_json(
             success_response(
                 command="symbols",
@@ -238,13 +238,13 @@ def symbol_stats(json_output=False):
 
     if json_output:
         stats_rows = [
-                    {
-                        "language": r["language"],
-                        "kind": r["kind"],
-                        "count": r["c"],
-                    }
-                    for r in rows
-                ]
+            {
+                "language": r["language"],
+                "kind": r["kind"],
+                "count": r["c"],
+            }
+            for r in rows
+        ]
         emit_json(
             success_response(
                 command="symbol_stats",
@@ -288,15 +288,15 @@ def entity(entity_prefix, json_output):
 
     if json_output:
         symbols_payload = [
-                    {
-                        "name": r["name"],
-                        "kind": r["kind"],
-                        "language": r["language"],
-                        "parent_symbol": r["parent_symbol"],
-                        "file_path": r["path"],
-                    }
-                    for r in rows
-                ]
+            {
+                "name": r["name"],
+                "kind": r["kind"],
+                "language": r["language"],
+                "parent_symbol": r["parent_symbol"],
+                "file_path": r["path"],
+            }
+            for r in rows
+        ]
         emit_json(
             success_response(
                 command="entity",

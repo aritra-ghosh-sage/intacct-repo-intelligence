@@ -59,11 +59,7 @@ def _render_endpoint(row: sqlite3.Row) -> None:
     click.echo(f"  openapi_file: {row['openapi_file_path'] or '(unknown)'}")
     click.echo(
         f"  handler_symbol: {row['handler_symbol_name'] or '(none)'}"
-        + (
-            f" ({row['handler_symbol_kind']})"
-            if row["handler_symbol_kind"]
-            else ""
-        )
+        + (f" ({row['handler_symbol_kind']})" if row["handler_symbol_kind"] else "")
     )
     click.echo(f"  endpoint_file: {row['endpoint_file_path'] or '(unknown)'}")
 
@@ -210,7 +206,9 @@ def _fetch_related_code_handlers(
     ).fetchall()
 
 
-def _fetch_symbol_matches(conn: sqlite3.Connection, symbol_name: str) -> list[sqlite3.Row]:
+def _fetch_symbol_matches(
+    conn: sqlite3.Connection, symbol_name: str
+) -> list[sqlite3.Row]:
     return conn.execute(
         """
         SELECT id, name, kind, language, parent_symbol
@@ -408,7 +406,9 @@ def entity_command(entity_name: str, db: str, limit: int, json_output: bool) -> 
             for row in rows:
                 endpoint_data = _endpoint_row_to_dict(row)
                 if row["handler_symbol_id"] is not None:
-                    related = _fetch_related_code_handlers(conn, row["handler_symbol_id"])
+                    related = _fetch_related_code_handlers(
+                        conn, row["handler_symbol_id"]
+                    )
                     endpoint_data["related_code_handlers"] = [
                         _related_handler_row_to_dict(item) for item in related
                     ]
@@ -443,7 +443,9 @@ def entity_command(entity_name: str, db: str, limit: int, json_output: bool) -> 
             for row in rows:
                 _render_endpoint(row)
                 if row["handler_symbol_id"] is not None:
-                    related = _fetch_related_code_handlers(conn, row["handler_symbol_id"])
+                    related = _fetch_related_code_handlers(
+                        conn, row["handler_symbol_id"]
+                    )
                     _render_related_handlers(related)
                 click.echo("")
     finally:
@@ -452,7 +454,9 @@ def entity_command(entity_name: str, db: str, limit: int, json_output: bool) -> 
 
 @cli.command("coverage")
 @click.argument("entity_name")
-@click.option("--version", help="Exact OpenAPI endpoint source version (for example s1).")
+@click.option(
+    "--version", help="Exact OpenAPI endpoint source version (for example s1)."
+)
 @click.option("--db", default=DEFAULT_DB, show_default=True)
 @click.option("--limit", default=500, show_default=True, type=int)
 @click.option("--json", "json_output", is_flag=True, help="Emit JSON output.")
@@ -465,20 +469,35 @@ def coverage_command(
         _require_tables(
             conn,
             [
-                "rest_endpoints", "entity_nodes", "repos",
-                "test_cases", "test_requests", "test_endpoint_links",
-                "test_entity_links", "test_diagnostics", "api_version_compatibility",
+                "rest_endpoints",
+                "entity_nodes",
+                "repos",
+                "test_cases",
+                "test_requests",
+                "test_endpoint_links",
+                "test_entity_links",
+                "test_diagnostics",
+                "api_version_compatibility",
             ],
         )
         entity, ambiguous_matches = _resolve_entity_by_name(conn, entity_name)
         if entity is None:
             if json_output:
-                emit_json(error_response(
-                    command="coverage", args={"entity_name": entity_name, "version": version},
-                    code="ambiguous_entity_lookup" if ambiguous_matches else "entity_not_found",
-                    message="Entity lookup is ambiguous." if ambiguous_matches else f"Entity not found: {entity_name}",
-                    details={"matches": ambiguous_matches} if ambiguous_matches else {"entity_name": entity_name},
-                ))
+                emit_json(
+                    error_response(
+                        command="coverage",
+                        args={"entity_name": entity_name, "version": version},
+                        code="ambiguous_entity_lookup"
+                        if ambiguous_matches
+                        else "entity_not_found",
+                        message="Entity lookup is ambiguous."
+                        if ambiguous_matches
+                        else f"Entity not found: {entity_name}",
+                        details={"matches": ambiguous_matches}
+                        if ambiguous_matches
+                        else {"entity_name": entity_name},
+                    )
+                )
                 return
             if ambiguous_matches:
                 raise click.ClickException(
@@ -488,14 +507,25 @@ def coverage_command(
 
         endpoints, diagnostics = _coverage_rows(conn, int(entity["id"]), version, limit)
         summary = coverage_summary(endpoints, diagnostics)
-        args = {"entity_name": entity_name, "version": version, "db": db, "limit": limit}
+        args = {
+            "entity_name": entity_name,
+            "version": version,
+            "db": db,
+            "limit": limit,
+        }
         if json_output:
-            emit_json(success_response(
-                command="coverage", args=args,
-                data={"entity": {"id": entity["id"], "name": entity["name"]},
-                      "endpoint_coverage": endpoints, "diagnostics": diagnostics},
-                summary=summary,
-            ))
+            emit_json(
+                success_response(
+                    command="coverage",
+                    args=args,
+                    data={
+                        "entity": {"id": entity["id"], "name": entity["name"]},
+                        "endpoint_coverage": endpoints,
+                        "diagnostics": diagnostics,
+                    },
+                    summary=summary,
+                )
+            )
             return
 
         click.echo(f"Entity: {entity['name']}")
@@ -574,7 +604,9 @@ def path_command(path_fragment: str, db: str, limit: int, json_output: bool) -> 
 @click.option("--db", default=DEFAULT_DB, show_default=True)
 @click.option("--limit", default=20, show_default=True, type=int)
 @click.option("--json", "json_output", is_flag=True, help="Emit JSON output.")
-def endpoint_command(endpoint_path: str, db: str, limit: int, json_output: bool) -> None:
+def endpoint_command(
+    endpoint_path: str, db: str, limit: int, json_output: bool
+) -> None:
     """Show all methods and evidence for an exact endpoint path."""
     conn = get_connection(db)
     try:
@@ -593,7 +625,9 @@ def endpoint_command(endpoint_path: str, db: str, limit: int, json_output: bool)
             for row in rows:
                 endpoint_data = _endpoint_row_to_dict(row)
                 if row["handler_symbol_id"] is not None:
-                    related = _fetch_related_code_handlers(conn, row["handler_symbol_id"])
+                    related = _fetch_related_code_handlers(
+                        conn, row["handler_symbol_id"]
+                    )
                     endpoint_data["related_code_handlers"] = [
                         _related_handler_row_to_dict(item) for item in related
                     ]

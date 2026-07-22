@@ -27,7 +27,10 @@ def rest_automation_paths(entry: dict[str, Any], root: Path) -> tuple[Path, Path
             f"repository {entry.get('repo_key')} requires a rest_automation mapping"
         )
     values: list[Path] = []
-    for key, expected_kind in (("features_root", "directory"), ("object_mapping", "file")):
+    for key, expected_kind in (
+        ("features_root", "directory"),
+        ("object_mapping", "file"),
+    ):
         value = config.get(key)
         if not isinstance(value, str) or not value.strip():
             raise RepositoryError(
@@ -64,37 +67,59 @@ def load_workspace_manifest(path: str | Path) -> dict[str, Any]:
     try:
         document = yaml.safe_load(manifest_path.read_text())
     except OSError as exc:
-        raise RepositoryError(f"cannot read workspace manifest {manifest_path}: {exc}") from exc
+        raise RepositoryError(
+            f"cannot read workspace manifest {manifest_path}: {exc}"
+        ) from exc
     except yaml.YAMLError as exc:
-        raise RepositoryError(f"invalid YAML in workspace manifest {manifest_path}: {exc}") from exc
+        raise RepositoryError(
+            f"invalid YAML in workspace manifest {manifest_path}: {exc}"
+        ) from exc
 
     if not isinstance(document, dict) or document.get("version") != 1:
         raise RepositoryError("workspace manifest must be a mapping with version: 1")
     repositories = document.get("repositories")
     if not isinstance(repositories, list) or not repositories:
-        raise RepositoryError("workspace manifest must contain a non-empty repositories list")
+        raise RepositoryError(
+            "workspace manifest must contain a non-empty repositories list"
+        )
 
     seen: set[str] = set()
     for entry in repositories:
         if not isinstance(entry, dict):
             raise RepositoryError("each repository entry must be a mapping")
-        missing = [key for key in ("repo_key", "local_root", "tracked_branch") if not entry.get(key)]
+        missing = [
+            key
+            for key in ("repo_key", "local_root", "tracked_branch")
+            if not entry.get(key)
+        ]
         if missing:
             raise RepositoryError(f"repository entry is missing {', '.join(missing)}")
         repo_key = str(entry["repo_key"])
         if repo_key in seen:
-            raise RepositoryError(f"duplicate repo_key in workspace manifest: {repo_key}")
+            raise RepositoryError(
+                f"duplicate repo_key in workspace manifest: {repo_key}"
+            )
         seen.add(repo_key)
         builders = entry.get("builders", [])
-        if not isinstance(builders, list) or not all(isinstance(item, str) and item for item in builders):
-            raise RepositoryError(f"repository {repo_key} builders must be a list of non-empty strings")
+        if not isinstance(builders, list) or not all(
+            isinstance(item, str) and item for item in builders
+        ):
+            raise RepositoryError(
+                f"repository {repo_key} builders must be a list of non-empty strings"
+            )
         if entry.get("profile") == "rest_automation":
             config = entry.get("rest_automation")
             if not isinstance(config, dict):
-                raise RepositoryError(f"repository {repo_key} requires a rest_automation mapping")
+                raise RepositoryError(
+                    f"repository {repo_key} requires a rest_automation mapping"
+                )
             for key in ("features_root", "object_mapping"):
                 value = config.get(key)
-                if not isinstance(value, str) or not value.strip() or Path(value).is_absolute():
+                if (
+                    not isinstance(value, str)
+                    or not value.strip()
+                    or Path(value).is_absolute()
+                ):
                     raise RepositoryError(
                         f"repository {repo_key} rest_automation.{key} must be a non-empty relative path"
                     )
@@ -119,11 +144,15 @@ def resolve_repository_root(conn: sqlite3.Connection, repo_key: str) -> Path:
 
     root = Path(get_repository(conn, repo_key)["local_root"]).expanduser()
     if not root.is_dir():
-        raise RepositoryError(f"repository {repo_key} checkout root does not exist: {root}")
+        raise RepositoryError(
+            f"repository {repo_key} checkout root does not exist: {root}"
+        )
     return root.resolve()
 
 
-def register_manifest(conn: sqlite3.Connection, manifest: dict[str, Any]) -> list[sqlite3.Row]:
+def register_manifest(
+    conn: sqlite3.Connection, manifest: dict[str, Any]
+) -> list[sqlite3.Row]:
     """Upsert manifest repositories and return their catalog rows.
 
     The caller owns the transaction so registration can be coordinated with
@@ -146,10 +175,16 @@ def register_manifest(conn: sqlite3.Connection, manifest: dict[str, Any]) -> lis
                 profile=excluded.profile, effective_builders_json=excluded.effective_builders_json
             """,
             (
-                entry["repo_key"], entry.get("name"), entry.get("kind"),
-                entry.get("language"), entry.get("remote_url"), entry["local_root"],
-                entry["tracked_branch"], int(entry.get("enabled", True)),
-                entry.get("profile"), json.dumps(builders, separators=(",", ":")),
+                entry["repo_key"],
+                entry.get("name"),
+                entry.get("kind"),
+                entry.get("language"),
+                entry.get("remote_url"),
+                entry["local_root"],
+                entry["tracked_branch"],
+                int(entry.get("enabled", True)),
+                entry.get("profile"),
+                json.dumps(builders, separators=(",", ":")),
             ),
         )
         rows.append(get_repository(conn, entry["repo_key"]))

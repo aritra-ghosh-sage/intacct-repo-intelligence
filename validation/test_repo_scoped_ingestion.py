@@ -86,7 +86,10 @@ class RepoScopedIngestionTests(unittest.TestCase):
 
     def test_scan_allows_colliding_paths_and_purges_only_target_repo(self):
         relative = Path("src") / "shared.py"
-        for root, contents in ((self.repo_one, "one = 1\n"), (self.repo_two, "two = 2\n")):
+        for root, contents in (
+            (self.repo_one, "one = 1\n"),
+            (self.repo_two, "two = 2\n"),
+        ):
             target = root / relative
             target.parent.mkdir(exist_ok=True)
             target.write_text(contents, encoding="utf-8")
@@ -99,10 +102,17 @@ class RepoScopedIngestionTests(unittest.TestCase):
         rows = self.conn.execute(
             "SELECT repo_id, path FROM files ORDER BY repo_id"
         ).fetchall()
-        self.assertEqual([(row["repo_id"], row["path"]) for row in rows], [(1, "src/shared.py"), (2, "src/shared.py")])
+        self.assertEqual(
+            [(row["repo_id"], row["path"]) for row in rows],
+            [(1, "src/shared.py"), (2, "src/shared.py")],
+        )
 
-        one_id = self.conn.execute("SELECT id FROM files WHERE repo_id = 1").fetchone()[0]
-        two_id = self.conn.execute("SELECT id FROM files WHERE repo_id = 2").fetchone()[0]
+        one_id = self.conn.execute("SELECT id FROM files WHERE repo_id = 1").fetchone()[
+            0
+        ]
+        two_id = self.conn.execute("SELECT id FROM files WHERE repo_id = 2").fetchone()[
+            0
+        ]
         self.conn.executemany(
             "INSERT INTO relationships (repo_id, file_id, extractor) VALUES (?, ?, 'phase2_regex_mvp')",
             [(1, one_id), (2, two_id)],
@@ -115,18 +125,28 @@ class RepoScopedIngestionTests(unittest.TestCase):
         with patch.object(scan_repo, "get_connection", return_value=connection):
             scan_repo.scan("one")
 
-        self.assertIsNone(self.conn.execute("SELECT 1 FROM files WHERE id = ?", (one_id,)).fetchone())
-        self.assertIsNotNone(self.conn.execute("SELECT 1 FROM files WHERE id = ?", (two_id,)).fetchone())
+        self.assertIsNone(
+            self.conn.execute("SELECT 1 FROM files WHERE id = ?", (one_id,)).fetchone()
+        )
+        self.assertIsNotNone(
+            self.conn.execute("SELECT 1 FROM files WHERE id = ?", (two_id,)).fetchone()
+        )
         self.assertEqual(
-            self.conn.execute("SELECT COUNT(*) FROM relationships WHERE repo_id = 1").fetchone()[0],
+            self.conn.execute(
+                "SELECT COUNT(*) FROM relationships WHERE repo_id = 1"
+            ).fetchone()[0],
             0,
         )
         self.assertEqual(
-            self.conn.execute("SELECT COUNT(*) FROM relationships WHERE repo_id = 2").fetchone()[0],
+            self.conn.execute(
+                "SELECT COUNT(*) FROM relationships WHERE repo_id = 2"
+            ).fetchone()[0],
             1,
         )
         self.assertEqual(
-            self.conn.execute("SELECT COUNT(*) FROM symbols WHERE id = 300").fetchone()[0],
+            self.conn.execute("SELECT COUNT(*) FROM symbols WHERE id = 300").fetchone()[
+                0
+            ],
             0,
         )
 

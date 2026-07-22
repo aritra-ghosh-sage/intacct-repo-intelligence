@@ -729,12 +729,20 @@ def cli() -> None:
     help="Optional path to entity_definitions.jsonl for drift diagnostics only.",
 )
 def link_command(
-    db: str, repo: str, reset: bool, repo_root: Path | None, reconcile_jsonl: Path | None
+    db: str,
+    repo: str,
+    reset: bool,
+    repo_root: Path | None,
+    reconcile_jsonl: Path | None,
 ) -> None:
     conn = get_connection(db)
     try:
         repository = get_repository(conn, repo)
-        resolved_root = repo_root.resolve() if repo_root is not None else resolve_repository_root(conn, repo)
+        resolved_root = (
+            repo_root.resolve()
+            if repo_root is not None
+            else resolve_repository_root(conn, repo)
+        )
         # OpenAPI mappings are a materialized projection of the current index.
         # Rebuild them on every run so stale mappings cannot survive metadata
         # changes when callers omit the compatibility --reset flag.

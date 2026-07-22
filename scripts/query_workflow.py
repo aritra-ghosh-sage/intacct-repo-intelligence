@@ -106,17 +106,17 @@ def list_workflows(entity_name, db, workflow_type, json_output):
 
     if json_output:
         workflows = {
-                    wf_type: [
-                        {
-                            "id": wf_id,
-                            "name": wf_name,
-                            "source_kind": source_kind,
-                            "source_file": source_file,
-                        }
-                        for wf_id, wf_name, source_kind, source_file in items
-                    ]
-                    for wf_type, items in sorted(grouped.items())
+            wf_type: [
+                {
+                    "id": wf_id,
+                    "name": wf_name,
+                    "source_kind": source_kind,
+                    "source_file": source_file,
                 }
+                for wf_id, wf_name, source_kind, source_file in items
+            ]
+            for wf_type, items in sorted(grouped.items())
+        }
         emit_json(
             success_response(
                 command="list",
@@ -176,17 +176,17 @@ def show_entity_workflows(entity_name, db, workflow_type, json_output):
 
     if json_output:
         workflows = {
-                    wf_type: [
-                        {
-                            "id": wf_id,
-                            "name": wf_name,
-                            "source_kind": source_kind,
-                            "source_file": source_file,
-                        }
-                        for wf_id, wf_name, source_kind, source_file in items
-                    ]
-                    for wf_type, items in sorted(grouped.items())
+            wf_type: [
+                {
+                    "id": wf_id,
+                    "name": wf_name,
+                    "source_kind": source_kind,
+                    "source_file": source_file,
                 }
+                for wf_id, wf_name, source_kind, source_file in items
+            ]
+            for wf_type, items in sorted(grouped.items())
+        }
         emit_json(
             success_response(
                 command="entity",

@@ -25,7 +25,16 @@ class WorkspaceRefreshTests(unittest.TestCase):
         self._git(checkout, "init", "-b", "main")
         (checkout / "source.py").write_text("class Source: pass\n", encoding="utf-8")
         self._git(checkout, "add", "source.py")
-        self._git(checkout, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "initial")
+        self._git(
+            checkout,
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-m",
+            "initial",
+        )
         database = root / "catalog.db"
         conn = sqlite3.connect(database)
         conn.executescript((ROOT / "catalog/schema.sql").read_text())
@@ -54,10 +63,17 @@ class WorkspaceRefreshTests(unittest.TestCase):
             self.assertEqual(repo[1], "active")
             self.assertEqual(
                 repo[0],
-                subprocess.check_output(["git", "-C", str(checkout), "rev-parse", "HEAD"], text=True).strip(),
+                subprocess.check_output(
+                    ["git", "-C", str(checkout), "rev-parse", "HEAD"], text=True
+                ).strip(),
             )
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM files").fetchone()[0], 1)
-            self.assertEqual(conn.execute("SELECT status FROM repo_index_runs").fetchone()[0], "active")
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM files").fetchone()[0], 1
+            )
+            self.assertEqual(
+                conn.execute("SELECT status FROM repo_index_runs").fetchone()[0],
+                "active",
+            )
         finally:
             conn.close()
         self.assertTrue(database.with_name("catalog.db.previous").is_file())
@@ -68,15 +84,19 @@ class WorkspaceRefreshTests(unittest.TestCase):
         # Establish an active revision first.  A later failed attempt must not
         # make the working catalog look failed or discard its indexed SHA.
         refresh_repository(database, manifest, "service")
-        before = sqlite3.connect(database).execute(
-            "SELECT indexed_commit_sha FROM repos WHERE repo_key='service'"
-        ).fetchone()[0]
+        before = (
+            sqlite3.connect(database)
+            .execute("SELECT indexed_commit_sha FROM repos WHERE repo_key='service'")
+            .fetchone()[0]
+        )
         (checkout / "source.py").write_text("changed\n", encoding="utf-8")
         with self.assertRaises(RefreshError):
             refresh_repository(database, manifest, "service")
         conn = sqlite3.connect(database)
         try:
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM files").fetchone()[0], 1)
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM files").fetchone()[0], 1
+            )
             repo = conn.execute(
                 """SELECT indexed_commit_sha,index_status,last_attempt_status,last_attempt_error
                    FROM repos WHERE repo_key='service'"""
@@ -86,7 +106,9 @@ class WorkspaceRefreshTests(unittest.TestCase):
             self.assertEqual(repo[2], "failed")
             self.assertIn("dirty", repo[3])
             self.assertEqual(
-                conn.execute("SELECT status FROM repo_index_runs ORDER BY id DESC").fetchone()[0],
+                conn.execute(
+                    "SELECT status FROM repo_index_runs ORDER BY id DESC"
+                ).fetchone()[0],
                 "failed",
             )
         finally:
@@ -98,11 +120,11 @@ class WorkspaceRefreshTests(unittest.TestCase):
         features = checkout / "features"
         features.mkdir()
         (features / "account.feature").write_text(
-            '''@version:v1
+            """@version:v1
 Feature: Account
   Scenario: Create account
     When "POST" to "account" with key "" and file ""
-''',
+""",
             encoding="utf-8",
         )
         (checkout / "object-mapping.json").write_text(
@@ -110,7 +132,16 @@ Feature: Account
             encoding="utf-8",
         )
         self._git(checkout, "add", "features/account.feature", "object-mapping.json")
-        self._git(checkout, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "add coverage")
+        self._git(
+            checkout,
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-m",
+            "add coverage",
+        )
         manifest.write_text(
             "version: 1\nrepositories:\n"
             "  - repo_key: service\n"
@@ -131,7 +162,9 @@ Feature: Account
                 "INSERT INTO files(repo_id,path,language) VALUES (?, 'openapi/account.yaml', 'yaml')",
                 (production_repo_id,),
             ).lastrowid
-            entity_id = conn.execute("INSERT INTO entity_nodes(name) VALUES ('Account')").lastrowid
+            entity_id = conn.execute(
+                "INSERT INTO entity_nodes(name) VALUES ('Account')"
+            ).lastrowid
             conn.execute(
                 """INSERT INTO rest_endpoints(repo_id,method,path,source_version,entity_id,file_id)
                    VALUES (?, 'POST', '/objects/accounts-payable/account', 'v1', ?, ?)""",
@@ -144,9 +177,16 @@ Feature: Account
         refresh_repository(database, manifest, "service")
         conn = sqlite3.connect(database)
         try:
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM test_cases").fetchone()[0], 1)
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM test_endpoint_links").fetchone()[0], 1)
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM test_entity_links").fetchone()[0], 1)
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM test_cases").fetchone()[0], 1
+            )
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM test_endpoint_links").fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM test_entity_links").fetchone()[0], 1
+            )
             self.assertEqual(
                 conn.execute(
                     "SELECT status FROM repo_index_stages WHERE builder_name='gherkin_coverage'"
@@ -162,19 +202,30 @@ Feature: Account
         database.unlink()
         result = subprocess.run(
             [
-                "bash", str(ROOT / "scripts" / "refresh.sh"),
-                "--db", str(database), "--manifest", str(manifest), "--repo", "service",
+                "bash",
+                str(ROOT / "scripts" / "refresh.sh"),
+                "--db",
+                str(database),
+                "--manifest",
+                str(manifest),
+                "--repo",
+                "service",
             ],
             cwd=ROOT,
             text=True,
             capture_output=True,
-            env={**os.environ, "PYTHON_BIN": "/Users/aritra.ghosh/projects/intacct-repo-intelligence/.venv/bin/python"},
+            env={
+                **os.environ,
+                "PYTHON_BIN": "/Users/aritra.ghosh/projects/intacct-repo-intelligence/.venv/bin/python",
+            },
         )
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         conn = sqlite3.connect(database)
         try:
             self.assertEqual(
-                conn.execute("SELECT index_status FROM repos WHERE repo_key='service'").fetchone()[0],
+                conn.execute(
+                    "SELECT index_status FROM repos WHERE repo_key='service'"
+                ).fetchone()[0],
                 "active",
             )
         finally:

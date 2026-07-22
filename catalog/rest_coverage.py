@@ -134,9 +134,17 @@ def coverage_summary(
 ) -> dict[str, int]:
     return {
         "endpoint_count": len(endpoints),
-        "active_covered_endpoint_count": sum(item["coverage"] == "active" for item in endpoints),
-        "uncovered_endpoint_count": sum(item["coverage"] == "uncovered" for item in endpoints),
-        "ci_conditional_only_endpoint_count": sum(item["coverage"] == "ci_conditional" for item in endpoints),
-        "known_issue_only_endpoint_count": sum(item["coverage"] == "known_issue_only" for item in endpoints),
+        "active_covered_endpoint_count": sum(
+            item["coverage"] == "active" for item in endpoints
+        ),
+        "uncovered_endpoint_count": sum(
+            item["coverage"] == "uncovered" for item in endpoints
+        ),
+        "ci_conditional_only_endpoint_count": sum(
+            item["coverage"] == "ci_conditional" for item in endpoints
+        ),
+        "known_issue_only_endpoint_count": sum(
+            item["coverage"] == "known_issue_only" for item in endpoints
+        ),
         "diagnostic_count": len(diagnostics),
     }

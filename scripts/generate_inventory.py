@@ -15,7 +15,6 @@ import sqlite3
 import sys
 from pathlib import Path
 from datetime import datetime, timezone
-from collections import defaultdict
 
 
 def get_connection():
@@ -297,7 +296,7 @@ def main():
         print(f"Generated at: {inventory['generated_at']}")
 
         verified = inventory["verified_state"]["database"]
-        print(f"Database state:")
+        print("Database state:")
         print(f"  - Tables: {len(verified['tables'])}")
         print(f"  - Symbol kinds: {len(verified['symbol_kinds'])}")
         print(f"  - Mapping types: {len(verified['mapping_types'])}")
@@ -305,7 +304,7 @@ def main():
         print(f"  - Workflow types: {len(verified['workflow_types'])}")
 
         filesystem = inventory["verified_state"]["filesystem"]
-        print(f"Filesystem state:")
+        print("Filesystem state:")
         print(f"  - Migrations: {len(filesystem['migrations'])}")
         print(f"  - Extractors: {len(filesystem['parsers'])}")
         print(f"  - Scripts: {len(filesystem['scripts'])}")
@@ -313,7 +312,7 @@ def main():
 
         drift = inventory.get("drift")
         if drift:
-            print(f"\n⚠️  Drift detected:")
+            print("\n⚠️  Drift detected:")
             for key, values in drift.items():
                 if values:
                     print(f"  - {key}: {len(values)} items")

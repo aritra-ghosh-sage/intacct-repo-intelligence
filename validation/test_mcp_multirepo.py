@@ -49,4 +49,3 @@ class McpMultiRepoTests(unittest.TestCase):
             self.assertEqual(repo_one["indexed_commit_sha"], "one-sha")
             self.assertEqual(repo_one["last_attempt_status"], "failed")
             self.assertEqual(repo_one["last_attempt_error"], "dirty checkout")
-

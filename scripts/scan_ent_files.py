@@ -180,6 +180,7 @@ def find_module_from_ent_path(ent_path: Path, repo_root: Path) -> Optional[str]:
         return rel_parts[module_idx]
     return None
 
+
 def discover_rpt_files(ent_stem: str, entity_dir: Path, repo_root: Path) -> List[str]:
     """
     Discover RPT files in the entity directory that match the entity stem.
@@ -193,6 +194,7 @@ def discover_rpt_files(ent_stem: str, entity_dir: Path, repo_root: Path) -> List
             rpt_files.append(to_repo_relative(rpt_file, repo_root))
 
     return rpt_files
+
 
 def discover_rpt_files_with_fallback(
     ent_stem: str, entity_dir: Path, repo_root: Path
@@ -221,6 +223,7 @@ def discover_rpt_files_with_fallback(
         for rpt_file in sorted(entity_dir.glob("*.rpt"))
     ]
 
+
 def discover_xslt_files(ent_stem: str, entity_dir: Path, repo_root: Path) -> List[str]:
     """
     Discover XSLT files in the entity directory that match the entity stem.
@@ -234,6 +237,7 @@ def discover_xslt_files(ent_stem: str, entity_dir: Path, repo_root: Path) -> Lis
             xslt_files.append(to_repo_relative(xslt_file, repo_root))
 
     return xslt_files
+
 
 def iter_class_files(entity_dir: Path) -> Iterable[Path]:
     for p in sorted(entity_dir.iterdir()):
@@ -942,6 +946,7 @@ def _write_missing_metadata_log(log_path: Path, records: List[dict]) -> None:
         for record in records:
             f.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
 
+
 def extract_required_ent_paths(text: str) -> List[str]:
     seen: set[str] = set()
     out: List[str] = []
@@ -957,6 +962,7 @@ def extract_required_ent_paths(text: str) -> List[str]:
         out.append(norm)
 
     return out
+
 
 def load_entity_definition_index(repo_root: Path) -> Dict[str, dict]:
     index: Dict[str, dict] = {}
@@ -1070,7 +1076,8 @@ def scan(repo_root: Path, out_file: Path) -> int:
                 ent_path=ent_path,
                 repo_root=repo_root,
                 entity_index=entity_index,
-                visited=set())
+                visited=set(),
+            )
 
             module_path_hint = find_module_from_ent_path(ent_path, repo_root)
             module_value = module_from_ent
@@ -1086,7 +1093,9 @@ def scan(repo_root: Path, out_file: Path) -> int:
                         },
                         "entity_name": canonical_name,
                         "file_path": to_repo_relative(ent_path, repo_root),
-                        "reason": "missing module key in top-level kSchemas definition" if not module_from_ent else "missing table key in top-level kSchemas definition",
+                        "reason": "missing module key in top-level kSchemas definition"
+                        if not module_from_ent
+                        else "missing table key in top-level kSchemas definition",
                         "source": "scan_ent_files",
                         "stage": "module_extraction",
                         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -1185,8 +1194,12 @@ def scan(repo_root: Path, out_file: Path) -> int:
             if service_mapping.service_schema_file:
                 consumed_service_schema_files.add(service_mapping.service_schema_file)
 
-            discovered_xslts = discover_xslt_files(ent_stem=ent_stem, entity_dir=ent_path.parent, repo_root=repo_root)
-            discovered_rpts = discover_rpt_files_with_fallback(ent_stem=ent_stem, entity_dir=ent_path.parent, repo_root=repo_root)
+            discovered_xslts = discover_xslt_files(
+                ent_stem=ent_stem, entity_dir=ent_path.parent, repo_root=repo_root
+            )
+            discovered_rpts = discover_rpt_files_with_fallback(
+                ent_stem=ent_stem, entity_dir=ent_path.parent, repo_root=repo_root
+            )
             row = EntityDefinition(
                 entity_name=canonical_name,
                 ent_file=to_repo_relative(ent_path, repo_root),
@@ -1229,7 +1242,7 @@ def scan(repo_root: Path, out_file: Path) -> int:
                 service_status=service_mapping.service_status,
                 service_reason=service_mapping.service_reason,
                 xslt_files=discovered_xslts if discovered_xslts else None,
-                rpt_files=discovered_rpts if discovered_rpts else None
+                rpt_files=discovered_rpts if discovered_rpts else None,
             )
             f.write(json.dumps(asdict(row), ensure_ascii=False, sort_keys=True) + "\n")
             count += 1
@@ -1290,7 +1303,7 @@ def scan(repo_root: Path, out_file: Path) -> int:
                 service_status=service_mapping.service_status,
                 service_reason="service-only synthetic row (no .ent mapping)",
                 xslt_files=None,
-                rpt_files=None
+                rpt_files=None,
             )
             f.write(json.dumps(asdict(row), ensure_ascii=False, sort_keys=True) + "\n")
             count += 1
@@ -1298,6 +1311,7 @@ def scan(repo_root: Path, out_file: Path) -> int:
     _write_missing_metadata_log(MISSING_METADATA_LOG_PATH, missing_metadata_records)
 
     return count
+
 
 def resolve_ent_metadata(
     ent_path: Path | None,
@@ -1320,29 +1334,33 @@ def resolve_ent_metadata(
 
         if table is not None and module is not None:
             return table, view, module, dummy, module_source
-        
+
         for require_value in extract_required_ent_paths(text):
             required_ent_path = _resolve_required_ent_path(
                 require_value=require_value,
                 current_ent_path=ent_path,
                 repo_root=repo_root,
-                entity_index=entity_index
+                entity_index=entity_index,
             )
             if required_ent_path is None:
                 continue
 
-            parent_table, parent_view, parent_module, parent_dummy, module_source = resolve_ent_metadata(
-                required_ent_path,
-                repo_root,
-                entity_index,
-                visited,
+            parent_table, parent_view, parent_module, parent_dummy, module_source = (
+                resolve_ent_metadata(
+                    required_ent_path,
+                    repo_root,
+                    entity_index,
+                    visited,
+                )
             )
 
             if table is None and parent_table is not None:
                 table = parent_table
             if module is None and parent_module is not None:
                 module = parent_module
-                module_source = f"required:{to_repo_relative(required_ent_path, repo_root)}"
+                module_source = (
+                    f"required:{to_repo_relative(required_ent_path, repo_root)}"
+                )
 
             if table is not None and module is not None:
                 return table, view, module, dummy, module_source
@@ -1350,6 +1368,7 @@ def resolve_ent_metadata(
         return table, view, module, dummy, module_source
     finally:
         visited.remove(str(ent_path))
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(

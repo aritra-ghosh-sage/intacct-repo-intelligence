@@ -22,7 +22,13 @@ class BuilderRegistryTests(unittest.TestCase):
         plan = build_plan("rest_automation")
         self.assertEqual(
             plan,
-            ["scan", "symbols", "relationships", "integration_links", "gherkin_coverage"],
+            [
+                "scan",
+                "symbols",
+                "relationships",
+                "integration_links",
+                "gherkin_coverage",
+            ],
         )
 
     def test_unknown_builder_is_rejected(self) -> None:

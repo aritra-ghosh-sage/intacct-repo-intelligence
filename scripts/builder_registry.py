@@ -25,9 +25,7 @@ BUILDERS: dict[str, Builder] = {
     "entity_roots": Builder(
         "entity_roots", ("entities", "symbols"), frozenset({"intacct_app"})
     ),
-    "openapi_scan": Builder(
-        "openapi_scan", ("scan",), frozenset({"intacct_app"})
-    ),
+    "openapi_scan": Builder("openapi_scan", ("scan",), frozenset({"intacct_app"})),
     "openapi_link": Builder(
         "openapi_link", ("openapi_scan", "entities"), frozenset({"intacct_app"})
     ),
@@ -52,7 +50,11 @@ BUILDERS: dict[str, Builder] = {
 PROFILE_DEFAULTS: dict[str, tuple[str, ...]] = {
     "generic": ("scan", "symbols", "relationships", "integration_links"),
     "rest_automation": (
-        "scan", "symbols", "relationships", "integration_links", "gherkin_coverage",
+        "scan",
+        "symbols",
+        "relationships",
+        "integration_links",
+        "gherkin_coverage",
     ),
     "intacct_app": (
         "scan",

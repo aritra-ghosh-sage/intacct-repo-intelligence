@@ -86,8 +86,9 @@ def build_entity_roots(conn: Any, reset: bool, repo_id: int) -> int:
          AND eo.entity_id = em.entity_id
         WHERE em.symbol_id IS NOT NULL
           AND em.repo_id = ?
-        """
-    , (repo_id,)).fetchall()
+        """,
+        (repo_id,),
+    ).fetchall()
 
     for row in rows:
         role = row["mapping_type"]
@@ -164,7 +165,9 @@ def build_entity_roots(conn: Any, reset: bool, repo_id: int) -> int:
     return 0
 
 
-def check_structural(conn: Any, repo_root: str = DEFAULT_REPO_ROOT) -> list[tuple[str, list[Any]]]:
+def check_structural(
+    conn: Any, repo_root: str = DEFAULT_REPO_ROOT
+) -> list[tuple[str, list[Any]]]:
     findings: list[tuple[str, list[Any]]] = []
     repo_id = _resolve_repo_id(conn, repo_root)
 
@@ -179,7 +182,9 @@ def check_structural(conn: Any, repo_root: str = DEFAULT_REPO_ROOT) -> list[tupl
         sql += " AND eo.repo_id = ?"
         params = (repo_id,)
     missing_ent = q(conn, sql, params)
-    findings.append(("entity_occurrences without ent_file", [r["name"] for r in missing_ent]))
+    findings.append(
+        ("entity_occurrences without ent_file", [r["name"] for r in missing_ent])
+    )
 
     orphan_mappings = q(
         conn,
@@ -275,7 +280,9 @@ def check_filesystem(conn: Any, repo_root: str) -> list[tuple[str, list[Any]]]:
         if not row["ent_file"] or not os.path.exists(full):
             missing_ent_files.append((row["name"], row["ent_file"]))
 
-    findings.append(("entity_occurrences with .ent files missing on disk", missing_ent_files))
+    findings.append(
+        ("entity_occurrences with .ent files missing on disk", missing_ent_files)
+    )
 
     missing_class_files: list[tuple[str, str | None, str | None]] = []
     rows = q(

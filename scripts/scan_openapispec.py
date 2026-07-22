@@ -206,6 +206,7 @@ def _infer_x_mapped_to(doc: dict[str, Any] | None) -> str | None:
 
     return None
 
+
 def _infer_kind(filename: str) -> str:
     lowered = filename.lower()
     if lowered.endswith(".schema.history.yaml"):
@@ -235,6 +236,7 @@ def _infer_kind(filename: str) -> str:
     if "events" in lowered:
         return "events"
     return "unknown"
+
 
 def scan_openapispec(
     conn: sqlite3.Connection, repo_root: Path, repo_id: int
