@@ -17,6 +17,7 @@ code_files.txt
 entity_mapping.txt
 repo_tree.txt
 catalog/catalog.db-journal
+catalog/catalog.db.previous
 .vscode/mcp.json
 validation/*.txt
 docs/*.txt
