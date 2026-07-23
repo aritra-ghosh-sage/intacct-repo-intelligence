@@ -76,9 +76,12 @@ class CaseScore:
     completeness_score: float
     uncertainty_score: float
     format_score: float
+    tool_path_score: float = 1.0
     hallucination_flags: list[str] = field(default_factory=list)
+    tool_path_notes: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     deepeval: dict[str, Any] | None = None
+    trace_summary: dict[str, Any] | None = None
 
     @property
     def hard_fail(self) -> bool:
@@ -100,10 +103,11 @@ class CaseScore:
         if self.hard_fail:
             return 0.0
         deterministic = round(
-            0.35 * self.grounding_score
-            + 0.30 * self.completeness_score
+            0.30 * self.grounding_score
+            + 0.25 * self.completeness_score
             + 0.20 * self.uncertainty_score
-            + 0.15 * self.format_score,
+            + 0.10 * self.format_score
+            + 0.15 * self.tool_path_score,
             3,
         )
         semantic = self.semantic_score
@@ -113,6 +117,10 @@ class CaseScore:
     def verdict(self) -> str:
         if self.hard_fail:
             return "hard_fail"
+        if self.tool_path_score < 1.0:
+            return "quality_fail"
+        if "missing_primary_signal" in self.notes:
+            return "quality_fail"
         if self.deepeval and self.deepeval.get("skipped"):
             return "indeterminate"
         if self.deepeval:
@@ -255,6 +263,115 @@ def _summary_numeric_terms(payload: dict[str, Any]) -> list[str]:
     return [str(value) for value in summary.values() if isinstance(value, (int, float))]
 
 
+def _tool_requirement(case: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
+    required_tool = case.get("required_tool")
+    required_args = case.get("required_tool_args") or {}
+    if required_tool is not None:
+        required_tool = str(required_tool)
+    if not isinstance(required_args, dict):
+        required_args = {}
+    return required_tool, required_args
+
+
+def _trace_steps(trace: Any) -> list[dict[str, Any]]:
+    if trace is None:
+        return []
+    if isinstance(trace, list):
+        return [step for step in trace if isinstance(step, dict)]
+    if isinstance(trace, dict):
+        for key in ("tool_calls", "steps", "trace", "events"):
+            value = trace.get(key)
+            if isinstance(value, list):
+                return [step for step in value if isinstance(step, dict)]
+        if "tool" in trace or "name" in trace or "tool_name" in trace:
+            return [trace]
+    return []
+
+
+def _trace_tool_name(step: dict[str, Any]) -> str | None:
+    for key in ("tool", "tool_name", "name"):
+        value = step.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    function = step.get("function")
+    if isinstance(function, dict):
+        value = function.get("name")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _trace_tool_arguments(step: dict[str, Any]) -> dict[str, Any]:
+    for key in ("arguments", "args", "parameters", "input"):
+        value = step.get(key)
+        if isinstance(value, dict):
+            return value
+    function = step.get("function")
+    if isinstance(function, dict):
+        value = function.get("arguments")
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def _contains_subset(actual: Any, expected: Any) -> bool:
+    if isinstance(expected, dict):
+        if not isinstance(actual, dict):
+            return False
+        for key, value in expected.items():
+            if key not in actual or not _contains_subset(actual[key], value):
+                return False
+        return True
+    if isinstance(expected, list):
+        if not isinstance(actual, list) or len(actual) < len(expected):
+            return False
+        return all(any(_contains_subset(candidate, item) for candidate in actual) for item in expected)
+    return actual == expected
+
+
+def summarize_trace(trace: Any, case: dict[str, Any]) -> dict[str, Any]:
+    steps = _trace_steps(trace)
+    tool_names = [name for step in steps if (name := _trace_tool_name(step))]
+    required_tool, required_args = _tool_requirement(case)
+    required_present = required_tool in tool_names if required_tool else True
+    required_args_match = True
+    if required_tool and required_args:
+        required_args_match = any(
+            _contains_subset(_trace_tool_arguments(step), required_args)
+            for step in steps
+            if _trace_tool_name(step) == required_tool
+        )
+    return {
+        "tool_count": len(steps),
+        "tool_names": tool_names,
+        "required_tool": required_tool,
+        "required_tool_present": required_present,
+        "required_tool_args": required_args or None,
+        "required_tool_args_match": required_args_match,
+    }
+
+
+def score_tool_path(
+    case: dict[str, Any], trace: Any, *, require_trace: bool = False
+) -> tuple[float, list[str], dict[str, Any] | None]:
+    required_tool, required_args = _tool_requirement(case)
+    if required_tool is None:
+        return 1.0, [], summarize_trace(trace, case) if trace is not None else None
+    if trace is None:
+        if require_trace:
+            return 0.0, ["missing_trace"], {"required_tool": required_tool, "required_tool_present": False, "tool_count": 0, "tool_names": []}
+        return 1.0, [], None
+
+    summary = summarize_trace(trace, case)
+    if summary["tool_count"] == 0:
+        return 0.0, ["malformed_trace"], summary
+    if not summary["required_tool_present"]:
+        return 0.0, [f"missing_required_tool:{required_tool}"], summary
+    if required_args and not summary["required_tool_args_match"]:
+        return 0.0, [f"wrong_tool_arguments:{required_tool}"], summary
+    return 1.0, [], summary
+
+
 def required_evidence_terms(case: dict[str, Any]) -> list[str]:
     payload = case["payload"]
     terms = {str(value).lower() for value in _summary_numeric_terms(payload)}
@@ -355,13 +472,20 @@ def score_format(answer: str, case: dict[str, Any]) -> tuple[float, list[str]]:
     return 1.0, []
 
 
-def score_case(answer: str, case: dict[str, Any]) -> CaseScore:
+def score_case(
+    answer: str,
+    case: dict[str, Any],
+    *,
+    trace: Any = None,
+    require_trace: bool = False,
+) -> CaseScore:
     grounding, grounding_notes = score_grounding(answer, case)
     completeness, completeness_notes = score_completeness(answer, case)
     uncertainty, uncertainty_notes = score_uncertainty(answer, case)
     response_format, format_notes = score_format(answer, case)
+    tool_path, tool_path_notes, trace_summary = score_tool_path(case, trace, require_trace=require_trace)
     flags = hallucination_flags(answer, case["payload"])
-    notes = grounding_notes + completeness_notes + uncertainty_notes + format_notes
+    notes = grounding_notes + completeness_notes + uncertainty_notes + format_notes + tool_path_notes
     if flags:
         notes.append("hard_evidence_violation")
     return CaseScore(
@@ -371,8 +495,11 @@ def score_case(answer: str, case: dict[str, Any]) -> CaseScore:
         completeness_score=completeness,
         uncertainty_score=uncertainty,
         format_score=response_format,
+        tool_path_score=tool_path,
         hallucination_flags=flags,
+        tool_path_notes=tool_path_notes,
         notes=notes,
+        trace_summary=trace_summary,
     )
 
 
@@ -417,7 +544,7 @@ def _adapter_input(case: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def run_adapter(command: list[str], case: dict[str, Any], timeout: int) -> str:
+def run_adapter(command: list[str], case: dict[str, Any], timeout: int) -> dict[str, Any]:
     completed = subprocess.run(
         command,
         input=json.dumps(_adapter_input(case)),
@@ -434,18 +561,26 @@ def run_adapter(command: list[str], case: dict[str, Any], timeout: int) -> str:
         raise RuntimeError(f"adapter returned invalid JSON for {case['case_id']}") from exc
     if output.get("case_id") != case["case_id"] or not isinstance(output.get("answer"), str):
         raise RuntimeError(f"adapter response must contain matching case_id and string answer for {case['case_id']}")
-    return output["answer"].strip()
+    return {
+        "answer": output["answer"].strip(),
+        "trace": output.get("trace"),
+    }
 
 
-def load_recorded_answers(path: Path) -> dict[str, str]:
-    answers: dict[str, str] = {}
+def load_recorded_runs(path: Path) -> dict[str, dict[str, Any]]:
+    answers: dict[str, dict[str, Any]] = {}
     for line in path.read_text().splitlines():
         if not line.strip():
             continue
         record = json.loads(line)
         if record.get("case_id") in answers:
             raise ValueError(f"duplicate recorded answer: {record['case_id']}")
-        answers[record["case_id"]] = record["answer"]
+        if not isinstance(record.get("answer"), str):
+            raise ValueError(f"recorded answer must be a string for {record.get('case_id')}")
+        answers[record["case_id"]] = {
+            "answer": record["answer"].strip(),
+            "trace": record.get("trace"),
+        }
     return answers
 
 
@@ -458,6 +593,7 @@ def main() -> int:
     parser.add_argument("--responses-jsonl", type=Path)
     parser.add_argument("--adapter-command-json", help="JSON argv for a per-case response adapter.")
     parser.add_argument("--adapter-timeout", type=int, default=120)
+    parser.add_argument("--require-trace", action="store_true", help="Require a trace for cases that declare a required tool.")
     parser.add_argument("--run-deepeval", action="store_true")
     parser.add_argument("--require-deepeval", action="store_true")
     parser.add_argument("--json", action="store_true")
@@ -481,20 +617,26 @@ def main() -> int:
             parser.error("--adapter-command-json must be a JSON string array")
         answers = {case["case_id"]: run_adapter(command, case, args.adapter_timeout) for case in cases}
     elif args.responses_jsonl:
-        answers = load_recorded_answers(args.responses_jsonl)
+        answers = load_recorded_runs(args.responses_jsonl)
     else:
         answer = args.actual_output if args.actual_output is not None else Path(args.actual_output_file).read_text()
         if len(cases) != 1:
             parser.error("--actual-output and --actual-output-file require exactly one case")
-        answers = {cases[0]["case_id"]: answer.strip()}
+        answers = {cases[0]["case_id"]: {"answer": answer.strip(), "trace": None}}
 
     results: list[CaseScore] = []
     for case in cases:
         if case["case_id"] not in answers:
             raise ValueError(f"missing answer for {case['case_id']}")
-        result = score_case(answers[case["case_id"]], case)
+        run = answers[case["case_id"]]
+        result = score_case(
+            run["answer"],
+            case,
+            trace=run.get("trace"),
+            require_trace=args.require_trace,
+        )
         if args.run_deepeval:
-            result.deepeval = run_deepeval(case, answers[case["case_id"]])
+            result.deepeval = run_deepeval(case, run["answer"])
         results.append(result)
 
     deepeval_skipped = any(result.deepeval and result.deepeval.get("skipped") for result in results)
@@ -510,10 +652,21 @@ def main() -> int:
         "completeness_mean": round(sum(result.completeness_score for result in results) / len(results), 3),
         "uncertainty_mean": round(sum(result.uncertainty_score for result in results) / len(results), 3),
         "format_mean": round(sum(result.format_score for result in results) / len(results), 3),
+        "tool_path_mean": round(sum(result.tool_path_score for result in results) / len(results), 3),
         "deepeval_available": DEEPEVAL_IMPORT_ERROR is None,
         "deepeval_error": None if DEEPEVAL_IMPORT_ERROR is None else str(DEEPEVAL_IMPORT_ERROR),
     }
-    report = {"summary": summary, "results": [{**asdict(result), "overall": result.overall, "verdict": result.verdict} for result in results]}
+    report = {
+        "summary": summary,
+        "results": [
+            {
+                **asdict(result),
+                "overall": result.overall,
+                "verdict": result.verdict,
+            }
+            for result in results
+        ],
+    }
     if args.json:
         print(json.dumps(report, indent=2))
     else:

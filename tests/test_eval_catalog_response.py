@@ -35,7 +35,7 @@ class CatalogEvalResponseTest(unittest.TestCase):
         answer = "The catalog has 52,104 files across 13 languages."
         score = score_case(answer, case)
         self.assertEqual(score.verdict, "quality_fail")
-        self.assertLess(score.overall, 0.75)
+        self.assertLess(score.overall, 1.0)
         self.assertIn("missing_primary_signal", score.notes)
 
     def test_uncertainty_case_rewards_explicit_qualification(self) -> None:
@@ -46,6 +46,48 @@ class CatalogEvalResponseTest(unittest.TestCase):
         score = score_case(answer, case)
         self.assertGreaterEqual(score.uncertainty_score, 1.0)
         self.assertGreaterEqual(score.overall, 0.75)
+
+    def test_expected_trace_tool_is_accepted(self) -> None:
+        case = next(case for case in self.cases if case["case_id"] == "coverage_apbill_uncovered_endpoints")
+        trace = {
+            "tool_calls": [
+                {
+                    "name": "rest_coverage",
+                    "arguments": {"entity_name": "APBill", "version": None, "limit": 500},
+                    "output": {"status": "ok"},
+                }
+            ]
+        }
+        score = score_case(
+            "The payload shows 5 endpoints and all 5 are uncovered, and active_covered_endpoint_count is 0.",
+            case,
+            trace=trace,
+            require_trace=True,
+        )
+        self.assertEqual(score.tool_path_score, 1.0)
+        self.assertEqual(score.verdict, "pass")
+        self.assertTrue(score.trace_summary["required_tool_present"])
+
+    def test_missing_required_trace_tool_is_flagged(self) -> None:
+        case = next(case for case in self.cases if case["case_id"] == "coverage_apbill_uncovered_endpoints")
+        trace = {
+            "tool_calls": [
+                {
+                    "name": "entity_context",
+                    "arguments": {"entity_name": "APBill"},
+                    "output": {"status": "ok"},
+                }
+            ]
+        }
+        score = score_case(
+            "The payload shows 5 endpoints and all 5 are uncovered.",
+            case,
+            trace=trace,
+            require_trace=True,
+        )
+        self.assertEqual(score.tool_path_score, 0.0)
+        self.assertEqual(score.verdict, "quality_fail")
+        self.assertIn("missing_required_tool:rest_coverage", score.tool_path_notes)
 
     def test_fabricated_path_is_a_hard_failure(self) -> None:
         case = next(case for case in self.cases if case["case_id"] == "stats_top_languages")

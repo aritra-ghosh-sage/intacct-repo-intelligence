@@ -11,10 +11,13 @@ The adapter receives one JSON object on stdin per case:
 It must write one JSON object to stdout:
 
 ```json
-{"case_id":"stats_top_languages","answer":"...","model":"optional-model-name"}
+{"case_id":"stats_top_languages","answer":"...","model":"optional-model-name","trace":{"tool_calls":[{"name":"rest_coverage","arguments":{"entity_name":"APBill"},"output":{"status":"ok"}}]}}
 ```
 
 Gold references and evaluator-only constraints are not sent to the adapter.
+The `trace` field is optional for answer-only runs, but if a case declares a
+`required_tool`, the evaluator can check that the trace includes that tool and
+its key arguments when `--require-trace` is enabled.
 
 Run deterministic scoring for a recorded answer:
 
@@ -30,12 +33,13 @@ Run the adapter once per case:
 ```bash
 ./.venv/bin/python scripts/eval_catalog_response.py \
   --adapter-command-json '["python","scripts/my_catalog_response_adapter.py"]' \
+  --require-trace \
   --run-deepeval \
   --require-deepeval \
   --json
 ```
 
-`hard_fail` means the answer contains an unsupported claim or contradicts computed evidence. `quality_fail` means deterministic checks passed but completeness, format, or Deepeval thresholds failed. `indeterminate` means Deepeval was requested but could not run. Regenerate or verify evidence snapshots with:
+`hard_fail` means the answer contains an unsupported claim or contradicts computed evidence. `quality_fail` means deterministic checks passed but completeness, format, tool-path, or Deepeval thresholds failed. `indeterminate` means Deepeval was requested but could not run. Regenerate or verify evidence snapshots with:
 
 ```bash
 ./.venv/bin/python scripts/verify_catalog_eval_dataset.py --verify
