@@ -2,8 +2,8 @@
 import os
 
 REPO_PATH = os.path.expanduser("~/projects/main")
-CATALOG_DB = "catalog/catalog.db"
-GRAPH_DB = "catalog/graph.lbug"
+CATALOG_DB = os.environ.get("CATALOG_DB", "catalog/catalog.db")
+GRAPH_DB = os.environ.get("GRAPH_DB", "catalog/graph.lbug")
 
 INCLUDE_EXTENSIONS = {
     ".java",

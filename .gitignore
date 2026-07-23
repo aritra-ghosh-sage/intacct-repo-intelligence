@@ -33,3 +33,4 @@ catalog/*.lbug.previous
 catalog/*.lbug.build.lock
 catalog/*.lbug.candidate.*
 catalog/*.lbug.snapshot.*.db
+evals/runs/
