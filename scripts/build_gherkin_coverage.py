@@ -159,6 +159,74 @@ def load_object_mapping(path: Path) -> tuple[dict[str, str], list[Diagnostic]]:
     return mapping, diagnostics
 
 
+def _versioned_feature_evidence(
+    features_root: Path, version: str
+) -> tuple[Path, Path] | None:
+    """Return a representative feature/properties pair that declares a version."""
+    for feature_path in sorted(features_root.rglob("*.feature")):
+        properties_path = feature_path.with_suffix(".properties")
+        metadata, _lines, _diagnostics = _read_properties_metadata_with_lines(
+            properties_path
+        )
+        if metadata.get("version") == version:
+            return feature_path, properties_path
+        try:
+            feature_text = feature_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            feature_text = feature_path.read_text(encoding="utf-8", errors="replace")
+        if re.search(rf"@version:{re.escape(version)}(?:\b|$)", feature_text, re.I):
+            return feature_path, properties_path
+    return None
+
+
+def seed_api_version_compatibility(
+    conn: sqlite3.Connection, suite_root: Path, features_root: Path
+) -> int:
+    """Seed explicit version compatibility evidence for v1-beta2 REST coverage."""
+    evidence_pair = _versioned_feature_evidence(features_root, "v1-beta2")
+    if evidence_pair is None:
+        return 0
+
+    feature_path, properties_path = evidence_pair
+    conn.execute(
+        """
+        DELETE FROM api_version_compatibility
+        WHERE test_version = 'beta' AND endpoint_version = 's1'
+        """
+    )
+    evidence = json.dumps(
+        {
+            "suite_root": str(suite_root),
+            "features_root": str(features_root),
+            "feature": str(feature_path),
+            "properties": str(properties_path),
+            "test_version": "v1-beta2",
+            "endpoint_version": "s1",
+            "scope": "rest_automation",
+        },
+        sort_keys=True,
+    )
+    conn.execute(
+        """
+        INSERT INTO api_version_compatibility(
+            test_version, endpoint_version, status, rationale, evidence
+        )
+        VALUES(?, ?, 'active', ?, ?)
+        ON CONFLICT(test_version, endpoint_version) DO UPDATE SET
+            status=excluded.status,
+            rationale=excluded.rationale,
+            evidence=excluded.evidence
+        """,
+        (
+            "v1-beta2",
+            "s1",
+            "REST automation coverage standardizes v1-beta2 requests onto s1 endpoints",
+            evidence,
+        ),
+    )
+    return 1
+
+
 def _substitute(value: str, values: dict[str, str]) -> str:
     return re.sub(
         r"<([^>]+)>", lambda match: values.get(match.group(1), match.group(0)), value
@@ -563,6 +631,7 @@ def build(
     repo_id = int(repo[0])
     production_repo_id = int(production_repo[0])
     mapping, mapping_diagnostics = load_object_mapping(object_mapping_path)
+    compatibility_rows = seed_api_version_compatibility(conn, suite_root, features_root)
     mapping_file_id = (
         _file_id(conn, repo_id, suite_root, object_mapping_path)
         if object_mapping_path.is_relative_to(suite_root)
@@ -574,8 +643,51 @@ def build(
         "requests": 0,
         "links": 0,
         "diagnostics": len(mapping_diagnostics),
+        "compatibility_rows": compatibility_rows,
     }
     conn.execute("DELETE FROM test_diagnostics WHERE repo_id=?", (repo_id,))
+    conn.execute(
+        """
+        DELETE FROM test_endpoint_links
+        WHERE test_request_id IN (
+            SELECT tr.id
+            FROM test_requests tr
+            JOIN test_cases tc ON tc.id = tr.test_case_id
+            WHERE tc.repo_id = ?
+        )
+        """,
+        (repo_id,),
+    )
+    conn.execute(
+        """
+        DELETE FROM test_entity_links
+        WHERE test_request_id IN (
+            SELECT tr.id
+            FROM test_requests tr
+            JOIN test_cases tc ON tc.id = tr.test_case_id
+            WHERE tc.repo_id = ?
+        )
+        """,
+        (repo_id,),
+    )
+    conn.execute(
+        """
+        DELETE FROM test_case_versions
+        WHERE test_case_id IN (
+            SELECT id FROM test_cases WHERE repo_id = ?
+        )
+        """,
+        (repo_id,),
+    )
+    conn.execute(
+        """
+        DELETE FROM test_requests
+        WHERE test_case_id IN (
+            SELECT id FROM test_cases WHERE repo_id = ?
+        )
+        """,
+        (repo_id,),
+    )
     conn.execute("DELETE FROM test_cases WHERE repo_id=?", (repo_id,))
     for diagnostic in mapping_diagnostics:
         conn.execute(

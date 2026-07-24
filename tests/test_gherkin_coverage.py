@@ -196,6 +196,41 @@ class GherkinCoverageTests(unittest.TestCase):
         conn.commit()
         return conn
 
+    def _compatibility_database(self, root: Path) -> sqlite3.Connection:
+        conn = self._database(root)
+        conn.execute(
+            "INSERT INTO entity_nodes(name, entity_type) VALUES ('APAccountLabel', 'business_entity')"
+        )
+        entity_id = conn.execute(
+            "SELECT id FROM entity_nodes WHERE name = 'APAccountLabel'"
+        ).fetchone()[0]
+        file_id = conn.execute(
+            "INSERT INTO files(repo_id, path, language) VALUES (1, 'openapi/account-label.yaml', 'yaml')"
+        ).lastrowid
+        conn.execute(
+            """
+            INSERT INTO rest_endpoints(repo_id, method, path, source_version, entity_id, file_id)
+            VALUES (1, 'GET', '/objects/accounts-payable/account-label/{key}', 's1', ?, ?)
+            """,
+            (entity_id, file_id),
+        )
+        conn.execute(
+            """
+            INSERT INTO api_version_compatibility(
+                test_version, endpoint_version, status, rationale, evidence
+            )
+            VALUES(
+                'beta',
+                's1',
+                'active',
+                'stale beta bridge kept for cleanup coverage',
+                '{"test_version":"beta","endpoint_version":"s1","scope":"legacy"}'
+            )
+            """
+        )
+        conn.commit()
+        return conn
+
     def _mapping(self, root: Path) -> Path:
         mapping = root / "object-mapping.json"
         mapping.write_text(
@@ -282,6 +317,100 @@ Feature: Account
                 "SELECT COUNT(*) FROM test_diagnostics WHERE kind = 'version_conflict'"
             ).fetchone()[0],
         )
+
+    def test_v1_beta2_account_label_compatibility_is_seeded_once_and_replaces_beta_row(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            suite_root = root / "suite"
+            features_root = suite_root / "src" / "test" / "resources" / "features" / "rest-api"
+            features_root.mkdir(parents=True)
+            feature = features_root / "account-label.feature"
+            feature.write_text(
+                """@version:v1-beta2
+Feature: Account label
+  Scenario: Read AP account label
+    When "GET" to "ap-account-label" with key "123" and file ""
+""",
+                encoding="utf-8",
+            )
+            feature.with_suffix(".properties").write_text(
+                "version=v1-beta2\ntestObject=ap-account-label\n",
+                encoding="utf-8",
+            )
+            mapping_path = suite_root / "object-mapping.json"
+            mapping_path.write_text(
+                json.dumps(
+                    {
+                        "cm": {
+                            "ap-account-label": "accounts-payable/account-label"
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            conn = self._compatibility_database(root)
+            self.addCleanup(conn.close)
+
+            stats = build(
+                conn,
+                "suite-a",
+                suite_root,
+                mapping_path,
+                features_root,
+            )
+            entity_id = conn.execute(
+                "SELECT id FROM entity_nodes WHERE name = 'APAccountLabel'"
+            ).fetchone()[0]
+            endpoints, _ = _coverage_rows(conn, entity_id, "s1", 10)
+
+            self.assertEqual(1, stats["compatibility_rows"])
+            self.assertEqual(
+                1, conn.execute("SELECT COUNT(*) FROM api_version_compatibility").fetchone()[0]
+            )
+            compatibility = conn.execute(
+                "SELECT test_version, endpoint_version, status FROM api_version_compatibility"
+            ).fetchone()
+            self.assertEqual("v1-beta2", compatibility["test_version"])
+            self.assertEqual("s1", compatibility["endpoint_version"])
+            self.assertEqual("active", compatibility["status"])
+            self.assertEqual(
+                0,
+                conn.execute(
+                    "SELECT COUNT(*) FROM api_version_compatibility WHERE test_version = 'beta'"
+                ).fetchone()[0],
+            )
+            self.assertEqual(
+                1, conn.execute("SELECT COUNT(*) FROM test_endpoint_links").fetchone()[0]
+            )
+            self.assertEqual(
+                "compatible_version",
+                conn.execute(
+                    "SELECT resolution_kind FROM test_endpoint_links"
+                ).fetchone()[0],
+            )
+            self.assertEqual("active", endpoints[0]["coverage"])
+            self.assertEqual(1, endpoints[0]["active_case_count"])
+
+            rerun_stats = build(
+                conn,
+                "suite-a",
+                suite_root,
+                mapping_path,
+                features_root,
+            )
+            self.assertEqual(1, rerun_stats["compatibility_rows"])
+            self.assertEqual(
+                1, conn.execute("SELECT COUNT(*) FROM api_version_compatibility").fetchone()[0]
+            )
+            self.assertEqual(
+                0,
+                conn.execute(
+                    "SELECT COUNT(*) FROM api_version_compatibility WHERE test_version = 'beta'"
+                ).fetchone()[0],
+            )
+            self.assertEqual(
+                1, conn.execute("SELECT COUNT(*) FROM test_endpoint_links").fetchone()[0]
+            )
 
     def test_orphan_properties_is_diagnostic_without_case_data(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

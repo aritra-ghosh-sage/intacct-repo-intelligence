@@ -136,10 +136,15 @@ def get_declared_state():
                 "target_tables": [
                     "rest_endpoints",
                     "repos",
-                    "knowledge_items",
                     "workflow_nodes",
                     "workflow_edges",
                     "openapispec_index",
+                ],
+                # ``knowledge_items`` is a legacy placeholder table with no live
+                # builder or query consumer today, so inventory drift should not
+                # treat it as a required phase-2d target.
+                "ignored_tables": [
+                    "knowledge_items",
                 ],
                 "expected_mapping_types": [
                     "allowed_operations_handler",
@@ -200,10 +205,13 @@ def compute_drift(verified, declared):
 
     # Check tables
     declared_tables = set(declared["phases"]["phase2d"]["target_tables"])
+    ignored_tables = set(declared["phases"]["phase2d"].get("ignored_tables", []))
     verified_tables = set(verified["database"]["tables"].keys())
 
     drift["missing_tables"] = sorted(list(declared_tables - verified_tables))
-    drift["extra_tables"] = sorted(list(verified_tables - declared_tables))[
+    drift["extra_tables"] = sorted(
+        list(verified_tables - declared_tables - ignored_tables)
+    )[
         :20
     ]  # Show first 20
 
