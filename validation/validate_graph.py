@@ -544,6 +544,13 @@ def validate_paths(
         sqlite_conn = sqlite3.connect(
             f"file:{Path(sqlite_path).resolve()}?mode=ro", uri=True
         )
+        violations = sqlite_conn.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            sample = [tuple(row) for row in violations[:5]]
+            raise RuntimeError(
+                f"invalid SQLite snapshot before graph validation: {len(violations)} "
+                f"foreign-key violation(s); sample={sample}"
+            )
         graph_db = lb.Database(graph_path, read_only=True)
         graph_conn = lb.Connection(graph_db)
 

@@ -688,6 +688,15 @@ def apply_multi_repo_migration(
             "SELECT id FROM repos WHERE repo_key = ?", (LEGACY_REPO_KEY,)
         ).fetchone()
         _ensure_entity_occurrences(conn, int(legacy[0]) if legacy is not None else None)
+        # FK enforcement is necessarily off while legacy parent tables are
+        # rebuilt, but foreign_key_check still validates the candidate before
+        # anything is made durable.
+        violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise RuntimeError(
+                f"foreign key check failed before {MULTI_REPO_MIGRATION} commit: "
+                f"{violations[:3]}"
+            )
         conn.execute("COMMIT")
     except Exception:
         conn.execute("ROLLBACK")

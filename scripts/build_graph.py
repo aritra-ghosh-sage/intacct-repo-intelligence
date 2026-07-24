@@ -1633,6 +1633,7 @@ def build_graph(sqlite_path: str, graph_path: str) -> None:
     try:
         Path(graph_path).parent.mkdir(parents=True, exist_ok=True)
         sql = sqlite3.connect(sqlite_path)
+        require_snapshot_integrity(sql, context="graph candidate build")
         db = lb.Database(graph_path)
         g = lb.Connection(db)
         ensure_schema(g)
@@ -1654,6 +1655,7 @@ def create_sqlite_snapshot(source_path: str, snapshot_path: Path) -> None:
     """Create one transactionally consistent SQLite backup for build and validation."""
     source = sqlite3.connect(f"file:{Path(source_path).resolve()}?mode=ro", uri=True)
     destination = sqlite3.connect(snapshot_path)
+    destination.execute("PRAGMA foreign_keys = ON")
     try:
         source.backup(destination)
     finally:
@@ -1667,6 +1669,17 @@ def source_fingerprint(snapshot_path: Path) -> str:
         for chunk in iter(lambda: snapshot.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def require_snapshot_integrity(conn: sqlite3.Connection, *, context: str) -> None:
+    """Reject graph projection when authoritative SQLite evidence is invalid."""
+    violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+    if violations:
+        sample = [tuple(row) for row in violations[:5]]
+        raise RuntimeError(
+            f"invalid SQLite snapshot before {context}: {len(violations)} "
+            f"foreign-key violation(s); sample={sample}"
+        )
 
 
 def require_graph_builds_migration(conn: sqlite3.Connection) -> None:
@@ -1715,15 +1728,14 @@ def promote_validated_graph(
             raise RuntimeError(f"another graph build holds {lock_path}") from exc
 
         metadata = sqlite3.connect(sqlite_path)
+        metadata.execute("PRAGMA foreign_keys = ON")
         try:
             require_graph_builds_migration(metadata)
             create_sqlite_snapshot(sqlite_path, snapshot)
-            # Validation must use the immutable snapshot, while the active
-            # graph metadata must identify the catalog file that clients will
-            # query after promotion.  A SQLite backup may differ byte-for-byte
-            # from its source even when it contains the same facts.
+            # This completed-build fingerprint identifies the immutable source
+            # snapshot; never derive graph freshness by hashing a live DB file.
             snapshot_fingerprint = source_fingerprint(snapshot)
-            fingerprint = source_fingerprint(Path(sqlite_path))
+            fingerprint = snapshot_fingerprint
             cur = metadata.execute(
                 """
                 INSERT INTO graph_builds(

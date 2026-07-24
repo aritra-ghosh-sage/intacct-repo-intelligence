@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 import base64
-import hashlib
 import os
 import sqlite3
 from pathlib import Path
@@ -50,6 +49,9 @@ class Catalog:
         c = sqlite3.connect(f"file:{self.db}?mode=ro", uri=True)
         c.row_factory = sqlite3.Row
         c.execute("PRAGMA query_only=ON")
+        # A response (including its metadata) observes one immutable WAL
+        # snapshot instead of a sequence of independently moving reads.
+        c.execute("BEGIN")
         return c
 
     def table(self, c: sqlite3.Connection, name: str) -> bool:
@@ -67,7 +69,6 @@ class Catalog:
             if self.table(c, "graph_builds")
             else None
         )
-        sqlite_sha256 = hashlib.sha256(self.db.read_bytes()).hexdigest()
         repositories = (
             [
                 _row(row)
@@ -79,10 +80,10 @@ class Catalog:
             else []
         )
         return {
-            "sqlite_sha256": sqlite_sha256,
+            "sqlite_snapshot": "read_transaction",
             "graph_exists": self.graph.is_file(),
             "active_graph_build": _row(build) if build else None,
-            "graph_fresh": bool(build and build["source_fingerprint"] == sqlite_sha256),
+            "graph_fresh": bool(build and self.graph.is_file() and build["source_fingerprint"]),
             "repositories": repositories,
         }
 
@@ -95,6 +96,14 @@ class Catalog:
         error=None,
         next_cursor=None,
     ) -> dict[str, Any]:
+        violations = c.execute("PRAGMA foreign_key_check").fetchall()
+        if violations and status == "ok":
+            status = "invalid_catalog"
+            error = {
+                "code": "foreign_key_violations",
+                "message": "Catalog integrity validation failed",
+                "details": {"count": len(violations), "sample": [tuple(x) for x in violations[:5]]},
+            }
         return {
             "contract_version": 1,
             "operation": operation,
@@ -149,6 +158,12 @@ class Catalog:
                 (like, like, repo_key, repo_key),
             ),
         }
+        if kind not in {*queries, "all"}:
+            raise ValueError("invalid search kind")
+        # Offset cursors across independently ordered result families cannot
+        # be made trustworthy.  Keep all-kind search explicitly unpaginated.
+        if kind == "all" and cursor:
+            raise ValueError("catalog_search(kind='all') does not support pagination; choose one kind")
         selected = queries if kind == "all" else {kind: queries[kind]}
         with self.conn() as c:
             records = []
@@ -158,7 +173,11 @@ class Catalog:
                     for r in c.execute(sql + " LIMIT ? OFFSET ?", (*args, lim + 1, off))
                 ]
             records.sort(key=lambda r: (r["kind"], str(r["record"])))
-            nxt = _cursor(off + lim) if len(records) > lim else None
+            if kind == "all" and len(records) > lim:
+                raise ValueError(
+                    "catalog_search(kind='all') result exceeds limit; choose one kind"
+                )
+            nxt = _cursor(off + lim) if kind != "all" and len(records) > lim else None
             return self.out(
                 "catalog_search",
                 {"repo_key": repo_key, "results": records[:lim]},
@@ -232,6 +251,13 @@ class Catalog:
                     },
                 )
             endpoints, diagnostics = coverage_rows(c, int(entity["id"]), version, lim)
+            version_predicate = (
+                "AND (source_version = ? OR source_version IS NULL)" if version else ""
+            )
+            total = c.execute(
+                f"SELECT COUNT(*) FROM rest_endpoints WHERE entity_id = ? {version_predicate}",
+                (entity["id"], *((version,) if version else ())),
+            ).fetchone()[0]
             return self.out(
                 "rest_coverage",
                 {
@@ -239,6 +265,11 @@ class Catalog:
                     "endpoint_coverage": endpoints,
                     "diagnostics": diagnostics,
                     "summary": coverage_summary(endpoints, diagnostics),
+                    "coverage_scope": {
+                        "total_endpoint_count": total,
+                        "returned_endpoint_count": len(endpoints),
+                        "sampled": len(endpoints) < total,
+                    },
                 },
                 c,
             )
@@ -293,12 +324,7 @@ class Catalog:
             if self.table(c, "graph_builds")
             else None
         )
-        return bool(
-            self.graph.is_file()
-            and active
-            and active["source_fingerprint"]
-            == hashlib.sha256(self.db.read_bytes()).hexdigest()
-        )
+        return bool(self.graph.is_file() and active and active["source_fingerprint"])
 
     def repositories(self) -> dict[str, Any]:
         with self.conn() as c:

@@ -15,10 +15,10 @@ import click
 from tqdm import tqdm
 
 try:
-    from catalog.db import get_connection
+    from catalog.db import get_connection, require_foreign_key_integrity
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from catalog.db import get_connection
+    from catalog.db import get_connection, require_foreign_key_integrity
 
 DEFAULT_DB = "catalog/catalog.db"
 DEFAULT_ENTITIES = "config/entity_definitions.jsonl"
@@ -668,13 +668,17 @@ def build(db: str, entities: Path, reset: bool, repo_key: str) -> BuildStats:
     try:
         ensure_entity_occurrences_table(conn)
         repo_id = _resolve_repo_id(conn, repo_key)
+        conn.execute("BEGIN IMMEDIATE")
 
         if reset:
+            # Roots are a projection of mappings, not independent evidence.
+            # Clear them before their source family so no stale root survives.
+            conn.execute("DELETE FROM entity_roots WHERE repo_id = ?", (repo_id,))
             conn.execute("DELETE FROM entity_mappings WHERE repo_id = ?", (repo_id,))
             # An occurrence is a snapshot of declarations from this repository.
             # Canonical entity_nodes intentionally remain shared and are not deleted.
             conn.execute("DELETE FROM entity_occurrences WHERE repo_id = ?", (repo_id,))
-            conn.commit()
+            require_foreign_key_integrity(conn, context="entity mapping reset")
 
         openapispec_mappings = [
             ("workflow_schema_file", WORKFLOW_FILE_ROLES[0]),
@@ -795,7 +799,11 @@ def build(db: str, entities: Path, reset: bool, repo_key: str) -> BuildStats:
                 if inserted:
                     stats.mappings_inserted += 1
 
+        require_foreign_key_integrity(conn, context="entity mapping build")
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 

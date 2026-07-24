@@ -15,11 +15,11 @@ import click
 from tqdm import tqdm
 
 try:
-    from catalog.db import get_connection
+    from catalog.db import get_connection, require_foreign_key_integrity
     from catalog.repositories import get_repository, resolve_repository_root
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from catalog.db import get_connection
+    from catalog.db import get_connection, require_foreign_key_integrity
     from catalog.repositories import get_repository, resolve_repository_root
 
 try:
@@ -1367,6 +1367,7 @@ def build(db: str, repo_root: Path, repo_id: int, reset: bool) -> BuildStats:
     conn = get_connection(db)
     try:
         ensure_workflows_file_id_column(conn)
+        conn.execute("BEGIN IMMEDIATE")
 
         if reset:
             conn.execute(
@@ -1381,7 +1382,6 @@ def build(db: str, repo_root: Path, repo_id: int, reset: bool) -> BuildStats:
             conn.execute(
                 "DELETE FROM openapi_file_ref_edges WHERE repo_id = ?", (repo_id,)
             )
-            conn.commit()
 
         entities = get_entities(conn, repo_id)
         for entity in tqdm(entities, desc="Building workflows", unit="entity"):
@@ -1398,13 +1398,14 @@ def build(db: str, repo_root: Path, repo_id: int, reset: bool) -> BuildStats:
             stats.workflows_inserted += wf
             stats.entities_processed += 1
 
-            if stats.entities_processed % 500 == 0:
-                conn.commit()
-
         materialize_openapi_ref_edges(conn, stats, repo_id)
         backfill_workflow_file_ids(conn, stats, unresolved_sources, repo_id)
 
+        require_foreign_key_integrity(conn, context="workflow build")
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 

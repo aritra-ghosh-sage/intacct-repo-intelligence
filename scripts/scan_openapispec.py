@@ -13,11 +13,11 @@ import click
 from tqdm import tqdm
 
 try:
-    from catalog.db import get_connection
+    from catalog.db import get_connection, require_foreign_key_integrity
     from catalog.repositories import get_repository, resolve_repository_root
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from catalog.db import get_connection
+    from catalog.db import get_connection, require_foreign_key_integrity
     from catalog.repositories import get_repository, resolve_repository_root
 
 try:
@@ -284,7 +284,7 @@ def scan_openapispec(
 
         conn.execute(
             """
-            INSERT OR REPLACE INTO openapispec_index(
+            INSERT INTO openapispec_index(
                 repo_id,
                 file_id,
                 file_path,
@@ -355,7 +355,11 @@ def scan_command(db: str, repo: str, repo_root: Path | None) -> None:
         stats = scan_openapispec(
             conn=conn, repo_root=resolved_root, repo_id=int(repository["id"])
         )
+        require_foreign_key_integrity(conn, context="OpenAPI index build")
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 

@@ -39,9 +39,6 @@ from config import CATALOG_DB as SQLITE_DB, GRAPH_DB
 DEFAULT_DB = os.environ.get("CATALOG_DB", SQLITE_DB)
 DEFAULT_GRAPH = os.environ.get("GRAPH_DB", GRAPH_DB)
 
-_graph_connection_cache: dict[str, tuple[lb.Database, lb.Connection]] = {}
-
-
 class EntityAmbiguityError(ValueError):
     """Raised when a canonical entity has several repo-scoped occurrences."""
 
@@ -84,11 +81,13 @@ def graph_error_boundary(func):
 
 
 def get_graph_connection(graph_db_path: str) -> tuple[lb.Database, lb.Connection]:
-    """Open a read-only Ladybug graph database connection."""
-    if graph_db_path not in _graph_connection_cache:
-        db = lb.Database(graph_db_path, read_only=True)
-        _graph_connection_cache[graph_db_path] = (db, lb.Connection(db))
-    return _graph_connection_cache[graph_db_path]
+    """Open an independently owned read-only Ladybug graph connection.
+
+    Callers close both objects.  A cache here was unsafe because MCP closes
+    its per-request handles, leaving later callers with stale closed objects.
+    """
+    db = lb.Database(graph_db_path, read_only=True)
+    return db, lb.Connection(db)
 
 
 def enrich_symbols_from_sql(

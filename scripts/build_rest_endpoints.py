@@ -27,11 +27,11 @@ import click
 from tqdm import tqdm
 
 try:
-    from catalog.db import get_connection
+    from catalog.db import get_connection, require_foreign_key_integrity
     from catalog.repositories import get_repository, resolve_repository_root
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from catalog.db import get_connection
+    from catalog.db import get_connection, require_foreign_key_integrity
     from catalog.repositories import get_repository, resolve_repository_root
 
 try:
@@ -462,9 +462,9 @@ def build(
 
     conn = get_connection(db)
     try:
+        conn.execute("BEGIN IMMEDIATE")
         if reset:
             conn.execute("DELETE FROM rest_endpoints WHERE repo_id = ?", (repo_id,))
-            conn.commit()
 
         stats = BuildStats()
         entity_by_file_id = _resolve_entity_ids_by_file(conn, repo_id)
@@ -572,12 +572,11 @@ def build(
                 conn, repo_id, endpoints_to_insert
             )
 
-            # Commit periodically to avoid holding locks
-            if stats.specs_processed % 100 == 0:
-                conn.commit()
-
+        require_foreign_key_integrity(conn, context="REST endpoint build")
         conn.commit()
-
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 

@@ -65,8 +65,10 @@ def _fingerprint(path: Path) -> str:
 
 def _backup_database(source: Path, target: Path) -> None:
     source_conn = sqlite3.connect(source)
+    source_conn.execute("PRAGMA foreign_keys = ON")
     try:
         target_conn = sqlite3.connect(target)
+        target_conn.execute("PRAGMA foreign_keys = ON")
         try:
             source_conn.backup(target_conn)
         finally:
@@ -278,6 +280,7 @@ def _record_failed_refresh(
     """Best-effort diagnostic history without replacing the active catalog."""
     try:
         conn = sqlite3.connect(active)
+        conn.execute("PRAGMA foreign_keys = ON")
         conn.row_factory = sqlite3.Row
         try:
             register_manifest(conn, manifest)
@@ -322,6 +325,7 @@ def refresh_repository(
     _backup_database(active, candidate)
     try:
         conn = sqlite3.connect(candidate)
+        conn.execute("PRAGMA foreign_keys = ON")
         conn.row_factory = sqlite3.Row
         try:
             if legacy_entry is not None:
@@ -368,6 +372,7 @@ def refresh_repository(
             # Re-open because individual builders own and close their own connections.
             conn.close()
             conn = sqlite3.connect(candidate)
+            conn.execute("PRAGMA foreign_keys = ON")
             conn.row_factory = sqlite3.Row
             _validate_candidate(conn, int(repo["id"]))
             if source_revision(root, branch) != start_sha:

@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from tqdm import tqdm
 
-from catalog.db import get_connection
+from catalog.db import get_connection, require_foreign_key_integrity
 from parser.repo_context import require_repo_scoped_files, resolve_repo
 from parser.extractors import (
     java_extractor,
@@ -105,6 +105,7 @@ def extract_all(
             continue
 
         try:
+            cur.execute("SAVEPOINT symbol_file")
             with open(abs_path, "rb") as f:
                 source = f.read()
 
@@ -146,14 +147,18 @@ def extract_all(
                 "UPDATE files SET last_symbols_extracted = ? WHERE id = ?",
                 (started, file_id),
             )
+            cur.execute("RELEASE SAVEPOINT symbol_file")
 
             if total_symbols % 5000 == 0:
                 conn.commit()
 
         except Exception as e:
+            cur.execute("ROLLBACK TO SAVEPOINT symbol_file")
+            cur.execute("RELEASE SAVEPOINT symbol_file")
             errors += 1
             print(f"⚠️  {rel_path}: {e}")
 
+    require_foreign_key_integrity(conn, context="symbol extraction")
     conn.commit()
     conn.close()
 

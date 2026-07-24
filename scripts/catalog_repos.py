@@ -6,12 +6,13 @@ from __future__ import annotations
 import argparse
 import sqlite3
 
+from catalog.db import get_connection
 from catalog.repositories import load_workspace_manifest, register_manifest
 
 
 def register(db: str, manifest_path: str) -> None:
     manifest = load_workspace_manifest(manifest_path)
-    conn = sqlite3.connect(db)
+    conn = get_connection(db)
     conn.row_factory = sqlite3.Row
     try:
         rows = register_manifest(conn, manifest)

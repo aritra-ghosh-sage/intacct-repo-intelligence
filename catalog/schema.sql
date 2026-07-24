@@ -95,6 +95,11 @@ CREATE TABLE IF NOT EXISTS relationships (
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
 
     FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    -- Names and evidence remain useful after a symbol/file is refreshed;
+    -- these are optional retained provenance, never ownership cascades.
+    FOREIGN KEY(source_symbol_id) REFERENCES symbols(id) ON DELETE SET NULL,
+    FOREIGN KEY(target_symbol_id) REFERENCES symbols(id) ON DELETE SET NULL,
+    FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE SET NULL,
     UNIQUE (
         repo_id,
         source_symbol_id,
@@ -179,7 +184,9 @@ CREATE TABLE IF NOT EXISTS entity_mappings (
 
     FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
     FOREIGN KEY(entity_id)
-        REFERENCES entity_nodes(id)
+        REFERENCES entity_nodes(id) ON DELETE CASCADE,
+    FOREIGN KEY(symbol_id) REFERENCES symbols(id) ON DELETE SET NULL,
+    FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS entity_roots (
@@ -199,8 +206,8 @@ CREATE TABLE IF NOT EXISTS entity_roots (
     UNIQUE(repo_id, entity_id, symbol_id),
 
     FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
-    FOREIGN KEY(entity_id) REFERENCES entity_nodes(id),
-    FOREIGN KEY(symbol_id) REFERENCES symbols(id)
+    FOREIGN KEY(entity_id) REFERENCES entity_nodes(id) ON DELETE CASCADE,
+    FOREIGN KEY(symbol_id) REFERENCES symbols(id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_entity_roots_entity
@@ -237,6 +244,7 @@ CREATE TABLE IF NOT EXISTS workflows (
 
     FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
     FOREIGN KEY(entity_id) REFERENCES entity_nodes(id) ON DELETE CASCADE,
+    FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE SET NULL,
     FOREIGN KEY(source_symbol_id) REFERENCES symbols(id) ON DELETE SET NULL
 );
 
@@ -342,7 +350,10 @@ CREATE TABLE IF NOT EXISTS rest_endpoints (
     handler_symbol_id INTEGER,
     file_id INTEGER,
     source_version TEXT,
-    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    FOREIGN KEY(entity_id) REFERENCES entity_nodes(id) ON DELETE SET NULL,
+    FOREIGN KEY(handler_symbol_id) REFERENCES symbols(id) ON DELETE SET NULL,
+    FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS knowledge_items (
@@ -370,7 +381,8 @@ CREATE TABLE IF NOT EXISTS openapispec_index (
     title TEXT,
     state TEXT,
     last_seen_at TEXT,
-    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE SET NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_openapispec_file_id ON openapispec_index(file_id);
@@ -408,7 +420,8 @@ CREATE TABLE IF NOT EXISTS security_operations (
     source_kind TEXT NOT NULL,
     raw_hash TEXT,
     UNIQUE(repo_id, op_key, op_numeric_id, source_file, source_kind),
-    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE SET NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_security_operations_key ON security_operations(op_key);
@@ -426,6 +439,7 @@ CREATE TABLE IF NOT EXISTS security_operation_allowops (
     source_line INTEGER,
     FOREIGN KEY(operation_id) REFERENCES security_operations(id) ON DELETE CASCADE,
     FOREIGN KEY(allowed_operation_id) REFERENCES security_operations(id) ON DELETE SET NULL,
+    FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE SET NULL,
     UNIQUE(operation_id, allowed_op_key, source_file)
 );
 
@@ -446,7 +460,8 @@ CREATE TABLE IF NOT EXISTS security_policies (
     file_id INTEGER,
     source_line INTEGER,
     UNIQUE(repo_id, policy_name, source_file),
-    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE SET NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_security_policies_name ON security_policies(policy_name);
@@ -483,7 +498,8 @@ CREATE TABLE IF NOT EXISTS security_menus (
     source_file TEXT NOT NULL,
     file_id INTEGER,
     UNIQUE(repo_id, source_file),
-    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS security_menu_items (
@@ -526,7 +542,8 @@ CREATE TABLE IF NOT EXISTS dbschema_tables (
     source_line INTEGER,
     raw_hash TEXT,
     UNIQUE(repo_id, table_name, source_file),
-    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE SET NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_dbschema_tables_name ON dbschema_tables(table_name);

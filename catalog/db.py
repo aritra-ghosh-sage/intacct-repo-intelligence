@@ -34,9 +34,21 @@ def get_connection(db_path: str | None = None):
 
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     _connection = sqlite3.connect(path)
+    _connection.execute("PRAGMA foreign_keys = ON")
     _connection.row_factory = sqlite3.Row
     _connection_path = path
     return _connection
+
+
+def require_foreign_key_integrity(conn: sqlite3.Connection, *, context: str) -> None:
+    """Fail a mutation before it can publish a catalog with orphaned facts."""
+    violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+    if violations:
+        sample = [tuple(row) for row in violations[:5]]
+        raise RuntimeError(
+            f"foreign key integrity failed after {context}: "
+            f"{len(violations)} violation(s); sample={sample}"
+        )
 
 
 def init_db():
@@ -66,6 +78,7 @@ def migrate_multi_repo(
 
     path = db_path or CATALOG_DB
     conn = sqlite3.connect(path)
+    conn.execute("PRAGMA foreign_keys = ON")
     try:
         apply_multi_repo_migration(
             conn, local_root=local_root, tracked_branch=tracked_branch

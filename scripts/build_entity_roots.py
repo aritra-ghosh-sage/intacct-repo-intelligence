@@ -11,10 +11,10 @@ from typing import Any
 import click
 
 try:
-    from catalog.db import get_connection
+    from catalog.db import get_connection, require_foreign_key_integrity
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from catalog.db import get_connection
+    from catalog.db import get_connection, require_foreign_key_integrity
 
 DEFAULT_DB = os.environ.get("CATALOG_DB", "catalog/catalog.db")
 DEFAULT_REPO_ROOT = "/home/aritraghosh/projects/ia-app"
@@ -70,8 +70,8 @@ def build_entity_roots(conn: Any, reset: bool, repo_id: int) -> int:
     ensure_entity_roots_columns(conn)
 
     if reset:
+        conn.execute("BEGIN IMMEDIATE")
         conn.execute("DELETE FROM entity_roots WHERE repo_id = ?", (repo_id,))
-        conn.commit()
 
     inserted = 0
     rows = conn.execute(
@@ -158,6 +158,7 @@ def build_entity_roots(conn: Any, reset: bool, repo_id: int) -> int:
         (repo_id,),
     ).fetchone()["c"]
 
+    require_foreign_key_integrity(conn, context="entity roots build")
     conn.commit()
     click.echo(f"Inserted entity_roots rows: {inserted}")
     click.echo(f"Shared root rows (is_shared=1): {shared_rows}")
