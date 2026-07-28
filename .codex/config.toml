@@ -1,9 +1,0 @@
-[mcp_servers.intacct_catalog]
-command = "/Users/aritra.ghosh/projects/intacct-repo-intelligence/.venv/bin/python"
-args = ["-m", "intacct_mcp.server"]
-cwd = "/Users/aritra.ghosh/projects/intacct-repo-intelligence"
-
-[mcp_servers.intacct_catalog.env]
-CATALOG_DB = "/Users/aritra.ghosh/projects/intacct-repo-intelligence/catalog/catalog.db"
-GRAPH_DB = "/Users/aritra.ghosh/projects/intacct-repo-intelligence/catalog/graph.lbug"
-MCP_TRANSPORT = "stdio"
