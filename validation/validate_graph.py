@@ -253,6 +253,21 @@ def validate_exact_parity(
             "MATCH (n:EntityAccessLink) RETURN n.entity_access_link_id,n.entity_id,n.surface,n.record_id,n.link_type,n.evidence_file_id,n.evidence_symbol_id,n.confidence_mode,n.notes,n.created_at ORDER BY n.entity_access_link_id",
         ),
         (
+            "EntitySchemaComponent",
+            "SELECT id,occurrence_id,component_kind,component_path,declared_name,target_literal,data_type,cardinality,writeability,confidence FROM entity_schema_components ORDER BY id",
+            "MATCH (n:EntitySchemaComponent) RETURN n.entity_schema_component_id,n.occurrence_id,n.component_kind,n.component_path,n.declared_name,n.target_literal,n.data_type,n.cardinality,n.writeability,n.confidence ORDER BY n.entity_schema_component_id",
+        ),
+        (
+            "EntityRelationshipFact",
+            "SELECT id,source_occurrence_id,target_occurrence_id,axis,relation_kind,fact_key,assertion_status,target_entity_name,target_literal,cardinality,confidence,source_path,start_line,end_line FROM entity_relationship_facts ORDER BY id",
+            "MATCH (n:EntityRelationshipFact) RETURN n.entity_relationship_fact_id,n.source_occurrence_id,n.target_occurrence_id,n.axis,n.relation_kind,n.fact_key,n.assertion_status,n.target_entity_name,n.target_literal,n.cardinality,n.confidence,n.source_path,n.start_line,n.end_line ORDER BY n.entity_relationship_fact_id",
+        ),
+        (
+            "EntityOperationFact",
+            "SELECT id,occurrence_id,axis,operation,surface_kind,availability,invocation_context,persistence_scope,standalone,confidence FROM entity_operation_facts ORDER BY id",
+            "MATCH (n:EntityOperationFact) RETURN n.entity_operation_fact_id,n.occurrence_id,n.axis,n.operation,n.surface_kind,n.availability,n.invocation_context,n.persistence_scope,n.standalone,n.confidence ORDER BY n.entity_operation_fact_id",
+        ),
+        (
             "ENTITY_ROOT",
             "SELECT entity_id,symbol_id,role,weight FROM entity_roots ORDER BY entity_id,symbol_id,role,weight",
             "MATCH (a:Entity)-[r:ENTITY_ROOT]->(b:Symbol) RETURN a.entity_id,b.symbol_id,r.role,r.weight ORDER BY a.entity_id,b.symbol_id,r.role,r.weight",
@@ -296,6 +311,29 @@ def validate_exact_parity(
             "ENTITY_OCCURRENCE_REST_ENDPOINT",
             "SELECT eo.id,ep.id FROM rest_endpoints ep JOIN entity_occurrences eo ON eo.repo_id=ep.repo_id AND eo.entity_id=ep.entity_id WHERE ep.entity_id IS NOT NULL ORDER BY eo.id,ep.id",
             "MATCH (a:EntityOccurrence)-[:ENTITY_OCCURRENCE_REST_ENDPOINT]->(b:RestEndpoint) RETURN a.entity_occurrence_id,b.rest_endpoint_id ORDER BY a.entity_occurrence_id,b.rest_endpoint_id",
+        ),
+        (
+            "ENTITY_OCCURRENCE_HAS_COMPONENT",
+            "SELECT occurrence_id,id FROM entity_schema_components ORDER BY occurrence_id,id",
+            "MATCH (a:EntityOccurrence)-[:ENTITY_OCCURRENCE_HAS_COMPONENT]->(b:EntitySchemaComponent) RETURN a.entity_occurrence_id,b.entity_schema_component_id ORDER BY a.entity_occurrence_id,b.entity_schema_component_id",
+        ),
+        (
+            "ENTITY_OCCURRENCE_HAS_SEMANTIC_FACT",
+            "SELECT source_occurrence_id,id FROM entity_relationship_facts ORDER BY source_occurrence_id,id",
+            "MATCH (a:EntityOccurrence)-[:ENTITY_OCCURRENCE_HAS_SEMANTIC_FACT]->(b:EntityRelationshipFact) RETURN a.entity_occurrence_id,b.entity_relationship_fact_id ORDER BY a.entity_occurrence_id,b.entity_relationship_fact_id",
+        ),
+        (
+            "SEMANTIC_FACT_TARGET_OCCURRENCE",
+            "SELECT id,target_occurrence_id FROM entity_relationship_facts "
+            "WHERE target_occurrence_id IS NOT NULL "
+            "AND assertion_status IN ('VERIFIED','CORROBORATED') "
+            "ORDER BY id,target_occurrence_id",
+            "MATCH (a:EntityRelationshipFact)-[:SEMANTIC_FACT_TARGET_OCCURRENCE]->(b:EntityOccurrence) RETURN a.entity_relationship_fact_id,b.entity_occurrence_id ORDER BY a.entity_relationship_fact_id,b.entity_occurrence_id",
+        ),
+        (
+            "ENTITY_OCCURRENCE_HAS_OPERATION_FACT",
+            "SELECT occurrence_id,id FROM entity_operation_facts ORDER BY occurrence_id,id",
+            "MATCH (a:EntityOccurrence)-[:ENTITY_OCCURRENCE_HAS_OPERATION_FACT]->(b:EntityOperationFact) RETURN a.entity_occurrence_id,b.entity_operation_fact_id ORDER BY a.entity_occurrence_id,b.entity_operation_fact_id",
         ),
         (
             "INHERITS",
@@ -498,6 +536,23 @@ def validate_exact_parity(
             "MATCH (a:SecurityOperation)-[r:ALLOWS_SECURITY_OPERATION]->(b:SecurityOperation) RETURN a.security_operation_id,b.security_operation_id,r.allowed_op_key,r.resolution_reason ORDER BY a.security_operation_id,b.security_operation_id,r.allowed_op_key,r.resolution_reason",
         ),
     ]
+    semantic_tables_present = bool(
+        sqlite_conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='entity_schema_components'"
+        ).fetchone()
+    )
+    if not semantic_tables_present:
+        semantic_check_names = {
+            "EntitySchemaComponent",
+            "EntityRelationshipFact",
+            "EntityOperationFact",
+            "ENTITY_OCCURRENCE_HAS_COMPONENT",
+            "ENTITY_OCCURRENCE_HAS_SEMANTIC_FACT",
+            "SEMANTIC_FACT_TARGET_OCCURRENCE",
+            "ENTITY_OCCURRENCE_HAS_OPERATION_FACT",
+        }
+        checks = [check for check in checks if check[0] not in semantic_check_names]
     integration_columns = {
         row[1] for row in sqlite_conn.execute("PRAGMA table_info(integration_links)")
     }

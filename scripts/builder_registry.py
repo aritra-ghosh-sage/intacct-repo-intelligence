@@ -36,9 +36,14 @@ BUILDERS: dict[str, Builder] = {
     "rest_endpoints": Builder(
         "rest_endpoints", ("openapi_link",), frozenset({"intacct_app"})
     ),
+    "entity_semantics": Builder(
+        "entity_semantics",
+        ("entities", "openapi_link", "security", "rest_endpoints"),
+        frozenset({"intacct_app"}),
+    ),
     "entity_access_links": Builder(
         "entity_access_links",
-        ("workflows", "security", "rest_endpoints"),
+        ("workflows", "security", "rest_endpoints", "entity_semantics"),
         frozenset({"intacct_app"}),
     ),
     "integration_links": Builder("integration_links", ("relationships",)),
@@ -67,6 +72,7 @@ PROFILE_DEFAULTS: dict[str, tuple[str, ...]] = {
         "workflows",
         "security",
         "rest_endpoints",
+        "entity_semantics",
         "entity_access_links",
         "integration_links",
     ),

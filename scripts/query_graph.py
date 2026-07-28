@@ -164,6 +164,91 @@ def _query_file_symbols_from_graph(
     return [{"symbol_id": row[0], "name": row[1], "kind": row[2]} for row in rows]
 
 
+def _query_file_occurrences_from_graph(
+    graph_conn: lb.Connection, file_path: str, repo_key: str | None = None
+) -> list[dict[str, Any]]:
+    """Return entity occurrences declared by an .ent file even when it has no symbols.
+
+    This is intentionally separate from symbol mappings: an .ent definition is
+    a source declaration, not evidence that an arbitrary class symbol owns it.
+    """
+    query = """
+    MATCH (r:Repository)-[:REPOSITORY_HAS_ENTITY_OCCURRENCE]->(o:EntityOccurrence)
+    MATCH (e:Entity)-[:ENTITY_HAS_OCCURRENCE]->(o)
+    WHERE o.ent_file = $file_path
+      AND ($repo_key IS NULL OR r.repo_key = $repo_key)
+    RETURN e.entity_id, e.name, e.entity_type, r.repo_key, o.entity_occurrence_id, o.module
+    ORDER BY r.repo_key, e.entity_id, o.entity_occurrence_id
+    """
+    rows = graph_conn.execute(
+        query, {"file_path": file_path, "repo_key": repo_key}
+    ).get_all()
+    return [
+        {
+            "entity_id": row[0],
+            "name": row[1],
+            "entity_type": row[2],
+            "repo_key": row[3],
+            "occurrence_id": row[4],
+            "module": row[5],
+        }
+        for row in rows
+    ]
+
+
+def query_semantic_relationship_traversal(
+    graph_conn: lb.Connection,
+    occurrence_id: int,
+    axes: list[str],
+    depth: int,
+) -> list[dict[str, Any]]:
+    """Traverse only projected, resolved semantic facts with an explicit bound.
+
+    Facts without a resolved target occurrence remain visible in SQLite direct
+    results but are deliberately not turned into graph edges.
+    """
+    discovered = {occurrence_id}
+    frontier = {occurrence_id}
+    results: list[dict[str, Any]] = []
+    for level in range(1, depth + 1):
+        if not frontier:
+            break
+        query = """
+        MATCH (source:EntityOccurrence)-[:ENTITY_OCCURRENCE_HAS_SEMANTIC_FACT]->(fact:EntityRelationshipFact)
+        MATCH (fact)-[:SEMANTIC_FACT_TARGET_OCCURRENCE]->(target:EntityOccurrence)
+        WHERE source.entity_occurrence_id IN $occurrence_ids
+          AND fact.axis IN $axes
+          AND fact.assertion_status IN ['VERIFIED', 'CORROBORATED']
+        RETURN fact.entity_relationship_fact_id, fact.axis, fact.relation_kind,
+               fact.fact_key, fact.assertion_status, fact.confidence,
+               fact.source_path, fact.start_line, fact.end_line,
+               source.entity_occurrence_id, target.entity_occurrence_id
+        ORDER BY fact.entity_relationship_fact_id
+        """
+        rows = graph_conn.execute(
+            query,
+            {"occurrence_ids": sorted(frontier), "axes": axes},
+        ).get_all()
+        next_frontier: set[int] = set()
+        for row in rows:
+            target_id = int(row[10])
+            results.append(
+                {
+                    "fact_id": int(row[0]), "axis": row[1],
+                    "relation_kind": row[2], "fact_key": row[3],
+                    "assertion_status": row[4], "confidence": row[5],
+                    "source_path": row[6], "start_line": row[7],
+                    "end_line": row[8], "source_occurrence_id": int(row[9]),
+                    "target_occurrence_id": target_id, "depth": level,
+                }
+            )
+            if target_id not in discovered:
+                discovered.add(target_id)
+                next_frontier.add(target_id)
+        frontier = next_frontier
+    return results
+
+
 def _query_entities_from_symbols(
     graph_conn: lb.Connection, symbol_ids: list[int], repo_key: str | None = None
 ) -> list[dict[str, Any]]:
@@ -425,8 +510,26 @@ def file_impact(
         traversal_nodes = seed_nodes + traversed_symbols
         symbols = enrich_symbols_from_sql(sql_conn, traversal_nodes)
 
-        direct_entities = _query_entities_from_symbols(graph_conn, seed_ids, repo_key)
+        direct_entities = _query_file_occurrences_from_graph(
+            graph_conn, file_path, repo_key
+        )
+        symbol_entities = _query_entities_from_symbols(graph_conn, seed_ids, repo_key)
+        seen_occurrences = {entity["occurrence_id"] for entity in direct_entities}
+        direct_entities.extend(
+            entity for entity in symbol_entities
+            if entity["occurrence_id"] not in seen_occurrences
+        )
         entities = _query_entities_from_symbols(graph_conn, affected_ids, repo_key)
+        # ``.ent`` files normally have no parsed symbols.  Their occurrence is
+        # nevertheless a direct change seed and must participate in downstream
+        # surface lookup; otherwise an entity definition produces a misleading
+        # empty impact report.
+        seen_affected_occurrences = {entity["occurrence_id"] for entity in entities}
+        entities.extend(
+            entity for entity in direct_entities
+            if entity["occurrence_id"] not in seen_affected_occurrences
+        )
+        entities.sort(key=lambda entity: (entity["repo_key"], entity["entity_id"], entity["occurrence_id"]))
         occurrence_ids = [e["occurrence_id"] for e in entities]
         surfaces = _query_surfaces_from_occurrences(graph_conn, occurrence_ids)
 

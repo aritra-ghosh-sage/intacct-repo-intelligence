@@ -77,6 +77,120 @@ class MultiRepoMigrationTests(unittest.TestCase):
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='test_cases'"
             ).fetchone()
         )
+        self.assertEqual(
+            conn.execute(
+                "SELECT COUNT(*) FROM schema_migrations WHERE name = '021_entity_semantics'"
+            ).fetchone()[0],
+            1,
+        )
+        self.assertEqual(
+            conn.execute(
+                "SELECT COUNT(*) FROM schema_migrations "
+                "WHERE name = '022_entity_semantics_repo_scope'"
+            ).fetchone()[0],
+            1,
+        )
+        self.assertIsNotNone(
+            conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='entity_relationship_facts'"
+            ).fetchone()
+        )
+        relationship_fks = conn.execute(
+            "PRAGMA foreign_key_list(entity_relationship_facts)"
+        ).fetchall()
+        composite_groups: dict[int, set[str]] = {}
+        for row in relationship_fks:
+            composite_groups.setdefault(int(row[0]), set()).add(str(row[3]))
+        self.assertIn(
+            {"source_occurrence_id", "repo_id"}, composite_groups.values()
+        )
+        self.assertIn(
+            {"target_occurrence_id", "repo_id"}, composite_groups.values()
+        )
+
+    def test_repo_scope_upgrade_preserves_semantic_record_ids(self) -> None:
+        conn = self.legacy_connection()
+        apply_multi_repo_migration(conn, local_root="/tmp/main")
+        repo_id = conn.execute(
+            "SELECT id FROM repos WHERE repo_key='ia-main'"
+        ).fetchone()[0]
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS entity_nodes("
+            "id INTEGER PRIMARY KEY,name TEXT NOT NULL UNIQUE)"
+        )
+        conn.execute("INSERT INTO entity_nodes(id,name) VALUES (1,'Customer')")
+        occurrence_id = conn.execute(
+            "INSERT INTO entity_occurrences(repo_id,entity_id,ent_file) "
+            "VALUES (?,?,?)",
+            (repo_id, 1, "customer.ent"),
+        ).lastrowid
+        conn.execute(
+            """INSERT INTO entity_schema_components(
+                   id,repo_id,occurrence_id,component_kind,component_path,
+                   source_path,evidence_text,evidence_hash,extractor,
+                   extractor_version,confidence
+               ) VALUES (41,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                repo_id,
+                occurrence_id,
+                "field",
+                "PARENT",
+                "customer.ent",
+                "PARENT",
+                "component-hash",
+                "fixture",
+                "1",
+                1.0,
+            ),
+        )
+        conn.execute(
+            """INSERT INTO entity_relationship_facts(
+                   id,repo_id,source_occurrence_id,source_component_id,axis,
+                   relation_kind,fact_key,target_occurrence_id,assertion_status,
+                   source_path,evidence_text,evidence_hash,extractor,
+                   extractor_version,confidence
+               ) VALUES (42,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                repo_id,
+                occurrence_id,
+                41,
+                "B",
+                "business_parent_reference",
+                "customer.parent",
+                occurrence_id,
+                "VERIFIED",
+                "customer.ent",
+                "PARENT",
+                "fact-hash",
+                "fixture",
+                "1",
+                1.0,
+            ),
+        )
+        conn.execute(
+            "DELETE FROM schema_migrations "
+            "WHERE name='022_entity_semantics_repo_scope'"
+        )
+        conn.execute("DROP INDEX uq_entity_schema_components_id_repo")
+        conn.execute("DROP INDEX uq_entity_relationship_facts_id_repo")
+        conn.execute("DROP INDEX uq_entity_occurrences_id_repo")
+        conn.commit()
+
+        apply_multi_repo_migration(conn, local_root="/tmp/main")
+        self.assertEqual(
+            conn.execute(
+                "SELECT id FROM entity_schema_components"
+            ).fetchone()[0],
+            41,
+        )
+        self.assertEqual(
+            tuple(conn.execute(
+                "SELECT id,source_component_id FROM entity_relationship_facts"
+            ).fetchone()),
+            (42, 41),
+        )
+        self.assertEqual(conn.execute("PRAGMA foreign_key_check").fetchall(), [])
 
     def test_migration_makes_workflow_identity_repo_qualified(self) -> None:
         conn = self.legacy_connection()

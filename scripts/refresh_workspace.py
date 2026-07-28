@@ -222,6 +222,10 @@ def _run_builder(
         from scripts.build_rest_endpoints import build
 
         build(candidate_db, root, repo_id, reset=True)
+    elif builder == "entity_semantics":
+        from scripts.build_entity_semantics import build
+
+        build(candidate_db, root, repo_key, reset=True)
     elif builder == "entity_access_links":
         from scripts.build_entity_access_links import build
 
@@ -275,7 +279,11 @@ def _validate_candidate(conn: sqlite3.Connection, repo_id: int) -> None:
 
 
 def _record_failed_refresh(
-    active: Path, manifest: dict, repo_key: str, error: Exception
+    active: Path,
+    manifest: dict | None,
+    repo_key: str,
+    error: Exception,
+    failed_step: str | None = None,
 ) -> None:
     """Best-effort diagnostic history without replacing the active catalog."""
     try:
@@ -283,14 +291,23 @@ def _record_failed_refresh(
         conn.execute("PRAGMA foreign_keys = ON")
         conn.row_factory = sqlite3.Row
         try:
-            register_manifest(conn, manifest)
+            if manifest is not None:
+                register_manifest(conn, manifest)
             repo = get_repository(conn, repo_key)
-            conn.execute(
+            run_id = conn.execute(
                 """INSERT INTO repo_index_runs(
                        repo_id, tracked_branch, status, diagnostic_error, completed_at
                    ) VALUES (?, ?, 'failed', ?, CURRENT_TIMESTAMP)""",
                 (int(repo["id"]), str(repo["tracked_branch"]), str(error)),
-            )
+            ).lastrowid
+            if failed_step is not None:
+                conn.execute(
+                    """INSERT INTO repo_index_stages(
+                           run_id,builder_name,status,started_at,completed_at,
+                           diagnostic_error
+                       ) VALUES (?,?,'failed',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,?)""",
+                    (run_id, failed_step, str(error)),
+                )
             conn.execute(
                 """UPDATE repos SET
                        last_attempt_status='failed', last_attempted_at=CURRENT_TIMESTAMP,
@@ -313,35 +330,47 @@ def refresh_repository(
     active = Path(db_path).resolve()
     if not active.is_file():
         raise RefreshError(f"catalog database does not exist: {active}")
-    manifest = load_workspace_manifest(manifest_path)
-    manifest_entry = _manifest_repository(manifest, repo_key)
-    legacy_entry = next(
-        (entry for entry in manifest["repositories"] if entry["repo_key"] == "ia-main"),
-        None,
-    )
+    manifest: dict | None = None
+    manifest_entry: dict | None = None
+    legacy_entry: dict | None = None
     candidate = active.with_name(f"{active.name}.candidate.{uuid.uuid4().hex}")
     previous = active.with_name(f"{active.name}.previous")
+    failed_step: str | None = "load_workspace_manifest"
 
-    _backup_database(active, candidate)
     try:
+        manifest = load_workspace_manifest(manifest_path)
+        failed_step = "manifest_repository"
+        manifest_entry = _manifest_repository(manifest, repo_key)
+        legacy_entry = next(
+            (entry for entry in manifest["repositories"] if entry["repo_key"] == "ia-main"),
+            None,
+        )
+        failed_step = "backup_database"
+        _backup_database(active, candidate)
+        failed_step = "open_candidate"
         conn = sqlite3.connect(candidate)
         conn.execute("PRAGMA foreign_keys = ON")
         conn.row_factory = sqlite3.Row
         try:
             if legacy_entry is not None:
+                failed_step = "migrate_multi_repo"
                 migrate_multi_repo(
                     db_path=str(candidate),
                     local_root=str(legacy_entry["local_root"]),
                     tracked_branch=str(legacy_entry["tracked_branch"]),
                 )
+            failed_step = "register_manifest"
             register_manifest(conn, manifest)
             conn.commit()
             repo = get_repository(conn, repo_key)
             if not repo["enabled"]:
                 raise RefreshError(f"repository is disabled: {repo_key}")
+            failed_step = "resolve_repository_root"
             root = resolve_repository_root(conn, repo_key)
             branch = str(repo["tracked_branch"])
+            failed_step = "source_revision"
             start_sha = source_revision(root, branch)
+            failed_step = "build_plan"
             plan = build_plan(
                 str(repo["profile"] or "generic"),
                 json.loads(repo["effective_builders_json"] or "[]"),
@@ -354,6 +383,7 @@ def refresh_repository(
             run_id = _record_run(conn, int(repo["id"]), branch, start_sha, plan)
 
             for builder in plan:
+                failed_step = builder
                 _stage(conn, run_id, builder, "running")
                 try:
                     _run_builder(
@@ -365,16 +395,20 @@ def refresh_repository(
                         manifest_entry,
                     )
                 except Exception as exc:
+                    failed_builder = builder
                     _stage(conn, run_id, builder, "failed", str(exc))
                     raise
                 _stage(conn, run_id, builder, "succeeded")
 
             # Re-open because individual builders own and close their own connections.
+            failed_step = "reopen_candidate"
             conn.close()
             conn = sqlite3.connect(candidate)
             conn.execute("PRAGMA foreign_keys = ON")
             conn.row_factory = sqlite3.Row
+            failed_step = "validate_candidate"
             _validate_candidate(conn, int(repo["id"]))
+            failed_step = "source_revision_postbuild"
             if source_revision(root, branch) != start_sha:
                 raise RefreshError(
                     "repository revision changed while candidate was built"
@@ -410,7 +444,7 @@ def refresh_repository(
         os.replace(candidate, active)
     except Exception as exc:
         candidate.unlink(missing_ok=True)
-        _record_failed_refresh(active, manifest, repo_key, exc)
+        _record_failed_refresh(active, manifest, repo_key, exc, failed_step)
         raise
 
 

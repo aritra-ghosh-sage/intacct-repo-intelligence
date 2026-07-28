@@ -14,6 +14,8 @@ from pathlib import Path
 
 MULTI_REPO_MIGRATION = "019_multi_repo"
 REST_AUTOMATION_COVERAGE_MIGRATION = "020_rest_automation_coverage"
+ENTITY_SEMANTICS_MIGRATION = "021_entity_semantics"
+ENTITY_SEMANTICS_REPO_SCOPE_MIGRATION = "022_entity_semantics_repo_scope"
 LEGACY_REPO_KEY = "ia-main"
 
 
@@ -633,6 +635,407 @@ def _create_rest_automation_coverage_tables(conn: sqlite3.Connection) -> None:
             conn.execute(statement)
 
 
+def _create_entity_semantics_tables(conn: sqlite3.Connection) -> None:
+    """Create the additive 021 semantic-evidence table family."""
+    script = """
+        CREATE TABLE IF NOT EXISTS entity_schema_components (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, repo_id INTEGER NOT NULL,
+            occurrence_id INTEGER NOT NULL, component_kind TEXT NOT NULL,
+            component_path TEXT NOT NULL, declared_name TEXT, target_literal TEXT,
+            data_type TEXT, cardinality TEXT, writeability TEXT,
+            properties_json TEXT NOT NULL DEFAULT '{}', source_file_id INTEGER,
+            source_path TEXT NOT NULL, start_line INTEGER, end_line INTEGER,
+            evidence_text TEXT NOT NULL, evidence_hash TEXT NOT NULL,
+            extractor TEXT NOT NULL, extractor_version TEXT NOT NULL,
+            confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+            FOREIGN KEY(occurrence_id) REFERENCES entity_occurrences(id) ON DELETE CASCADE,
+            FOREIGN KEY(source_file_id) REFERENCES files(id) ON DELETE SET NULL,
+            UNIQUE(repo_id, occurrence_id, component_kind, component_path, evidence_hash)
+        );
+        CREATE INDEX IF NOT EXISTS idx_entity_schema_components_occurrence
+            ON entity_schema_components(repo_id, occurrence_id, component_kind);
+        CREATE INDEX IF NOT EXISTS idx_entity_schema_components_source
+            ON entity_schema_components(repo_id, source_path);
+        CREATE TABLE IF NOT EXISTS entity_relationship_facts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, repo_id INTEGER NOT NULL,
+            source_occurrence_id INTEGER NOT NULL, source_component_id INTEGER,
+            axis TEXT NOT NULL CHECK(axis IN ('A','B','C','D','E')),
+            relation_kind TEXT NOT NULL, fact_key TEXT NOT NULL,
+            target_occurrence_id INTEGER, target_entity_name TEXT,
+            target_component_id INTEGER, target_literal TEXT, cardinality TEXT,
+            assertion_status TEXT NOT NULL CHECK(assertion_status IN
+                ('VERIFIED','CORROBORATED','UNRESOLVED','CONFLICTING')),
+            qualifiers_json TEXT NOT NULL DEFAULT '{}', source_file_id INTEGER,
+            source_path TEXT NOT NULL, start_line INTEGER, end_line INTEGER,
+            evidence_text TEXT NOT NULL, evidence_hash TEXT NOT NULL,
+            extractor TEXT NOT NULL, extractor_version TEXT NOT NULL,
+            confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+            FOREIGN KEY(source_occurrence_id) REFERENCES entity_occurrences(id) ON DELETE CASCADE,
+            FOREIGN KEY(source_component_id) REFERENCES entity_schema_components(id) ON DELETE SET NULL,
+            FOREIGN KEY(target_occurrence_id) REFERENCES entity_occurrences(id) ON DELETE SET NULL,
+            FOREIGN KEY(target_component_id) REFERENCES entity_schema_components(id) ON DELETE SET NULL,
+            FOREIGN KEY(source_file_id) REFERENCES files(id) ON DELETE SET NULL,
+            UNIQUE(repo_id, fact_key, evidence_hash)
+        );
+        CREATE INDEX IF NOT EXISTS idx_entity_relationship_facts_occurrence
+            ON entity_relationship_facts(repo_id, source_occurrence_id, axis);
+        CREATE INDEX IF NOT EXISTS idx_entity_relationship_facts_target
+            ON entity_relationship_facts(repo_id, target_occurrence_id, axis);
+        CREATE INDEX IF NOT EXISTS idx_entity_relationship_facts_status
+            ON entity_relationship_facts(repo_id, assertion_status);
+        CREATE TABLE IF NOT EXISTS entity_operation_facts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, repo_id INTEGER NOT NULL,
+            occurrence_id INTEGER NOT NULL,
+            axis TEXT NOT NULL CHECK(axis IN ('A','B','C','D','E')),
+            operation TEXT NOT NULL CHECK(operation IN
+                ('create','read','update','delete','approve','submit','decline')),
+            surface_kind TEXT NOT NULL, rest_endpoint_id INTEGER,
+            security_operation_id INTEGER, symbol_id INTEGER,
+            availability TEXT NOT NULL CHECK(availability IN
+                ('allowed','denied','not_declared','unresolved')),
+            invocation_context TEXT NOT NULL CHECK(invocation_context IN
+                ('root','child','both','any','unresolved')),
+            persistence_scope TEXT NOT NULL CHECK(persistence_scope IN
+                ('root','entity','shared','entity_override','unresolved')),
+            standalone INTEGER CHECK(standalone IN (0,1)), parent_occurrence_id INTEGER,
+            qualifiers_json TEXT NOT NULL DEFAULT '{}', source_file_id INTEGER,
+            source_path TEXT NOT NULL, start_line INTEGER, end_line INTEGER,
+            evidence_text TEXT NOT NULL, evidence_hash TEXT NOT NULL,
+            extractor TEXT NOT NULL, extractor_version TEXT NOT NULL,
+            confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+            FOREIGN KEY(occurrence_id) REFERENCES entity_occurrences(id) ON DELETE CASCADE,
+            FOREIGN KEY(rest_endpoint_id) REFERENCES rest_endpoints(id) ON DELETE SET NULL,
+            FOREIGN KEY(security_operation_id) REFERENCES security_operations(id) ON DELETE SET NULL,
+            FOREIGN KEY(symbol_id) REFERENCES symbols(id) ON DELETE SET NULL,
+            FOREIGN KEY(parent_occurrence_id) REFERENCES entity_occurrences(id) ON DELETE SET NULL,
+            FOREIGN KEY(source_file_id) REFERENCES files(id) ON DELETE SET NULL,
+            UNIQUE(repo_id, occurrence_id, operation, surface_kind, evidence_hash)
+        );
+        CREATE INDEX IF NOT EXISTS idx_entity_operation_facts_occurrence
+            ON entity_operation_facts(repo_id, occurrence_id, operation);
+        CREATE TABLE IF NOT EXISTS entity_extraction_coverage (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, repo_id INTEGER NOT NULL,
+            occurrence_id INTEGER NOT NULL, source_file_id INTEGER,
+            source_path TEXT NOT NULL, extractor TEXT NOT NULL,
+            extractor_version TEXT NOT NULL,
+            declaration_family TEXT NOT NULL CHECK(declaration_family IN
+                ('A','B','C','D','E','components','operations')), source_hash TEXT,
+            status TEXT NOT NULL CHECK(status IN ('complete','partial','failed','not_applicable')),
+            component_count INTEGER NOT NULL DEFAULT 0, fact_count INTEGER NOT NULL DEFAULT 0,
+            diagnostic TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+            FOREIGN KEY(occurrence_id) REFERENCES entity_occurrences(id) ON DELETE CASCADE,
+            FOREIGN KEY(source_file_id) REFERENCES files(id) ON DELETE SET NULL,
+            UNIQUE(repo_id, occurrence_id, extractor, extractor_version,
+                declaration_family, source_hash)
+        );
+        CREATE INDEX IF NOT EXISTS idx_entity_extraction_coverage_occurrence
+            ON entity_extraction_coverage(repo_id, occurrence_id, declaration_family);
+        CREATE TABLE IF NOT EXISTS entity_semantic_conflicts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, repo_id INTEGER NOT NULL,
+            fact_key TEXT NOT NULL, left_fact_id INTEGER NOT NULL,
+            right_fact_id INTEGER NOT NULL, conflict_kind TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('open','resolved','accepted_unresolved')),
+            reason TEXT NOT NULL, resolution_evidence TEXT, source_file_id INTEGER,
+            source_path TEXT, confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+            FOREIGN KEY(left_fact_id) REFERENCES entity_relationship_facts(id) ON DELETE CASCADE,
+            FOREIGN KEY(right_fact_id) REFERENCES entity_relationship_facts(id) ON DELETE CASCADE,
+            FOREIGN KEY(source_file_id) REFERENCES files(id) ON DELETE SET NULL,
+            UNIQUE(repo_id, fact_key, left_fact_id, right_fact_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_entity_semantic_conflicts_fact_key
+            ON entity_semantic_conflicts(repo_id, fact_key, status);
+    """
+    # ``executescript`` commits SQLite's active transaction.  The 019/021
+    # migration must remain atomic, so execute statements individually.
+    for statement in script.split(";"):
+        if statement.strip():
+            conn.execute(statement)
+
+
+def _semantic_repo_scope_violations(conn: sqlite3.Connection) -> list[tuple[str, int]]:
+    """Return repository ownership mismatches that ordinary single-column FKs miss."""
+    checks = (
+        (
+            "component_occurrence",
+            "SELECT COUNT(*) FROM entity_schema_components c "
+            "JOIN entity_occurrences o ON o.id=c.occurrence_id "
+            "WHERE c.repo_id<>o.repo_id",
+        ),
+        (
+            "relationship_source_occurrence",
+            "SELECT COUNT(*) FROM entity_relationship_facts f "
+            "JOIN entity_occurrences o ON o.id=f.source_occurrence_id "
+            "WHERE f.repo_id<>o.repo_id",
+        ),
+        (
+            "relationship_target_occurrence",
+            "SELECT COUNT(*) FROM entity_relationship_facts f "
+            "JOIN entity_occurrences o ON o.id=f.target_occurrence_id "
+            "WHERE f.target_occurrence_id IS NOT NULL AND f.repo_id<>o.repo_id",
+        ),
+        (
+            "relationship_source_component",
+            "SELECT COUNT(*) FROM entity_relationship_facts f "
+            "JOIN entity_schema_components c ON c.id=f.source_component_id "
+            "WHERE f.source_component_id IS NOT NULL AND f.repo_id<>c.repo_id",
+        ),
+        (
+            "relationship_target_component",
+            "SELECT COUNT(*) FROM entity_relationship_facts f "
+            "JOIN entity_schema_components c ON c.id=f.target_component_id "
+            "WHERE f.target_component_id IS NOT NULL AND f.repo_id<>c.repo_id",
+        ),
+        (
+            "operation_occurrence",
+            "SELECT COUNT(*) FROM entity_operation_facts f "
+            "JOIN entity_occurrences o ON o.id=f.occurrence_id "
+            "WHERE f.repo_id<>o.repo_id",
+        ),
+        (
+            "operation_parent_occurrence",
+            "SELECT COUNT(*) FROM entity_operation_facts f "
+            "JOIN entity_occurrences o ON o.id=f.parent_occurrence_id "
+            "WHERE f.parent_occurrence_id IS NOT NULL AND f.repo_id<>o.repo_id",
+        ),
+        (
+            "coverage_occurrence",
+            "SELECT COUNT(*) FROM entity_extraction_coverage c "
+            "JOIN entity_occurrences o ON o.id=c.occurrence_id "
+            "WHERE c.repo_id<>o.repo_id",
+        ),
+        (
+            "conflict_left_fact",
+            "SELECT COUNT(*) FROM entity_semantic_conflicts c "
+            "JOIN entity_relationship_facts f ON f.id=c.left_fact_id "
+            "WHERE c.repo_id<>f.repo_id",
+        ),
+        (
+            "conflict_right_fact",
+            "SELECT COUNT(*) FROM entity_semantic_conflicts c "
+            "JOIN entity_relationship_facts f ON f.id=c.right_fact_id "
+            "WHERE c.repo_id<>f.repo_id",
+        ),
+    )
+    violations: list[tuple[str, int]] = []
+    for name, query in checks:
+        count = int(conn.execute(query).fetchone()[0])
+        if count:
+            violations.append((name, count))
+    return violations
+
+
+def _create_repo_scoped_entity_semantics_tables(conn: sqlite3.Connection) -> None:
+    """Create the 022 semantic tables with composite repository ownership FKs."""
+    script = """
+        CREATE TABLE entity_schema_components (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, repo_id INTEGER NOT NULL,
+            occurrence_id INTEGER NOT NULL, component_kind TEXT NOT NULL,
+            component_path TEXT NOT NULL, declared_name TEXT, target_literal TEXT,
+            data_type TEXT, cardinality TEXT, writeability TEXT,
+            properties_json TEXT NOT NULL DEFAULT '{}', source_file_id INTEGER,
+            source_path TEXT NOT NULL, start_line INTEGER, end_line INTEGER,
+            evidence_text TEXT NOT NULL, evidence_hash TEXT NOT NULL,
+            extractor TEXT NOT NULL, extractor_version TEXT NOT NULL,
+            confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+            FOREIGN KEY(occurrence_id) REFERENCES entity_occurrences(id) ON DELETE CASCADE,
+            FOREIGN KEY(occurrence_id,repo_id) REFERENCES entity_occurrences(id,repo_id),
+            FOREIGN KEY(source_file_id) REFERENCES files(id) ON DELETE SET NULL,
+            UNIQUE(repo_id,occurrence_id,component_kind,component_path,evidence_hash)
+        );
+        CREATE TABLE entity_relationship_facts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, repo_id INTEGER NOT NULL,
+            source_occurrence_id INTEGER NOT NULL, source_component_id INTEGER,
+            axis TEXT NOT NULL CHECK(axis IN ('A','B','C','D','E')),
+            relation_kind TEXT NOT NULL, fact_key TEXT NOT NULL,
+            target_occurrence_id INTEGER, target_entity_name TEXT,
+            target_component_id INTEGER, target_literal TEXT, cardinality TEXT,
+            assertion_status TEXT NOT NULL CHECK(assertion_status IN
+                ('VERIFIED','CORROBORATED','UNRESOLVED','CONFLICTING')),
+            qualifiers_json TEXT NOT NULL DEFAULT '{}', source_file_id INTEGER,
+            source_path TEXT NOT NULL, start_line INTEGER, end_line INTEGER,
+            evidence_text TEXT NOT NULL, evidence_hash TEXT NOT NULL,
+            extractor TEXT NOT NULL, extractor_version TEXT NOT NULL,
+            confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+            FOREIGN KEY(source_occurrence_id) REFERENCES entity_occurrences(id) ON DELETE CASCADE,
+            FOREIGN KEY(source_occurrence_id,repo_id) REFERENCES entity_occurrences(id,repo_id),
+            FOREIGN KEY(source_component_id) REFERENCES entity_schema_components(id) ON DELETE SET NULL,
+            FOREIGN KEY(source_component_id,repo_id) REFERENCES entity_schema_components(id,repo_id),
+            FOREIGN KEY(target_occurrence_id) REFERENCES entity_occurrences(id) ON DELETE SET NULL,
+            FOREIGN KEY(target_occurrence_id,repo_id) REFERENCES entity_occurrences(id,repo_id),
+            FOREIGN KEY(target_component_id) REFERENCES entity_schema_components(id) ON DELETE SET NULL,
+            FOREIGN KEY(target_component_id,repo_id) REFERENCES entity_schema_components(id,repo_id),
+            FOREIGN KEY(source_file_id) REFERENCES files(id) ON DELETE SET NULL,
+            UNIQUE(repo_id,fact_key,evidence_hash)
+        );
+        CREATE TABLE entity_operation_facts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, repo_id INTEGER NOT NULL,
+            occurrence_id INTEGER NOT NULL,
+            axis TEXT NOT NULL CHECK(axis IN ('A','B','C','D','E')),
+            operation TEXT NOT NULL CHECK(operation IN
+                ('create','read','update','delete','approve','submit','decline')),
+            surface_kind TEXT NOT NULL, rest_endpoint_id INTEGER,
+            security_operation_id INTEGER, symbol_id INTEGER,
+            availability TEXT NOT NULL CHECK(availability IN
+                ('allowed','denied','not_declared','unresolved')),
+            invocation_context TEXT NOT NULL CHECK(invocation_context IN
+                ('root','child','both','any','unresolved')),
+            persistence_scope TEXT NOT NULL CHECK(persistence_scope IN
+                ('root','entity','shared','entity_override','unresolved')),
+            standalone INTEGER CHECK(standalone IN (0,1)), parent_occurrence_id INTEGER,
+            qualifiers_json TEXT NOT NULL DEFAULT '{}', source_file_id INTEGER,
+            source_path TEXT NOT NULL, start_line INTEGER, end_line INTEGER,
+            evidence_text TEXT NOT NULL, evidence_hash TEXT NOT NULL,
+            extractor TEXT NOT NULL, extractor_version TEXT NOT NULL,
+            confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+            FOREIGN KEY(occurrence_id) REFERENCES entity_occurrences(id) ON DELETE CASCADE,
+            FOREIGN KEY(occurrence_id,repo_id) REFERENCES entity_occurrences(id,repo_id),
+            FOREIGN KEY(rest_endpoint_id) REFERENCES rest_endpoints(id) ON DELETE SET NULL,
+            FOREIGN KEY(security_operation_id) REFERENCES security_operations(id) ON DELETE SET NULL,
+            FOREIGN KEY(symbol_id) REFERENCES symbols(id) ON DELETE SET NULL,
+            FOREIGN KEY(parent_occurrence_id) REFERENCES entity_occurrences(id) ON DELETE SET NULL,
+            FOREIGN KEY(parent_occurrence_id,repo_id) REFERENCES entity_occurrences(id,repo_id),
+            FOREIGN KEY(source_file_id) REFERENCES files(id) ON DELETE SET NULL,
+            UNIQUE(repo_id,occurrence_id,operation,surface_kind,evidence_hash)
+        );
+        CREATE TABLE entity_extraction_coverage (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, repo_id INTEGER NOT NULL,
+            occurrence_id INTEGER NOT NULL, source_file_id INTEGER,
+            source_path TEXT NOT NULL, extractor TEXT NOT NULL,
+            extractor_version TEXT NOT NULL,
+            declaration_family TEXT NOT NULL CHECK(declaration_family IN
+                ('A','B','C','D','E','components','operations')), source_hash TEXT,
+            status TEXT NOT NULL CHECK(status IN
+                ('complete','partial','failed','not_applicable')),
+            component_count INTEGER NOT NULL DEFAULT 0,
+            fact_count INTEGER NOT NULL DEFAULT 0, diagnostic TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+            FOREIGN KEY(occurrence_id) REFERENCES entity_occurrences(id) ON DELETE CASCADE,
+            FOREIGN KEY(occurrence_id,repo_id) REFERENCES entity_occurrences(id,repo_id),
+            FOREIGN KEY(source_file_id) REFERENCES files(id) ON DELETE SET NULL,
+            UNIQUE(repo_id,occurrence_id,extractor,extractor_version,
+                declaration_family,source_hash)
+        );
+        CREATE TABLE entity_semantic_conflicts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, repo_id INTEGER NOT NULL,
+            fact_key TEXT NOT NULL, left_fact_id INTEGER NOT NULL,
+            right_fact_id INTEGER NOT NULL, conflict_kind TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN
+                ('open','resolved','accepted_unresolved')),
+            reason TEXT NOT NULL, resolution_evidence TEXT, source_file_id INTEGER,
+            source_path TEXT, confidence REAL NOT NULL
+                CHECK(confidence >= 0 AND confidence <= 1),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+            FOREIGN KEY(left_fact_id) REFERENCES entity_relationship_facts(id) ON DELETE CASCADE,
+            FOREIGN KEY(left_fact_id,repo_id) REFERENCES entity_relationship_facts(id,repo_id),
+            FOREIGN KEY(right_fact_id) REFERENCES entity_relationship_facts(id) ON DELETE CASCADE,
+            FOREIGN KEY(right_fact_id,repo_id) REFERENCES entity_relationship_facts(id,repo_id),
+            FOREIGN KEY(source_file_id) REFERENCES files(id) ON DELETE SET NULL,
+            UNIQUE(repo_id,fact_key,left_fact_id,right_fact_id)
+        )
+    """
+    for statement in script.split(";"):
+        if statement.strip():
+            conn.execute(statement)
+
+
+def _apply_entity_semantics_repo_scope_migration(conn: sqlite3.Connection) -> None:
+    violations = _semantic_repo_scope_violations(conn)
+    if violations:
+        raise RuntimeError(
+            "entity semantic repository ownership violations before migration 022: "
+            f"{violations}"
+        )
+
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_entity_occurrences_id_repo "
+        "ON entity_occurrences(id,repo_id)"
+    )
+    for table in (
+        "entity_semantic_conflicts",
+        "entity_operation_facts",
+        "entity_extraction_coverage",
+        "entity_relationship_facts",
+        "entity_schema_components",
+    ):
+        conn.execute(f"ALTER TABLE {table} RENAME TO _021_{table}")
+
+    _create_repo_scoped_entity_semantics_tables(conn)
+    # Composite child FKs require their parent keys before rows are copied.
+    conn.execute(
+        "CREATE UNIQUE INDEX uq_entity_schema_components_id_repo "
+        "ON entity_schema_components(id,repo_id)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX uq_entity_relationship_facts_id_repo "
+        "ON entity_relationship_facts(id,repo_id)"
+    )
+    for table in (
+        "entity_schema_components",
+        "entity_relationship_facts",
+        "entity_operation_facts",
+        "entity_extraction_coverage",
+        "entity_semantic_conflicts",
+    ):
+        columns = ",".join(row[1] for row in conn.execute(f"PRAGMA table_info({table})"))
+        conn.execute(
+            f"INSERT INTO {table}({columns}) SELECT {columns} FROM _021_{table}"
+        )
+    for table in (
+        "entity_semantic_conflicts",
+        "entity_operation_facts",
+        "entity_extraction_coverage",
+        "entity_relationship_facts",
+        "entity_schema_components",
+    ):
+        conn.execute(f"DROP TABLE _021_{table}")
+
+    index_script = """
+        CREATE INDEX idx_entity_schema_components_occurrence
+            ON entity_schema_components(repo_id,occurrence_id,component_kind);
+        CREATE INDEX idx_entity_schema_components_source
+            ON entity_schema_components(repo_id,source_path);
+        CREATE INDEX idx_entity_relationship_facts_occurrence
+            ON entity_relationship_facts(repo_id,source_occurrence_id,axis);
+        CREATE INDEX idx_entity_relationship_facts_target
+            ON entity_relationship_facts(repo_id,target_occurrence_id,axis);
+        CREATE INDEX idx_entity_relationship_facts_status
+            ON entity_relationship_facts(repo_id,assertion_status);
+        CREATE INDEX idx_entity_operation_facts_occurrence
+            ON entity_operation_facts(repo_id,occurrence_id,operation);
+        CREATE INDEX idx_entity_extraction_coverage_occurrence
+            ON entity_extraction_coverage(repo_id,occurrence_id,declaration_family);
+        CREATE INDEX idx_entity_semantic_conflicts_fact_key
+            ON entity_semantic_conflicts(repo_id,fact_key,status)
+    """
+    for statement in index_script.split(";"):
+        if statement.strip():
+            conn.execute(statement)
+
+    violations = _semantic_repo_scope_violations(conn)
+    if violations:
+        raise RuntimeError(
+            "entity semantic repository ownership violations after migration 022: "
+            f"{violations}"
+        )
+
+
 def apply_multi_repo_migration(
     conn: sqlite3.Connection, *, local_root: str, tracked_branch: str = "main"
 ) -> None:
@@ -687,7 +1090,29 @@ def apply_multi_repo_migration(
         legacy = conn.execute(
             "SELECT id FROM repos WHERE repo_key = ?", (LEGACY_REPO_KEY,)
         ).fetchone()
-        _ensure_entity_occurrences(conn, int(legacy[0]) if legacy is not None else None)
+        _ensure_entity_occurrences(
+            conn, int(legacy[0]) if legacy is not None else None
+        )
+        semantics_applied = conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name = ?",
+            (ENTITY_SEMANTICS_MIGRATION,),
+        ).fetchone()
+        if semantics_applied is None:
+            _create_entity_semantics_tables(conn)
+            conn.execute(
+                "INSERT INTO schema_migrations(name) VALUES (?)",
+                (ENTITY_SEMANTICS_MIGRATION,),
+            )
+        semantics_scope_applied = conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name = ?",
+            (ENTITY_SEMANTICS_REPO_SCOPE_MIGRATION,),
+        ).fetchone()
+        if semantics_scope_applied is None:
+            _apply_entity_semantics_repo_scope_migration(conn)
+            conn.execute(
+                "INSERT INTO schema_migrations(name) VALUES (?)",
+                (ENTITY_SEMANTICS_REPO_SCOPE_MIGRATION,),
+            )
         # FK enforcement is necessarily off while legacy parent tables are
         # rebuilt, but foreign_key_check still validates the candidate before
         # anything is made durable.

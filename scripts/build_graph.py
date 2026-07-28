@@ -152,6 +152,29 @@ def ensure_schema(conn: lb.Connection) -> None:
         "method STRING, "
         "path STRING)"
     )
+    # Semantic ontology facts remain authoritative in SQLite.  These nodes are
+    # a read-only traversal projection used only after an operator-built graph
+    # is promoted alongside the matching catalog snapshot.
+    conn.execute(
+        "CREATE NODE TABLE IF NOT EXISTS EntitySchemaComponent("
+        "entity_schema_component_id INT64 PRIMARY KEY, occurrence_id INT64, "
+        "component_kind STRING, component_path STRING, declared_name STRING, "
+        "target_literal STRING, data_type STRING, cardinality STRING, "
+        "writeability STRING, confidence DOUBLE)"
+    )
+    conn.execute(
+        "CREATE NODE TABLE IF NOT EXISTS EntityRelationshipFact("
+        "entity_relationship_fact_id INT64 PRIMARY KEY, source_occurrence_id INT64, "
+        "target_occurrence_id INT64, axis STRING, relation_kind STRING, fact_key STRING, "
+        "assertion_status STRING, target_entity_name STRING, target_literal STRING, "
+        "cardinality STRING, confidence DOUBLE, source_path STRING, start_line INT64, end_line INT64)"
+    )
+    conn.execute(
+        "CREATE NODE TABLE IF NOT EXISTS EntityOperationFact("
+        "entity_operation_fact_id INT64 PRIMARY KEY, occurrence_id INT64, axis STRING, "
+        "operation STRING, surface_kind STRING, availability STRING, "
+        "invocation_context STRING, persistence_scope STRING, standalone STRING, confidence DOUBLE)"
+    )
 
     # V2 node tables
     conn.execute(
@@ -316,6 +339,26 @@ def ensure_schema(conn: lb.Connection) -> None:
     )
     conn.execute(
         "CREATE REL TABLE IF NOT EXISTS ENTITY_OCCURRENCE_REST_ENDPOINT(FROM EntityOccurrence TO RestEndpoint)"
+    )
+    # Semantic facts are modeled as nodes so an unresolved target can remain
+    # authoritative SQLite evidence without inventing a graph edge.  These
+    # relations are only emitted for the deterministic IDs carried by the
+    # source tables below.
+    conn.execute(
+        "CREATE REL TABLE IF NOT EXISTS ENTITY_OCCURRENCE_HAS_COMPONENT("
+        "FROM EntityOccurrence TO EntitySchemaComponent)"
+    )
+    conn.execute(
+        "CREATE REL TABLE IF NOT EXISTS ENTITY_OCCURRENCE_HAS_SEMANTIC_FACT("
+        "FROM EntityOccurrence TO EntityRelationshipFact)"
+    )
+    conn.execute(
+        "CREATE REL TABLE IF NOT EXISTS SEMANTIC_FACT_TARGET_OCCURRENCE("
+        "FROM EntityRelationshipFact TO EntityOccurrence)"
+    )
+    conn.execute(
+        "CREATE REL TABLE IF NOT EXISTS ENTITY_OCCURRENCE_HAS_OPERATION_FACT("
+        "FROM EntityOccurrence TO EntityOperationFact)"
     )
     conn.execute(
         "CREATE REL TABLE IF NOT EXISTS ENTITY_ACCESS_LINK_ENTITY_OCCURRENCE(FROM EntityAccessLink TO EntityOccurrence)"
@@ -736,6 +779,34 @@ def load_nodes(sql: sqlite3.Connection, g: lb.Connection) -> None:
         "SELECT id AS rest_endpoint_id, method, path FROM rest_endpoints ORDER BY id",
         "RestEndpoint",
     )
+    # The semantic source tables were introduced after early catalog snapshots.
+    # A graph build against an older catalog remains compatible and simply has
+    # no semantic projection.
+    if sql.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='entity_schema_components'"
+    ).fetchone():
+        copy_table_from_sql(
+            sql, g,
+            "SELECT id AS entity_schema_component_id,occurrence_id,component_kind,component_path,"
+            "declared_name,target_literal,data_type,cardinality,writeability,confidence "
+            "FROM entity_schema_components ORDER BY id",
+            "EntitySchemaComponent",
+        )
+        copy_table_from_sql(
+            sql, g,
+            "SELECT id AS entity_relationship_fact_id,source_occurrence_id,target_occurrence_id,"
+            "axis,relation_kind,fact_key,assertion_status,target_entity_name,target_literal,"
+            "cardinality,confidence,source_path,start_line,end_line "
+            "FROM entity_relationship_facts ORDER BY id",
+            "EntityRelationshipFact",
+        )
+        copy_table_from_sql(
+            sql, g,
+            "SELECT id AS entity_operation_fact_id,occurrence_id,axis,operation,surface_kind,"
+            "availability,invocation_context,persistence_scope,standalone,confidence "
+            "FROM entity_operation_facts ORDER BY id",
+            "EntityOperationFact",
+        )
 
 
 def load_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
@@ -954,6 +1025,32 @@ def load_edges(sql: sqlite3.Connection, g: lb.Connection) -> None:
         'SELECT id AS "FROM",source_file_id AS "TO" FROM entity_occurrences WHERE source_file_id IS NOT NULL ORDER BY id',
         "ENTITY_OCCURRENCE_FILE",
     )
+    if sql.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='entity_schema_components'"
+    ).fetchone():
+        copy_rel_table_from_sql(
+            sql, g,
+            'SELECT occurrence_id AS "FROM",id AS "TO" FROM entity_schema_components ORDER BY id',
+            "ENTITY_OCCURRENCE_HAS_COMPONENT",
+        )
+        copy_rel_table_from_sql(
+            sql, g,
+            'SELECT source_occurrence_id AS "FROM",id AS "TO" FROM entity_relationship_facts ORDER BY id',
+            "ENTITY_OCCURRENCE_HAS_SEMANTIC_FACT",
+        )
+        copy_rel_table_from_sql(
+            sql, g,
+            'SELECT id AS "FROM",target_occurrence_id AS "TO" '
+            "FROM entity_relationship_facts "
+            "WHERE target_occurrence_id IS NOT NULL "
+            "AND assertion_status IN ('VERIFIED','CORROBORATED') ORDER BY id",
+            "SEMANTIC_FACT_TARGET_OCCURRENCE",
+        )
+        copy_rel_table_from_sql(
+            sql, g,
+            'SELECT occurrence_id AS "FROM",id AS "TO" FROM entity_operation_facts ORDER BY id',
+            "ENTITY_OCCURRENCE_HAS_OPERATION_FACT",
+        )
     if sql.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='integration_links'"
     ).fetchone():

@@ -7,6 +7,7 @@ decorator-based tool registration, and type-safe request/response structures.
 from __future__ import annotations
 
 import base64
+import json
 import os
 import sqlite3
 from dataclasses import dataclass
@@ -1437,7 +1438,7 @@ def relationship_query_impl(
         sql += " AND rel.confidence <= ?"
         args.append(confidence_max)
 
-    sql += " ORDER BY id"
+    sql += " ORDER BY rel.id"
 
     with state.conn() as c:
         rows = c.execute(
@@ -1713,6 +1714,7 @@ def file_impact_impl(
 
         from scripts.query_graph import (
             _query_bounded_incoming_traversal,
+            _query_file_occurrences_from_graph,
             _query_file_symbols_from_graph,
             enrich_symbols_from_sql,
             get_graph_connection,
@@ -1728,6 +1730,9 @@ def file_impact_impl(
                 max_edges_per_symbol,
             )
             allnodes = [{**x, "depth": 0, "is_seed": True} for x in seeds] + nodes
+            direct_occurrences = _query_file_occurrences_from_graph(
+                g, file_path, repo_key
+            )
             return make_response(
                 state,
                 "file_impact",
@@ -1736,6 +1741,7 @@ def file_impact_impl(
                     "seed_symbols": enrich_symbols_from_sql(
                         c, allnodes[: len(seeds)]
                     ),
+                    "direct_entity_occurrences": direct_occurrences,
                     "affected_symbols": enrich_symbols_from_sql(c, allnodes),
                     "traversal": {
                         "depth": depth,
@@ -1869,6 +1875,573 @@ def catalog_status_impl(state: CatalogState) -> CatalogResponse:
         return make_response(state, "catalog_status", {"counts": counts}, c)
 
 
+SEMANTIC_TABLES = (
+    "entity_schema_components",
+    "entity_relationship_facts",
+    "entity_operation_facts",
+    "entity_extraction_coverage",
+    "entity_semantic_conflicts",
+)
+
+
+def _semantic_tables_missing(state: CatalogState, c: sqlite3.Connection) -> list[str]:
+    return [name for name in SEMANTIC_TABLES if not state.table_exists(c, name)]
+
+
+def _semantic_capability_error(
+    state: CatalogState, operation: str, c: sqlite3.Connection, missing: list[str]
+) -> CatalogResponse:
+    return make_response(
+        state,
+        operation,
+        {},
+        c,
+        status="capability_unavailable",
+        error={
+            "code": "semantic_tables_missing",
+            "message": "Apply migration 021_entity_semantics and refresh the repository",
+            "details": {"missing_tables": missing},
+        },
+    )
+
+
+def object_relationships_impl(
+    state: CatalogState,
+    object_name: str,
+    repo_key: str | None = None,
+    axes: list[str] | None = None,
+    direction: str = "both",
+    depth: int = 1,
+    include: list[str] | None = None,
+    confidence_min: float | None = None,
+    limit: int = DEFAULT_LIMIT,
+    cursor: str | None = None,
+) -> CatalogResponse:
+    """Return direct semantic evidence; graph traversal is deliberately opt-in."""
+    lim = validate_limit(limit)
+    off = decode_cursor(cursor)
+    requested_axes = axes or ["A", "B", "C", "D", "E"]
+    if any(axis not in {"A", "B", "C", "D", "E"} for axis in requested_axes):
+        raise ValueError("axes must contain only A, B, C, D, E")
+    if direction not in {"incoming", "outgoing", "both"}:
+        raise ValueError("direction must be incoming, outgoing, or both")
+    if not 1 <= depth <= 3:
+        raise ValueError("depth must be 1..3")
+    include = include or ["components", "relationships", "operations", "coverage", "conflicts"]
+
+    with state.conn() as c:
+        missing = _semantic_tables_missing(state, c)
+        if missing:
+            return _semantic_capability_error(state, "object_relationships", c, missing)
+        occurrences = c.execute(
+            """SELECT eo.id occurrence_id,en.id entity_id,en.name,r.repo_key,eo.ent_file,
+                      eo.module,eo.table_name,eo.view_name
+               FROM entity_occurrences eo JOIN entity_nodes en ON en.id=eo.entity_id
+               JOIN repos r ON r.id=eo.repo_id
+               WHERE en.name=? COLLATE NOCASE AND (? IS NULL OR r.repo_key=?)
+               ORDER BY r.repo_key,eo.id""",
+            (object_name, repo_key, repo_key),
+        ).fetchall()
+        if not occurrences:
+            return make_error_response(
+                state, "object_relationships", "entity_not_found",
+                f"No entity named {object_name}", c,
+            )
+        if repo_key is None and len(occurrences) > 1:
+            return make_response(
+                state, "object_relationships",
+                {"candidates": [row_to_dict(row) for row in occurrences]}, c,
+                status="ambiguous",
+                error={"code": "ambiguous_entity", "message": "Retry with repo_key"},
+            )
+        occurrence = occurrences[0]
+        occurrence_id = int(occurrence["occurrence_id"])
+        repo_id = c.execute("SELECT id FROM repos WHERE repo_key=?", (occurrence["repo_key"],)).fetchone()[0]
+        placeholders = ",".join("?" for _ in requested_axes)
+        relation_where = [f"rf.axis IN ({placeholders})"]
+        relation_args: list[Any] = [*requested_axes]
+        if direction == "outgoing":
+            relation_where.append("rf.source_occurrence_id=?")
+            relation_args.append(occurrence_id)
+        elif direction == "incoming":
+            relation_where.append("rf.target_occurrence_id=?")
+            relation_args.append(occurrence_id)
+        else:
+            relation_where.append("(rf.source_occurrence_id=? OR rf.target_occurrence_id=?)")
+            relation_args.extend([occurrence_id, occurrence_id])
+        if confidence_min is not None:
+            if not 0 <= confidence_min <= 1:
+                raise ValueError("confidence_min must be 0.0..1.0")
+            relation_where.append("rf.confidence >= ?")
+            relation_args.append(confidence_min)
+        relation_sql = (
+            "SELECT rf.id,rf.axis,rf.relation_kind,rf.fact_key,rf.assertion_status,"
+            "rf.target_entity_name,rf.target_literal,rf.cardinality,rf.qualifiers_json,"
+            "rf.confidence,rf.source_path,rf.start_line,rf.end_line,rf.evidence_text,"
+            "rf.extractor,rf.extractor_version,src.name source_entity_name,"
+            "dst.name target_entity_resolved "
+            "FROM entity_relationship_facts rf "
+            "JOIN entity_occurrences src_occ ON src_occ.id=rf.source_occurrence_id "
+            "JOIN entity_nodes src ON src.id=src_occ.entity_id "
+            "LEFT JOIN entity_occurrences dst_occ ON dst_occ.id=rf.target_occurrence_id "
+            "LEFT JOIN entity_nodes dst ON dst.id=dst_occ.entity_id "
+            "WHERE " + " AND ".join(relation_where) + " ORDER BY rf.id"
+        )
+        # Axis classification must not depend on the requested page.  Fetch the
+        # caller's page separately, then aggregate every matching assertion.
+        axis_status_rows = c.execute(
+            "SELECT rf.axis,rf.assertion_status,COUNT(*) count FROM "
+            "entity_relationship_facts rf WHERE " + " AND ".join(relation_where) +
+            " GROUP BY rf.axis,rf.assertion_status",
+            relation_args,
+        ).fetchall()
+        rel_rows = c.execute(relation_sql + " LIMIT ? OFFSET ?", (*relation_args, lim + 1, off)).fetchall()
+        relationships, next_cursor = paginate(rel_rows, lim, off)
+        for relationship in relationships:
+            relationship["qualifiers"] = json.loads(relationship.pop("qualifiers_json") or "{}")
+
+        graph_status = "not_required"
+        graph_used = False
+        semantic_traversal: list[dict[str, Any]] = []
+        if depth > 1:
+            if state.graph_active(c):
+                from scripts.query_graph import get_graph_connection, query_semantic_relationship_traversal
+
+                graph_db, graph = get_graph_connection(str(state.graph_path))
+                try:
+                    semantic_traversal = query_semantic_relationship_traversal(
+                        graph, occurrence_id, requested_axes, depth
+                    )
+                    graph_status = "fresh"
+                    graph_used = True
+                except Exception:
+                    # An older active graph can predate the semantic node
+                    # projection.  Do not substitute unrelated SQLite joins.
+                    graph_status = "semantic_projection_unavailable"
+                finally:
+                    graph.close()
+                    graph_db.close()
+            else:
+                graph_status = "graph_unavailable"
+
+        coverage_rows = c.execute(
+            "SELECT declaration_family,status,diagnostic FROM entity_extraction_coverage "
+            "WHERE occurrence_id=? AND declaration_family IN (" + placeholders + ") "
+            "ORDER BY id DESC",
+            (occurrence_id, *requested_axes),
+        ).fetchall()
+        coverage_by_axis: dict[str, list[str]] = {axis: [] for axis in requested_axes}
+        for row in coverage_rows:
+            coverage_by_axis[str(row["declaration_family"])].append(str(row["status"]))
+        assertions_by_axis: dict[str, list[str]] = {axis: [] for axis in requested_axes}
+        for row in axis_status_rows:
+            assertions_by_axis[str(row["axis"])].extend(
+                [str(row["assertion_status"])] * int(row["count"])
+            )
+
+        data: dict[str, Any] = {
+            "object": row_to_dict(occurrence),
+            "axes": {
+                axis: {"status": "NOT_OBSERVED", "facts": []}
+                for axis in requested_axes
+            },
+            "traversal": {
+                "requested_depth": depth,
+                "graph_used": graph_used,
+                "graph_status": graph_status,
+            },
+        }
+        if depth > 1 and graph_used:
+            data["semantic_traversal"] = semantic_traversal
+        for relationship in relationships:
+            data["axes"][relationship["axis"]]["facts"].append(relationship)
+        for axis in requested_axes:
+            statuses = assertions_by_axis[axis]
+            coverage_statuses = coverage_by_axis[axis]
+            if "CONFLICTING" in statuses:
+                data["axes"][axis]["status"] = "CONFLICTING"
+            elif "CORROBORATED" in statuses:
+                data["axes"][axis]["status"] = "CORROBORATED"
+            elif "VERIFIED" in statuses:
+                data["axes"][axis]["status"] = "VERIFIED"
+            elif "UNRESOLVED" in statuses or any(
+                state in {"partial", "failed"} for state in coverage_statuses
+            ):
+                data["axes"][axis]["status"] = "UNRESOLVED"
+            # Only a complete or not-applicable declaration family can close
+            # an empty axis as NOT_OBSERVED.  Missing coverage is unresolved.
+            elif coverage_statuses and all(
+                state in {"complete", "not_applicable"} for state in coverage_statuses
+            ):
+                data["axes"][axis]["status"] = "NOT_OBSERVED"
+            else:
+                data["axes"][axis]["status"] = "UNRESOLVED"
+
+        if "relationships" in include:
+            data["relationships"] = relationships
+        if "components" in include:
+            data["components"] = [
+                row_to_dict(row) for row in c.execute(
+                    "SELECT id,component_kind,component_path,declared_name,target_literal,"
+                    "data_type,cardinality,writeability,properties_json,source_path,start_line,"
+                    "end_line,evidence_text,extractor,extractor_version,confidence "
+                    "FROM entity_schema_components WHERE occurrence_id=? ORDER BY id",
+                    (occurrence_id,),
+                )
+            ]
+            for component in data["components"]:
+                component["properties"] = json.loads(component.pop("properties_json") or "{}")
+        if "operations" in include:
+            data["operations"] = [
+                row_to_dict(row) for row in c.execute(
+                    "SELECT id,axis,operation,surface_kind,availability,invocation_context,"
+                    "persistence_scope,standalone,parent_occurrence_id,qualifiers_json,source_path,"
+                    "start_line,end_line,evidence_text,confidence FROM entity_operation_facts "
+                    "WHERE occurrence_id=? AND axis IN (" + placeholders + ") ORDER BY id",
+                    (occurrence_id, *requested_axes),
+                )
+            ]
+            for operation in data["operations"]:
+                operation["qualifiers"] = json.loads(operation.pop("qualifiers_json") or "{}")
+        if "coverage" in include:
+            data["coverage"] = [
+                row_to_dict(row) for row in c.execute(
+                    "SELECT declaration_family,source_path,status,component_count,fact_count,diagnostic,"
+                    "extractor,extractor_version FROM entity_extraction_coverage "
+                    "WHERE occurrence_id=? ORDER BY id DESC",
+                    (occurrence_id,),
+                )
+            ]
+        if "conflicts" in include:
+            data["conflicts"] = [
+                row_to_dict(row) for row in c.execute(
+                    "SELECT id,fact_key,conflict_kind,status,reason,resolution_evidence,confidence "
+                    "FROM entity_semantic_conflicts WHERE repo_id=? AND fact_key IN "
+                    "(SELECT fact_key FROM entity_relationship_facts WHERE source_occurrence_id=? "
+                    "OR target_occurrence_id=?) ORDER BY id",
+                    (repo_id, occurrence_id, occurrence_id),
+                )
+            ]
+        status = "ok" if depth == 1 or graph_used else "graph_unavailable"
+        error = None if depth == 1 or graph_used else {
+            "code": "graph_stale_or_unprojected",
+            "message": "Semantic multi-hop traversal requires a fresh Ladybug semantic projection",
+        }
+        return make_response(state, "object_relationships", data, c, status=status, error=error, next_cursor=next_cursor)
+
+
+def qa_impact_impl(
+    state: CatalogState,
+    changes: list[dict[str, Any]],
+    repo_key: str,
+    axes: list[str] | None = None,
+    depth: int = 1,
+    include_tests: bool = True,
+) -> CatalogResponse:
+    """Return direct evidence surfaces for a set of changed repository files."""
+    if not changes:
+        raise ValueError("changes must not be empty")
+    if not 1 <= depth <= 3:
+        raise ValueError("depth must be 1..3")
+    requested_axes = axes or ["A", "B", "C", "D", "E"]
+    if any(axis not in {"A", "B", "C", "D", "E"} for axis in requested_axes):
+        raise ValueError("axes must contain only A, B, C, D, E")
+    with state.conn() as c:
+        missing = _semantic_tables_missing(state, c)
+        if missing:
+            return _semantic_capability_error(state, "qa_impact", c, missing)
+        repo = c.execute("SELECT id FROM repos WHERE repo_key=?", (repo_key,)).fetchone()
+        if not repo:
+            return make_error_response(state, "qa_impact", "repo_not_found", f"Unknown repository {repo_key}", c)
+        repo_id = int(repo[0])
+        paths = [str(change.get("file_path") or "") for change in changes]
+        if any(not path for path in paths):
+            raise ValueError("each change requires file_path")
+        input_resolution: list[dict[str, Any]] = []
+
+        for path in paths:
+            path_sources: dict[int, set[str]] = {}
+
+            def record_seed(occurrence_id: int, source: str) -> None:
+                path_sources.setdefault(occurrence_id, set()).add(source)
+
+            for row in c.execute(
+                "SELECT id FROM entity_occurrences "
+                "WHERE repo_id=? AND ent_file=? ORDER BY id",
+                (repo_id, path),
+            ):
+                record_seed(int(row[0]), "ent_file")
+
+            file_row = c.execute(
+                "SELECT id FROM files WHERE repo_id=? AND path=?",
+                (repo_id, path),
+            ).fetchone()
+            if file_row is not None:
+                file_id = int(file_row[0])
+                for row in c.execute(
+                    "SELECT DISTINCT eo.id FROM entity_mappings em "
+                    "JOIN entity_occurrences eo "
+                    "ON eo.repo_id=em.repo_id AND eo.entity_id=em.entity_id "
+                    "WHERE em.repo_id=? AND em.file_id=? ORDER BY eo.id",
+                    (repo_id, file_id),
+                ):
+                    record_seed(int(row[0]), "entity_mapping_file")
+                for row in c.execute(
+                    "SELECT DISTINCT eo.id FROM entity_mappings em "
+                    "JOIN symbols s ON s.id=em.symbol_id "
+                    "JOIN entity_occurrences eo "
+                    "ON eo.repo_id=em.repo_id AND eo.entity_id=em.entity_id "
+                    "WHERE em.repo_id=? AND s.file_id=? ORDER BY eo.id",
+                    (repo_id, file_id),
+                ):
+                    record_seed(int(row[0]), "entity_mapping_symbol")
+                for row in c.execute(
+                    "SELECT DISTINCT eo.id FROM entity_access_links eal "
+                    "JOIN entity_occurrences eo "
+                    "ON eo.repo_id=eal.repo_id AND eo.entity_id=eal.entity_id "
+                    "WHERE eal.repo_id=? AND eal.evidence_file_id=? ORDER BY eo.id",
+                    (repo_id, file_id),
+                ):
+                    record_seed(int(row[0]), "entity_access_evidence")
+
+            resolved_ids = sorted(path_sources)
+            seed_sources = sorted(
+                {
+                    source
+                    for occurrence_id in resolved_ids
+                    for source in path_sources[occurrence_id]
+                }
+            )
+            input_resolution.append(
+                {
+                    "file_path": path,
+                    "status": "resolved" if resolved_ids else "unresolved",
+                    "seed_sources": seed_sources,
+                    "occurrence_ids": resolved_ids,
+                    "diagnostic": (
+                        None
+                        if resolved_ids
+                        else "No repository-scoped entity occurrence mapping was observed"
+                    ),
+                }
+            )
+
+        occurrence_ids = sorted(
+            {
+                occurrence_id
+                for item in input_resolution
+                for occurrence_id in item["occurrence_ids"]
+            }
+        )
+        if occurrence_ids:
+            occurrence_placeholders = ",".join("?" for _ in occurrence_ids)
+            occurrences = c.execute(
+                """SELECT eo.id occurrence_id,en.id entity_id,en.name,eo.ent_file,
+                          eo.module,eo.table_name,eo.view_name
+                   FROM entity_occurrences eo
+                   JOIN entity_nodes en ON en.id=eo.entity_id
+                   WHERE eo.repo_id=? AND eo.id IN ("""
+                + occurrence_placeholders
+                + ") ORDER BY eo.id",
+                (repo_id, *occurrence_ids),
+            ).fetchall()
+        else:
+            occurrences = []
+        data: dict[str, Any] = {
+            "changes": changes,
+            "input_resolution": input_resolution,
+            "seed_entity_occurrences": [row_to_dict(row) for row in occurrences],
+            "semantic_relationships": [],
+            "semantic_operations": [],
+            "components": [],
+            "surfaces": {"mappings": [], "rest_endpoints": [], "workflows": [], "db_tables": [], "tests": []},
+            "coverage_gaps": [],
+            "semantic_coverage": [],
+            "conflicts": [],
+            "impacted_components": [],
+            "traversal": {"requested_depth": depth, "graph_used": False,
+                          "graph_status": "not_required" if depth == 1 else "graph_unavailable"},
+        }
+        for resolution in input_resolution:
+            if resolution["status"] == "unresolved":
+                data["coverage_gaps"].append(
+                    {
+                        "file_path": resolution["file_path"],
+                        "kind": "investigation_gap",
+                        "reason": resolution["diagnostic"],
+                    }
+                )
+        if occurrence_ids:
+            ids = ",".join("?" for _ in occurrence_ids)
+            axis_placeholders = ",".join("?" for _ in requested_axes)
+            data["semantic_relationships"] = [row_to_dict(row) for row in c.execute(
+                "SELECT id,axis,relation_kind,fact_key,assertion_status,target_entity_name,"
+                "target_literal,confidence,source_path,start_line,end_line,evidence_text "
+                f"FROM entity_relationship_facts WHERE source_occurrence_id IN ({ids}) "
+                f"AND axis IN ({axis_placeholders}) ORDER BY id",
+                (*occurrence_ids, *requested_axes),
+            )]
+            data["semantic_operations"] = [row_to_dict(row) for row in c.execute(
+                "SELECT id,axis,operation,surface_kind,availability,invocation_context,"
+                "persistence_scope,standalone,parent_occurrence_id,confidence,source_path,"
+                "start_line,end_line,evidence_text FROM entity_operation_facts "
+                f"WHERE occurrence_id IN ({ids}) AND axis IN ({axis_placeholders}) ORDER BY id",
+                (*occurrence_ids, *requested_axes),
+            )]
+            data["components"] = [row_to_dict(row) for row in c.execute(
+                "SELECT id,component_kind,component_path,declared_name,target_literal,"
+                "source_path,start_line,end_line,evidence_text,confidence "
+                f"FROM entity_schema_components WHERE occurrence_id IN ({ids}) ORDER BY id",
+                occurrence_ids,
+            )]
+            data["semantic_coverage"] = [row_to_dict(row) for row in c.execute(
+                "SELECT eo.id occurrence_id,en.name entity_name,ec.declaration_family,"
+                "ec.status,ec.diagnostic,ec.source_path,ec.component_count,ec.fact_count "
+                "FROM entity_extraction_coverage ec "
+                "JOIN entity_occurrences eo ON eo.id=ec.occurrence_id "
+                "JOIN entity_nodes en ON en.id=eo.entity_id "
+                f"WHERE ec.occurrence_id IN ({ids}) "
+                f"AND ec.declaration_family IN ({axis_placeholders}) "
+                "ORDER BY eo.id,ec.declaration_family,ec.id DESC",
+                (*occurrence_ids, *requested_axes),
+            )]
+            data["conflicts"] = [row_to_dict(row) for row in c.execute(
+                "SELECT esc.id,esc.fact_key,esc.conflict_kind,esc.status,esc.reason,"
+                "esc.resolution_evidence,esc.confidence "
+                "FROM entity_semantic_conflicts esc WHERE esc.repo_id=? AND esc.fact_key IN ("
+                f"SELECT fact_key FROM entity_relationship_facts WHERE source_occurrence_id IN ({ids})"
+                ") ORDER BY esc.id",
+                (repo_id, *occurrence_ids),
+            )]
+            entity_ids = [int(row["entity_id"]) for row in occurrences]
+            entity_placeholders = ",".join("?" for _ in entity_ids)
+            data["surfaces"]["mappings"] = [row_to_dict(row) for row in c.execute(
+                "SELECT en.name entity_name,em.mapping_type,f.path file_path,s.name symbol_name,"
+                "s.start_line,s.end_line,em.confidence FROM entity_mappings em "
+                "JOIN entity_nodes en ON en.id=em.entity_id LEFT JOIN files f ON f.id=em.file_id "
+                "LEFT JOIN symbols s ON s.id=em.symbol_id WHERE em.repo_id=? AND em.entity_id IN (" + entity_placeholders + ") ORDER BY em.id",
+                (repo_id, *entity_ids),
+            )]
+            data["surfaces"]["rest_endpoints"] = [row_to_dict(row) for row in c.execute(
+                "SELECT en.name entity_name,re.method,re.path,re.source_version,f.path file_path "
+                "FROM rest_endpoints re JOIN entity_nodes en ON en.id=re.entity_id "
+                "LEFT JOIN files f ON f.id=re.file_id WHERE re.repo_id=? AND re.entity_id IN (" + entity_placeholders + ") ORDER BY re.id",
+                (repo_id, *entity_ids),
+            )]
+            data["surfaces"]["workflows"] = [row_to_dict(row) for row in c.execute(
+                "SELECT en.name entity_name,w.name,w.workflow_type,w.source_kind,w.source_file,w.confidence "
+                "FROM workflows w JOIN entity_nodes en ON en.id=w.entity_id WHERE w.repo_id=? AND w.entity_id IN (" + entity_placeholders + ") ORDER BY w.id",
+                (repo_id, *entity_ids),
+            )]
+            data["surfaces"]["db_tables"] = [row_to_dict(row) for row in c.execute(
+                "SELECT DISTINCT en.name entity_name,dt.id dbschema_table_id,dt.table_name,"
+                "dt.source_file,dt.source_line FROM entity_access_links eal "
+                "JOIN entity_nodes en ON en.id=eal.entity_id "
+                "JOIN dbschema_tables dt ON dt.id=eal.record_id "
+                "WHERE eal.repo_id=? AND eal.surface='dbschema_table' "
+                "AND eal.entity_id IN (" + entity_placeholders + ") ORDER BY dt.id",
+                (repo_id, *entity_ids),
+            )]
+            if include_tests:
+                data["surfaces"]["tests"] = [row_to_dict(row) for row in c.execute(
+                    "SELECT en.name entity_name,tc.id test_case_id,tc.feature_name,tc.scenario_name,"
+                    "tc.eligibility,tc.scenario_line FROM test_entity_links tel "
+                    "JOIN entity_nodes en ON en.id=tel.entity_id JOIN test_requests tr ON tr.id=tel.test_request_id "
+                    "JOIN test_cases tc ON tc.id=tr.test_case_id "
+                    "WHERE tc.repo_id=? AND tel.entity_id IN (" + entity_placeholders + ") ORDER BY tc.id",
+                    (repo_id, *entity_ids),
+                )]
+            for occurrence in occurrences:
+                entity_id = int(occurrence["entity_id"])
+                count = c.execute(
+                    "SELECT COUNT(*) FROM test_entity_links tel "
+                    "JOIN test_requests tr ON tr.id=tel.test_request_id "
+                    "JOIN test_cases tc ON tc.id=tr.test_case_id "
+                    "WHERE tel.entity_id=? AND tc.repo_id=?",
+                    (entity_id, repo_id),
+                ).fetchone()[0]
+                if not count:
+                    data["coverage_gaps"].append({
+                        "entity_name": occurrence["name"],
+                        "kind": "investigation_gap",
+                        "reason": "No linked test requests were observed; no BDD scenario is inferred.",
+                    })
+        # Risk ranking is a deterministic triage signal, not a claim that a
+        # behavioral regression will occur.  Each item retains the extracted
+        # evidence that caused it to be surfaced.
+        impact_rows: list[dict[str, Any]] = []
+        for row in data["semantic_relationships"]:
+            impact_rows.append({
+                "risk": "high", "component_type": "semantic_relationship",
+                "reason": f"Axis {row['axis']} relationship can change object semantics",
+                "evidence": row,
+            })
+        for row in data["semantic_operations"]:
+            impact_rows.append({
+                "risk": "high" if row["operation"] in {"create", "update", "delete"} else "medium",
+                "component_type": "semantic_operation",
+                "reason": "Operation behavior is declared for the changed object",
+                "evidence": row,
+            })
+        for surface_name in ("rest_endpoints", "workflows"):
+            for row in data["surfaces"][surface_name]:
+                impact_rows.append({
+                    "risk": "high", "component_type": surface_name,
+                    "reason": f"Linked {surface_name.rstrip('s')} surface",
+                    "evidence": row,
+                })
+        for surface_name in ("mappings", "db_tables"):
+            for row in data["surfaces"][surface_name]:
+                impact_rows.append({
+                    "risk": "medium", "component_type": surface_name,
+                    "reason": f"Linked {surface_name.rstrip('s')} surface",
+                    "evidence": row,
+                })
+        for row in data["semantic_coverage"]:
+            if row["status"] in {"partial", "failed"}:
+                impact_rows.append({
+                    "risk": "unresolved", "component_type": "extraction_coverage",
+                    "reason": row["diagnostic"], "evidence": row,
+                })
+        risk_order = {"high": 0, "medium": 1, "low": 2, "unresolved": 3}
+        data["impacted_components"] = sorted(
+            impact_rows,
+            key=lambda row: (risk_order[row["risk"]], row["component_type"], str(row["evidence"])),
+        )
+        graph_used = False
+        graph_status = "not_required"
+        if depth > 1:
+            if state.graph_active(c):
+                from scripts.query_graph import get_graph_connection, query_semantic_relationship_traversal
+
+                graph_db, graph = get_graph_connection(str(state.graph_path))
+                try:
+                    data["semantic_traversal"] = [
+                        fact
+                        for occurrence_id in occurrence_ids
+                        for fact in query_semantic_relationship_traversal(
+                            graph, occurrence_id, requested_axes, depth
+                        )
+                    ]
+                    graph_used = True
+                    graph_status = "fresh"
+                except Exception:
+                    graph_status = "semantic_projection_unavailable"
+                finally:
+                    graph.close()
+                    graph_db.close()
+            else:
+                graph_status = "graph_unavailable"
+        data["traversal"]["graph_used"] = graph_used
+        data["traversal"]["graph_status"] = graph_status
+        status = "ok" if depth == 1 or graph_used else "graph_unavailable"
+        error = None if depth == 1 or graph_used else {
+            "code": "graph_stale_or_unprojected",
+            "message": "Semantic multi-hop traversal requires a fresh Ladybug semantic projection",
+        }
+        return make_response(state, "qa_impact", data, c, status=status, error=error)
+
+
 class Catalog:
     """Compatibility wrapper exposing class-based catalog methods for tests/legacy callers."""
 
@@ -1954,6 +2527,35 @@ def create_server(
     ) -> CatalogResponse:
         """Retrieve full context for an entity (occurrences, mappings, workflows, endpoints)."""
         return entity_context_impl(state, entity_name, repo_key)
+
+    @mcp.tool()
+    def object_relationships(
+        object_name: str,
+        repo_key: str | None = None,
+        axes: list[Literal["A", "B", "C", "D", "E"]] | None = None,
+        direction: Literal["incoming", "outgoing", "both"] = "both",
+        depth: int = 1,
+        include: list[Literal["components", "relationships", "operations", "coverage", "conflicts"]] | None = None,
+        confidence_min: float | None = None,
+        limit: int = DEFAULT_LIMIT,
+        cursor: str | None = None,
+    ) -> CatalogResponse:
+        """Return provenance-backed object ownership, hierarchy, visibility, and entity-context facts."""
+        return object_relationships_impl(
+            state, object_name, repo_key, axes, direction, depth, include,
+            confidence_min, limit, cursor,
+        )
+
+    @mcp.tool()
+    def qa_impact(
+        changes: list[dict[str, Any]],
+        repo_key: str,
+        axes: list[Literal["A", "B", "C", "D", "E"]] | None = None,
+        depth: int = 1,
+        include_tests: bool = True,
+    ) -> CatalogResponse:
+        """Assess direct semantic and delivery surfaces affected by changed repository files."""
+        return qa_impact_impl(state, changes, repo_key, axes, depth, include_tests)
 
     @mcp.tool()
     def rest_coverage(

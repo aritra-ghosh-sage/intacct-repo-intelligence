@@ -6,6 +6,7 @@ import tempfile
 import unittest
 import os
 from pathlib import Path
+from unittest import mock
 
 from scripts.refresh_workspace import RefreshError, refresh_repository
 
@@ -111,6 +112,69 @@ class WorkspaceRefreshTests(unittest.TestCase):
                 ).fetchone()[0],
                 "failed",
             )
+        finally:
+            conn.close()
+
+    def test_semantic_builder_dispatch_uses_real_runner(self) -> None:
+        directory, checkout, database, manifest = self._fixture()
+        self.addCleanup(directory.cleanup)
+        conn = sqlite3.connect(database)
+        conn.execute("CREATE TABLE active_sentinel(value TEXT NOT NULL)")
+        conn.execute("INSERT INTO active_sentinel(value) VALUES ('preserved')")
+        conn.commit()
+        conn.close()
+
+        with mock.patch(
+            "scripts.refresh_workspace.build_plan",
+            return_value=["entity_semantics"],
+        ), mock.patch(
+            "scripts.build_entity_semantics.build",
+            return_value={"occurrences": 0},
+        ) as semantic_build:
+            refresh_repository(database, manifest, "service")
+
+        semantic_build.assert_called_once()
+        self.assertTrue(
+            Path(semantic_build.call_args.args[0]).name.startswith("catalog.db.candidate.")
+        )
+        self.assertEqual(Path(semantic_build.call_args.args[1]).resolve(), checkout.resolve())
+        self.assertEqual(semantic_build.call_args.args[2], "service")
+        self.assertTrue(semantic_build.call_args.kwargs["reset"])
+
+        conn = sqlite3.connect(database)
+        try:
+            self.assertEqual(
+                conn.execute("SELECT value FROM active_sentinel").fetchone()[0],
+                "preserved",
+            )
+            stage = conn.execute(
+                "SELECT builder_name,status,diagnostic_error "
+                "FROM repo_index_stages ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            self.assertEqual(stage[0], "entity_semantics")
+            self.assertEqual(stage[1], "succeeded")
+            self.assertIsNone(stage[2])
+        finally:
+            conn.close()
+
+    def test_dirty_checkout_records_source_revision_failure_stage(self) -> None:
+        directory, checkout, database, manifest = self._fixture()
+        self.addCleanup(directory.cleanup)
+        refresh_repository(database, manifest, "service")
+        (checkout / "source.py").write_text("changed\n", encoding="utf-8")
+
+        with self.assertRaises(RefreshError):
+            refresh_repository(database, manifest, "service")
+
+        conn = sqlite3.connect(database)
+        try:
+            stage = conn.execute(
+                "SELECT builder_name,status,diagnostic_error "
+                "FROM repo_index_stages ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            self.assertEqual(stage[0], "source_revision")
+            self.assertEqual(stage[1], "failed")
+            self.assertIn("dirty", stage[2])
         finally:
             conn.close()
 

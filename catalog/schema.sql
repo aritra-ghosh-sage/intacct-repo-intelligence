@@ -167,6 +167,8 @@ CREATE TABLE IF NOT EXISTS entity_occurrences (
 );
 CREATE INDEX IF NOT EXISTS idx_entity_occurrences_entity
     ON entity_occurrences(entity_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_entity_occurrences_id_repo
+    ON entity_occurrences(id, repo_id);
 
 CREATE TABLE IF NOT EXISTS entity_mappings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -754,6 +756,183 @@ CREATE TABLE IF NOT EXISTS test_diagnostics (
     FOREIGN KEY(test_request_id) REFERENCES test_requests(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_test_diagnostics_repo_kind ON test_diagnostics(repo_id, kind);
+
+-- Authoritative, repository-scoped semantic facts extracted from .ent files.
+-- Ladybug projects these rows for traversal; it is not a second source of truth.
+CREATE TABLE IF NOT EXISTS entity_schema_components (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
+    occurrence_id INTEGER NOT NULL,
+    component_kind TEXT NOT NULL,
+    component_path TEXT NOT NULL,
+    declared_name TEXT,
+    target_literal TEXT,
+    data_type TEXT,
+    cardinality TEXT,
+    writeability TEXT,
+    properties_json TEXT NOT NULL DEFAULT '{}',
+    source_file_id INTEGER,
+    source_path TEXT NOT NULL,
+    start_line INTEGER,
+    end_line INTEGER,
+    evidence_text TEXT NOT NULL,
+    evidence_hash TEXT NOT NULL,
+    extractor TEXT NOT NULL,
+    extractor_version TEXT NOT NULL,
+    confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    FOREIGN KEY(occurrence_id) REFERENCES entity_occurrences(id) ON DELETE CASCADE,
+    FOREIGN KEY(occurrence_id, repo_id) REFERENCES entity_occurrences(id, repo_id),
+    FOREIGN KEY(source_file_id) REFERENCES files(id) ON DELETE SET NULL,
+    UNIQUE(repo_id, occurrence_id, component_kind, component_path, evidence_hash)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_entity_schema_components_id_repo
+    ON entity_schema_components(id, repo_id);
+CREATE INDEX IF NOT EXISTS idx_entity_schema_components_occurrence
+    ON entity_schema_components(repo_id, occurrence_id, component_kind);
+CREATE INDEX IF NOT EXISTS idx_entity_schema_components_source
+    ON entity_schema_components(repo_id, source_path);
+
+CREATE TABLE IF NOT EXISTS entity_relationship_facts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
+    source_occurrence_id INTEGER NOT NULL,
+    source_component_id INTEGER,
+    axis TEXT NOT NULL CHECK(axis IN ('A','B','C','D','E')),
+    relation_kind TEXT NOT NULL,
+    fact_key TEXT NOT NULL,
+    target_occurrence_id INTEGER,
+    target_entity_name TEXT,
+    target_component_id INTEGER,
+    target_literal TEXT,
+    cardinality TEXT,
+    assertion_status TEXT NOT NULL CHECK(assertion_status IN
+        ('VERIFIED','CORROBORATED','UNRESOLVED','CONFLICTING')),
+    qualifiers_json TEXT NOT NULL DEFAULT '{}',
+    source_file_id INTEGER,
+    source_path TEXT NOT NULL,
+    start_line INTEGER,
+    end_line INTEGER,
+    evidence_text TEXT NOT NULL,
+    evidence_hash TEXT NOT NULL,
+    extractor TEXT NOT NULL,
+    extractor_version TEXT NOT NULL,
+    confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    FOREIGN KEY(source_occurrence_id) REFERENCES entity_occurrences(id) ON DELETE CASCADE,
+    FOREIGN KEY(source_occurrence_id, repo_id) REFERENCES entity_occurrences(id, repo_id),
+    FOREIGN KEY(source_component_id) REFERENCES entity_schema_components(id) ON DELETE SET NULL,
+    FOREIGN KEY(source_component_id, repo_id) REFERENCES entity_schema_components(id, repo_id),
+    FOREIGN KEY(target_occurrence_id) REFERENCES entity_occurrences(id) ON DELETE SET NULL,
+    FOREIGN KEY(target_occurrence_id, repo_id) REFERENCES entity_occurrences(id, repo_id),
+    FOREIGN KEY(target_component_id) REFERENCES entity_schema_components(id) ON DELETE SET NULL,
+    FOREIGN KEY(target_component_id, repo_id) REFERENCES entity_schema_components(id, repo_id),
+    FOREIGN KEY(source_file_id) REFERENCES files(id) ON DELETE SET NULL,
+    UNIQUE(repo_id, fact_key, evidence_hash)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_entity_relationship_facts_id_repo
+    ON entity_relationship_facts(id, repo_id);
+CREATE INDEX IF NOT EXISTS idx_entity_relationship_facts_occurrence
+    ON entity_relationship_facts(repo_id, source_occurrence_id, axis);
+CREATE INDEX IF NOT EXISTS idx_entity_relationship_facts_target
+    ON entity_relationship_facts(repo_id, target_occurrence_id, axis);
+CREATE INDEX IF NOT EXISTS idx_entity_relationship_facts_status
+    ON entity_relationship_facts(repo_id, assertion_status);
+
+CREATE TABLE IF NOT EXISTS entity_operation_facts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
+    occurrence_id INTEGER NOT NULL,
+    axis TEXT NOT NULL CHECK(axis IN ('A','B','C','D','E')),
+    operation TEXT NOT NULL CHECK(operation IN
+        ('create','read','update','delete','approve','submit','decline')),
+    surface_kind TEXT NOT NULL,
+    rest_endpoint_id INTEGER,
+    security_operation_id INTEGER,
+    symbol_id INTEGER,
+    availability TEXT NOT NULL CHECK(availability IN
+        ('allowed','denied','not_declared','unresolved')),
+    invocation_context TEXT NOT NULL CHECK(invocation_context IN
+        ('root','child','both','any','unresolved')),
+    persistence_scope TEXT NOT NULL CHECK(persistence_scope IN
+        ('root','entity','shared','entity_override','unresolved')),
+    standalone INTEGER CHECK(standalone IN (0,1)),
+    parent_occurrence_id INTEGER,
+    qualifiers_json TEXT NOT NULL DEFAULT '{}',
+    source_file_id INTEGER,
+    source_path TEXT NOT NULL,
+    start_line INTEGER,
+    end_line INTEGER,
+    evidence_text TEXT NOT NULL,
+    evidence_hash TEXT NOT NULL,
+    extractor TEXT NOT NULL,
+    extractor_version TEXT NOT NULL,
+    confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    FOREIGN KEY(occurrence_id) REFERENCES entity_occurrences(id) ON DELETE CASCADE,
+    FOREIGN KEY(occurrence_id, repo_id) REFERENCES entity_occurrences(id, repo_id),
+    FOREIGN KEY(rest_endpoint_id) REFERENCES rest_endpoints(id) ON DELETE SET NULL,
+    FOREIGN KEY(security_operation_id) REFERENCES security_operations(id) ON DELETE SET NULL,
+    FOREIGN KEY(symbol_id) REFERENCES symbols(id) ON DELETE SET NULL,
+    FOREIGN KEY(parent_occurrence_id) REFERENCES entity_occurrences(id) ON DELETE SET NULL,
+    FOREIGN KEY(parent_occurrence_id, repo_id) REFERENCES entity_occurrences(id, repo_id),
+    FOREIGN KEY(source_file_id) REFERENCES files(id) ON DELETE SET NULL,
+    UNIQUE(repo_id, occurrence_id, operation, surface_kind, evidence_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_entity_operation_facts_occurrence
+    ON entity_operation_facts(repo_id, occurrence_id, operation);
+
+CREATE TABLE IF NOT EXISTS entity_extraction_coverage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
+    occurrence_id INTEGER NOT NULL,
+    source_file_id INTEGER,
+    source_path TEXT NOT NULL,
+    extractor TEXT NOT NULL,
+    extractor_version TEXT NOT NULL,
+    declaration_family TEXT NOT NULL CHECK(declaration_family IN ('A','B','C','D','E','components','operations')),
+    source_hash TEXT,
+    status TEXT NOT NULL CHECK(status IN ('complete','partial','failed','not_applicable')),
+    component_count INTEGER NOT NULL DEFAULT 0,
+    fact_count INTEGER NOT NULL DEFAULT 0,
+    diagnostic TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    FOREIGN KEY(occurrence_id) REFERENCES entity_occurrences(id) ON DELETE CASCADE,
+    FOREIGN KEY(occurrence_id, repo_id) REFERENCES entity_occurrences(id, repo_id),
+    FOREIGN KEY(source_file_id) REFERENCES files(id) ON DELETE SET NULL,
+    UNIQUE(repo_id, occurrence_id, extractor, extractor_version, declaration_family, source_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_entity_extraction_coverage_occurrence
+    ON entity_extraction_coverage(repo_id, occurrence_id, declaration_family);
+
+CREATE TABLE IF NOT EXISTS entity_semantic_conflicts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
+    fact_key TEXT NOT NULL,
+    left_fact_id INTEGER NOT NULL,
+    right_fact_id INTEGER NOT NULL,
+    conflict_kind TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('open','resolved','accepted_unresolved')),
+    reason TEXT NOT NULL,
+    resolution_evidence TEXT,
+    source_file_id INTEGER,
+    source_path TEXT,
+    confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    FOREIGN KEY(left_fact_id) REFERENCES entity_relationship_facts(id) ON DELETE CASCADE,
+    FOREIGN KEY(left_fact_id, repo_id) REFERENCES entity_relationship_facts(id, repo_id),
+    FOREIGN KEY(right_fact_id) REFERENCES entity_relationship_facts(id) ON DELETE CASCADE,
+    FOREIGN KEY(right_fact_id, repo_id) REFERENCES entity_relationship_facts(id, repo_id),
+    FOREIGN KEY(source_file_id) REFERENCES files(id) ON DELETE SET NULL,
+    UNIQUE(repo_id, fact_key, left_fact_id, right_fact_id)
+);
+CREATE INDEX IF NOT EXISTS idx_entity_semantic_conflicts_fact_key
+    ON entity_semantic_conflicts(repo_id, fact_key, status);
 
 
 -- Advisory quality/triage view only. It intentionally excludes entities without
