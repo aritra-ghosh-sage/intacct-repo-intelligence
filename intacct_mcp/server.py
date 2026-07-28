@@ -1,33 +1,219 @@
-"""Local, read-only MCP server for the Intacct evidence catalog."""
+"""Modern FastMCP server for the Intacct evidence catalog.
+
+This implementation uses FastMCP v2.14.7+ patterns with explicit state management,
+decorator-based tool registration, and type-safe request/response structures.
+"""
 
 from __future__ import annotations
+
 import base64
 import os
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
+
 from mcp.server.fastmcp import FastMCP
-from config import CATALOG_DB, GRAPH_DB
+
 from catalog.rest_coverage import REQUIRED_TABLES, coverage_rows, coverage_summary
+from config import CATALOG_DB, GRAPH_DB
 
-DEFAULT_LIMIT, MAX_LIMIT = 25, 100
+# ============================================================================
+# Type Definitions
+# ============================================================================
 
 
-def _row(row: sqlite3.Row) -> dict[str, Any]:
+class CatalogSnapshot(TypedDict, total=False):
+    """Current state of the catalog and graph."""
+
+    sqlite_snapshot: str
+    graph_exists: bool
+    active_graph_build: dict[str, Any] | None
+    graph_fresh: bool
+    repositories: list[dict[str, Any]]
+
+
+class PageInfo(TypedDict, total=False):
+    """Pagination info for paginated responses."""
+
+    next_cursor: str | None
+    truncated: bool
+
+
+class CatalogError(TypedDict, total=False):
+    """Standard error response structure."""
+
+    code: str
+    message: str
+    details: dict[str, Any] | None
+
+
+class CatalogResponse(TypedDict, total=False):
+    """Standard response envelope for all catalog operations."""
+
+    contract_version: int
+    operation: str
+    status: str
+    data: dict[str, Any]
+    snapshot: CatalogSnapshot
+    page: PageInfo
+    error: CatalogError | None
+
+
+# ============================================================================
+# Configuration
+# ============================================================================
+
+DEFAULT_LIMIT = 25
+MAX_LIMIT = 100
+
+
+# ============================================================================
+# State Management
+# ============================================================================
+
+
+@dataclass
+class CatalogState:
+    """Encapsulates the Intacct catalog database connection and graph state."""
+
+    db_path: Path
+    graph_path: Path
+
+    def conn(self) -> sqlite3.Connection:
+        """Open a read-only connection to the catalog database."""
+        if not self.db_path.is_file():
+            raise FileNotFoundError("catalog database is unavailable")
+        c = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True)
+        c.row_factory = sqlite3.Row
+        c.execute("PRAGMA query_only=ON")
+        c.execute("BEGIN")  # Immutable WAL snapshot for this connection
+        return c
+
+    def table_exists(self, c: sqlite3.Connection, name: str) -> bool:
+        """Check if a table exists in the database."""
+        return bool(
+            c.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                (name,),
+            ).fetchone()
+        )
+
+    def snapshot(self, c: sqlite3.Connection) -> CatalogSnapshot:
+        """Capture current catalog state."""
+        build = None
+        if self.table_exists(c, "graph_builds"):
+            build = c.execute(
+                "SELECT id,status,source_fingerprint,started_at,completed_at "
+                "FROM graph_builds WHERE status='active' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+
+        repositories: list[dict[str, Any]] = []
+        if self.table_exists(c, "repos"):
+            repositories = [
+                dict(row)
+                for row in c.execute(
+                    "SELECT repo_key,tracked_branch,indexed_commit_sha,"
+                    "last_scanned_at,last_built_at,index_status,diagnostic_error,"
+                    "last_attempt_status,last_attempted_at,last_attempt_error "
+                    "FROM repos ORDER BY repo_key"
+                )
+            ]
+
+        return {
+            "sqlite_snapshot": "read_transaction",
+            "graph_exists": self.graph_path.is_file(),
+            "active_graph_build": dict(build) if build else None,
+            "graph_fresh": bool(
+                build
+                and self.graph_path.is_file()
+                and build["source_fingerprint"]
+            ),
+            "repositories": repositories,
+        }
+
+    def graph_active(self, c: sqlite3.Connection) -> bool:
+        """Check if there's an active graph matching current catalog."""
+        if not self.table_exists(c, "graph_builds"):
+            return False
+        build = c.execute(
+            "SELECT source_fingerprint FROM graph_builds "
+            "WHERE status='active' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        return bool(self.graph_path.is_file() and build and build["source_fingerprint"])
+
+
+# ============================================================================
+# Response Builders
+# ============================================================================
+
+
+def row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+    """Convert sqlite3.Row to dict."""
     return dict(row)
 
 
-def _limit(n: int) -> int:
-    if not 1 <= n <= MAX_LIMIT:
-        raise ValueError(f"limit must be 1..{MAX_LIMIT}")
-    return n
+def make_response(
+    state: CatalogState,
+    operation: str,
+    data: dict[str, Any],
+    c: sqlite3.Connection,
+    status: str = "ok",
+    error: CatalogError | None = None,
+    next_cursor: str | None = None,
+) -> CatalogResponse:
+    """Build a standard catalog response envelope."""
+    violations = c.execute("PRAGMA foreign_key_check").fetchall()
+    if violations and status == "ok":
+        status = "invalid_catalog"
+        error = {
+            "code": "foreign_key_violations",
+            "message": "Catalog integrity validation failed",
+            "details": {
+                "count": len(violations),
+                "sample": [tuple(v) for v in violations[:5]],
+            },
+        }
+
+    return {
+        "contract_version": 1,
+        "operation": operation,
+        "status": status,
+        "data": data,
+        "snapshot": state.snapshot(c),
+        "page": {"next_cursor": next_cursor, "truncated": bool(next_cursor)},
+        "error": error,
+    }
 
 
-def _offset(cursor: str | None) -> int:
+def make_error_response(
+    state: CatalogState,
+    operation: str,
+    code: str,
+    message: str,
+    c: sqlite3.Connection,
+    details: dict[str, Any] | None = None,
+) -> CatalogResponse:
+    """Build an error response."""
+    error: CatalogError = {"code": code, "message": message}
+    if details:
+        error["details"] = details
+    return make_response(state, operation, {}, c, status="error", error=error)
+
+
+# ============================================================================
+# Pagination & Validation
+# ============================================================================
+
+
+def decode_cursor(cursor: str | None) -> int:
+    """Decode base64url cursor to offset."""
     if not cursor:
         return 0
     try:
-        n = int(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
+        # Add padding
+        padded = cursor + "=" * (-len(cursor) % 4)
+        n = int(base64.urlsafe_b64decode(padded))
     except (ValueError, UnicodeDecodeError) as exc:
         raise ValueError("invalid cursor") from exc
     if n < 0:
@@ -35,400 +221,1720 @@ def _offset(cursor: str | None) -> int:
     return n
 
 
-def _cursor(offset: int) -> str:
+def encode_cursor(offset: int) -> str:
+    """Encode offset to base64url cursor."""
     return base64.urlsafe_b64encode(str(offset).encode()).decode().rstrip("=")
 
 
-class Catalog:
-    def __init__(self, db: str = CATALOG_DB, graph: str = GRAPH_DB):
-        self.db, self.graph = Path(db).resolve(), Path(graph).resolve()
+def validate_limit(n: int) -> int:
+    """Validate and return limit value."""
+    if not 1 <= n <= MAX_LIMIT:
+        raise ValueError(f"limit must be 1..{MAX_LIMIT}")
+    return n
 
-    def conn(self) -> sqlite3.Connection:
-        if not self.db.is_file():
-            raise FileNotFoundError("catalog database is unavailable")
-        c = sqlite3.connect(f"file:{self.db}?mode=ro", uri=True)
-        c.row_factory = sqlite3.Row
-        c.execute("PRAGMA query_only=ON")
-        # A response (including its metadata) observes one immutable WAL
-        # snapshot instead of a sequence of independently moving reads.
-        c.execute("BEGIN")
-        return c
 
-    def table(self, c: sqlite3.Connection, name: str) -> bool:
-        return bool(
-            c.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
-            ).fetchone()
+def paginate(
+    rows: list[sqlite3.Row], limit: int, offset: int
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Paginate rows and return data + next cursor."""
+    data = [row_to_dict(x) for x in rows[:limit]]
+    next_cursor = encode_cursor(offset + limit) if len(rows) > limit else None
+    return data, next_cursor
+
+
+# ============================================================================
+# Tool Implementations
+# ============================================================================
+
+
+# ============================================================================
+# Phase 1: Dependency Surface Tools
+# ============================================================================
+
+
+def workflow_structure_impl(
+    state: CatalogState,
+    entity_name: str,
+    workflow_id: int | None = None,
+    repo_key: str | None = None,
+) -> CatalogResponse:
+    """Retrieve workflow structure: nodes and edges with ordinal sequencing."""
+    with state.conn() as c:
+        # Find workflow(s)
+        sql = (
+            "SELECT w.id, w.name, w.workflow_type, r.repo_key, e.name entity_name "
+            "FROM workflows w "
+            "JOIN entity_nodes e ON e.id = w.entity_id "
+            "JOIN repos r ON r.id = w.repo_id "
+            "WHERE e.name = ? COLLATE NOCASE AND (? IS NULL OR r.repo_key = ?)"
         )
+        if workflow_id:
+            sql += " AND w.id = ?"
+            workflows = c.execute(sql, (entity_name, repo_key, repo_key, workflow_id)).fetchall()
+        else:
+            workflows = c.execute(sql, (entity_name, repo_key, repo_key)).fetchall()
 
-    def snapshot(self, c: sqlite3.Connection) -> dict[str, Any]:
-        build = (
-            c.execute(
-                "SELECT id,status,source_fingerprint,started_at,completed_at FROM graph_builds WHERE status='active' ORDER BY id DESC LIMIT 1"
-            ).fetchone()
-            if self.table(c, "graph_builds")
-            else None
-        )
-        repositories = (
-            [
-                _row(row)
-                for row in c.execute(
-                    "SELECT repo_key,tracked_branch,indexed_commit_sha,last_scanned_at,last_built_at,index_status,diagnostic_error,last_attempt_status,last_attempted_at,last_attempt_error FROM repos ORDER BY repo_key"
-                )
-            ]
-            if self.table(c, "repos")
-            else []
-        )
-        return {
-            "sqlite_snapshot": "read_transaction",
-            "graph_exists": self.graph.is_file(),
-            "active_graph_build": _row(build) if build else None,
-            "graph_fresh": bool(build and self.graph.is_file() and build["source_fingerprint"]),
-            "repositories": repositories,
-        }
-
-    def out(
-        self,
-        operation: str,
-        data: dict[str, Any],
-        c: sqlite3.Connection,
-        status="ok",
-        error=None,
-        next_cursor=None,
-    ) -> dict[str, Any]:
-        violations = c.execute("PRAGMA foreign_key_check").fetchall()
-        if violations and status == "ok":
-            status = "invalid_catalog"
-            error = {
-                "code": "foreign_key_violations",
-                "message": "Catalog integrity validation failed",
-                "details": {"count": len(violations), "sample": [tuple(x) for x in violations[:5]]},
-            }
-        return {
-            "contract_version": 1,
-            "operation": operation,
-            "status": status,
-            "data": data,
-            "snapshot": self.snapshot(c),
-            "page": {"next_cursor": next_cursor, "truncated": bool(next_cursor)},
-            "error": error,
-        }
-
-    def page(
-        self, rows: list[sqlite3.Row], lim: int, off: int
-    ) -> tuple[list[dict[str, Any]], str | None]:
-        return [_row(x) for x in rows[:lim]], _cursor(off + lim) if len(
-            rows
-        ) > lim else None
-
-    def search(
-        self,
-        query: str,
-        kind: str,
-        limit: int,
-        cursor: str | None,
-        repo_key: str | None = None,
-    ) -> dict[str, Any]:
-        if not query.strip():
-            raise ValueError("query must not be empty")
-        lim, off, like = _limit(limit), _offset(cursor), f"%{query.strip()}%"
-        queries = {
-            "entity": (
-                "SELECT e.id,e.name,e.entity_type,e.confidence,r.repo_key,eo.ent_file,eo.module,eo.table_name,eo.view_name,eo.dummy,eo.source_file_id,eo.extractor,eo.confidence occurrence_confidence FROM entity_nodes e JOIN entity_occurrences eo ON eo.entity_id=e.id JOIN repos r ON r.id=eo.repo_id WHERE e.name LIKE ? AND (? IS NULL OR r.repo_key=?) ORDER BY e.name,r.repo_key,e.id",
-                (like, repo_key, repo_key),
-            ),
-            "file": (
-                "SELECT f.id,r.repo_key,f.path,f.language,f.size_bytes,f.sha1 FROM files f JOIN repos r ON r.id=f.repo_id WHERE f.path LIKE ? AND (? IS NULL OR r.repo_key=?) ORDER BY r.repo_key,f.path,f.id",
-                (like, repo_key, repo_key),
-            ),
-            "symbol": (
-                "SELECT s.id,s.name,s.kind,s.language,s.start_line,s.end_line,r.repo_key,f.path file_path FROM symbols s JOIN files f ON f.id=s.file_id JOIN repos r ON r.id=f.repo_id WHERE s.name LIKE ? AND (? IS NULL OR r.repo_key=?) ORDER BY s.name,r.repo_key,s.id",
-                (like, repo_key, repo_key),
-            ),
-            "api": (
-                "SELECT o.id,r.repo_key,o.file_path,o.module,o.kind,o.canonical_name,o.resource_path,o.x_mapped_to FROM openapispec_index o JOIN repos r ON r.id=o.repo_id WHERE (o.canonical_name LIKE ? OR o.resource_path LIKE ?) AND (? IS NULL OR r.repo_key=?) ORDER BY r.repo_key,o.file_path,o.id",
-                (like, like, repo_key, repo_key),
-            ),
-            "workflow": (
-                "SELECT w.id,r.repo_key,w.name,w.workflow_type,w.source_file,e.name entity_name FROM workflows w JOIN entity_nodes e ON e.id=w.entity_id JOIN repos r ON r.id=w.repo_id WHERE (w.name LIKE ? OR e.name LIKE ?) AND (? IS NULL OR r.repo_key=?) ORDER BY e.name,w.name,r.repo_key,w.id",
-                (like, like, repo_key, repo_key),
-            ),
-            "security": (
-                "SELECT o.id,r.repo_key,o.op_key,o.title,o.action,o.source_file,o.source_line FROM security_operations o JOIN repos r ON r.id=o.repo_id WHERE (o.op_key LIKE ? OR o.title LIKE ?) AND (? IS NULL OR r.repo_key=?) ORDER BY o.op_key,r.repo_key,o.id",
-                (like, like, repo_key, repo_key),
-            ),
-        }
-        if kind not in {*queries, "all"}:
-            raise ValueError("invalid search kind")
-        # Offset cursors across independently ordered result families cannot
-        # be made trustworthy.  Keep all-kind search explicitly unpaginated.
-        if kind == "all" and cursor:
-            raise ValueError("catalog_search(kind='all') does not support pagination; choose one kind")
-        selected = queries if kind == "all" else {kind: queries[kind]}
-        with self.conn() as c:
-            records = []
-            for label, (sql, args) in selected.items():
-                records += [
-                    {"kind": label, "record": _row(r)}
-                    for r in c.execute(sql + " LIMIT ? OFFSET ?", (*args, lim + 1, off))
-                ]
-            records.sort(key=lambda r: (r["kind"], str(r["record"])))
-            if kind == "all" and len(records) > lim:
-                raise ValueError(
-                    "catalog_search(kind='all') result exceeds limit; choose one kind"
-                )
-            nxt = _cursor(off + lim) if kind != "all" and len(records) > lim else None
-            return self.out(
-                "catalog_search",
-                {"repo_key": repo_key, "results": records[:lim]},
+        if not workflows:
+            return make_error_response(
+                state,
+                "workflow_structure",
+                "workflow_not_found",
+                f"No workflow found for entity {entity_name}" + (f" with id {workflow_id}" if workflow_id else ""),
                 c,
-                next_cursor=nxt,
             )
 
-    def entity(self, name: str, repo_key: str | None = None) -> dict[str, Any]:
-        with self.conn() as c:
-            e = c.execute(
-                "SELECT id,name,entity_type,confidence FROM entity_nodes WHERE name=? COLLATE NOCASE",
-                (name,),
-            ).fetchone()
-            if not e:
-                return self.out(
-                    "entity_context",
-                    {},
-                    c,
-                    "not_found",
-                    {"code": "entity_not_found", "message": f"No entity named {name}"},
-                )
-            i = e["id"]
-            data = {"entity": _row(e)}
-            data["occurrences"] = [
-                _row(r)
+        data_list = []
+        for wf in workflows:
+            wf_id = wf["id"]
+            nodes = [
+                row_to_dict(r)
                 for r in c.execute(
-                    "SELECT eo.id,r.repo_key,eo.ent_file,eo.module,eo.table_name,eo.view_name,eo.dummy,eo.source_file_id,eo.extractor,eo.confidence,eo.created_at,eo.updated_at FROM entity_occurrences eo JOIN repos r ON r.id=eo.repo_id WHERE eo.entity_id=? AND (? IS NULL OR r.repo_key=?) ORDER BY r.repo_key,eo.id",
-                    (i, repo_key, repo_key),
+                    "SELECT id, workflow_id, entity_id, node_kind, node_key, name, ordinal, action, "
+                    "source_kind, file_id, symbol_id, metadata_json "
+                    "FROM workflow_nodes WHERE workflow_id = ? ORDER BY ordinal, id",
+                    (wf_id,),
                 )
             ]
-            for key, sql in {
-                "mappings": "SELECT em.id,r.repo_key,em.mapping_type,em.confidence,em.source_text,s.id symbol_id,s.name symbol_name,f.path file_path,s.start_line,s.end_line FROM entity_mappings em JOIN repos r ON r.id=em.repo_id LEFT JOIN symbols s ON s.id=em.symbol_id LEFT JOIN files f ON f.id=COALESCE(em.file_id,s.file_id) WHERE em.entity_id=? AND (? IS NULL OR r.repo_key=?) ORDER BY r.repo_key,em.id",
-                "roots": "SELECT er.id,r.repo_key,er.role,er.weight,er.reason,er.is_shared,s.id symbol_id,s.name symbol_name,f.path file_path,s.start_line,s.end_line FROM entity_roots er JOIN repos r ON r.id=er.repo_id JOIN symbols s ON s.id=er.symbol_id JOIN files f ON f.id=s.file_id WHERE er.entity_id=? AND (? IS NULL OR r.repo_key=?) ORDER BY r.repo_key,er.weight DESC,er.id",
-                "workflows": "SELECT w.id,r.repo_key,w.name,w.workflow_type,w.source_kind,w.source_file,w.source_symbol_id,w.confidence,w.reason FROM workflows w JOIN repos r ON r.id=w.repo_id WHERE w.entity_id=? AND (? IS NULL OR r.repo_key=?) ORDER BY r.repo_key,w.workflow_type,w.name,w.id",
-                "rest_endpoints": "SELECT ep.id,r.repo_key,ep.method,ep.path,ep.handler_symbol_id,f.path file_path FROM rest_endpoints ep JOIN repos r ON r.id=ep.repo_id LEFT JOIN files f ON f.id=ep.file_id WHERE ep.entity_id=? AND (? IS NULL OR r.repo_key=?) ORDER BY r.repo_key,ep.path,ep.method,ep.id",
-            }.items():
-                data[key] = [_row(r) for r in c.execute(sql, (i, repo_key, repo_key))]
-            return self.out("entity_context", data, c)
+            edges = [
+                row_to_dict(r)
+                for r in c.execute(
+                    "SELECT id, workflow_id, from_node_id, to_node_id, edge_kind, ordinal, evidence, "
+                    "confidence, file_id, symbol_id "
+                    "FROM workflow_edges WHERE workflow_id = ? ORDER BY ordinal, id",
+                    (wf_id,),
+                )
+            ]
+            data_list.append({
+                "workflow": row_to_dict(wf),
+                "nodes": nodes,
+                "edges": edges,
+            })
 
-    def coverage(
-        self, name: str, version: str | None = None, limit: int = DEFAULT_LIMIT
-    ) -> dict[str, Any]:
-        lim = _limit(limit)
-        with self.conn() as c:
-            missing = [table for table in REQUIRED_TABLES if not self.table(c, table)]
-            if missing:
-                return self.out(
-                    "rest_coverage",
-                    {},
-                    c,
-                    "error",
-                    {
-                        "code": "coverage_tables_missing",
-                        "message": "REST coverage tables are unavailable",
-                        "details": {"missing_tables": missing},
-                    },
-                )
-            entity = c.execute(
-                "SELECT id,name FROM entity_nodes WHERE name=? COLLATE NOCASE",
-                (name,),
-            ).fetchone()
-            if not entity:
-                return self.out(
-                    "rest_coverage",
-                    {},
-                    c,
-                    "not_found",
-                    {
-                        "code": "entity_not_found",
-                        "message": f"No entity named {name}",
-                    },
-                )
-            endpoints, diagnostics = coverage_rows(c, int(entity["id"]), version, lim)
-            version_predicate = (
-                "AND (source_version = ? OR source_version IS NULL)" if version else ""
-            )
-            total = c.execute(
-                f"SELECT COUNT(*) FROM rest_endpoints WHERE entity_id = ? {version_predicate}",
-                (entity["id"], *((version,) if version else ())),
-            ).fetchone()[0]
-            return self.out(
-                "rest_coverage",
-                {
-                    "entity": {"id": entity["id"], "name": entity["name"]},
-                    "endpoint_coverage": endpoints,
-                    "diagnostics": diagnostics,
-                    "summary": coverage_summary(endpoints, diagnostics),
-                    "coverage_scope": {
-                        "total_endpoint_count": total,
-                        "returned_endpoint_count": len(endpoints),
-                        "sampled": len(endpoints) < total,
-                    },
-                },
+        return make_response(
+            state,
+            "workflow_structure",
+            {"workflows": data_list},
+            c,
+        )
+
+
+def entity_access_detail_impl(
+    state: CatalogState,
+    entity_name: str,
+    surface_type: str | None = None,
+    repo_key: str | None = None,
+    limit: int = DEFAULT_LIMIT,
+    cursor: str | None = None,
+) -> CatalogResponse:
+    """Retrieve entity access links by surface with evidence provenance."""
+    lim = validate_limit(limit)
+    off = decode_cursor(cursor)
+
+    with state.conn() as c:
+        # Find entity
+        e = c.execute(
+            "SELECT id FROM entity_nodes WHERE name = ? COLLATE NOCASE",
+            (entity_name,),
+        ).fetchone()
+
+        if not e:
+            return make_error_response(
+                state,
+                "entity_access_detail",
+                "entity_not_found",
+                f"No entity named {entity_name}",
                 c,
             )
 
-    def records(
-        self,
-        operation: str,
-        sql: str,
-        args: tuple[Any, ...],
-        limit: int,
-        cursor: str | None,
-        key: str,
-    ) -> dict[str, Any]:
-        lim, off = _limit(limit), _offset(cursor)
-        with self.conn() as c:
+        entity_id = e["id"]
+        sql = (
+            "SELECT eal.id, r.repo_key, eal.surface, eal.record_id, eal.link_type, "
+            "eal.evidence_file_id, eal.evidence_symbol_id, eal.confidence_mode, eal.notes, "
+            "ef.path evidence_file_path, es.name evidence_symbol_name "
+            "FROM entity_access_links eal "
+            "JOIN repos r ON r.id = eal.repo_id "
+            "LEFT JOIN files ef ON ef.id = eal.evidence_file_id "
+            "LEFT JOIN symbols es ON es.id = eal.evidence_symbol_id "
+            "WHERE eal.entity_id = ? AND (? IS NULL OR r.repo_key = ?)"
+        )
+        args: list[Any] = [entity_id, repo_key, repo_key]
+
+        if surface_type:
+            sql += " AND eal.surface = ?"
+            args.append(surface_type)
+
+        sql += " ORDER BY eal.surface, eal.record_id, eal.id"
+
+        rows = c.execute(
+            sql + " LIMIT ? OFFSET ?", (*args, lim + 1, off)
+        ).fetchall()
+        data, nxt = paginate(rows, lim, off)
+
+        return make_response(
+            state,
+            "entity_access_detail",
+            {"entity_name": entity_name, "links": data},
+            c,
+            next_cursor=nxt,
+        )
+
+
+def security_dependency_chain_impl(
+    state: CatalogState,
+    op_key: str,
+    repo_key: str | None = None,
+) -> CatalogResponse:
+    """Retrieve security operation dependencies: allowops, policy grants, and menu links."""
+    with state.conn() as c:
+        # Find operation(s) by op_key
+        ops = c.execute(
+            "SELECT o.id, o.op_key, o.op_numeric_id, o.title, o.action, r.repo_key "
+            "FROM security_operations o "
+            "JOIN repos r ON r.id = o.repo_id "
+            "WHERE o.op_key = ? AND (? IS NULL OR r.repo_key = ?)",
+            (op_key, repo_key, repo_key),
+        ).fetchall()
+
+        if not ops:
+            return make_error_response(
+                state,
+                "security_dependency_chain",
+                "operation_not_found",
+                f"No security operation with key {op_key}",
+                c,
+            )
+
+        chains = []
+        for op in ops:
+            op_id = op["id"]
+
+            # Allowed operations (allowops)
+            allowops = [
+                row_to_dict(r)
+                for r in c.execute(
+                    "SELECT sao.id, sao.allowed_op_key, sao.allowed_operation_id, sao.resolution_reason, "
+                    "so.id allowed_op_id, so.title allowed_op_title "
+                    "FROM security_operation_allowops sao "
+                    "LEFT JOIN security_operations so ON so.id = sao.allowed_operation_id "
+                    "WHERE sao.operation_id = ? ORDER BY sao.allowed_op_key",
+                    (op_id,),
+                )
+            ]
+
+            # Policy eops (what policies grant this operation)
+            policy_eops = [
+                row_to_dict(r)
+                for r in c.execute(
+                    "SELECT spe.id, sp.policy_name, spv.value_key, spe.op_key, so.id op_id, so.title op_title "
+                    "FROM security_policy_eops spe "
+                    "JOIN security_policy_values spv ON spv.id = spe.policy_value_id "
+                    "JOIN security_policies sp ON sp.id = spv.policy_id "
+                    "LEFT JOIN security_operations so ON so.op_key = spe.op_key AND so.repo_id = sp.repo_id "
+                    "WHERE spe.op_key = ? ORDER BY sp.policy_name, spv.value_key",
+                    (op_key,),
+                )
+            ]
+
+            # Menu items pointing to this operation
+            menu_items = [
+                row_to_dict(r)
+                for r in c.execute(
+                    "SELECT smi.id, sm.menu_name, smi.item_path, smi.menu_key, "
+                    "so.id op_id, so.title op_title "
+                    "FROM security_menu_items smi "
+                    "JOIN security_menus sm ON sm.id = smi.menu_id "
+                    "LEFT JOIN security_operations so ON so.op_key = smi.menu_key AND so.repo_id = sm.repo_id "
+                    "WHERE smi.menu_key = ? ORDER BY sm.menu_name, smi.item_path",
+                    (op_key,),
+                )
+            ]
+
+            chains.append({
+                "operation": row_to_dict(op),
+                "allowed_operations": allowops,
+                "policy_grants": policy_eops,
+                "menu_references": menu_items,
+            })
+
+        return make_response(
+            state,
+            "security_dependency_chain",
+            {"chains": chains},
+            c,
+        )
+
+
+def openapi_file_dependencies_impl(
+    state: CatalogState,
+    file_path: str,
+    repo_key: str | None = None,
+) -> CatalogResponse:
+    """Retrieve OpenAPI file reference dependencies."""
+    with state.conn() as c:
+        # Find file
+        files = c.execute(
+            "SELECT f.id, r.repo_key, f.path FROM files f "
+            "JOIN repos r ON r.id = f.repo_id "
+            "WHERE f.path = ? AND (? IS NULL OR r.repo_key = ?)",
+            (file_path, repo_key, repo_key),
+        ).fetchall()
+
+        if not files:
+            return make_error_response(
+                state,
+                "openapi_file_dependencies",
+                "file_not_found",
+                f"File not found: {file_path}",
+                c,
+            )
+
+        if len(files) > 1 and not repo_key:
+            return make_response(
+                state,
+                "openapi_file_dependencies",
+                {"candidates": [row_to_dict(r) for r in files]},
+                c,
+                status="ambiguous",
+                error={
+                    "code": "ambiguous_file",
+                    "message": "File exists in multiple repos; retry with repo_key",
+                },
+            )
+
+        f = files[0]
+        file_id = f["id"]
+
+        # Outgoing refs (from this file)
+        outgoing = [
+            row_to_dict(r)
+            for r in c.execute(
+                "SELECT ofre.id, ofre.ref_value, ofre.ref_path, ofre.confidence, "
+                "tf.path target_file_path "
+                "FROM openapi_file_ref_edges ofre "
+                "JOIN files tf ON tf.id = ofre.target_file_id "
+                "WHERE ofre.source_file_id = ? ORDER BY ofre.ref_value",
+                (file_id,),
+            )
+        ]
+
+        # Incoming refs (to this file)
+        incoming = [
+            row_to_dict(r)
+            for r in c.execute(
+                "SELECT ofre.id, ofre.ref_value, ofre.ref_path, ofre.confidence, "
+                "sf.path source_file_path "
+                "FROM openapi_file_ref_edges ofre "
+                "JOIN files sf ON sf.id = ofre.source_file_id "
+                "WHERE ofre.target_file_id = ? ORDER BY ofre.ref_value",
+                (file_id,),
+            )
+        ]
+
+        return make_response(
+            state,
+            "openapi_file_dependencies",
+            {
+                "file": row_to_dict(f),
+                "outgoing_refs": outgoing,
+                "incoming_refs": incoming,
+            },
+            c,
+        )
+
+
+# ============================================================================
+# Phase 2: Risk Surface Tools
+# ============================================================================
+
+
+def catalog_risk_summary_impl(state: CatalogState) -> CatalogResponse:
+    """Aggregate risk signals across the catalog."""
+    with state.conn() as c:
+        # Relationships confidence and resolution
+        rel_stats = c.execute(
+            "SELECT COUNT(*) as total, "
+            "COUNT(CASE WHEN confidence < 0.7 THEN 1 END) as low_confidence, "
+            "COUNT(CASE WHEN resolution_class = 'project_unresolved' THEN 1 END) as unresolved, "
+            "COUNT(CASE WHEN resolution_class = 'heuristic' THEN 1 END) as heuristic, "
+            "AVG(confidence) as avg_confidence "
+            "FROM relationships"
+        ).fetchone()
+
+        # Entities and mappings
+        entity_stats = c.execute(
+            "SELECT COUNT(DISTINCT e.id) as total_entities, "
+            "COUNT(DISTINCT em.id) as total_mappings, "
+            "COUNT(CASE WHEN em.confidence < 1.0 THEN em.id END) as weak_mappings "
+            "FROM entity_nodes e "
+            "LEFT JOIN entity_mappings em ON em.entity_id = e.id"
+        ).fetchone()
+
+        # Entity roots (canonical symbols)
+        roots_stats = c.execute(
+            "SELECT COUNT(DISTINCT e.id) as entities_with_roots, "
+            "COUNT(DISTINCT CASE WHEN er.id IS NULL THEN e.id END) as entities_missing_roots "
+            "FROM entity_nodes e "
+            "LEFT JOIN entity_roots er ON er.entity_id = e.id"
+        ).fetchone()
+
+        # Security operations
+        sec_stats = c.execute(
+            "SELECT COUNT(*) as total_operations, "
+            "COUNT(CASE WHEN file_id IS NULL THEN 1 END) as missing_file_ids "
+            "FROM security_operations"
+        ).fetchone()
+
+        # Security conflicts
+        conflicts = c.execute(
+            "SELECT COUNT(DISTINCT op_key) as conflicting_keys "
+            "FROM security_operations "
+            "GROUP BY op_key "
+            "HAVING COUNT(DISTINCT op_numeric_id) > 1"
+        ).fetchall()
+        conflict_count = len(conflicts) if conflicts else 0
+
+        # Security unresolved
+        unresolved_allowops = c.execute(
+            "SELECT COUNT(*) as count FROM security_operation_allowops WHERE allowed_operation_id IS NULL"
+        ).fetchone()
+
+        # OpenAPI specs
+        openapi_stats = c.execute(
+            "SELECT COUNT(*) as total_specs, "
+            "COUNT(CASE WHEN kind = 'unknown' THEN 1 END) as unknown_kind, "
+            "COUNT(CASE WHEN canonical_name LIKE '%/%' THEN 1 END) as path_slug_leakage, "
+            "COUNT(CASE WHEN x_mapped_to IS NOT NULL THEN 1 END) as with_mapping "
+            "FROM openapispec_index"
+        ).fetchone()
+
+        # Graph freshness
+        graph_build = None
+        if state.table_exists(c, "graph_builds"):
+            graph_build = c.execute(
+                "SELECT status, source_fingerprint FROM graph_builds WHERE status='active' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+
+        # Repository health
+        repo_stats = c.execute(
+            "SELECT COUNT(*) as total_repos, "
+            "COUNT(CASE WHEN index_status = 'active' THEN 1 END) as active_repos, "
+            "COUNT(CASE WHEN diagnostic_error IS NOT NULL THEN 1 END) as repos_with_errors "
+            "FROM repos"
+        ).fetchone()
+
+        # Compute risk scores
+        rel_confidence_score = float(rel_stats["avg_confidence"]) if rel_stats["avg_confidence"] else 0.0
+        rel_resolution_score = 1.0 - (
+            (rel_stats["unresolved"] + rel_stats["heuristic"]) / max(rel_stats["total"], 1)
+        )
+
+        entities_with_roots = roots_stats["entities_with_roots"] or 0
+        total_entities = entity_stats["total_entities"] or 1
+        entity_completeness_score = entities_with_roots / total_entities if total_entities > 0 else 0.0
+
+        sec_conflict_score = 1.0 - (
+            (conflict_count + unresolved_allowops["count"]) / max(sec_stats["total_operations"], 1)
+        )
+
+        openapi_linkage = openapi_stats["with_mapping"] / max(openapi_stats["total_specs"], 1)
+        openapi_quality_score = 1.0 - (
+            (openapi_stats["unknown_kind"] + openapi_stats["path_slug_leakage"]) / max(openapi_stats["total_specs"], 1)
+        )
+
+        graph_freshness_score = 1.0 if (graph_build and state.graph_path.is_file()) else 0.5
+        repo_health_score = (repo_stats["active_repos"] or 0) / max(repo_stats["total_repos"], 1)
+
+        overall_score = (
+            rel_resolution_score * 0.2
+            + rel_confidence_score * 0.15
+            + entity_completeness_score * 0.15
+            + sec_conflict_score * 0.15
+            + openapi_quality_score * 0.15
+            + graph_freshness_score * 0.1
+            + repo_health_score * 0.1
+        )
+
+        return make_response(
+            state,
+            "catalog_risk_summary",
+            {
+                "relationships": {
+                    "total": rel_stats["total"],
+                    "avg_confidence": round(rel_stats["avg_confidence"], 3) if rel_stats["avg_confidence"] else None,
+                    "low_confidence": rel_stats["low_confidence"],
+                    "unresolved": rel_stats["unresolved"],
+                    "heuristic": rel_stats["heuristic"],
+                },
+                "entities": {
+                    "total": entity_stats["total_entities"],
+                    "total_mappings": entity_stats["total_mappings"],
+                    "weak_mappings": entity_stats["weak_mappings"],
+                    "with_canonical_roots": entities_with_roots,
+                    "missing_roots": roots_stats["entities_missing_roots"],
+                },
+                "security": {
+                    "total_operations": sec_stats["total_operations"],
+                    "missing_file_ids": sec_stats["missing_file_ids"],
+                    "conflicting_op_keys": conflict_count,
+                    "unresolved_allowops": unresolved_allowops["count"],
+                },
+                "openapi": {
+                    "total_specs": openapi_stats["total_specs"],
+                    "with_entity_mapping": openapi_stats["with_mapping"],
+                    "linkage_percent": round(openapi_linkage * 100, 2),
+                    "unknown_kind": openapi_stats["unknown_kind"],
+                    "path_slug_leakage": openapi_stats["path_slug_leakage"],
+                },
+                "graph": {
+                    "active": bool(graph_build and state.graph_path.is_file()),
+                    "build_status": graph_build["status"] if graph_build else None,
+                },
+                "repositories": {
+                    "total": repo_stats["total_repos"],
+                    "active": repo_stats["active_repos"],
+                    "with_errors": repo_stats["repos_with_errors"],
+                },
+                "risk_scores": {
+                    "relationships_resolution": round(rel_resolution_score, 3),
+                    "relationships_confidence": round(rel_confidence_score, 3),
+                    "entity_completeness": round(entity_completeness_score, 3),
+                    "security_integrity": round(sec_conflict_score, 3),
+                    "openapi_quality": round(openapi_quality_score, 3),
+                    "graph_freshness": round(graph_freshness_score, 3),
+                    "repository_health": round(repo_health_score, 3),
+                    "overall": round(overall_score, 3),
+                },
+            },
+            c,
+        )
+
+
+def risk_detail_impl(
+    state: CatalogState,
+    category: str,
+    entity_name: str | None = None,
+    symbol_name: str | None = None,
+    repo_key: str | None = None,
+    limit: int = DEFAULT_LIMIT,
+    cursor: str | None = None,
+) -> CatalogResponse:
+    """Drill down into specific risk category with pagination."""
+    lim = validate_limit(limit)
+    off = decode_cursor(cursor)
+
+    valid_categories = {
+        "low_confidence_relationships",
+        "unresolved_relationships",
+        "heuristic_relationships",
+        "entity_mapping_gaps",
+        "security_conflicts",
+        "security_unresolved_allowops",
+        "missing_file_ids_security",
+        "openapi_unknown_kind",
+    }
+
+    if category not in valid_categories:
+        raise ValueError(f"invalid category: {category}")
+
+    with state.conn() as c:
+        if category == "low_confidence_relationships":
+            sql = (
+                "SELECT rel.id, r.repo_key, rel.source_name, rel.target_name, "
+                "rel.relationship_type, rel.confidence, rel.resolution_class, rel.evidence "
+                "FROM relationships rel "
+                "JOIN repos r ON r.id = rel.repo_id "
+                "WHERE rel.confidence < 0.7 AND (? IS NULL OR r.repo_key = ?)"
+            )
+            args = [repo_key, repo_key]
+
+        elif category == "unresolved_relationships":
+            sql = (
+                "SELECT rel.id, r.repo_key, rel.source_name, rel.target_name, "
+                "rel.relationship_type, rel.confidence, rel.resolution_class, rel.resolution_reason "
+                "FROM relationships rel "
+                "JOIN repos r ON r.id = rel.repo_id "
+                "WHERE rel.resolution_class = 'project_unresolved' AND (? IS NULL OR r.repo_key = ?)"
+            )
+            args = [repo_key, repo_key]
+
+        elif category == "heuristic_relationships":
+            sql = (
+                "SELECT rel.id, r.repo_key, rel.source_name, rel.target_name, "
+                "rel.relationship_type, rel.confidence, rel.resolution_class, rel.reason "
+                "FROM relationships rel "
+                "JOIN repos r ON r.id = rel.repo_id "
+                "WHERE rel.resolution_class = 'heuristic' AND (? IS NULL OR r.repo_key = ?)"
+            )
+            args = [repo_key, repo_key]
+
+        elif category == "entity_mapping_gaps":
+            sql = (
+                "SELECT em.id, r.repo_key, e.name entity_name, em.mapping_type, em.confidence, em.source_text "
+                "FROM entity_mappings em "
+                "JOIN entity_nodes e ON e.id = em.entity_id "
+                "JOIN repos r ON r.id = em.repo_id "
+                "WHERE em.confidence < 1.0 AND (? IS NULL OR r.repo_key = ?)"
+            )
+            if entity_name:
+                sql += " AND e.name COLLATE NOCASE = ?"
+                args = [repo_key, repo_key, entity_name]
+            else:
+                args = [repo_key, repo_key]
+
+        elif category == "security_conflicts":
+            sql = (
+                "SELECT o1.id, r.repo_key, o1.op_key, o1.op_numeric_id, o1.title, "
+                "GROUP_CONCAT(o2.op_numeric_id) as conflicting_ids, "
+                "GROUP_CONCAT(o2.title) as conflicting_titles "
+                "FROM security_operations o1 "
+                "JOIN repos r ON r.id = o1.repo_id "
+                "JOIN security_operations o2 ON o2.op_key = o1.op_key AND o2.repo_id = r.id AND o2.op_numeric_id != o1.op_numeric_id "
+                "WHERE (? IS NULL OR r.repo_key = ?) "
+                "GROUP BY o1.id, r.repo_key, o1.op_key, o1.op_numeric_id, o1.title"
+            )
+            args = [repo_key, repo_key]
+
+        elif category == "security_unresolved_allowops":
+            sql = (
+                "SELECT sao.id, r.repo_key, so.op_key, sao.allowed_op_key, sao.allowed_operation_id "
+                "FROM security_operation_allowops sao "
+                "JOIN security_operations so ON so.id = sao.operation_id "
+                "JOIN repos r ON r.id = so.repo_id "
+                "WHERE sao.allowed_operation_id IS NULL AND (? IS NULL OR r.repo_key = ?)"
+            )
+            args = [repo_key, repo_key]
+
+        elif category == "missing_file_ids_security":
+            sql = (
+                "SELECT so.id, r.repo_key, so.op_key, so.title, so.source_file FROM security_operations so "
+                "JOIN repos r ON r.id = so.repo_id "
+                "WHERE so.file_id IS NULL AND (? IS NULL OR r.repo_key = ?)"
+            )
+            args = [repo_key, repo_key]
+
+        elif category == "openapi_unknown_kind":
+            sql = (
+                "SELECT oi.id, r.repo_key, oi.file_path, oi.module, oi.kind, oi.canonical_name "
+                "FROM openapispec_index oi "
+                "JOIN repos r ON r.id = oi.repo_id "
+                "WHERE oi.kind = 'unknown' AND (? IS NULL OR r.repo_key = ?)"
+            )
+            args = [repo_key, repo_key]
+
+        # Map category to id column for proper ORDER BY qualification
+        id_columns = {
+            "low_confidence_relationships": "rel.id",
+            "unresolved_relationships": "rel.id",
+            "heuristic_relationships": "rel.id",
+            "entity_mapping_gaps": "em.id",
+            "security_conflicts": "o1.id",
+            "security_unresolved_allowops": "sao.id",
+            "missing_file_ids_security": "so.id",
+            "openapi_unknown_kind": "oi.id",
+        }
+        sql += f" ORDER BY {id_columns[category]}"
+        rows = c.execute(sql + " LIMIT ? OFFSET ?", (*args, lim + 1, off)).fetchall()
+        data, nxt = paginate(rows, lim, off)
+
+        return make_response(
+            state,
+            "risk_detail",
+            {"category": category, "records": data},
+            c,
+            next_cursor=nxt,
+        )
+
+
+def confidence_band_query_impl(
+    state: CatalogState,
+    category: str,
+    confidence_min: float,
+    confidence_max: float,
+    repo_key: str | None = None,
+    limit: int = DEFAULT_LIMIT,
+    cursor: str | None = None,
+) -> CatalogResponse:
+    """Query records within a confidence band."""
+    if not 0.0 <= confidence_min <= 1.0 or not 0.0 <= confidence_max <= 1.0:
+        raise ValueError("confidence_min and confidence_max must be 0.0..1.0")
+    if confidence_min > confidence_max:
+        raise ValueError("confidence_min must be <= confidence_max")
+
+    lim = validate_limit(limit)
+    off = decode_cursor(cursor)
+
+    valid_categories = {"relationships", "entity_mappings", "workflows", "entity_roots"}
+
+    if category not in valid_categories:
+        raise ValueError(f"invalid category: {category}")
+
+    with state.conn() as c:
+        if category == "relationships":
+            sql = (
+                "SELECT rel.id, r.repo_key, rel.source_name, rel.target_name, rel.confidence "
+                "FROM relationships rel "
+                "JOIN repos r ON r.id = rel.repo_id "
+                "WHERE rel.confidence >= ? AND rel.confidence <= ? AND (? IS NULL OR r.repo_key = ?) "
+                "ORDER BY rel.confidence, rel.id"
+            )
+            args = [confidence_min, confidence_max, repo_key, repo_key]
+
+        elif category == "entity_mappings":
+            sql = (
+                "SELECT em.id, r.repo_key, e.name entity_name, em.mapping_type, em.confidence "
+                "FROM entity_mappings em "
+                "JOIN entity_nodes e ON e.id = em.entity_id "
+                "JOIN repos r ON r.id = em.repo_id "
+                "WHERE em.confidence >= ? AND em.confidence <= ? AND (? IS NULL OR r.repo_key = ?) "
+                "ORDER BY em.confidence, em.id"
+            )
+            args = [confidence_min, confidence_max, repo_key, repo_key]
+
+        elif category == "workflows":
+            sql = (
+                "SELECT w.id, r.repo_key, e.name entity_name, w.name workflow_name, w.confidence "
+                "FROM workflows w "
+                "JOIN entity_nodes e ON e.id = w.entity_id "
+                "JOIN repos r ON r.id = w.repo_id "
+                "WHERE w.confidence >= ? AND w.confidence <= ? AND (? IS NULL OR r.repo_key = ?) "
+                "ORDER BY w.confidence, w.id"
+            )
+            args = [confidence_min, confidence_max, repo_key, repo_key]
+
+        elif category == "entity_roots":
+            sql = (
+                "SELECT er.id, r.repo_key, e.name entity_name, s.name symbol_name, er.weight "
+                "FROM entity_roots er "
+                "JOIN entity_nodes e ON e.id = er.entity_id "
+                "JOIN symbols s ON s.id = er.symbol_id "
+                "JOIN repos r ON r.id = er.repo_id "
+                "WHERE er.weight >= ? AND er.weight <= ? AND (? IS NULL OR r.repo_key = ?) "
+                "ORDER BY er.weight, er.id"
+            )
+            args = [confidence_min, confidence_max, repo_key, repo_key]
+
+        rows = c.execute(sql + " LIMIT ? OFFSET ?", (*args, lim + 1, off)).fetchall()
+        data, nxt = paginate(rows, lim, off)
+
+        return make_response(
+            state,
+            "confidence_band_query",
+            {"category": category, "confidence_range": [confidence_min, confidence_max], "records": data},
+            c,
+            next_cursor=nxt,
+        )
+
+
+def catalog_search_impl(
+    state: CatalogState,
+    query: str,
+    kind: str,
+    limit: int,
+    cursor: str | None,
+    repo_key: str | None = None,
+) -> CatalogResponse:
+    """Search across catalog entities, files, symbols, APIs, workflows, and security."""
+    if not query.strip():
+        raise ValueError("query must not be empty")
+
+    lim = validate_limit(limit)
+    off = decode_cursor(cursor)
+    like = f"%{query.strip()}%"
+
+    queries: dict[str, tuple[str, tuple[Any, ...]]] = {
+        "entity": (
+            "SELECT e.id,e.name,e.entity_type,e.confidence,r.repo_key,"
+            "eo.ent_file,eo.module,eo.table_name,eo.view_name,eo.dummy,"
+            "eo.source_file_id,eo.extractor,eo.confidence occurrence_confidence "
+            "FROM entity_nodes e "
+            "JOIN entity_occurrences eo ON eo.entity_id=e.id "
+            "JOIN repos r ON r.id=eo.repo_id "
+            "WHERE e.name LIKE ? AND (? IS NULL OR r.repo_key=?) "
+            "ORDER BY e.name,r.repo_key,e.id",
+            (like, repo_key, repo_key),
+        ),
+        "file": (
+            "SELECT f.id,r.repo_key,f.path,f.language,f.size_bytes,f.sha1 "
+            "FROM files f "
+            "JOIN repos r ON r.id=f.repo_id "
+            "WHERE f.path LIKE ? AND (? IS NULL OR r.repo_key=?) "
+            "ORDER BY r.repo_key,f.path,f.id",
+            (like, repo_key, repo_key),
+        ),
+        "symbol": (
+            "SELECT s.id,s.name,s.kind,s.language,s.start_line,s.end_line,"
+            "r.repo_key,f.path file_path "
+            "FROM symbols s "
+            "JOIN files f ON f.id=s.file_id "
+            "JOIN repos r ON r.id=f.repo_id "
+            "WHERE s.name LIKE ? AND (? IS NULL OR r.repo_key=?) "
+            "ORDER BY s.name,r.repo_key,s.id",
+            (like, repo_key, repo_key),
+        ),
+        "api": (
+            "SELECT o.id,r.repo_key,o.file_path,o.module,o.kind,o.canonical_name,"
+            "o.resource_path,o.x_mapped_to "
+            "FROM openapispec_index o "
+            "JOIN repos r ON r.id=o.repo_id "
+            "WHERE (o.canonical_name LIKE ? OR o.resource_path LIKE ?) "
+            "AND (? IS NULL OR r.repo_key=?) "
+            "ORDER BY r.repo_key,o.file_path,o.id",
+            (like, like, repo_key, repo_key),
+        ),
+        "workflow": (
+            "SELECT w.id,r.repo_key,w.name,w.workflow_type,w.source_file,"
+            "e.name entity_name "
+            "FROM workflows w "
+            "JOIN entity_nodes e ON e.id=w.entity_id "
+            "JOIN repos r ON r.id=w.repo_id "
+            "WHERE (w.name LIKE ? OR e.name LIKE ?) "
+            "AND (? IS NULL OR r.repo_key=?) "
+            "ORDER BY e.name,w.name,r.repo_key,w.id",
+            (like, like, repo_key, repo_key),
+        ),
+        "security": (
+            "SELECT o.id,r.repo_key,o.op_key,o.title,o.action,o.source_file,"
+            "o.source_line "
+            "FROM security_operations o "
+            "JOIN repos r ON r.id=o.repo_id "
+            "WHERE (o.op_key LIKE ? OR o.title LIKE ?) "
+            "AND (? IS NULL OR r.repo_key=?) "
+            "ORDER BY o.op_key,r.repo_key,o.id",
+            (like, like, repo_key, repo_key),
+        ),
+    }
+
+    if kind not in {*queries, "all"}:
+        raise ValueError("invalid search kind")
+
+    if kind == "all" and cursor:
+        raise ValueError(
+            "catalog_search(kind='all') does not support pagination; choose one kind"
+        )
+
+    selected = queries if kind == "all" else {kind: queries[kind]}
+
+    with state.conn() as c:
+        records: list[dict[str, Any]] = []
+        for label, (sql, args) in selected.items():
             rows = c.execute(
                 sql + " LIMIT ? OFFSET ?", (*args, lim + 1, off)
             ).fetchall()
-            data, nxt = self.page(rows, lim, off)
-            return self.out(operation, {key: data}, c, next_cursor=nxt)
+            records += [
+                {"kind": label, "record": row_to_dict(r)} for r in rows
+            ]
 
-    def provenance(self, kind: str, ident: int) -> dict[str, Any]:
-        q = {
-            "file": "SELECT f.id,r.repo_key,r.tracked_branch,r.indexed_commit_sha,r.last_scanned_at,r.last_built_at,r.index_status,f.path,f.language,f.size_bytes,f.sha1,f.last_indexed FROM files f JOIN repos r ON r.id=f.repo_id WHERE f.id=?",
-            "symbol": "SELECT s.id,s.name,s.kind,s.language,s.start_line,s.end_line,s.signature,f.id file_id,r.repo_key,r.tracked_branch,r.indexed_commit_sha,f.path file_path FROM symbols s JOIN files f ON f.id=s.file_id JOIN repos r ON r.id=f.repo_id WHERE s.id=?",
-            "relationship": "SELECT rel.id,r.repo_key,r.tracked_branch,r.indexed_commit_sha,rel.source_symbol_id,rel.target_symbol_id,rel.relationship_type,rel.file_path,rel.confidence,rel.evidence,rel.resolution_class,rel.resolution_reason,rel.extractor,rel.created_at FROM relationships rel JOIN repos r ON r.id=rel.repo_id WHERE rel.id=?",
-            "entity_mapping": "SELECT em.id,r.repo_key,em.mapping_type,em.confidence,em.source_text,e.name entity_name,eo.ent_file,eo.module,eo.table_name,eo.view_name,s.id symbol_id,f.path file_path,s.start_line,s.end_line FROM entity_mappings em JOIN repos r ON r.id=em.repo_id JOIN entity_nodes e ON e.id=em.entity_id LEFT JOIN entity_occurrences eo ON eo.repo_id=em.repo_id AND eo.entity_id=em.entity_id LEFT JOIN symbols s ON s.id=em.symbol_id LEFT JOIN files f ON f.id=COALESCE(em.file_id,s.file_id) WHERE em.id=?",
-            "workflow": "SELECT w.id,r.repo_key,w.name,w.workflow_type,w.source_kind,w.source_file,w.source_symbol_id,w.confidence,w.reason,e.name entity_name,eo.ent_file,eo.module,eo.table_name,eo.view_name FROM workflows w JOIN repos r ON r.id=w.repo_id JOIN entity_nodes e ON e.id=w.entity_id LEFT JOIN entity_occurrences eo ON eo.repo_id=w.repo_id AND eo.entity_id=w.entity_id WHERE w.id=?",
-            "rest_endpoint": "SELECT ep.id,r.repo_key,ep.method,ep.path,e.name entity_name,eo.ent_file,eo.module,eo.table_name,eo.view_name,ep.handler_symbol_id,f.path file_path FROM rest_endpoints ep JOIN repos r ON r.id=ep.repo_id LEFT JOIN entity_nodes e ON e.id=ep.entity_id LEFT JOIN entity_occurrences eo ON eo.repo_id=ep.repo_id AND eo.entity_id=ep.entity_id LEFT JOIN files f ON f.id=ep.file_id WHERE ep.id=?",
-            "security_operation": "SELECT id,op_key,title,action,source_file,source_line,source_kind,raw_hash FROM security_operations WHERE id=?",
-        }[kind]
-        with self.conn() as c:
-            r = c.execute(q, (ident,)).fetchone()
-            return self.out(
-                "provenance",
-                {"record_type": kind, "evidence": _row(r)} if r else {},
-                c,
-                "ok" if r else "not_found",
-                None
-                if r
-                else {
-                    "code": "record_not_found",
-                    "message": f"No {kind} record {ident}",
-                },
+        records.sort(key=lambda r: (r["kind"], str(r["record"])))
+
+        if kind == "all" and len(records) > lim:
+            raise ValueError(
+                "catalog_search(kind='all') result exceeds limit; choose one kind"
             )
 
-    def graph_state(self, c):
-        active = (
-            c.execute(
-                "SELECT source_fingerprint FROM graph_builds WHERE status='active' ORDER BY id DESC LIMIT 1"
-            ).fetchone()
-            if self.table(c, "graph_builds")
-            else None
-        )
-        return bool(self.graph.is_file() and active and active["source_fingerprint"])
+        nxt = None
+        if kind != "all" and len(records) > lim:
+            nxt = encode_cursor(off + lim)
 
-    def repositories(self) -> dict[str, Any]:
-        with self.conn() as c:
-            rows = [
-                _row(row)
-                for row in c.execute(
-                    "SELECT repo_key,tracked_branch,indexed_commit_sha,last_scanned_at,last_built_at,index_status,diagnostic_error,last_attempt_status,last_attempted_at,last_attempt_error FROM repos ORDER BY repo_key"
+        return make_response(
+            state,
+            "catalog_search",
+            {"repo_key": repo_key, "results": records[:lim]},
+            c,
+            next_cursor=nxt,
+        )
+
+
+def entity_context_impl(
+    state: CatalogState,
+    name: str,
+    repo_key: str | None = None,
+) -> CatalogResponse:
+    """Retrieve full context for an entity including occurrences, mappings, and workflows."""
+    with state.conn() as c:
+        e = c.execute(
+            "SELECT id,name,entity_type,confidence FROM entity_nodes "
+            "WHERE name=? COLLATE NOCASE",
+            (name,),
+        ).fetchone()
+
+        if not e:
+            return make_error_response(
+                state,
+                "entity_context",
+                "entity_not_found",
+                f"No entity named {name}",
+                c,
+            )
+
+        entity_id = e["id"]
+        data: dict[str, Any] = {"entity": row_to_dict(e)}
+
+        # Occurrences
+        data["occurrences"] = [
+            row_to_dict(r)
+            for r in c.execute(
+                "SELECT eo.id,r.repo_key,eo.ent_file,eo.module,eo.table_name,"
+                "eo.view_name,eo.dummy,eo.source_file_id,eo.extractor,"
+                "eo.confidence,eo.created_at,eo.updated_at "
+                "FROM entity_occurrences eo "
+                "JOIN repos r ON r.id=eo.repo_id "
+                "WHERE eo.entity_id=? AND (? IS NULL OR r.repo_key=?) "
+                "ORDER BY r.repo_key,eo.id",
+                (entity_id, repo_key, repo_key),
+            )
+        ]
+
+        # Mappings, roots, workflows, endpoints
+        for key, sql in {
+            "mappings": (
+                "SELECT em.id,r.repo_key,em.mapping_type,em.confidence,"
+                "em.source_text,s.id symbol_id,s.name symbol_name,f.path file_path,"
+                "s.start_line,s.end_line "
+                "FROM entity_mappings em "
+                "JOIN repos r ON r.id=em.repo_id "
+                "LEFT JOIN symbols s ON s.id=em.symbol_id "
+                "LEFT JOIN files f ON f.id=COALESCE(em.file_id,s.file_id) "
+                "WHERE em.entity_id=? AND (? IS NULL OR r.repo_key=?) "
+                "ORDER BY r.repo_key,em.id"
+            ),
+            "roots": (
+                "SELECT er.id,r.repo_key,er.role,er.weight,er.reason,er.is_shared,"
+                "s.id symbol_id,s.name symbol_name,f.path file_path,s.start_line,"
+                "s.end_line "
+                "FROM entity_roots er "
+                "JOIN repos r ON r.id=er.repo_id "
+                "JOIN symbols s ON s.id=er.symbol_id "
+                "JOIN files f ON f.id=s.file_id "
+                "WHERE er.entity_id=? AND (? IS NULL OR r.repo_key=?) "
+                "ORDER BY r.repo_key,er.weight DESC,er.id"
+            ),
+            "workflows": (
+                "SELECT w.id,r.repo_key,w.name,w.workflow_type,w.source_kind,"
+                "w.source_file,w.source_symbol_id,w.confidence,w.reason "
+                "FROM workflows w "
+                "JOIN repos r ON r.id=w.repo_id "
+                "WHERE w.entity_id=? AND (? IS NULL OR r.repo_key=?) "
+                "ORDER BY r.repo_key,w.workflow_type,w.name,w.id"
+            ),
+            "rest_endpoints": (
+                "SELECT ep.id,r.repo_key,ep.method,ep.path,ep.handler_symbol_id,"
+                "f.path file_path "
+                "FROM rest_endpoints ep "
+                "JOIN repos r ON r.id=ep.repo_id "
+                "LEFT JOIN files f ON f.id=ep.file_id "
+                "WHERE ep.entity_id=? AND (? IS NULL OR r.repo_key=?) "
+                "ORDER BY r.repo_key,ep.path,ep.method,ep.id"
+            ),
+        }.items():
+            data[key] = [
+                row_to_dict(r)
+                for r in c.execute(sql, (entity_id, repo_key, repo_key))
+            ]
+
+        return make_response(state, "entity_context", data, c)
+
+
+
+def rest_coverage_impl(
+    state: CatalogState,
+    name: str,
+    version: str | None = None,
+    limit: int = DEFAULT_LIMIT,
+) -> CatalogResponse:
+    """Show evidence-backed Gherkin REST coverage for an entity."""
+    lim = validate_limit(limit)
+
+    with state.conn() as c:
+        missing = [
+            table for table in REQUIRED_TABLES if not state.table_exists(c, table)
+        ]
+        if missing:
+            return make_error_response(
+                state,
+                "rest_coverage",
+                "coverage_tables_missing",
+                "REST coverage tables are unavailable",
+                c,
+                {"missing_tables": missing},
+            )
+
+        entity = c.execute(
+            "SELECT id,name FROM entity_nodes WHERE name=? COLLATE NOCASE",
+            (name,),
+        ).fetchone()
+
+        if not entity:
+            return make_error_response(
+                state,
+                "rest_coverage",
+                "entity_not_found",
+                f"No entity named {name}",
+                c,
+            )
+
+        entity_id = int(entity["id"])
+        endpoints, diagnostics = coverage_rows(c, entity_id, version, lim)
+
+        version_predicate = (
+            "AND (source_version = ? OR source_version IS NULL)"
+            if version
+            else ""
+        )
+        total = c.execute(
+            f"SELECT COUNT(*) FROM rest_endpoints "
+            f"WHERE entity_id = ? {version_predicate}",
+            (entity_id, *((version,) if version else ())),
+        ).fetchone()[0]
+
+        data = {
+            "entity": {"id": entity_id, "name": entity["name"]},
+            "endpoint_coverage": endpoints,
+            "diagnostics": diagnostics,
+            "summary": coverage_summary(endpoints, diagnostics),
+            "coverage_scope": {
+                "total_endpoint_count": total,
+                "returned_endpoint_count": len(endpoints),
+                "sampled": len(endpoints) < total,
+            },
+        }
+
+        return make_response(state, "rest_coverage", data, c)
+
+
+def entity_test_coverage_impl(
+    state: CatalogState,
+    entity_name: str,
+    workflow_name: str | None = None,
+    eligibility: str | None = None,
+    limit: int = DEFAULT_LIMIT,
+    cursor: str | None = None,
+) -> CatalogResponse:
+    """Retrieve Gherkin test cases (scenarios and their HTTP requests) covering an entity or its workflows.
+
+    Returns test cases organized by feature/scenario with full request steps,
+    Jira references, eligibility status, and a summary by eligibility tier.
+    If workflow_name is provided, only test cases containing at least one
+    operation_kind='workflow' request step for that entity are returned.
+    """
+    lim = validate_limit(limit)
+    off = decode_cursor(cursor)
+
+    with state.conn() as c:
+        # Verify required tables are present
+        required_tables = (
+            "test_cases",
+            "test_requests",
+            "test_entity_links",
+            "entity_nodes",
+            "repos",
+        )
+        missing = [t for t in required_tables if not state.table_exists(c, t)]
+        if missing:
+            return make_error_response(
+                state,
+                "entity_test_coverage",
+                "tables_missing",
+                "Test coverage tables are unavailable",
+                c,
+                {"missing_tables": missing},
+            )
+
+        # Resolve entity
+        entity = c.execute(
+            "SELECT id, name, entity_type FROM entity_nodes WHERE name = ? COLLATE NOCASE",
+            (entity_name,),
+        ).fetchone()
+        if not entity:
+            return make_error_response(
+                state,
+                "entity_test_coverage",
+                "entity_not_found",
+                f"No entity named {entity_name}",
+                c,
+            )
+        entity_id = int(entity["id"])
+
+        # Gather workflow context for the entity (informational)
+        workflows: list[dict[str, Any]] = []
+        if state.table_exists(c, "workflows"):
+            wf_sql = (
+                "SELECT w.id, w.name, w.workflow_type, r.repo_key "
+                "FROM workflows w JOIN repos r ON r.id = w.repo_id "
+                "WHERE w.entity_id = ?"
+            )
+            wf_args: list[Any] = [entity_id]
+            if workflow_name:
+                wf_sql += " AND w.name = ? COLLATE NOCASE"
+                wf_args.append(workflow_name)
+            wf_sql += " ORDER BY w.name"
+            workflows = [row_to_dict(r) for r in c.execute(wf_sql, wf_args)]
+
+        # Build optional filter clauses (no extra params needed for workflow_filter)
+        eligibility_clause = ""
+        query_args: list[Any] = [entity_id]
+        if eligibility:
+            valid_eligibilities = {"active", "known_issue", "ci_only", "conditional"}
+            if eligibility not in valid_eligibilities:
+                return make_error_response(
+                    state,
+                    "entity_test_coverage",
+                    "invalid_eligibility",
+                    f"eligibility must be one of: {sorted(valid_eligibilities)}",
+                    c,
+                )
+            eligibility_clause = " AND tc.eligibility = ?"
+            query_args.append(eligibility)
+
+        workflow_clause = (
+            " AND EXISTS ("
+            "SELECT 1 FROM test_requests tr2 "
+            "WHERE tr2.test_case_id = tc.id AND tr2.operation_kind = 'workflow'"
+            ")"
+            if workflow_name
+            else ""
+        )
+
+        entity_exists_clause = (
+            "EXISTS ("
+            "SELECT 1 FROM test_requests tr "
+            "JOIN test_entity_links tel ON tel.test_request_id = tr.id "
+            "WHERE tr.test_case_id = tc.id AND tel.entity_id = ?"
+            ")"
+        )
+
+        # Summary counts by eligibility (unaffected by eligibility filter)
+        summary_rows = c.execute(
+            f"""
+            SELECT tc.eligibility, COUNT(DISTINCT tc.id) AS cnt
+            FROM test_cases tc
+            WHERE {entity_exists_clause}
+            {workflow_clause}
+            GROUP BY tc.eligibility
+            ORDER BY tc.eligibility
+            """,
+            [entity_id],
+        ).fetchall()
+        summary = {row["eligibility"]: row["cnt"] for row in summary_rows}
+        total = sum(summary.values())
+
+        # Paginated test case list
+        rows = c.execute(
+            f"""
+            SELECT DISTINCT
+                tc.id,
+                r.repo_key AS suite_id,
+                tc.feature_name,
+                tc.scenario_name,
+                tc.case_name,
+                tc.example_row,
+                tc.feature_line,
+                tc.scenario_line,
+                tc.eligibility,
+                tc.tags_json,
+                tc.jira_refs_json,
+                f.path AS feature_path
+            FROM test_cases tc
+            JOIN repos r ON r.id = tc.repo_id
+            LEFT JOIN files f ON f.id = tc.file_id
+            WHERE {entity_exists_clause}
+            {eligibility_clause}
+            {workflow_clause}
+            ORDER BY tc.eligibility, tc.feature_name, tc.scenario_name,
+                     tc.example_row, tc.id
+            LIMIT ? OFFSET ?
+            """,
+            (*query_args, lim + 1, off),
+        ).fetchall()
+
+        page_rows = rows[:lim]
+        next_cursor = encode_cursor(off + lim) if len(rows) > lim else None
+
+        # Enrich each test case with its HTTP request steps
+        cases: list[dict[str, Any]] = []
+        for row in page_rows:
+            tc_id = row["id"]
+            requests = [
+                row_to_dict(r)
+                for r in c.execute(
+                    """
+                    SELECT tr.id, tr.ordinal, tr.step_line, tr.method,
+                           tr.object_token, tr.raw_path, tr.normalized_path,
+                           tr.request_version, tr.expected_status, tr.operation_kind
+                    FROM test_requests tr
+                    WHERE tr.test_case_id = ?
+                    ORDER BY tr.ordinal
+                    """,
+                    (tc_id,),
                 )
             ]
-            return self.out("repository_list", {"repositories": rows}, c)
+            case_dict = row_to_dict(row)
+            case_dict["requests"] = requests
+            cases.append(case_dict)
 
-    def usages(
-        self, name: str | None, ident: int | None, repo_key: str | None = None
-    ) -> dict[str, Any]:
-        with self.conn() as c:
-            hits = c.execute(
-                "SELECT s.id,s.name,s.kind,r.repo_key,f.path file_path,s.start_line,s.end_line FROM symbols s JOIN files f ON f.id=s.file_id JOIN repos r ON r.id=f.repo_id WHERE ((? IS NOT NULL AND s.id=?) OR (? IS NULL AND s.name=?)) AND (? IS NULL OR r.repo_key=?) ORDER BY r.repo_key,s.id",
-                (ident, ident, ident, name, repo_key, repo_key),
-            ).fetchall()
-            if not hits:
-                return self.out(
-                    "symbol_references",
-                    {},
-                    c,
-                    "not_found",
-                    {"code": "symbol_not_found", "message": "Symbol not found"},
-                )
-            if ident is None and len(hits) > 1:
-                return self.out(
-                    "symbol_references",
-                    {"candidates": [_row(r) for r in hits]},
-                    c,
-                    "ambiguous",
-                    {"code": "ambiguous_symbol", "message": "Retry with symbol_id"},
-                )
-            if not self.graph_state(c):
-                return self.out(
-                    "symbol_references",
-                    {"target": _row(hits[0])},
-                    c,
-                    "graph_unavailable",
-                    {"code": "graph_unavailable", "message": "No active Ladybug graph"},
-                )
-            from scripts.query_graph import (
-                _query_symbol_usages,
-                enrich_symbols_from_sql,
-                get_graph_connection,
-            )
+        data: dict[str, Any] = {
+            "entity": row_to_dict(entity),
+            "workflows": workflows,
+            "total_test_case_count": total,
+            "summary_by_eligibility": summary,
+            "test_cases": cases,
+            "filter": {
+                "workflow_name": workflow_name,
+                "eligibility": eligibility,
+            },
+        }
 
-            db, g = get_graph_connection(str(self.graph))
-            try:
-                x = _query_symbol_usages(g, int(hits[0]["id"]))
-                both = x["callers"] + x["referencers"]
-                y = enrich_symbols_from_sql(c, both)
-                return self.out(
-                    "symbol_references",
-                    {
-                        "target": _row(hits[0]),
-                        "callers": y[: len(x["callers"])],
-                        "referencers": y[len(x["callers"]) :],
-                    },
-                    c,
-                )
-            finally:
-                g.close()
-                db.close()
+        return make_response(
+            state,
+            "entity_test_coverage",
+            data,
+            c,
+            next_cursor=next_cursor,
+        )
 
-    def status(self):
-        with self.conn() as c:
-            return self.out(
-                "catalog_status",
-                {
-                    "counts": {
-                        t: c.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
-                        for t in (
-                            "files",
-                            "symbols",
-                            "relationships",
-                            "entity_nodes",
-                            "workflows",
-                            "rest_endpoints",
-                        )
-                        if self.table(c, t)
-                    }
-                },
+
+def relationship_query_impl(
+    state: CatalogState,
+    name: str,
+    direction: str,
+    resolution_classes: list[str] | None = None,
+    confidence_min: float | None = None,
+    confidence_max: float | None = None,
+    repo_key: str | None = None,
+    limit: int = DEFAULT_LIMIT,
+    cursor: str | None = None,
+) -> CatalogResponse:
+    """Query relationships by source or target symbol with optional confidence filtering."""
+    lim = validate_limit(limit)
+    off = decode_cursor(cursor)
+
+    if confidence_min is not None and confidence_max is not None:
+        if not (0.0 <= confidence_min <= 1.0 and 0.0 <= confidence_max <= 1.0):
+            raise ValueError("confidence_min and confidence_max must be 0.0..1.0")
+        if confidence_min > confidence_max:
+            raise ValueError("confidence_min must be <= confidence_max")
+
+    column = "source_name" if direction == "outgoing" else "target_name"
+    sql = (
+        "SELECT rel.id,r.repo_key,rel.source_symbol_id,rel.source_name,"
+        "rel.source_kind,rel.target_symbol_id,rel.target_name,rel.target_kind,"
+        "rel.relationship_type,rel.file_path,rel.language,rel.confidence,"
+        "rel.evidence,rel.resolution_class,rel.resolution_reason,rel.extractor "
+        "FROM relationships rel "
+        "JOIN repos r ON r.id=rel.repo_id "
+        f"WHERE rel.{column}=? AND (? IS NULL OR r.repo_key=?)"
+    )
+    args: list[Any] = [name, repo_key, repo_key]
+
+    if resolution_classes:
+        sql += " AND resolution_class IN (" + ",".join("?" * len(resolution_classes)) + ")"
+        args += resolution_classes
+
+    if confidence_min is not None:
+        sql += " AND rel.confidence >= ?"
+        args.append(confidence_min)
+
+    if confidence_max is not None:
+        sql += " AND rel.confidence <= ?"
+        args.append(confidence_max)
+
+    sql += " ORDER BY id"
+
+    with state.conn() as c:
+        rows = c.execute(
+            sql + " LIMIT ? OFFSET ?", (*args, lim + 1, off)
+        ).fetchall()
+        data, nxt = paginate(rows, lim, off)
+        return make_response(
+            state,
+            "relationship_query",
+            {"relationships": data},
+            c,
+            next_cursor=nxt,
+        )
+
+
+
+def api_surface_impl(
+    state: CatalogState,
+    entity_name: str | None = None,
+    path_fragment: str | None = None,
+    repo_key: str | None = None,
+    limit: int = DEFAULT_LIMIT,
+    cursor: str | None = None,
+) -> CatalogResponse:
+    """Query REST API endpoints by entity or path."""
+    if not entity_name and not path_fragment:
+        raise ValueError("entity_name or path_fragment is required")
+
+    lim = validate_limit(limit)
+    off = decode_cursor(cursor)
+
+    sql = (
+        "SELECT r.id,rp.repo_key,r.method,r.path,e.id entity_id,"
+        "e.name entity_name,r.handler_symbol_id,f.path file_path "
+        "FROM rest_endpoints r "
+        "JOIN repos rp ON rp.id=r.repo_id "
+        "LEFT JOIN entity_nodes e ON e.id=r.entity_id "
+        "LEFT JOIN files f ON f.id=r.file_id "
+        "WHERE (? IS NULL OR rp.repo_key=?)"
+    )
+    args: list[Any] = [repo_key, repo_key]
+
+    if entity_name:
+        sql += " AND e.name=? COLLATE NOCASE"
+        args.append(entity_name)
+
+    if path_fragment:
+        sql += " AND r.path LIKE ?"
+        args.append("%" + path_fragment + "%")
+
+    sql += " ORDER BY r.path,r.method,r.id"
+
+    with state.conn() as c:
+        rows = c.execute(
+            sql + " LIMIT ? OFFSET ?", (*args, lim + 1, off)
+        ).fetchall()
+        data, nxt = paginate(rows, lim, off)
+        return make_response(
+            state,
+            "api_surface",
+            {"endpoints": data},
+            c,
+            next_cursor=nxt,
+        )
+
+
+def workflow_context_impl(
+    state: CatalogState,
+    entity_name: str,
+    workflow_type: str | None = None,
+    repo_key: str | None = None,
+) -> CatalogResponse:
+    """Retrieve workflows for an entity."""
+    sql = (
+        "SELECT w.id,r.repo_key,w.name,w.workflow_type,w.source_kind,"
+        "w.source_file,w.source_symbol_id,w.confidence,w.reason "
+        "FROM workflows w "
+        "JOIN entity_nodes e ON e.id=w.entity_id "
+        "JOIN repos r ON r.id=w.repo_id "
+        "WHERE e.name=? COLLATE NOCASE AND (? IS NULL OR r.repo_key=?)"
+    )
+    args: list[Any] = [entity_name, repo_key, repo_key]
+
+    if workflow_type:
+        sql += " AND w.workflow_type=?"
+        args.append(workflow_type)
+
+    sql += " ORDER BY w.workflow_type,w.name,w.id"
+
+    with state.conn() as c:
+        rows = c.execute(sql, args).fetchall()
+        data = [row_to_dict(r) for r in rows]
+        return make_response(state, "workflow_context", {"workflows": data}, c)
+
+
+def security_surface_impl(
+    state: CatalogState,
+    key_fragment: str,
+    limit: int = DEFAULT_LIMIT,
+    cursor: str | None = None,
+    repo_key: str | None = None,
+) -> CatalogResponse:
+    """Search security operations by key or title."""
+    lim = validate_limit(limit)
+    off = decode_cursor(cursor)
+
+    sql = (
+        "SELECT o.id,r.repo_key,o.op_key,o.op_numeric_id,o.title,o.action,"
+        "o.script,o.source_file,o.source_line,o.source_kind "
+        "FROM security_operations o "
+        "JOIN repos r ON r.id=o.repo_id "
+        "WHERE (o.op_key LIKE ? OR o.title LIKE ?) "
+        "AND (? IS NULL OR r.repo_key=?) "
+        "ORDER BY o.op_key,r.repo_key,o.id"
+    )
+    args = (
+        "%" + key_fragment + "%",
+        "%" + key_fragment + "%",
+        repo_key,
+        repo_key,
+    )
+
+    with state.conn() as c:
+        rows = c.execute(
+            sql + " LIMIT ? OFFSET ?", (*args, lim + 1, off)
+        ).fetchall()
+        data, nxt = paginate(rows, lim, off)
+        return make_response(
+            state,
+            "security_surface",
+            {"operations": data},
+            c,
+            next_cursor=nxt,
+        )
+
+
+def symbol_references_impl(
+    state: CatalogState,
+    symbol_name: str | None = None,
+    symbol_id: int | None = None,
+    repo_key: str | None = None,
+) -> CatalogResponse:
+    """Find all references (callers and referencers) to a symbol."""
+    with state.conn() as c:
+        hits = c.execute(
+            "SELECT s.id,s.name,s.kind,r.repo_key,f.path file_path,"
+            "s.start_line,s.end_line "
+            "FROM symbols s "
+            "JOIN files f ON f.id=s.file_id "
+            "JOIN repos r ON r.id=f.repo_id "
+            "WHERE ((? IS NOT NULL AND s.id=?) OR (? IS NULL AND s.name=?)) "
+            "AND (? IS NULL OR r.repo_key=?) "
+            "ORDER BY r.repo_key,s.id",
+            (symbol_id, symbol_id, symbol_id, symbol_name, repo_key, repo_key),
+        ).fetchall()
+
+        if not hits:
+            return make_error_response(
+                state,
+                "symbol_references",
+                "symbol_not_found",
+                "Symbol not found",
                 c,
             )
 
+        if symbol_id is None and len(hits) > 1:
+            return make_response(
+                state,
+                "symbol_references",
+                {"candidates": [row_to_dict(r) for r in hits]},
+                c,
+                status="ambiguous",
+                error={
+                    "code": "ambiguous_symbol",
+                    "message": "Retry with symbol_id",
+                },
+            )
 
-def create_server(db_path: str | None = None, graph_path: str | None = None) -> FastMCP:
-    cat = Catalog(
-        db_path or os.getenv("CATALOG_DB", CATALOG_DB),
-        graph_path or os.getenv("GRAPH_DB", GRAPH_DB),
-    )
-    transport = os.getenv("MCP_TRANSPORT", "streamable-http")
-    kwargs = {
-        "name": "intacct_catalog",
-        "instructions": "Read-only evidence-first catalog. Search first, cite returned source paths, line ranges, record IDs and confidence; do not infer missing evidence.",
+        if not state.graph_active(c):
+            return make_response(
+                state,
+                "symbol_references",
+                {"target": row_to_dict(hits[0])},
+                c,
+                status="graph_unavailable",
+                error={
+                    "code": "graph_unavailable",
+                    "message": "No active Ladybug graph",
+                },
+            )
+
+        from scripts.query_graph import (
+            _query_symbol_usages,
+            enrich_symbols_from_sql,
+            get_graph_connection,
+        )
+
+        db, g = get_graph_connection(str(state.graph_path))
+        try:
+            x = _query_symbol_usages(g, int(hits[0]["id"]))
+            both = x["callers"] + x["referencers"]
+            y = enrich_symbols_from_sql(c, both)
+            return make_response(
+                state,
+                "symbol_references",
+                {
+                    "target": row_to_dict(hits[0]),
+                    "callers": y[: len(x["callers"])],
+                    "referencers": y[len(x["callers"]) :],
+                },
+                c,
+            )
+        finally:
+            g.close()
+            db.close()
+
+
+def file_impact_impl(
+    state: CatalogState,
+    file_path: str,
+    repo_key: str | None = None,
+    depth: int = 1,
+    max_edges_per_symbol: int = 25,
+) -> CatalogResponse:
+    """Analyze impact of changes to a file (incoming call graph)."""
+    if not 1 <= depth <= 3 or not 1 <= max_edges_per_symbol <= 1000:
+        raise ValueError("depth must be 1..3 and max_edges_per_symbol 1..1000")
+
+    with state.conn() as c:
+        files = c.execute(
+            "SELECT f.id,f.path,r.repo_key FROM files f "
+            "JOIN repos r ON r.id=f.repo_id "
+            "WHERE f.path=? AND (? IS NULL OR r.repo_key=?) "
+            "ORDER BY r.repo_key,f.id",
+            (file_path, repo_key, repo_key),
+        ).fetchall()
+
+        if repo_key is None and len(files) > 1:
+            return make_response(
+                state,
+                "file_impact",
+                {"candidates": [row_to_dict(row) for row in files]},
+                c,
+                status="ambiguous",
+                error={
+                    "code": "ambiguous_file",
+                    "message": "File path exists in multiple repositories; retry with repo_key",
+                },
+            )
+
+        f = files[0] if files else None
+        if not f:
+            return make_error_response(
+                state,
+                "file_impact",
+                "file_not_found",
+                f"File not found: {file_path}",
+                c,
+            )
+
+        if not state.graph_active(c):
+            return make_response(
+                state,
+                "file_impact",
+                {"file": row_to_dict(f)},
+                c,
+                status="graph_unavailable",
+                error={
+                    "code": "graph_stale",
+                    "message": "No active graph matches the current SQLite catalog",
+                },
+            )
+
+        from scripts.query_graph import (
+            _query_bounded_incoming_traversal,
+            _query_file_symbols_from_graph,
+            enrich_symbols_from_sql,
+            get_graph_connection,
+        )
+
+        db, g = get_graph_connection(str(state.graph_path))
+        try:
+            seeds = _query_file_symbols_from_graph(g, file_path, repo_key)
+            nodes, edges = _query_bounded_incoming_traversal(
+                g,
+                [x["symbol_id"] for x in seeds],
+                depth,
+                max_edges_per_symbol,
+            )
+            allnodes = [{**x, "depth": 0, "is_seed": True} for x in seeds] + nodes
+            return make_response(
+                state,
+                "file_impact",
+                {
+                    "file": row_to_dict(f),
+                    "seed_symbols": enrich_symbols_from_sql(
+                        c, allnodes[: len(seeds)]
+                    ),
+                    "affected_symbols": enrich_symbols_from_sql(c, allnodes),
+                    "traversal": {
+                        "depth": depth,
+                        "max_edges_per_symbol": max_edges_per_symbol,
+                        "edges": edges,
+                    },
+                },
+                c,
+            )
+        finally:
+            g.close()
+            db.close()
+
+
+def provenance_impl(
+    state: CatalogState,
+    record_type: str,
+    record_id: int,
+) -> CatalogResponse:
+    """Retrieve full provenance for a record (file, symbol, relationship, etc.)."""
+    queries = {
+        "file": (
+            "SELECT f.id,r.repo_key,r.tracked_branch,r.indexed_commit_sha,"
+            "r.last_scanned_at,r.last_built_at,r.index_status,f.path,f.language,"
+            "f.size_bytes,f.sha1,f.last_indexed FROM files f "
+            "JOIN repos r ON r.id=f.repo_id WHERE f.id=?"
+        ),
+        "symbol": (
+            "SELECT s.id,s.name,s.kind,s.language,s.start_line,s.end_line,"
+            "s.signature,f.id file_id,r.repo_key,r.tracked_branch,"
+            "r.indexed_commit_sha,f.path file_path FROM symbols s "
+            "JOIN files f ON f.id=s.file_id JOIN repos r ON r.id=f.repo_id "
+            "WHERE s.id=?"
+        ),
+        "relationship": (
+            "SELECT rel.id,r.repo_key,r.tracked_branch,r.indexed_commit_sha,"
+            "rel.source_symbol_id,rel.target_symbol_id,rel.relationship_type,"
+            "rel.file_path,rel.confidence,rel.evidence,rel.resolution_class,"
+            "rel.resolution_reason,rel.extractor,rel.created_at "
+            "FROM relationships rel JOIN repos r ON r.id=rel.repo_id WHERE rel.id=?"
+        ),
+        "entity_mapping": (
+            "SELECT em.id,r.repo_key,em.mapping_type,em.confidence,"
+            "em.source_text,e.name entity_name,eo.ent_file,eo.module,"
+            "eo.table_name,eo.view_name,s.id symbol_id,f.path file_path,"
+            "s.start_line,s.end_line FROM entity_mappings em "
+            "JOIN repos r ON r.id=em.repo_id JOIN entity_nodes e ON e.id=em.entity_id "
+            "LEFT JOIN entity_occurrences eo ON eo.repo_id=em.repo_id "
+            "AND eo.entity_id=em.entity_id LEFT JOIN symbols s ON s.id=em.symbol_id "
+            "LEFT JOIN files f ON f.id=COALESCE(em.file_id,s.file_id) "
+            "WHERE em.id=?"
+        ),
+        "workflow": (
+            "SELECT w.id,r.repo_key,w.name,w.workflow_type,w.source_kind,"
+            "w.source_file,w.source_symbol_id,w.confidence,w.reason,"
+            "e.name entity_name,eo.ent_file,eo.module,eo.table_name,eo.view_name "
+            "FROM workflows w JOIN repos r ON r.id=w.repo_id "
+            "JOIN entity_nodes e ON e.id=w.entity_id "
+            "LEFT JOIN entity_occurrences eo ON eo.repo_id=w.repo_id "
+            "AND eo.entity_id=w.entity_id WHERE w.id=?"
+        ),
+        "rest_endpoint": (
+            "SELECT ep.id,r.repo_key,ep.method,ep.path,e.name entity_name,"
+            "eo.ent_file,eo.module,eo.table_name,eo.view_name,"
+            "ep.handler_symbol_id,f.path file_path FROM rest_endpoints ep "
+            "JOIN repos r ON r.id=ep.repo_id "
+            "LEFT JOIN entity_nodes e ON e.id=ep.entity_id "
+            "LEFT JOIN entity_occurrences eo ON eo.repo_id=ep.repo_id "
+            "AND eo.entity_id=ep.entity_id LEFT JOIN files f ON f.id=ep.file_id "
+            "WHERE ep.id=?"
+        ),
+        "security_operation": (
+            "SELECT id,op_key,title,action,source_file,source_line,source_kind,"
+            "raw_hash FROM security_operations WHERE id=?"
+        ),
     }
-    if transport in {"sse", "streamable-http"}:
-        kwargs["port"] = int(os.getenv("MCP_PORT", "8010"))
-    s = FastMCP(**kwargs)
 
-    @s.tool()
+    if record_type not in queries:
+        raise ValueError(f"invalid record_type: {record_type}")
+
+    with state.conn() as c:
+        r = c.execute(queries[record_type], (record_id,)).fetchone()
+        if not r:
+            return make_error_response(
+                state,
+                "provenance",
+                "record_not_found",
+                f"No {record_type} record {record_id}",
+                c,
+            )
+
+        return make_response(
+            state,
+            "provenance",
+            {"record_type": record_type, "evidence": row_to_dict(r)},
+            c,
+        )
+
+
+def repository_list_impl(state: CatalogState) -> CatalogResponse:
+    """List all tracked repositories and their branch/revision status."""
+    with state.conn() as c:
+        rows = c.execute(
+            "SELECT repo_key,tracked_branch,indexed_commit_sha,last_scanned_at,"
+            "last_built_at,index_status,diagnostic_error,last_attempt_status,"
+            "last_attempted_at,last_attempt_error FROM repos ORDER BY repo_key"
+        ).fetchall()
+        return make_response(
+            state,
+            "repository_list",
+            {"repositories": [row_to_dict(r) for r in rows]},
+            c,
+        )
+
+
+def catalog_status_impl(state: CatalogState) -> CatalogResponse:
+    """Get catalog statistics (row counts per table)."""
+    with state.conn() as c:
+        counts = {}
+        for table in (
+            "files",
+            "symbols",
+            "relationships",
+            "entity_nodes",
+            "workflows",
+            "rest_endpoints",
+        ):
+            if state.table_exists(c, table):
+                counts[table] = c.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+
+        return make_response(state, "catalog_status", {"counts": counts}, c)
+
+
+class Catalog:
+    """Compatibility wrapper exposing class-based catalog methods for tests/legacy callers."""
+
+    def __init__(
+        self,
+        db_path: str | os.PathLike[str] | None = None,
+        graph_path: str | os.PathLike[str] | None = None,
+    ) -> None:
+        self.state = CatalogState(
+            db_path=Path(db_path or os.getenv("CATALOG_DB", CATALOG_DB)).resolve(),
+            graph_path=Path(graph_path or os.getenv("GRAPH_DB", GRAPH_DB)).resolve(),
+        )
+
+    def entity(
+        self,
+        name: str,
+        repo_key: str | None = None,
+    ) -> CatalogResponse:
+        return entity_context_impl(self.state, name, repo_key)
+
+    def repositories(self) -> CatalogResponse:
+        return repository_list_impl(self.state)
+
+    def coverage(
+        self,
+        name: str,
+        version: str | None = None,
+        limit: int = DEFAULT_LIMIT,
+    ) -> CatalogResponse:
+        response = rest_coverage_impl(self.state, name, version, limit)
+        # Preserve legacy class API contract expected by validation tests.
+        error = response.get("error") or {}
+        if error.get("code") == "entity_not_found":
+            response["status"] = "not_found"
+        return response
+
+
+# ============================================================================
+# Server Setup
+# ============================================================================
+
+
+def create_server(
+    db_path: str | None = None,
+    graph_path: str | None = None,
+    host: str = "127.0.0.1",
+    port: int = 8010,
+) -> tuple[FastMCP, CatalogState]:
+    """Create and configure the FastMCP server.
+
+    Returns a tuple of (FastMCP instance, CatalogState) for lifecycle management.
+    """
+    state = CatalogState(
+        db_path=Path(db_path or os.getenv("CATALOG_DB", CATALOG_DB)).resolve(),
+        graph_path=Path(graph_path or os.getenv("GRAPH_DB", GRAPH_DB)).resolve(),
+    )
+
+    mcp = FastMCP(
+        name="intacct_catalog",
+        instructions="Read-only evidence-first catalog. Search first, cite returned source paths, line ranges, record IDs and confidence; do not infer missing evidence.",
+        host=host,
+        port=port,
+    )
+
+    # Register tools with factory closures to bind state
+    @mcp.tool()
     def catalog_search(
         query: str,
         kind: Literal[
@@ -437,208 +1943,180 @@ def create_server(db_path: str | None = None, graph_path: str | None = None) -> 
         limit: int = DEFAULT_LIMIT,
         cursor: str | None = None,
         repo_key: str | None = None,
-    ) -> dict[str, Any]:
-        return cat.search(query, kind, limit, cursor, repo_key)
+    ) -> CatalogResponse:
+        """Search across entities, files, symbols, APIs, workflows, and security operations."""
+        return catalog_search_impl(state, query, kind, limit, cursor, repo_key)
 
-    @s.tool()
-    def repository_list() -> dict[str, Any]:
-        """List repositories and their branch/revision/index freshness."""
-        return cat.repositories()
+    @mcp.tool()
+    def entity_context(
+        entity_name: str,
+        repo_key: str | None = None,
+    ) -> CatalogResponse:
+        """Retrieve full context for an entity (occurrences, mappings, workflows, endpoints)."""
+        return entity_context_impl(state, entity_name, repo_key)
 
-    @s.tool()
-    def entity_context(entity_name: str, repo_key: str | None = None) -> dict[str, Any]:
-        return cat.entity(entity_name, repo_key)
-
-    @s.tool()
+    @mcp.tool()
     def rest_coverage(
         entity_name: str,
         version: str | None = None,
         limit: int = DEFAULT_LIMIT,
-    ) -> dict[str, Any]:
+    ) -> CatalogResponse:
         """Show evidence-backed Gherkin REST coverage for an entity."""
-        return cat.coverage(entity_name, version, limit)
+        return rest_coverage_impl(state, entity_name, version, limit)
 
-    @s.tool()
+    @mcp.tool()
+    def entity_test_coverage(
+        entity_name: str,
+        workflow_name: str | None = None,
+        eligibility: str | None = None,
+        limit: int = DEFAULT_LIMIT,
+        cursor: str | None = None,
+    ) -> CatalogResponse:
+        """Retrieve Gherkin test cases covering an entity (or its workflows).
+
+        Returns each matching scenario with its feature name, Jira references,
+        eligibility status, and the full sequence of HTTP request steps. Use
+        workflow_name to narrow results to scenarios that exercise a named
+        workflow. Use eligibility to filter by 'active', 'known_issue',
+        'ci_only', or 'conditional'.
+        """
+        return entity_test_coverage_impl(
+            state, entity_name, workflow_name, eligibility, limit, cursor
+        )
+
+    @mcp.tool()
     def relationship_query(
         name: str,
-        direction: Literal["outgoing", "incoming"],
+        direction: Literal["outgoing", "incoming"] = "outgoing",
         resolution_classes: list[str] | None = None,
+        confidence_min: float | None = None,
+        confidence_max: float | None = None,
         repo_key: str | None = None,
         limit: int = DEFAULT_LIMIT,
         cursor: str | None = None,
-    ) -> dict[str, Any]:
-        column = "source_name" if direction == "outgoing" else "target_name"
-        sql = f"SELECT rel.id,r.repo_key,rel.source_symbol_id,rel.source_name,rel.source_kind,rel.target_symbol_id,rel.target_name,rel.target_kind,rel.relationship_type,rel.file_path,rel.language,rel.confidence,rel.evidence,rel.resolution_class,rel.resolution_reason,rel.extractor FROM relationships rel JOIN repos r ON r.id=rel.repo_id WHERE rel.{column}=? AND (? IS NULL OR r.repo_key=?)"
-        args = [name, repo_key, repo_key]
-        if resolution_classes:
-            sql += (
-                " AND resolution_class IN ("
-                + ",".join("?" for _ in resolution_classes)
-                + ")"
-            )
-            args += resolution_classes
-        return cat.records(
-            "relationship_query",
-            sql + " ORDER BY id",
-            tuple(args),
-            limit,
-            cursor,
-            "relationships",
+    ) -> CatalogResponse:
+        """Query relationships by source or target symbol with optional confidence filtering."""
+        return relationship_query_impl(
+            state, name, direction, resolution_classes, confidence_min, confidence_max, repo_key, limit, cursor
         )
 
-    @s.tool()
+    # Phase 1: Dependency Surface Tools
+    @mcp.tool()
+    def workflow_structure(
+        entity_name: str,
+        workflow_id: int | None = None,
+        repo_key: str | None = None,
+    ) -> CatalogResponse:
+        """Retrieve workflow structure: nodes and edges with ordinal sequencing."""
+        return workflow_structure_impl(state, entity_name, workflow_id, repo_key)
+
+    @mcp.tool()
+    def entity_access_detail(
+        entity_name: str,
+        surface_type: str | None = None,
+        repo_key: str | None = None,
+        limit: int = DEFAULT_LIMIT,
+        cursor: str | None = None,
+    ) -> CatalogResponse:
+        """Retrieve entity access links by surface with evidence provenance."""
+        return entity_access_detail_impl(state, entity_name, surface_type, repo_key, limit, cursor)
+
+    @mcp.tool()
+    def security_dependency_chain(
+        op_key: str,
+        repo_key: str | None = None,
+    ) -> CatalogResponse:
+        """Retrieve security operation dependencies: allowops, policy grants, and menu links."""
+        return security_dependency_chain_impl(state, op_key, repo_key)
+
+    @mcp.tool()
+    def openapi_file_dependencies(
+        file_path: str,
+        repo_key: str | None = None,
+    ) -> CatalogResponse:
+        """Retrieve OpenAPI file reference dependencies."""
+        return openapi_file_dependencies_impl(state, file_path, repo_key)
+
+    # Phase 2: Risk Surface Tools
+    @mcp.tool()
+    def catalog_risk_summary() -> CatalogResponse:
+        """Aggregate risk signals across the catalog."""
+        return catalog_risk_summary_impl(state)
+
+    @mcp.tool()
+    def risk_detail(
+        category: str,
+        entity_name: str | None = None,
+        symbol_name: str | None = None,
+        repo_key: str | None = None,
+        limit: int = DEFAULT_LIMIT,
+        cursor: str | None = None,
+    ) -> CatalogResponse:
+        """Drill down into specific risk category with pagination."""
+        return risk_detail_impl(state, category, entity_name, symbol_name, repo_key, limit, cursor)
+
+    @mcp.tool()
+    def confidence_band_query(
+        category: str,
+        confidence_min: float,
+        confidence_max: float,
+        repo_key: str | None = None,
+        limit: int = DEFAULT_LIMIT,
+        cursor: str | None = None,
+    ) -> CatalogResponse:
+        """Query records within a confidence band."""
+        return confidence_band_query_impl(state, category, confidence_min, confidence_max, repo_key, limit, cursor)
+
+    @mcp.tool()
     def api_surface(
         entity_name: str | None = None,
         path_fragment: str | None = None,
         repo_key: str | None = None,
         limit: int = DEFAULT_LIMIT,
         cursor: str | None = None,
-    ) -> dict[str, Any]:
-        if not entity_name and not path_fragment:
-            raise ValueError("entity_name or path_fragment is required")
-        sql = "SELECT r.id,rp.repo_key,r.method,r.path,e.id entity_id,e.name entity_name,r.handler_symbol_id,f.path file_path FROM rest_endpoints r JOIN repos rp ON rp.id=r.repo_id LEFT JOIN entity_nodes e ON e.id=r.entity_id LEFT JOIN files f ON f.id=r.file_id WHERE (? IS NULL OR rp.repo_key=?)"
-        args = [repo_key, repo_key]
-        if entity_name:
-            sql += " AND e.name=? COLLATE NOCASE"
-            args.append(entity_name)
-        if path_fragment:
-            sql += " AND r.path LIKE ?"
-            args.append("%" + path_fragment + "%")
-        return cat.records(
-            "api_surface",
-            sql + " ORDER BY r.path,r.method,r.id",
-            tuple(args),
-            limit,
-            cursor,
-            "endpoints",
-        )
+    ) -> CatalogResponse:
+        """Query REST API endpoints by entity or path."""
+        return api_surface_impl(state, entity_name, path_fragment, repo_key, limit, cursor)
 
-    @s.tool()
+    @mcp.tool()
     def workflow_context(
-        entity_name: str, workflow_type: str | None = None, repo_key: str | None = None
-    ) -> dict[str, Any]:
-        sql = "SELECT w.id,r.repo_key,w.name,w.workflow_type,w.source_kind,w.source_file,w.source_symbol_id,w.confidence,w.reason FROM workflows w JOIN entity_nodes e ON e.id=w.entity_id JOIN repos r ON r.id=w.repo_id WHERE e.name=? COLLATE NOCASE AND (? IS NULL OR r.repo_key=?)"
-        args = [entity_name, repo_key, repo_key]
-        if workflow_type:
-            sql += " AND w.workflow_type=?"
-            args.append(workflow_type)
-        return cat.records(
-            "workflow_context",
-            sql + " ORDER BY w.workflow_type,w.name,w.id",
-            tuple(args),
-            DEFAULT_LIMIT,
-            None,
-            "workflows",
-        )
+        entity_name: str,
+        workflow_type: str | None = None,
+        repo_key: str | None = None,
+    ) -> CatalogResponse:
+        """Retrieve workflows for an entity."""
+        return workflow_context_impl(state, entity_name, workflow_type, repo_key)
 
-    @s.tool()
+    @mcp.tool()
     def security_surface(
         key_fragment: str,
         limit: int = DEFAULT_LIMIT,
         cursor: str | None = None,
         repo_key: str | None = None,
-    ) -> dict[str, Any]:
-        return cat.records(
-            "security_surface",
-            "SELECT o.id,r.repo_key,o.op_key,o.op_numeric_id,o.title,o.action,o.script,o.source_file,o.source_line,o.source_kind FROM security_operations o JOIN repos r ON r.id=o.repo_id WHERE (o.op_key LIKE ? OR o.title LIKE ?) AND (? IS NULL OR r.repo_key=?) ORDER BY o.op_key,r.repo_key,o.id",
-            ("%" + key_fragment + "%", "%" + key_fragment + "%", repo_key, repo_key),
-            limit,
-            cursor,
-            "operations",
-        )
+    ) -> CatalogResponse:
+        """Search security operations by key or title."""
+        return security_surface_impl(state, key_fragment, limit, cursor, repo_key)
 
-    @s.tool()
+    @mcp.tool()
     def symbol_references(
         symbol_name: str | None = None,
         symbol_id: int | None = None,
         repo_key: str | None = None,
-    ) -> dict[str, Any]:
-        return cat.usages(symbol_name, symbol_id, repo_key)
+    ) -> CatalogResponse:
+        """Find all references (callers and referencers) to a symbol."""
+        return symbol_references_impl(state, symbol_name, symbol_id, repo_key)
 
-    @s.tool()
+    @mcp.tool()
     def file_impact(
         file_path: str,
         repo_key: str | None = None,
         depth: int = 1,
         max_edges_per_symbol: int = 25,
-    ) -> dict[str, Any]:
-        if not 1 <= depth <= 3 or not 1 <= max_edges_per_symbol <= 1000:
-            raise ValueError("depth must be 1..3 and max_edges_per_symbol 1..1000")
-        with cat.conn() as c:
-            files = c.execute(
-                "SELECT f.id,f.path,r.repo_key FROM files f JOIN repos r ON r.id=f.repo_id "
-                "WHERE f.path=? AND (? IS NULL OR r.repo_key=?) ORDER BY r.repo_key,f.id",
-                (file_path, repo_key, repo_key),
-            ).fetchall()
-            if repo_key is None and len(files) > 1:
-                return cat.out(
-                    "file_impact",
-                    {"candidates": [_row(row) for row in files]},
-                    c,
-                    "ambiguous",
-                    {
-                        "code": "ambiguous_file",
-                        "message": "File path exists in multiple repositories; retry with repo_key",
-                    },
-                )
-            f = files[0] if files else None
-            if not f:
-                return cat.out(
-                    "file_impact",
-                    {},
-                    c,
-                    "not_found",
-                    {
-                        "code": "file_not_found",
-                        "message": f"File not found: {file_path}",
-                    },
-                )
-            if not cat.graph_state(c):
-                return cat.out(
-                    "file_impact",
-                    {"file": _row(f)},
-                    c,
-                    "graph_unavailable",
-                    {
-                        "code": "graph_stale",
-                        "message": "No active graph matches the current SQLite catalog",
-                    },
-                )
-            from scripts.query_graph import (
-                _query_bounded_incoming_traversal,
-                _query_file_symbols_from_graph,
-                enrich_symbols_from_sql,
-                get_graph_connection,
-            )
+    ) -> CatalogResponse:
+        """Analyze impact of changes to a file (incoming call graph)."""
+        return file_impact_impl(state, file_path, repo_key, depth, max_edges_per_symbol)
 
-            db, g = get_graph_connection(str(cat.graph))
-            try:
-                seeds = _query_file_symbols_from_graph(g, file_path, repo_key)
-                nodes, edges = _query_bounded_incoming_traversal(
-                    g, [x["symbol_id"] for x in seeds], depth, max_edges_per_symbol
-                )
-                allnodes = [{**x, "depth": 0, "is_seed": True} for x in seeds] + nodes
-                return cat.out(
-                    "file_impact",
-                    {
-                        "file": _row(f),
-                        "seed_symbols": enrich_symbols_from_sql(
-                            c, allnodes[: len(seeds)]
-                        ),
-                        "affected_symbols": enrich_symbols_from_sql(c, allnodes),
-                        "traversal": {
-                            "depth": depth,
-                            "max_edges_per_symbol": max_edges_per_symbol,
-                            "edges": edges,
-                        },
-                    },
-                    c,
-                )
-            finally:
-                g.close()
-                db.close()
-
-    @s.tool()
+    @mcp.tool()
     def provenance(
         record_type: Literal[
             "file",
@@ -650,34 +2128,50 @@ def create_server(db_path: str | None = None, graph_path: str | None = None) -> 
             "security_operation",
         ],
         record_id: int,
-    ) -> dict[str, Any]:
-        return cat.provenance(record_type, record_id)
+    ) -> CatalogResponse:
+        """Retrieve full provenance for a record."""
+        return provenance_impl(state, record_type, record_id)
 
-    @s.tool()
-    def catalog_status() -> dict[str, Any]:
-        return cat.status()
+    @mcp.tool()
+    def repository_list() -> CatalogResponse:
+        """List all tracked repositories and their branch/revision status."""
+        return repository_list_impl(state)
 
-    @s.resource("catalog://schema")
+    @mcp.tool()
+    def catalog_status() -> CatalogResponse:
+        """Get catalog statistics (row counts per table)."""
+        return catalog_status_impl(state)
+
+    # Register resources
+    @mcp.resource("catalog://schema")
     def schema() -> str:
+        """Return the catalog database schema."""
         return (
             Path(__file__)
             .resolve()
-            .parents[1]
-            .joinpath("catalog/schema.sql")
+            .parent.parent.joinpath("catalog/schema.sql")
             .read_text()
         )
 
-    @s.resource("catalog://snapshot")
+    @mcp.resource("catalog://snapshot")
     def snapshot() -> str:
-        with cat.conn() as c:
-            return str(cat.snapshot(c))
+        """Return current catalog snapshot."""
+        with state.conn() as c:
+            return str(state.snapshot(c))
 
-    return s
+    return mcp, state
 
 
-mcp = create_server()
+# ============================================================================
+# Entry Point
+# ============================================================================
+
 if __name__ == "__main__":
+    port = int(os.getenv("MCP_PORT", "8010"))
+    host = os.getenv("MCP_HOST", "127.0.0.1")
+    mcp, state = create_server(port=port, host=host)
     transport = os.getenv("MCP_TRANSPORT", "streamable-http")
     if transport not in {"stdio", "sse", "streamable-http"}:
         raise ValueError("MCP_TRANSPORT must be stdio, sse, or streamable-http")
+
     mcp.run(transport=transport)
