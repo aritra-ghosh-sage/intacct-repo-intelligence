@@ -421,7 +421,7 @@ def create_server(db_path: str | None = None, graph_path: str | None = None) -> 
     )
     transport = os.getenv("MCP_TRANSPORT", "streamable-http")
     kwargs = {
-        "name": "intacct-catalog",
+        "name": "intacct_catalog",
         "instructions": "Read-only evidence-first catalog. Search first, cite returned source paths, line ranges, record IDs and confidence; do not infer missing evidence.",
     }
     if transport in {"sse", "streamable-http"}:
