@@ -12,9 +12,11 @@ import os
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, TypedDict
+from typing import Annotated, Any, Literal, Required, TypedDict
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
+from pydantic import Field
 
 from catalog.rest_coverage import REQUIRED_TABLES, coverage_rows, coverage_summary
 from config import CATALOG_DB, GRAPH_DB
@@ -59,6 +61,183 @@ class CatalogResponse(TypedDict, total=False):
     snapshot: CatalogSnapshot
     page: PageInfo
     error: CatalogError | None
+
+
+# ============================================================================
+# MCP Input Contract
+# ============================================================================
+
+
+RepositoryKey = Annotated[
+    str,
+    Field(
+        min_length=1,
+        description=(
+            "Catalog repository identifier. Current configured values are "
+            "'ia-main' and 'ia-restapi-automation'. Call repository_list to "
+            "discover the values in the active catalog. Omit only when the "
+            "requested name or path is unambiguous across repositories."
+        ),
+        examples=["ia-main", "ia-restapi-automation"],
+    ),
+]
+EntityName = Annotated[
+    str,
+    Field(
+        min_length=1,
+        description=(
+            "Exact catalog entity name, matched case-insensitively. Use "
+            "catalog_search(kind='entity') to discover names."
+        ),
+        examples=["APBill", "Customer", "GLAccount"],
+    ),
+]
+CatalogFilePath = Annotated[
+    str,
+    Field(
+        min_length=1,
+        description=(
+            "Exact repository-relative path as stored by the catalog; do not "
+            "pass an absolute filesystem path. Use catalog_search(kind='file') "
+            "to discover paths."
+        ),
+        examples=["app/source/apar/ARInvoiceManager.cls"],
+    ),
+]
+ResultLimit = Annotated[
+    int,
+    Field(
+        ge=1,
+        le=100,
+        description="Maximum records to return for this page; valid range is 1..100.",
+        examples=[25],
+    ),
+]
+PaginationCursor = Annotated[
+    str,
+    Field(
+        min_length=1,
+        description=(
+            "Opaque next_cursor returned in the previous response page. Do not "
+            "construct or modify it."
+        ),
+    ),
+]
+ConfidenceScore = Annotated[
+    float,
+    Field(
+        ge=0.0,
+        le=1.0,
+        description="Inclusive confidence score in the range 0.0..1.0.",
+        examples=[0.7],
+    ),
+]
+SemanticTraversalDepth = Annotated[
+    int,
+    Field(
+        ge=1,
+        le=3,
+        description=(
+            "Traversal depth from 1..3. Depth 1 uses SQLite evidence; depths "
+            "2..3 require a fresh Ladybug graph projection."
+        ),
+        examples=[1],
+    ),
+]
+GraphTraversalDepth = Annotated[
+    int,
+    Field(
+        ge=1,
+        le=3,
+        description=(
+            "Incoming graph traversal depth from 1..3. Every depth requires a "
+            "fresh active Ladybug graph."
+        ),
+        examples=[1],
+    ),
+]
+SemanticAxis = Annotated[
+    Literal["A", "B", "C", "D", "E"],
+    Field(
+        description=(
+            "Semantic axis: A=ownership/composition, B=business hierarchy, "
+            "C=location hierarchy, D=visibility/restriction, "
+            "E=entity-context metadata."
+        )
+    ),
+]
+RelationshipResolutionClass = Annotated[
+    Literal[
+        "builtin",
+        "external",
+        "heuristic",
+        "project_resolved",
+        "project_unresolved",
+    ],
+    Field(description="Relationship resolution classification to include."),
+]
+Eligibility = Annotated[
+    Literal["active", "known_issue", "ci_only", "conditional"],
+    Field(description="Gherkin scenario eligibility classification."),
+]
+RiskCategory = Annotated[
+    Literal[
+        "low_confidence_relationships",
+        "unresolved_relationships",
+        "heuristic_relationships",
+        "entity_mapping_gaps",
+        "security_conflicts",
+        "security_unresolved_allowops",
+        "missing_file_ids_security",
+        "openapi_unknown_kind",
+    ],
+    Field(description="Catalog risk category returned by catalog_risk_summary."),
+]
+ConfidenceCategory = Annotated[
+    Literal["relationships", "entity_mappings", "workflows", "entity_roots"],
+    Field(description="Record family whose confidence or weight is filtered."),
+]
+AccessSurface = Annotated[
+    Literal[
+        "dbschema_table",
+        "rest_endpoint",
+        "security_menu",
+        "security_menu_item",
+        "security_operation",
+        "security_policy",
+        "security_resource",
+        "workflow",
+    ],
+    Field(description="Entity access surface type to include."),
+]
+WorkflowType = Annotated[
+    Literal[
+        "allowed_operations",
+        "approval",
+        "posting",
+        "reverse",
+        "batch",
+        "item",
+        "entry",
+        "ui",
+        "rest",
+    ],
+    Field(description="Workflow classification to include."),
+]
+
+
+class QaChange(TypedDict, total=False):
+    """One changed catalog file supplied to qa_impact."""
+
+    file_path: Required[CatalogFilePath]
+
+
+READ_ONLY_TOOL_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=True,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=False,
+)
 
 
 # ============================================================================
@@ -2501,247 +2680,482 @@ def create_server(
 
     mcp = FastMCP(
         name="intacct_catalog",
-        instructions="Read-only evidence-first catalog. Search first, cite returned source paths, line ranges, record IDs and confidence; do not infer missing evidence.",
+        instructions=(
+            "Read-only evidence-first catalog. Call repository_list to discover "
+            "repo_key values. Use repository-relative file paths from "
+            "catalog_search, never absolute paths. Follow input enums and numeric "
+            "bounds exactly; reuse page.next_cursor unchanged. Every result uses "
+            "the CatalogResponse v1 envelope: inspect status and error before "
+            "using data. Cite returned source paths, line ranges, record IDs, and "
+            "confidence; do not infer missing evidence."
+        ),
         host=host,
         port=port,
     )
 
     # Register tools with factory closures to bind state
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_TOOL_ANNOTATIONS)
     def catalog_search(
-        query: str,
-        kind: Literal[
-            "all", "entity", "file", "symbol", "api", "workflow", "security"
+        query: Annotated[
+            str,
+            Field(
+                min_length=1,
+                description=(
+                    "Case-insensitive name or path fragment. Use a specific kind "
+                    "when pagination may be needed."
+                ),
+                examples=["ARInvoiceManager", "APBill"],
+            ),
+        ],
+        kind: Annotated[
+            Literal[
+                "all", "entity", "file", "symbol", "api", "workflow", "security"
+            ],
+            Field(
+                description=(
+                    "Catalog record family to search. 'all' searches every family "
+                    "but does not accept cursor and errors if the combined result "
+                    "exceeds limit; choose one kind for pagination."
+                )
+            ),
         ] = "all",
-        limit: int = DEFAULT_LIMIT,
-        cursor: str | None = None,
-        repo_key: str | None = None,
+        limit: ResultLimit = DEFAULT_LIMIT,
+        cursor: PaginationCursor | None = None,
+        repo_key: RepositoryKey | None = None,
     ) -> CatalogResponse:
-        """Search across entities, files, symbols, APIs, workflows, and security operations."""
+        """Discover exact catalog names, IDs, and repository-relative paths before calling narrower tools."""
         return catalog_search_impl(state, query, kind, limit, cursor, repo_key)
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_TOOL_ANNOTATIONS)
     def entity_context(
-        entity_name: str,
-        repo_key: str | None = None,
+        entity_name: EntityName,
+        repo_key: RepositoryKey | None = None,
     ) -> CatalogResponse:
-        """Retrieve full context for an entity (occurrences, mappings, workflows, endpoints)."""
+        """Return an entity's repository occurrences, code mappings, root symbols, workflows, and REST endpoints."""
         return entity_context_impl(state, entity_name, repo_key)
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_TOOL_ANNOTATIONS)
     def object_relationships(
-        object_name: str,
-        repo_key: str | None = None,
-        axes: list[Literal["A", "B", "C", "D", "E"]] | None = None,
-        direction: Literal["incoming", "outgoing", "both"] = "both",
-        depth: int = 1,
-        include: list[Literal["components", "relationships", "operations", "coverage", "conflicts"]] | None = None,
-        confidence_min: float | None = None,
-        limit: int = DEFAULT_LIMIT,
-        cursor: str | None = None,
+        object_name: EntityName,
+        repo_key: RepositoryKey | None = None,
+        axes: Annotated[
+            list[SemanticAxis],
+            Field(
+                min_length=1,
+                description="Semantic axes to query; omit to query A, B, C, D, and E.",
+            ),
+        ]
+        | None = None,
+        direction: Annotated[
+            Literal["incoming", "outgoing", "both"],
+            Field(description="Relationship direction relative to object_name."),
+        ] = "both",
+        depth: SemanticTraversalDepth = 1,
+        include: Annotated[
+            list[
+                Literal[
+                    "components",
+                    "relationships",
+                    "operations",
+                    "coverage",
+                    "conflicts",
+                ]
+            ],
+            Field(
+                min_length=1,
+                description=(
+                    "Response sections to include; omit to include all five "
+                    "sections."
+                ),
+            ),
+        ]
+        | None = None,
+        confidence_min: ConfidenceScore | None = None,
+        limit: ResultLimit = DEFAULT_LIMIT,
+        cursor: PaginationCursor | None = None,
     ) -> CatalogResponse:
-        """Return provenance-backed object ownership, hierarchy, visibility, and entity-context facts."""
+        """Query provenance-backed ownership, hierarchy, visibility, and entity-context facts for one entity."""
         return object_relationships_impl(
             state, object_name, repo_key, axes, direction, depth, include,
             confidence_min, limit, cursor,
         )
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_TOOL_ANNOTATIONS)
     def qa_impact(
-        changes: list[dict[str, Any]],
-        repo_key: str,
-        axes: list[Literal["A", "B", "C", "D", "E"]] | None = None,
-        depth: int = 1,
-        include_tests: bool = True,
+        changes: Annotated[
+            list[QaChange],
+            Field(
+                min_length=1,
+                description=(
+                    "Changed files. Every item must contain file_path using the "
+                    "exact repository-relative catalog path."
+                ),
+                examples=[
+                    [
+                        {
+                            "file_path": (
+                                "app/source/apar/ARInvoiceManager.cls"
+                            )
+                        }
+                    ]
+                ],
+            ),
+        ],
+        repo_key: RepositoryKey,
+        axes: Annotated[
+            list[SemanticAxis],
+            Field(
+                min_length=1,
+                description="Semantic axes to assess; omit to assess all five axes.",
+            ),
+        ]
+        | None = None,
+        depth: SemanticTraversalDepth = 1,
+        include_tests: Annotated[
+            bool,
+            Field(
+                description=(
+                    "When true, include linked Gherkin tests and explicit test "
+                    "coverage gaps."
+                )
+            ),
+        ] = True,
     ) -> CatalogResponse:
-        """Assess direct semantic and delivery surfaces affected by changed repository files."""
+        """Assess evidence-backed semantic, API, workflow, database, and test surfaces for changed files in one repository."""
         return qa_impact_impl(state, changes, repo_key, axes, depth, include_tests)
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_TOOL_ANNOTATIONS)
     def rest_coverage(
-        entity_name: str,
-        version: str | None = None,
-        limit: int = DEFAULT_LIMIT,
+        entity_name: EntityName,
+        version: Annotated[
+            str,
+            Field(
+                min_length=1,
+                description=(
+                    "Optional REST source version. Current catalog examples are "
+                    "'s1' and 's2'; omit to include all versions."
+                ),
+                examples=["s1", "s2"],
+            ),
+        ]
+        | None = None,
+        limit: ResultLimit = DEFAULT_LIMIT,
     ) -> CatalogResponse:
-        """Show evidence-backed Gherkin REST coverage for an entity."""
+        """Compare an entity's REST endpoints with linked Gherkin requests and report covered and uncovered endpoints."""
         return rest_coverage_impl(state, entity_name, version, limit)
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_TOOL_ANNOTATIONS)
     def entity_test_coverage(
-        entity_name: str,
-        workflow_name: str | None = None,
-        eligibility: str | None = None,
-        limit: int = DEFAULT_LIMIT,
-        cursor: str | None = None,
+        entity_name: EntityName,
+        workflow_name: Annotated[
+            str,
+            Field(
+                min_length=1,
+                description=(
+                    "Exact workflow name, matched case-insensitively. When set, "
+                    "return scenarios containing a workflow request step."
+                ),
+                examples=["approve"],
+            ),
+        ]
+        | None = None,
+        eligibility: Eligibility | None = None,
+        limit: ResultLimit = DEFAULT_LIMIT,
+        cursor: PaginationCursor | None = None,
     ) -> CatalogResponse:
-        """Retrieve Gherkin test cases covering an entity (or its workflows).
-
-        Returns each matching scenario with its feature name, Jira references,
-        eligibility status, and the full sequence of HTTP request steps. Use
-        workflow_name to narrow results to scenarios that exercise a named
-        workflow. Use eligibility to filter by 'active', 'known_issue',
-        'ci_only', or 'conditional'.
-        """
+        """Return linked Gherkin scenarios, Jira references, eligibility, feature paths, lines, and ordered HTTP steps."""
         return entity_test_coverage_impl(
             state, entity_name, workflow_name, eligibility, limit, cursor
         )
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_TOOL_ANNOTATIONS)
     def relationship_query(
-        name: str,
-        direction: Literal["outgoing", "incoming"] = "outgoing",
-        resolution_classes: list[str] | None = None,
-        confidence_min: float | None = None,
-        confidence_max: float | None = None,
-        repo_key: str | None = None,
-        limit: int = DEFAULT_LIMIT,
-        cursor: str | None = None,
+        name: Annotated[
+            str,
+            Field(
+                min_length=1,
+                description=(
+                    "Exact symbol name. It is matched against source_name for "
+                    "outgoing queries and target_name for incoming queries."
+                ),
+                examples=["ARInvoiceManager"],
+            ),
+        ],
+        direction: Annotated[
+            Literal["outgoing", "incoming"],
+            Field(description="Direction relative to name; 'both' is not valid."),
+        ] = "outgoing",
+        resolution_classes: Annotated[
+            list[RelationshipResolutionClass],
+            Field(
+                min_length=1,
+                description="Only return relationships in these resolution classes.",
+            ),
+        ]
+        | None = None,
+        confidence_min: ConfidenceScore | None = None,
+        confidence_max: ConfidenceScore | None = None,
+        repo_key: RepositoryKey | None = None,
+        limit: ResultLimit = DEFAULT_LIMIT,
+        cursor: PaginationCursor | None = None,
     ) -> CatalogResponse:
-        """Query relationships by source or target symbol with optional confidence filtering."""
+        """Return direct extracted relationships for an exact source or target symbol name; call twice for both directions."""
         return relationship_query_impl(
             state, name, direction, resolution_classes, confidence_min, confidence_max, repo_key, limit, cursor
         )
 
     # Phase 1: Dependency Surface Tools
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_TOOL_ANNOTATIONS)
     def workflow_structure(
-        entity_name: str,
-        workflow_id: int | None = None,
-        repo_key: str | None = None,
+        entity_name: EntityName,
+        workflow_id: Annotated[
+            int,
+            Field(
+                ge=1,
+                description=(
+                    "Exact workflow record ID. Omit to return every workflow for "
+                    "the entity."
+                ),
+                examples=[907],
+            ),
+        ]
+        | None = None,
+        repo_key: RepositoryKey | None = None,
     ) -> CatalogResponse:
-        """Retrieve workflow structure: nodes and edges with ordinal sequencing."""
+        """Return workflow records plus their ordered nodes and edges for an entity."""
         return workflow_structure_impl(state, entity_name, workflow_id, repo_key)
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_TOOL_ANNOTATIONS)
     def entity_access_detail(
-        entity_name: str,
-        surface_type: str | None = None,
-        repo_key: str | None = None,
-        limit: int = DEFAULT_LIMIT,
-        cursor: str | None = None,
+        entity_name: EntityName,
+        surface_type: AccessSurface | None = None,
+        repo_key: RepositoryKey | None = None,
+        limit: ResultLimit = DEFAULT_LIMIT,
+        cursor: PaginationCursor | None = None,
     ) -> CatalogResponse:
-        """Retrieve entity access links by surface with evidence provenance."""
+        """Return an entity's links to workflow, REST, security, and database surfaces with evidence IDs."""
         return entity_access_detail_impl(state, entity_name, surface_type, repo_key, limit, cursor)
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_TOOL_ANNOTATIONS)
     def security_dependency_chain(
-        op_key: str,
-        repo_key: str | None = None,
+        op_key: Annotated[
+            str,
+            Field(
+                min_length=1,
+                description=(
+                    "Exact security operation key. Use security_surface to "
+                    "discover keys."
+                ),
+                examples=["ee/lists/employee"],
+            ),
+        ],
+        repo_key: RepositoryKey | None = None,
     ) -> CatalogResponse:
-        """Retrieve security operation dependencies: allowops, policy grants, and menu links."""
+        """Return an exact security operation with allowed operations, granting policies, and menu references."""
         return security_dependency_chain_impl(state, op_key, repo_key)
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_TOOL_ANNOTATIONS)
     def openapi_file_dependencies(
-        file_path: str,
-        repo_key: str | None = None,
+        file_path: CatalogFilePath,
+        repo_key: RepositoryKey | None = None,
     ) -> CatalogResponse:
-        """Retrieve OpenAPI file reference dependencies."""
+        """Return incoming and outgoing OpenAPI reference edges for one exact catalog file."""
         return openapi_file_dependencies_impl(state, file_path, repo_key)
 
     # Phase 2: Risk Surface Tools
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_TOOL_ANNOTATIONS)
     def catalog_risk_summary() -> CatalogResponse:
-        """Aggregate risk signals across the catalog."""
+        """Return aggregate catalog-quality signals and the category names accepted by risk_detail."""
         return catalog_risk_summary_impl(state)
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_TOOL_ANNOTATIONS)
     def risk_detail(
-        category: str,
-        entity_name: str | None = None,
-        symbol_name: str | None = None,
-        repo_key: str | None = None,
-        limit: int = DEFAULT_LIMIT,
-        cursor: str | None = None,
+        category: RiskCategory,
+        entity_name: Annotated[
+            str,
+            Field(
+                min_length=1,
+                description=(
+                    "Optional exact entity name, matched case-insensitively. "
+                    "Applied only when category='entity_mapping_gaps'."
+                ),
+                examples=["APBill"],
+            ),
+        ]
+        | None = None,
+        symbol_name: Annotated[
+            str,
+            Field(
+                min_length=1,
+                description=(
+                    "Reserved symbol-name filter. The current implementation "
+                    "does not apply this filter."
+                ),
+            ),
+        ]
+        | None = None,
+        repo_key: RepositoryKey | None = None,
+        limit: ResultLimit = DEFAULT_LIMIT,
+        cursor: PaginationCursor | None = None,
     ) -> CatalogResponse:
-        """Drill down into specific risk category with pagination."""
+        """Return paginated evidence rows for one category from catalog_risk_summary."""
         return risk_detail_impl(state, category, entity_name, symbol_name, repo_key, limit, cursor)
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_TOOL_ANNOTATIONS)
     def confidence_band_query(
-        category: str,
-        confidence_min: float,
-        confidence_max: float,
-        repo_key: str | None = None,
-        limit: int = DEFAULT_LIMIT,
-        cursor: str | None = None,
+        category: ConfidenceCategory,
+        confidence_min: ConfidenceScore,
+        confidence_max: ConfidenceScore,
+        repo_key: RepositoryKey | None = None,
+        limit: ResultLimit = DEFAULT_LIMIT,
+        cursor: PaginationCursor | None = None,
     ) -> CatalogResponse:
-        """Query records within a confidence band."""
+        """Return records whose confidence or entity-root weight falls in an inclusive 0.0..1.0 band."""
         return confidence_band_query_impl(state, category, confidence_min, confidence_max, repo_key, limit, cursor)
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_TOOL_ANNOTATIONS)
     def api_surface(
-        entity_name: str | None = None,
-        path_fragment: str | None = None,
-        repo_key: str | None = None,
-        limit: int = DEFAULT_LIMIT,
-        cursor: str | None = None,
+        entity_name: EntityName | None = None,
+        path_fragment: Annotated[
+            str,
+            Field(
+                min_length=1,
+                description=(
+                    "Case-sensitive substring of a REST endpoint path. At least "
+                    "one of entity_name or path_fragment is required."
+                ),
+                examples=["/objects/accounts-payable/bill"],
+            ),
+        ]
+        | None = None,
+        repo_key: RepositoryKey | None = None,
+        limit: ResultLimit = DEFAULT_LIMIT,
+        cursor: PaginationCursor | None = None,
     ) -> CatalogResponse:
-        """Query REST API endpoints by entity or path."""
+        """Find REST endpoints by exact entity name, endpoint-path fragment, or both."""
         return api_surface_impl(state, entity_name, path_fragment, repo_key, limit, cursor)
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_TOOL_ANNOTATIONS)
     def workflow_context(
-        entity_name: str,
-        workflow_type: str | None = None,
-        repo_key: str | None = None,
+        entity_name: EntityName,
+        workflow_type: WorkflowType | None = None,
+        repo_key: RepositoryKey | None = None,
     ) -> CatalogResponse:
-        """Retrieve workflows for an entity."""
+        """Return atomic workflow/action records for an exact entity, optionally filtered by workflow type."""
         return workflow_context_impl(state, entity_name, workflow_type, repo_key)
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_TOOL_ANNOTATIONS)
     def security_surface(
-        key_fragment: str,
-        limit: int = DEFAULT_LIMIT,
-        cursor: str | None = None,
-        repo_key: str | None = None,
+        key_fragment: Annotated[
+            str,
+            Field(
+                min_length=1,
+                description=(
+                    "Case-insensitive substring matched against operation key "
+                    "and title."
+                ),
+                examples=["employee"],
+            ),
+        ],
+        limit: ResultLimit = DEFAULT_LIMIT,
+        cursor: PaginationCursor | None = None,
+        repo_key: RepositoryKey | None = None,
     ) -> CatalogResponse:
-        """Search security operations by key or title."""
+        """Discover security operation IDs and exact keys by key or title fragment."""
         return security_surface_impl(state, key_fragment, limit, cursor, repo_key)
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_TOOL_ANNOTATIONS)
     def symbol_references(
-        symbol_name: str | None = None,
-        symbol_id: int | None = None,
-        repo_key: str | None = None,
+        symbol_name: Annotated[
+            str,
+            Field(
+                min_length=1,
+                description=(
+                    "Exact symbol name. If it resolves to multiple symbols, the "
+                    "response is ambiguous and returns candidates; retry with "
+                    "symbol_id."
+                ),
+                examples=["create"],
+            ),
+        ]
+        | None = None,
+        symbol_id: Annotated[
+            int,
+            Field(
+                ge=1,
+                description=(
+                    "Exact symbol record ID from catalog_search or an ambiguous "
+                    "symbol_references response. Takes precedence over symbol_name."
+                ),
+                examples=[6361],
+            ),
+        ]
+        | None = None,
+        repo_key: RepositoryKey | None = None,
     ) -> CatalogResponse:
-        """Find all references (callers and referencers) to a symbol."""
+        """Find graph callers and referencers for one symbol; provide symbol_name or the preferred unambiguous symbol_id."""
         return symbol_references_impl(state, symbol_name, symbol_id, repo_key)
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_TOOL_ANNOTATIONS)
     def file_impact(
-        file_path: str,
-        repo_key: str | None = None,
-        depth: int = 1,
-        max_edges_per_symbol: int = 25,
+        file_path: CatalogFilePath,
+        repo_key: RepositoryKey | None = None,
+        depth: GraphTraversalDepth = 1,
+        max_edges_per_symbol: Annotated[
+            int,
+            Field(
+                ge=1,
+                le=1000,
+                description=(
+                    "Maximum incoming graph edges expanded per symbol at each "
+                    "depth; valid range is 1..1000."
+                ),
+                examples=[25],
+            ),
+        ] = 25,
     ) -> CatalogResponse:
-        """Analyze impact of changes to a file (incoming call graph)."""
+        """Traverse incoming graph references from every symbol in one exact repository-relative file."""
         return file_impact_impl(state, file_path, repo_key, depth, max_edges_per_symbol)
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_TOOL_ANNOTATIONS)
     def provenance(
-        record_type: Literal[
-            "file",
-            "symbol",
-            "relationship",
-            "entity_mapping",
-            "workflow",
-            "rest_endpoint",
-            "security_operation",
+        record_type: Annotated[
+            Literal[
+                "file",
+                "symbol",
+                "relationship",
+                "entity_mapping",
+                "workflow",
+                "rest_endpoint",
+                "security_operation",
+            ],
+            Field(
+                description=(
+                    "Catalog table family that owns record_id. Use an ID returned "
+                    "by another catalog tool."
+                )
+            ),
         ],
-        record_id: int,
+        record_id: Annotated[
+            int,
+            Field(
+                ge=1,
+                description="Exact catalog record ID returned by another tool.",
+                examples=[6361],
+            ),
+        ],
     ) -> CatalogResponse:
-        """Retrieve full provenance for a record."""
+        """Resolve one catalog record ID to its repository revision and source evidence."""
         return provenance_impl(state, record_type, record_id)
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_TOOL_ANNOTATIONS)
     def repository_list() -> CatalogResponse:
-        """List all tracked repositories and their branch/revision status."""
+        """Discover valid repo_key values and each repository's indexed branch, commit, and health status."""
         return repository_list_impl(state)
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_TOOL_ANNOTATIONS)
     def catalog_status() -> CatalogResponse:
-        """Get catalog statistics (row counts per table)."""
+        """Return high-level row counts for the active SQLite catalog."""
         return catalog_status_impl(state)
 
     # Register resources
