@@ -18,6 +18,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from catalog.db import migrate_multi_repo
+from catalog.migrations import LEGACY_REPO_KEY
 from catalog.repositories import (
     get_repository,
     load_workspace_manifest,
@@ -25,7 +27,6 @@ from catalog.repositories import (
     rest_automation_paths,
     resolve_repository_root,
 )
-from catalog.db import migrate_multi_repo
 from scripts.builder_registry import build_plan
 
 
@@ -47,7 +48,12 @@ def source_revision(root: Path, tracked_branch: str) -> str:
     if _git(root, "status", "--porcelain"):
         raise RefreshError(f"repository checkout is dirty: {root}")
     head = _git(root, "rev-parse", "HEAD")
-    branch_sha = _git(root, "rev-parse", "--verify", tracked_branch)
+    try:
+        branch_sha = _git(root, "rev-parse", "--verify", tracked_branch)
+    except RefreshError as exc:
+        raise RefreshError(
+            f"configured branch {tracked_branch!r} is unavailable in {root}: {exc}"
+        ) from exc
     if head != branch_sha:
         raise RefreshError(
             f"HEAD {head} does not match configured branch {tracked_branch} ({branch_sha})"
@@ -85,6 +91,13 @@ def _manifest_repository(manifest: dict, repo_key: str) -> dict:
     if entry is None:
         raise RefreshError(f"repository not found in manifest: {repo_key}")
     return entry
+
+
+def _dependency_keys(entry: dict) -> tuple[str, ...]:
+    depends_on = entry.get("depends_on")
+    if depends_on is None:
+        return ()
+    return tuple(str(value) for value in depends_on)
 
 
 def _record_run(
@@ -241,12 +254,13 @@ def _run_builder(
                 """
                 SELECT COUNT(*) FROM rest_endpoints re
                 JOIN repos r ON r.id = re.repo_id
-                WHERE r.repo_key = 'ia-main' AND re.source_version IS NOT NULL
-                """
+                WHERE r.repo_key = ? AND re.source_version IS NOT NULL
+                """,
+                (LEGACY_REPO_KEY,),
             ).fetchone()[0]
             if not production_endpoints:
                 raise RefreshError(
-                    "ia-main REST endpoints are absent; refresh ia-main before REST automation coverage"
+                    f"{LEGACY_REPO_KEY} REST endpoints are absent; refresh {LEGACY_REPO_KEY} before REST automation coverage"
                 )
             build(
                 conn,
@@ -324,28 +338,28 @@ def _record_failed_refresh(
         return
 
 
-def refresh_repository(
-    db_path: str | Path, manifest_path: str | Path, repo_key: str
+def _refresh_repository_once(
+    active: Path,
+    manifest: dict,
+    repo_key: str,
 ) -> None:
-    active = Path(db_path).resolve()
-    if not active.is_file():
-        raise RefreshError(f"catalog database does not exist: {active}")
-    manifest: dict | None = None
     manifest_entry: dict | None = None
     legacy_entry: dict | None = None
     candidate = active.with_name(f"{active.name}.candidate.{uuid.uuid4().hex}")
     previous = active.with_name(f"{active.name}.previous")
-    failed_step: str | None = "load_workspace_manifest"
+    failed_step: str | None = "manifest_repository"
 
     try:
-        manifest = load_workspace_manifest(manifest_path)
-        failed_step = "manifest_repository"
         manifest_entry = _manifest_repository(manifest, repo_key)
+        failed_step = "backup_database"
         legacy_entry = next(
-            (entry for entry in manifest["repositories"] if entry["repo_key"] == "ia-main"),
+            (
+                entry
+                for entry in manifest["repositories"]
+                if entry["repo_key"] == LEGACY_REPO_KEY
+            ),
             None,
         )
-        failed_step = "backup_database"
         _backup_database(active, candidate)
         failed_step = "open_candidate"
         conn = sqlite3.connect(candidate)
@@ -395,7 +409,6 @@ def refresh_repository(
                         manifest_entry,
                     )
                 except Exception as exc:
-                    failed_builder = builder
                     _stage(conn, run_id, builder, "failed", str(exc))
                     raise
                 _stage(conn, run_id, builder, "succeeded")
@@ -446,6 +459,84 @@ def refresh_repository(
         candidate.unlink(missing_ok=True)
         _record_failed_refresh(active, manifest, repo_key, exc, failed_step)
         raise
+
+
+def _resolve_refresh_order(manifest: dict, repo_key: str) -> list[str]:
+    """Return a validated, dependency-first refresh order."""
+    ordered: list[str] = []
+    completed: set[str] = set()
+    visiting: list[str] = []
+    visiting_set: set[str] = set()
+
+    def visit(current_key: str) -> None:
+        if current_key in completed:
+            return
+        if current_key in visiting_set:
+            cycle_start = visiting.index(current_key)
+            cycle = visiting[cycle_start:] + [current_key]
+            raise RefreshError(
+                f"cyclic repository dependency at {' -> '.join(cycle)}"
+            )
+
+        entry = _manifest_repository(manifest, current_key)
+        if not entry.get("enabled", True):
+            if current_key == repo_key:
+                raise RefreshError(f"repository is disabled: {current_key}")
+            raise RefreshError(
+                f"repository {repo_key} depends on disabled repository: {current_key}"
+            )
+
+        visiting.append(current_key)
+        visiting_set.add(current_key)
+        try:
+            for dependency in _dependency_keys(entry):
+                visit(dependency)
+        finally:
+            visiting.pop()
+            visiting_set.remove(current_key)
+        completed.add(current_key)
+        ordered.append(current_key)
+
+    visit(repo_key)
+    return ordered
+
+
+def _validate_refresh_preconditions(
+    manifest: dict, refresh_order: list[str]
+) -> None:
+    """Validate every checkout before any repository candidate is built."""
+    for repo_key in refresh_order:
+        entry = _manifest_repository(manifest, repo_key)
+        root = Path(entry["local_root"]).expanduser()
+        if not root.is_dir():
+            raise RefreshError(
+                f"repository {repo_key} checkout root does not exist: {root}"
+            )
+        resolved_root = root.resolve()
+        source_revision(resolved_root, str(entry["tracked_branch"]))
+        if entry.get("profile") == "rest_automation":
+            rest_automation_paths(entry, resolved_root)
+
+
+def refresh_repository(
+    db_path: str | Path, manifest_path: str | Path, repo_key: str
+) -> None:
+    active = Path(db_path).resolve()
+    if not active.is_file():
+        raise RefreshError(f"catalog database does not exist: {active}")
+    manifest: dict | None = None
+    failed_step = "load_workspace_manifest"
+    try:
+        manifest = load_workspace_manifest(manifest_path)
+        failed_step = "dependency_preflight"
+        refresh_order = _resolve_refresh_order(manifest, repo_key)
+        _validate_refresh_preconditions(manifest, refresh_order)
+    except Exception as exc:
+        _record_failed_refresh(active, manifest, repo_key, exc, failed_step)
+        raise
+
+    for refresh_repo_key in refresh_order:
+        _refresh_repository_once(active, manifest, refresh_repo_key)
 
 
 def main() -> None:

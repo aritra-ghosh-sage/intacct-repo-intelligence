@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 import subprocess
 import tempfile
 import unittest
-import os
 from pathlib import Path
 from unittest import mock
 
+from catalog.repositories import RepositoryError
 from scripts.refresh_workspace import RefreshError, refresh_repository
 
 
@@ -157,7 +158,258 @@ class WorkspaceRefreshTests(unittest.TestCase):
         finally:
             conn.close()
 
-    def test_dirty_checkout_records_source_revision_failure_stage(self) -> None:
+    def test_refresh_honors_manifest_dependency_order(self) -> None:
+        directory, _checkout, database, manifest = self._fixture()
+        self.addCleanup(directory.cleanup)
+        manifest.write_text(
+            "version: 1\nrepositories:\n"
+            "  - repo_key: base\n"
+            "    local_root: /tmp/base\n"
+            "    tracked_branch: main\n"
+            "    profile: generic\n"
+            "    depends_on: null\n"
+            "    builders: []\n"
+            "  - repo_key: shared\n"
+            "    local_root: /tmp/shared\n"
+            "    tracked_branch: main\n"
+            "    profile: generic\n"
+            "    depends_on:\n"
+            "      - base\n"
+            "    builders: []\n"
+            "  - repo_key: sibling\n"
+            "    local_root: /tmp/sibling\n"
+            "    tracked_branch: main\n"
+            "    profile: generic\n"
+            "    depends_on:\n"
+            "      - base\n"
+            "    builders: []\n"
+            "  - repo_key: service\n"
+            "    local_root: /tmp/service\n"
+            "    tracked_branch: main\n"
+            "    profile: generic\n"
+            "    depends_on:\n"
+            "      - shared\n"
+            "      - sibling\n"
+            "    builders: []\n",
+            encoding="utf-8",
+        )
+
+        refresh_calls: list[str] = []
+
+        def record_refresh(active: Path, manifest_document: dict, repo_key: str) -> None:
+            refresh_calls.append(repo_key)
+
+        with mock.patch(
+            "scripts.refresh_workspace._validate_refresh_preconditions"
+        ) as validate_preconditions, mock.patch(
+            "scripts.refresh_workspace._refresh_repository_once",
+            side_effect=record_refresh,
+        ):
+            refresh_repository(database, manifest, "service")
+
+        validate_preconditions.assert_called_once()
+        self.assertEqual(
+            validate_preconditions.call_args.args[1],
+            ["base", "shared", "sibling", "service"],
+        )
+        self.assertEqual(refresh_calls, ["base", "shared", "sibling", "service"])
+
+    def test_refresh_rejects_disabled_dependencies_before_refreshing(self) -> None:
+        directory, _checkout, database, manifest = self._fixture()
+        self.addCleanup(directory.cleanup)
+        manifest.write_text(
+            "version: 1\nrepositories:\n"
+            "  - repo_key: base\n"
+            "    local_root: /tmp/base\n"
+            "    tracked_branch: main\n"
+            "    enabled: false\n"
+            "    profile: generic\n"
+            "    depends_on: null\n"
+            "    builders: []\n"
+            "  - repo_key: service\n"
+            "    local_root: /tmp/service\n"
+            "    tracked_branch: main\n"
+            "    profile: generic\n"
+            "    depends_on:\n"
+            "      - base\n"
+            "    builders: []\n",
+            encoding="utf-8",
+        )
+
+        with mock.patch("scripts.refresh_workspace._refresh_repository_once") as refresh_once:
+            with self.assertRaisesRegex(RefreshError, "disabled repository"):
+                refresh_repository(database, manifest, "service")
+
+        refresh_once.assert_not_called()
+
+    def test_refresh_rejects_later_disabled_dependency_before_refreshing(self) -> None:
+        directory, _checkout, database, manifest = self._fixture()
+        self.addCleanup(directory.cleanup)
+        manifest.write_text(
+            "version: 1\nrepositories:\n"
+            "  - repo_key: base\n"
+            "    local_root: /tmp/base\n"
+            "    tracked_branch: main\n"
+            "  - repo_key: blocked\n"
+            "    local_root: /tmp/blocked\n"
+            "    tracked_branch: main\n"
+            "    enabled: false\n"
+            "  - repo_key: middle\n"
+            "    local_root: /tmp/middle\n"
+            "    tracked_branch: main\n"
+            "    depends_on: [blocked]\n"
+            "  - repo_key: service\n"
+            "    local_root: /tmp/service\n"
+            "    tracked_branch: main\n"
+            "    depends_on: [base, middle]\n",
+            encoding="utf-8",
+        )
+
+        with mock.patch("scripts.refresh_workspace._refresh_repository_once") as refresh_once:
+            with self.assertRaisesRegex(RefreshError, "disabled repository: blocked"):
+                refresh_repository(database, manifest, "service")
+
+        refresh_once.assert_not_called()
+
+    def test_refresh_rejects_disabled_target_and_records_preflight(self) -> None:
+        directory, _checkout, database, manifest = self._fixture()
+        self.addCleanup(directory.cleanup)
+        manifest.write_text(
+            "version: 1\nrepositories:\n"
+            "  - repo_key: base\n"
+            "    local_root: /tmp/base\n"
+            "    tracked_branch: main\n"
+            "  - repo_key: service\n"
+            "    local_root: /tmp/service\n"
+            "    tracked_branch: main\n"
+            "    enabled: false\n"
+            "    depends_on: [base]\n",
+            encoding="utf-8",
+        )
+
+        with mock.patch("scripts.refresh_workspace._refresh_repository_once") as refresh_once:
+            with self.assertRaisesRegex(RefreshError, "repository is disabled: service"):
+                refresh_repository(database, manifest, "service")
+
+        refresh_once.assert_not_called()
+        conn = sqlite3.connect(database)
+        try:
+            runs = conn.execute(
+                "SELECT status FROM repo_index_runs ORDER BY id"
+            ).fetchall()
+            self.assertEqual(runs, [("failed",)])
+            stage = conn.execute(
+                "SELECT builder_name,status FROM repo_index_stages"
+            ).fetchone()
+            self.assertEqual(stage, ("dependency_preflight", "failed"))
+        finally:
+            conn.close()
+
+    def test_invalid_manifest_records_load_failure_without_refreshing(self) -> None:
+        directory, checkout, database, manifest = self._fixture()
+        self.addCleanup(directory.cleanup)
+        conn = sqlite3.connect(database)
+        try:
+            conn.execute(
+                """INSERT INTO repos(repo_key,local_root,tracked_branch)
+                   VALUES ('service', ?, 'main')""",
+                (str(checkout),),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        manifest.write_text(
+            "version: 1\nrepositories:\n"
+            "  - repo_key: service\n"
+            f"    local_root: {checkout}\n"
+            "    tracked_branch: main\n"
+            "    depends_on: [missing]\n",
+            encoding="utf-8",
+        )
+
+        with mock.patch("scripts.refresh_workspace._refresh_repository_once") as refresh_once:
+            with self.assertRaisesRegex(RepositoryError, "unknown repository"):
+                refresh_repository(database, manifest, "service")
+
+        refresh_once.assert_not_called()
+        conn = sqlite3.connect(database)
+        try:
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM repo_index_runs").fetchone()[0],
+                1,
+            )
+            stage = conn.execute(
+                "SELECT builder_name,status FROM repo_index_stages"
+            ).fetchone()
+            self.assertEqual(stage, ("load_workspace_manifest", "failed"))
+        finally:
+            conn.close()
+
+    def test_missing_later_checkout_fails_before_any_refresh(self) -> None:
+        directory, checkout, database, manifest = self._fixture()
+        self.addCleanup(directory.cleanup)
+        missing = Path(directory.name) / "missing"
+        manifest.write_text(
+            "version: 1\nrepositories:\n"
+            "  - repo_key: base\n"
+            f"    local_root: {checkout}\n"
+            "    tracked_branch: main\n"
+            "  - repo_key: service\n"
+            f"    local_root: {missing}\n"
+            "    tracked_branch: main\n"
+            "    depends_on: [base]\n",
+            encoding="utf-8",
+        )
+
+        with mock.patch("scripts.refresh_workspace._refresh_repository_once") as refresh_once:
+            with self.assertRaisesRegex(RefreshError, "checkout root does not exist"):
+                refresh_repository(database, manifest, "service")
+
+        refresh_once.assert_not_called()
+
+    def test_invalid_later_branch_fails_before_any_refresh(self) -> None:
+        directory, checkout, database, manifest = self._fixture()
+        self.addCleanup(directory.cleanup)
+        manifest.write_text(
+            "version: 1\nrepositories:\n"
+            "  - repo_key: base\n"
+            f"    local_root: {checkout}\n"
+            "    tracked_branch: main\n"
+            "  - repo_key: service\n"
+            f"    local_root: {checkout}\n"
+            "    tracked_branch: missing-branch\n"
+            "    depends_on: [base]\n",
+            encoding="utf-8",
+        )
+
+        with mock.patch("scripts.refresh_workspace._refresh_repository_once") as refresh_once:
+            with self.assertRaisesRegex(RefreshError, "missing-branch"):
+                refresh_repository(database, manifest, "service")
+
+        refresh_once.assert_not_called()
+
+    def test_missing_rest_evidence_fails_before_any_refresh(self) -> None:
+        directory, checkout, database, manifest = self._fixture()
+        self.addCleanup(directory.cleanup)
+        manifest.write_text(
+            "version: 1\nrepositories:\n"
+            "  - repo_key: service\n"
+            f"    local_root: {checkout}\n"
+            "    tracked_branch: main\n"
+            "    profile: rest_automation\n"
+            "    rest_automation:\n"
+            "      features_root: missing-features\n"
+            "      object_mapping: missing-mapping.json\n",
+            encoding="utf-8",
+        )
+
+        with mock.patch("scripts.refresh_workspace._refresh_repository_once") as refresh_once:
+            with self.assertRaisesRegex(RepositoryError, "does not exist"):
+                refresh_repository(database, manifest, "service")
+
+        refresh_once.assert_not_called()
+
+    def test_dirty_checkout_records_dependency_preflight_failure_stage(self) -> None:
         directory, checkout, database, manifest = self._fixture()
         self.addCleanup(directory.cleanup)
         refresh_repository(database, manifest, "service")
@@ -172,7 +424,7 @@ class WorkspaceRefreshTests(unittest.TestCase):
                 "SELECT builder_name,status,diagnostic_error "
                 "FROM repo_index_stages ORDER BY id DESC LIMIT 1"
             ).fetchone()
-            self.assertEqual(stage[0], "source_revision")
+            self.assertEqual(stage[0], "dependency_preflight")
             self.assertEqual(stage[1], "failed")
             self.assertIn("dirty", stage[2])
         finally:

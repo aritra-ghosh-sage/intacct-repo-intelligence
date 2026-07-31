@@ -425,12 +425,26 @@ In JSON mode, ambiguity candidates are returned in `error.details.candidates`.
 
 The catalog can index multiple repositories through
 [`config/workspace_repos.yaml`](config/workspace_repos.yaml). Each repository
-has one explicitly tracked branch and an explicit builder list; dependencies
-are expanded by `scripts/builder_registry.py`.
+has one explicitly tracked branch and an explicit builder list; repository
+ordering is declared with `depends_on` when needed and expanded by
+`scripts/refresh_workspace.py`.
+
+Use `depends_on: null` for repositories with no prerequisite repos. Use an
+explicit list when a repository must refresh another repository first.
+
+Manifest loading is atomic and strict. Unknown fields, missing required fields,
+invalid field types, unsupported profiles or builders, and invalid dependency
+graphs reject the entire manifest before registration or refresh. The required
+repository fields are `repo_key`, `local_root`, and `tracked_branch`;
+`enabled` defaults to `true`, `profile` defaults to `generic`, `builders`
+defaults to an empty list, and `depends_on` defaults to `null`. Refresh also
+preflights every checkout in the dependency closure, including its root,
+configured branch, clean state, and any REST automation evidence paths, before
+building the first candidate.
 
 `scripts/refresh.sh` remains as a compatibility entry point. It initializes a
-missing catalog, applies the workspace migration, and refreshes `ia-main`; it
-does not delete the active catalog or build a graph:
+missing catalog, applies the workspace migration, and refreshes `ia-main` by
+default; it does not delete the active catalog or build a graph:
 
 ```bash
 bash scripts/refresh.sh
@@ -451,12 +465,11 @@ Refresh one repository with a clean checkout:
 python scripts/refresh_workspace.py --db catalog/catalog.db --manifest config/workspace_repos.yaml --repo ia-main
 ```
 
-REST automation coverage is a repository-scoped candidate builder. Refresh
-`ia-main` first so its versioned REST endpoint and entity evidence is present,
-then refresh the Gherkin suite:
+REST automation coverage is a repository-scoped candidate builder. With the
+manifest dependency in place, refreshing `ia-restapi-automation` will refresh
+`ia-main` first so its versioned REST endpoint and entity evidence is present:
 
 ```bash
-python scripts/refresh_workspace.py --db catalog/catalog.db --manifest config/workspace_repos.yaml --repo ia-main
 python scripts/refresh_workspace.py --db catalog/catalog.db --manifest config/workspace_repos.yaml --repo ia-restapi-automation
 ```
 

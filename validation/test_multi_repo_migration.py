@@ -18,6 +18,251 @@ from catalog.repositories import (
 
 
 class MultiRepoMigrationTests(unittest.TestCase):
+    def _assert_manifest_error(self, text: str, pattern: str) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "repos.yaml"
+            manifest.write_text(text, encoding="utf-8")
+            with self.assertRaisesRegex(RepositoryError, pattern):
+                load_workspace_manifest(manifest)
+
+    def test_manifest_rejects_unknown_fields(self) -> None:
+        cases = (
+            (
+                "version: 1\nrepository: []\nrepositories: []\n",
+                "unknown field: repository",
+            ),
+            (
+                "version: 1\nrepositories:\n"
+                "  - repo_key: service\n"
+                "    local_root: /tmp/service\n"
+                "    tracked_branch: main\n"
+                "    depend_on: null\n",
+                "unknown field: depend_on",
+            ),
+            (
+                "version: 1\nrepositories:\n"
+                "  - repo_key: suite\n"
+                "    local_root: /tmp/suite\n"
+                "    tracked_branch: main\n"
+                "    profile: rest_automation\n"
+                "    rest_automation:\n"
+                "      features_root: features\n"
+                "      object_mapping: mapping.json\n"
+                "      feature_root: typo\n",
+                "unknown field: feature_root",
+            ),
+        )
+        for manifest, pattern in cases:
+            with self.subTest(pattern=pattern):
+                self._assert_manifest_error(manifest, pattern)
+
+    def test_manifest_requires_exact_version_and_non_empty_repositories(self) -> None:
+        cases = (
+            ("repositories: []\n", "version must be the integer 1"),
+            ("version: 1.0\nrepositories: []\n", "version must be the integer 1"),
+            ("version: true\nrepositories: []\n", "version must be the integer 1"),
+            ("version: 1\nrepositories: []\n", "non-empty repositories list"),
+        )
+        for manifest, pattern in cases:
+            with self.subTest(manifest=manifest):
+                self._assert_manifest_error(manifest, pattern)
+
+    def test_manifest_rejects_missing_or_invalid_required_fields(self) -> None:
+        entries = (
+            (
+                "    local_root: /tmp/service\n"
+                "    tracked_branch: main\n",
+                "missing required field: repo_key",
+            ),
+            (
+                "    repo_key: service\n"
+                "    tracked_branch: main\n",
+                "missing required field: local_root",
+            ),
+            (
+                "    repo_key: service\n"
+                "    local_root: /tmp/service\n",
+                "missing required field: tracked_branch",
+            ),
+            (
+                "    repo_key: 7\n"
+                "    local_root: /tmp/service\n"
+                "    tracked_branch: main\n",
+                "repo_key must be a non-empty string",
+            ),
+            (
+                "    repo_key: service\n"
+                "    local_root: '   '\n"
+                "    tracked_branch: main\n",
+                "local_root must be a non-empty string",
+            ),
+        )
+        for entry, pattern in entries:
+            with self.subTest(pattern=pattern):
+                self._assert_manifest_error(
+                    f"version: 1\nrepositories:\n  -\n{entry}",
+                    pattern,
+                )
+
+    def test_manifest_rejects_invalid_optional_field_types(self) -> None:
+        cases = (
+            ("    enabled: 'false'\n", "enabled must be a boolean"),
+            ("    name: 42\n", "name must be null or a non-empty string"),
+            ("    profile: 42\n", "profile must be null or a non-empty string"),
+            ("    builders: scan\n", "builders must be a list"),
+            (
+                "    builders: [scan, scan]\n",
+                "builders contains duplicate builder: scan",
+            ),
+        )
+        base = (
+            "version: 1\nrepositories:\n"
+            "  - repo_key: service\n"
+            "    local_root: /tmp/service\n"
+            "    tracked_branch: main\n"
+        )
+        for field, pattern in cases:
+            with self.subTest(pattern=pattern):
+                self._assert_manifest_error(base + field, pattern)
+
+    def test_manifest_rejects_invalid_profile_builder_selections(self) -> None:
+        cases = (
+            ("made_up", "    builders: []\n", "unknown repository profile"),
+            ("generic", "    builders: [security]\n", "not supported by profile"),
+            ("generic", "    builders: [made_up]\n", "unknown builder"),
+        )
+        for profile, builders, pattern in cases:
+            with self.subTest(profile=profile, pattern=pattern):
+                self._assert_manifest_error(
+                    "version: 1\nrepositories:\n"
+                    "  - repo_key: service\n"
+                    "    local_root: /tmp/service\n"
+                    "    tracked_branch: main\n"
+                    f"    profile: {profile}\n"
+                    f"{builders}",
+                    pattern,
+                )
+
+    def test_manifest_rejects_invalid_rest_automation_contract(self) -> None:
+        cases = (
+            (
+                "    profile: rest_automation\n",
+                "requires a rest_automation mapping",
+            ),
+            (
+                "    profile: rest_automation\n"
+                "    rest_automation:\n"
+                "      features_root: features\n",
+                "requires rest_automation.object_mapping",
+            ),
+            (
+                "    profile: rest_automation\n"
+                "    rest_automation:\n"
+                "      features_root: ../features\n"
+                "      object_mapping: mapping.json\n",
+                "must stay inside local_root",
+            ),
+            (
+                "    profile: generic\n"
+                "    rest_automation:\n"
+                "      features_root: features\n"
+                "      object_mapping: mapping.json\n",
+                "only valid for profile rest_automation",
+            ),
+        )
+        base = (
+            "version: 1\nrepositories:\n"
+            "  - repo_key: suite\n"
+            "    local_root: /tmp/suite\n"
+            "    tracked_branch: main\n"
+        )
+        for fields, pattern in cases:
+            with self.subTest(pattern=pattern):
+                self._assert_manifest_error(base + fields, pattern)
+
+    def test_manifest_accepts_null_dependencies_and_valid_chains(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "repos.yaml"
+            manifest.write_text(
+                "version: 1\nrepositories:\n"
+                "  - repo_key: base\n"
+                "    local_root: /tmp/base\n"
+                "    tracked_branch: main\n"
+                "    depends_on: null\n"
+                "  - repo_key: dependent\n"
+                "    local_root: /tmp/dependent\n"
+                "    tracked_branch: main\n"
+                "    depends_on:\n"
+                "      - base\n",
+                encoding="utf-8",
+            )
+            document = load_workspace_manifest(manifest)
+            self.assertIsNone(document["repositories"][0]["depends_on"])
+            self.assertEqual(document["repositories"][1]["depends_on"], ["base"])
+
+    def test_manifest_rejects_missing_dependency_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "repos.yaml"
+            manifest.write_text(
+                "version: 1\nrepositories:\n"
+                "  - repo_key: dependent\n"
+                "    local_root: /tmp/dependent\n"
+                "    tracked_branch: main\n"
+                "    depends_on:\n"
+                "      - missing\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(RepositoryError, "unknown repository"):
+                load_workspace_manifest(manifest)
+
+    def test_manifest_rejects_self_dependency(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "repos.yaml"
+            manifest.write_text(
+                "version: 1\nrepositories:\n"
+                "  - repo_key: dependent\n"
+                "    local_root: /tmp/dependent\n"
+                "    tracked_branch: main\n"
+                "    depends_on:\n"
+                "      - dependent\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(RepositoryError, "cannot depend on itself"):
+                load_workspace_manifest(manifest)
+
+    def test_manifest_rejects_duplicate_dependencies(self) -> None:
+        self._assert_manifest_error(
+            "version: 1\nrepositories:\n"
+            "  - repo_key: base\n"
+            "    local_root: /tmp/base\n"
+            "    tracked_branch: main\n"
+            "  - repo_key: dependent\n"
+            "    local_root: /tmp/dependent\n"
+            "    tracked_branch: main\n"
+            "    depends_on: [base, base]\n",
+            "duplicate repository key: base",
+        )
+
+    def test_manifest_rejects_dependency_cycles(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "repos.yaml"
+            manifest.write_text(
+                "version: 1\nrepositories:\n"
+                "  - repo_key: a\n"
+                "    local_root: /tmp/a\n"
+                "    tracked_branch: main\n"
+                "    depends_on:\n"
+                "      - b\n"
+                "  - repo_key: b\n"
+                "    local_root: /tmp/b\n"
+                "    tracked_branch: main\n"
+                "    depends_on:\n"
+                "      - a\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(RepositoryError, "cyclic dependency"):
+                load_workspace_manifest(manifest)
+
     def legacy_connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row

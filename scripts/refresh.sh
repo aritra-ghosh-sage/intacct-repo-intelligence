@@ -11,6 +11,7 @@ cd "$PROJECT_ROOT"
 
 DB="catalog/catalog.db"
 MANIFEST="config/workspace_repos.yaml"
+# Compatibility default: callers can override this repo key explicitly.
 REPO_KEY="ia-main"
 if [[ -z "${PYTHON_BIN:-}" ]]; then
     if [[ -x .venv/bin/python ]]; then

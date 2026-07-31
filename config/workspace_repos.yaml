@@ -10,6 +10,7 @@ repositories:
     tracked_branch: main
     enabled: true
     profile: intacct_app
+    depends_on: null
     builders:
       - scan
       - symbols
@@ -31,6 +32,8 @@ repositories:
     tracked_branch: main
     enabled: true
     profile: rest_automation
+    depends_on:
+      - ia-main
     builders:
       - scan
       - symbols

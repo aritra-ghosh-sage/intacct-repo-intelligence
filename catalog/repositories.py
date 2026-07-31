@@ -7,8 +7,8 @@ repository record instead of reading ``config.REPO_PATH`` directly.
 
 from __future__ import annotations
 
-import sqlite3
 import json
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +17,146 @@ import yaml
 
 class RepositoryError(ValueError):
     """Raised when workspace repository configuration is invalid."""
+
+
+_MANIFEST_KEYS = frozenset({"version", "repositories"})
+_REPOSITORY_KEYS = frozenset(
+    {
+        "repo_key",
+        "name",
+        "kind",
+        "language",
+        "remote_url",
+        "local_root",
+        "tracked_branch",
+        "enabled",
+        "profile",
+        "builders",
+        "depends_on",
+        "rest_automation",
+    }
+)
+_REST_AUTOMATION_KEYS = frozenset({"features_root", "object_mapping"})
+_OPTIONAL_TEXT_FIELDS = ("name", "kind", "language", "remote_url")
+
+
+def _reject_unknown_keys(
+    mapping: dict[str, Any], allowed: frozenset[str], context: str
+) -> None:
+    unknown = sorted(str(key) for key in mapping if key not in allowed)
+    if unknown:
+        noun = "field" if len(unknown) == 1 else "fields"
+        raise RepositoryError(f"{context} contains unknown {noun}: {', '.join(unknown)}")
+
+
+def _required_non_empty_string(
+    entry: dict[str, Any], field: str, context: str
+) -> str:
+    if field not in entry:
+        raise RepositoryError(f"{context} is missing required field: {field}")
+    value = entry[field]
+    if not isinstance(value, str) or not value.strip():
+        raise RepositoryError(f"{context} field {field} must be a non-empty string")
+    normalized = value.strip()
+    entry[field] = normalized
+    return normalized
+
+
+def _normalize_optional_string(
+    entry: dict[str, Any], field: str, context: str
+) -> None:
+    if field not in entry or entry[field] is None:
+        return
+    value = entry[field]
+    if not isinstance(value, str) or not value.strip():
+        raise RepositoryError(
+            f"{context} field {field} must be null or a non-empty string"
+        )
+    entry[field] = value.strip()
+
+
+def _normalize_builder_list(repo_key: str, raw_builders: Any) -> list[str]:
+    if not isinstance(raw_builders, list):
+        raise RepositoryError(
+            f"repository {repo_key} builders must be a list of non-empty strings"
+        )
+    builders: list[str] = []
+    seen: set[str] = set()
+    for builder in raw_builders:
+        if not isinstance(builder, str) or not builder.strip():
+            raise RepositoryError(
+                f"repository {repo_key} builders must contain non-empty strings"
+            )
+        builder_name = builder.strip()
+        if builder_name in seen:
+            raise RepositoryError(
+                f"repository {repo_key} builders contains duplicate builder: {builder_name}"
+            )
+        seen.add(builder_name)
+        builders.append(builder_name)
+    return builders
+
+
+def _normalize_profile_and_validate_builders(
+    repo_key: str, raw_profile: Any, builders: list[str]
+) -> str | None:
+    from scripts.builder_registry import BuilderPlanError, build_plan
+
+    if raw_profile is not None and (
+        not isinstance(raw_profile, str) or not raw_profile.strip()
+    ):
+        raise RepositoryError(
+            f"repository {repo_key} field profile must be null or a non-empty string"
+        )
+    profile = raw_profile.strip() if isinstance(raw_profile, str) else None
+    try:
+        build_plan(profile or "generic", builders)
+    except BuilderPlanError as exc:
+        raise RepositoryError(f"repository {repo_key} {exc}") from exc
+    return profile
+
+
+def _normalize_rest_automation(
+    repo_key: str, profile: str | None, raw_config: Any
+) -> dict[str, str] | None:
+    if profile != "rest_automation":
+        if raw_config is not None:
+            raise RepositoryError(
+                f"repository {repo_key} rest_automation is only valid for profile rest_automation"
+            )
+        return None
+    if not isinstance(raw_config, dict):
+        raise RepositoryError(
+            f"repository {repo_key} requires a rest_automation mapping"
+        )
+    _reject_unknown_keys(
+        raw_config,
+        _REST_AUTOMATION_KEYS,
+        f"repository {repo_key} rest_automation",
+    )
+    config: dict[str, str] = {}
+    for field in ("features_root", "object_mapping"):
+        if field not in raw_config:
+            raise RepositoryError(
+                f"repository {repo_key} requires rest_automation.{field}"
+            )
+        value = raw_config[field]
+        if not isinstance(value, str) or not value.strip():
+            raise RepositoryError(
+                f"repository {repo_key} rest_automation.{field} must be a non-empty relative path"
+            )
+        normalized = value.strip()
+        candidate = Path(normalized)
+        if candidate.is_absolute():
+            raise RepositoryError(
+                f"repository {repo_key} rest_automation.{field} must be a relative path"
+            )
+        if ".." in candidate.parts:
+            raise RepositoryError(
+                f"repository {repo_key} rest_automation.{field} must stay inside local_root"
+            )
+        config[field] = normalized
+    return config
 
 
 def rest_automation_paths(entry: dict[str, Any], root: Path) -> tuple[Path, Path]:
@@ -56,6 +196,63 @@ def rest_automation_paths(entry: dict[str, Any], root: Path) -> tuple[Path, Path
     return values[0], values[1]
 
 
+def _normalize_dependency_list(
+    repo_key: str, raw_dependencies: Any
+) -> list[str] | None:
+    if raw_dependencies is None:
+        return None
+    if not isinstance(raw_dependencies, list):
+        raise RepositoryError(
+            f"repository {repo_key} depends_on must be null or a list of repository keys"
+        )
+    dependencies: list[str] = []
+    seen: set[str] = set()
+    for dependency in raw_dependencies:
+        if not isinstance(dependency, str) or not dependency.strip():
+            raise RepositoryError(
+                f"repository {repo_key} depends_on must contain non-empty repository keys"
+            )
+        dependency_key = dependency.strip()
+        if dependency_key == repo_key:
+            raise RepositoryError(f"repository {repo_key} cannot depend on itself")
+        if dependency_key in seen:
+            raise RepositoryError(
+                f"repository {repo_key} depends_on contains duplicate repository key: {dependency_key}"
+            )
+        seen.add(dependency_key)
+        dependencies.append(dependency_key)
+    return dependencies
+
+
+def _validate_dependency_cycles(
+    dependencies: dict[str, list[str] | None]
+) -> None:
+    permanent: set[str] = set()
+    visiting: list[str] = []
+    visiting_set: set[str] = set()
+
+    def visit(repo_key: str) -> None:
+        if repo_key in permanent:
+            return
+        if repo_key in visiting_set:
+            cycle_start = visiting.index(repo_key)
+            cycle = visiting[cycle_start:] + [repo_key]
+            raise RepositoryError(
+                "workspace manifest contains a cyclic dependency chain: "
+                + " -> ".join(cycle)
+            )
+        visiting.append(repo_key)
+        visiting_set.add(repo_key)
+        for dependency in dependencies.get(repo_key) or ():
+            visit(dependency)
+        visiting.pop()
+        visiting_set.remove(repo_key)
+        permanent.add(repo_key)
+
+    for repo_key in dependencies:
+        visit(repo_key)
+
+
 def load_workspace_manifest(path: str | Path) -> dict[str, Any]:
     """Load and validate a version 1 workspace repository manifest.
 
@@ -75,8 +272,11 @@ def load_workspace_manifest(path: str | Path) -> dict[str, Any]:
             f"invalid YAML in workspace manifest {manifest_path}: {exc}"
         ) from exc
 
-    if not isinstance(document, dict) or document.get("version") != 1:
-        raise RepositoryError("workspace manifest must be a mapping with version: 1")
+    if not isinstance(document, dict):
+        raise RepositoryError("workspace manifest must be a mapping")
+    _reject_unknown_keys(document, _MANIFEST_KEYS, "workspace manifest")
+    if type(document.get("version")) is not int or document["version"] != 1:
+        raise RepositoryError("workspace manifest version must be the integer 1")
     repositories = document.get("repositories")
     if not isinstance(repositories, list) or not repositories:
         raise RepositoryError(
@@ -84,45 +284,60 @@ def load_workspace_manifest(path: str | Path) -> dict[str, Any]:
         )
 
     seen: set[str] = set()
+    dependencies: dict[str, list[str] | None] = {}
     for entry in repositories:
         if not isinstance(entry, dict):
             raise RepositoryError("each repository entry must be a mapping")
-        missing = [
-            key
-            for key in ("repo_key", "local_root", "tracked_branch")
-            if not entry.get(key)
-        ]
-        if missing:
-            raise RepositoryError(f"repository entry is missing {', '.join(missing)}")
-        repo_key = str(entry["repo_key"])
+        raw_repo_key = entry.get("repo_key")
+        entry_context = (
+            f"repository {raw_repo_key.strip()}"
+            if isinstance(raw_repo_key, str) and raw_repo_key.strip()
+            else "repository entry"
+        )
+        _reject_unknown_keys(entry, _REPOSITORY_KEYS, entry_context)
+        repo_key = _required_non_empty_string(entry, "repo_key", "repository entry")
         if repo_key in seen:
             raise RepositoryError(
                 f"duplicate repo_key in workspace manifest: {repo_key}"
             )
         seen.add(repo_key)
-        builders = entry.get("builders", [])
-        if not isinstance(builders, list) or not all(
-            isinstance(item, str) and item for item in builders
-        ):
+        context = f"repository {repo_key}"
+        _required_non_empty_string(entry, "local_root", context)
+        _required_non_empty_string(entry, "tracked_branch", context)
+        for field in _OPTIONAL_TEXT_FIELDS:
+            _normalize_optional_string(entry, field, context)
+
+        enabled = entry.get("enabled", True)
+        if not isinstance(enabled, bool):
             raise RepositoryError(
-                f"repository {repo_key} builders must be a list of non-empty strings"
+                f"repository {repo_key} field enabled must be a boolean"
             )
-        if entry.get("profile") == "rest_automation":
-            config = entry.get("rest_automation")
-            if not isinstance(config, dict):
+        entry["enabled"] = enabled
+
+        builders = _normalize_builder_list(repo_key, entry.get("builders", []))
+        entry["builders"] = builders
+        profile = _normalize_profile_and_validate_builders(
+            repo_key, entry.get("profile"), builders
+        )
+        if "profile" in entry:
+            entry["profile"] = profile
+
+        raw_dependencies = entry.get("depends_on")
+        dependencies[repo_key] = _normalize_dependency_list(repo_key, raw_dependencies)
+        entry["depends_on"] = dependencies[repo_key]
+
+        rest_config = _normalize_rest_automation(
+            repo_key, profile, entry.get("rest_automation")
+        )
+        if rest_config is not None:
+            entry["rest_automation"] = rest_config
+    for repo_key, repo_dependencies in dependencies.items():
+        for dependency in repo_dependencies or ():
+            if dependency not in dependencies:
                 raise RepositoryError(
-                    f"repository {repo_key} requires a rest_automation mapping"
+                    f"repository {repo_key} depends on unknown repository: {dependency}"
                 )
-            for key in ("features_root", "object_mapping"):
-                value = config.get(key)
-                if (
-                    not isinstance(value, str)
-                    or not value.strip()
-                    or Path(value).is_absolute()
-                ):
-                    raise RepositoryError(
-                        f"repository {repo_key} rest_automation.{key} must be a non-empty relative path"
-                    )
+    _validate_dependency_cycles(dependencies)
     return document
 
 

@@ -31,6 +31,7 @@ except ModuleNotFoundError:  # helpful error for operators rather than fallback 
 
 
 DEFAULT_DB = "catalog/catalog.db"
+PRODUCTION_REST_REPO_KEY = "ia-main"
 VERSION_TAG = re.compile(r"^@version:([^\s]+)$", re.I)
 JIRA_TAG = re.compile(r"^@([A-Z][A-Z0-9]+-\d+)$")
 STATUS = re.compile(
@@ -616,11 +617,12 @@ def build(
             f"No enabled repos record for REST automation repository '{repo_key}'"
         )
     production_repo = conn.execute(
-        "SELECT id FROM repos WHERE repo_key='ia-main' AND enabled=1"
+        "SELECT id FROM repos WHERE repo_key=? AND enabled=1",
+        (PRODUCTION_REST_REPO_KEY,),
     ).fetchone()
     if not production_repo:
         raise ValueError(
-            "No enabled repos record for production REST repository 'ia-main'"
+            f"No enabled repos record for production REST repository {PRODUCTION_REST_REPO_KEY!r}"
         )
     suite_root = suite_root.resolve()
     features_root = (
