@@ -32,12 +32,13 @@ It creates a useful first graph for dependency and reverse-dependency queries.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import re
 import sqlite3
+from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterable, Optional
+
 from tqdm import tqdm
 
 try:
@@ -150,21 +151,21 @@ class SymbolRow:
     id: int
     name: str
     kind: str
-    parent_symbol: Optional[str]
-    file_id: Optional[int]
-    file_path: Optional[str]
+    parent_symbol: str | None
+    file_id: int | None
+    file_path: str | None
 
 
 @dataclass
 class Relationship:
-    source_symbol_id: Optional[int]
-    source_name: Optional[str]
-    source_kind: Optional[str]
-    target_symbol_id: Optional[int]
+    source_symbol_id: int | None
+    source_name: str | None
+    source_kind: str | None
+    target_symbol_id: int | None
     target_name: str
-    target_kind: Optional[str]
+    target_kind: str | None
     relationship_type: str
-    file_id: Optional[int]
+    file_id: int | None
     file_path: str
     language: str
     confidence: float
@@ -178,7 +179,7 @@ def table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {r["name"] for r in rows}
 
 
-def pick_col(columns: set[str], candidates: list[str]) -> Optional[str]:
+def pick_col(columns: set[str], candidates: list[str]) -> str | None:
     for c in candidates:
         if c in columns:
             return c
@@ -190,8 +191,9 @@ def load_files(
     repo_id: int,
     only_changed: bool,
     languages: list[str],
-    limit: Optional[int],
-    file_filter: Optional[str],
+    limit: int | None,
+    file_filter: str | None,
+    file_ids: Iterable[int] | None = None,
 ) -> list[FileRow]:
     placeholders = ",".join(["?"] * len(languages))
     params: list[object] = [repo_id, *languages]
@@ -205,6 +207,12 @@ def load_files(
     if file_filter:
         where.append("path LIKE ?")
         params.append(f"%{file_filter}%")
+    if file_ids is not None:
+        normalized_ids = sorted({int(file_id) for file_id in file_ids})
+        if not normalized_ids:
+            return []
+        where.append("id IN (" + ",".join("?" for _ in normalized_ids) + ")")
+        params.extend(normalized_ids)
 
     sql = f"""
         SELECT id, path, language
@@ -291,8 +299,8 @@ def resolve_symbol(
     symbols_by_name: dict[str, list[SymbolRow]],
     symbols_by_qualified_name: dict[str, list[SymbolRow]],
     name: str,
-    source_name: Optional[str] = None,
-) -> Optional[SymbolRow]:
+    source_name: str | None = None,
+) -> SymbolRow | None:
     if not name:
         return None
 
@@ -354,8 +362,8 @@ def prefer_symbol(candidates: list[SymbolRow]) -> SymbolRow:
 def pick_source_symbol(
     symbols_by_file: dict[int, list[SymbolRow]],
     file_id: int,
-    preferred_name: Optional[str] = None,
-) -> tuple[Optional[int], Optional[str], Optional[str]]:
+    preferred_name: str | None = None,
+) -> tuple[int | None, str | None, str | None]:
     symbols = symbols_by_file.get(file_id, [])
 
     if preferred_name:
@@ -380,7 +388,7 @@ def pick_source_symbol(
     return None, None, None
 
 
-def read_file_text(repo_root: Path, file_path: str) -> Optional[str]:
+def read_file_text(repo_root: Path, file_path: str) -> str | None:
     p = Path(file_path)
     if not p.is_absolute():
         p = repo_root / file_path
@@ -417,7 +425,7 @@ def looks_builtin(target_name: str, relationship_type: str) -> bool:
 def classify_relationship(
     relationship_type: str,
     target_name: str,
-    target_symbol_id: Optional[int],
+    target_symbol_id: int | None,
 ) -> tuple[str, str]:
     if target_symbol_id is not None:
         return RESOLUTION_CLASS_PROJECT_RESOLVED, "target_symbol_id_present"
@@ -466,12 +474,12 @@ def make_rel(
     rel_type: str,
     target_name: str,
     file_row: FileRow,
-    source: tuple[Optional[int], Optional[str], Optional[str]],
+    source: tuple[int | None, str | None, str | None],
     symbols_by_name: dict[str, list[SymbolRow]],
     symbols_by_qualified_name: dict[str, list[SymbolRow]],
     evidence: str,
     confidence: float = 0.7,
-    target_kind_hint: Optional[str] = None,
+    target_kind_hint: str | None = None,
 ) -> Relationship:
     target_name = normalize_target_name(target_name)
     target = resolve_symbol(
@@ -486,7 +494,7 @@ def make_rel(
         target.id if target else None,
     )
 
-    normalized_target_kind: Optional[str]
+    normalized_target_kind: str | None
     if target is not None:
         resolved_kind = str(target.kind or "").strip().lower()
         if resolved_kind in {"cqry", "qry"}:
@@ -532,9 +540,7 @@ def extract_php(
 
     rels: list[Relationship] = []
     class_declarations: list[
-        tuple[
-            int, str, Optional[str], tuple[Optional[int], Optional[str], Optional[str]]
-        ]
+        tuple[int, str, str | None, tuple[int | None, str | None, str | None]]
     ] = []
 
     # class Foo extends Bar implements A, B
@@ -588,7 +594,7 @@ def extract_php(
 
     def source_for_offset(
         offset: int,
-    ) -> tuple[tuple[Optional[int], Optional[str], Optional[str]], Optional[str]]:
+    ) -> tuple[tuple[int | None, str | None, str | None], str | None]:
         for start, class_name, parent_class, class_source in reversed(
             class_declarations
         ):
@@ -1211,6 +1217,44 @@ def reset_relationships(conn: sqlite3.Connection, repo_id: int) -> None:
     conn.commit()
 
 
+def relationship_file_closure(
+    conn: sqlite3.Connection,
+    *,
+    repo_id: int,
+    direct_file_ids: Iterable[int],
+    changed_symbol_ids: Iterable[int] = (),
+    changed_symbol_names: Iterable[str] = (),
+) -> set[int]:
+    """Return source files requiring re-resolution after symbol changes."""
+
+    closure = {int(file_id) for file_id in direct_file_ids}
+    clauses: list[str] = []
+    params: list[object] = [repo_id, RELATIONSHIP_EXTRACTOR]
+    symbol_ids = sorted({int(value) for value in changed_symbol_ids})
+    names = sorted({str(value) for value in changed_symbol_names if value})
+    if symbol_ids:
+        placeholders = ",".join("?" for _ in symbol_ids)
+        clauses.append(
+            f"(source_symbol_id IN ({placeholders}) OR target_symbol_id IN ({placeholders}))"
+        )
+        params.extend(symbol_ids)
+        params.extend(symbol_ids)
+    if names:
+        placeholders = ",".join("?" for _ in names)
+        clauses.append(f"target_name IN ({placeholders})")
+        params.extend(names)
+    if clauses:
+        rows = conn.execute(
+            "SELECT DISTINCT file_id FROM relationships "
+            "WHERE repo_id=? AND extractor=? AND file_id IS NOT NULL AND ("
+            + " OR ".join(clauses)
+            + ")",
+            params,
+        ).fetchall()
+        closure.update(int(row[0]) for row in rows)
+    return closure
+
+
 def extract_all(
     only_changed: bool = True,
     languages: list[str] | None = None,
@@ -1221,12 +1265,13 @@ def extract_all(
     limit: int | None = None,
     file_filter: str | None = None,
     db_path: str | None = None,
-) -> None:
+    file_ids: Iterable[int] | None = None,
+) -> int:
     conn = get_connection(db_path)
     cur = conn.cursor()
     require_repo_scoped_files(conn)
     repo = resolve_repo(conn, repo_key)
-    started = datetime.now(timezone.utc).isoformat()
+    started = datetime.now(UTC).isoformat()
 
     ensure_relationship_tracking_schema(conn)
     ensure_relationship_classification_columns(conn)
@@ -1237,7 +1282,7 @@ def extract_all(
     if not selected_languages:
         print("⚠️  No valid extractors selected.")
         conn.close()
-        return
+        return 0
 
     if "yaml" in selected_languages:
         reset_yaml_rel_stats()
@@ -1255,6 +1300,7 @@ def extract_all(
         languages=selected_languages,
         limit=limit,
         file_filter=file_filter,
+        file_ids=file_ids,
     )
     print(f"🔎 Extracting relationships from {len(files)} files")
 
@@ -1269,6 +1315,11 @@ def extract_all(
 
     for file_row in tqdm(files, desc="Extracting"):
         try:
+            cur.execute("SAVEPOINT relationship_file")
+            cur.execute(
+                "DELETE FROM relationships WHERE extractor=? AND repo_id=? AND file_id=?",
+                (RELATIONSHIP_EXTRACTOR, repo.id, file_row.id),
+            )
             rels = extract_relationships_for_file(
                 repo_root_path,
                 file_row,
@@ -1282,11 +1333,14 @@ def extract_all(
                 "UPDATE files SET last_relationships_extracted = ? WHERE id = ?",
                 (started, file_row.id),
             )
+            cur.execute("RELEASE SAVEPOINT relationship_file")
 
             if commit_every > 0 and processed % commit_every == 0:
                 conn.commit()
                 tqdm.write(f"Processed={processed}, inserted={total_inserted}")
         except Exception as e:
+            cur.execute("ROLLBACK TO SAVEPOINT relationship_file")
+            cur.execute("RELEASE SAVEPOINT relationship_file")
             errors += 1
             print(f"⚠️  {file_row.path}: {e}")
 
@@ -1302,6 +1356,9 @@ def extract_all(
         print(
             f"   YAML rels emitted:       {yaml_stats.get('relationships_emitted', 0)}"
         )
+    if errors:
+        raise RuntimeError(f"relationship extraction failed for {errors} file(s)")
+    return total_inserted
 
 
 if __name__ == "__main__":

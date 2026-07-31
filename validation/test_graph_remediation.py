@@ -5,10 +5,11 @@ import os
 import sqlite3
 import tempfile
 import unittest
-from unittest import mock
 from pathlib import Path
+from unittest import mock
 
 from catalog.db import get_connection
+from catalog.migrations import apply_delta_refresh_migration
 from scripts.build_graph import (
     create_sqlite_snapshot,
     preserve_previous_graph,
@@ -19,7 +20,6 @@ from scripts.query_graph import (
     _query_bounded_incoming_traversal,
     _query_entity_from_graph,
 )
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -123,6 +123,11 @@ class GraphRemediationTests(unittest.TestCase):
             migrated = sqlite3.connect(Path(directory) / "migrated.db")
             try:
                 fresh.executescript((ROOT / "catalog/schema.sql").read_text())
+                migrated.executescript((ROOT / "catalog/schema.sql").read_text())
+                migrated.execute(
+                    "DELETE FROM schema_migrations WHERE name='023_delta_refresh'"
+                )
+                migrated.execute("DROP TABLE graph_builds")
                 migrated.executescript(
                     """
                     CREATE TABLE graph_builds (
@@ -141,19 +146,13 @@ class GraphRemediationTests(unittest.TestCase):
                     ) VALUES ('old.lbug', 'catalog.db', 'active', NULL);
                     """
                 )
-                migrated.executescript(
-                    (ROOT / "migrations/017_graph_builds.sql").read_text()
-                )
-                migrated.executescript(
-                    (
-                        ROOT / "migrations/018_graph_build_status_previous.sql"
-                    ).read_text()
-                )
+                migrated.commit()
+                apply_delta_refresh_migration(migrated)
                 self.assertEqual(schema_signature(fresh), schema_signature(migrated))
                 row = migrated.execute(
-                    "SELECT status, source_fingerprint FROM graph_builds"
+                    "SELECT status, source_fingerprint,catalog_build_id FROM graph_builds"
                 ).fetchone()
-                self.assertEqual(row, ("active", "legacy-unknown"))
+                self.assertEqual(row, ("active", "legacy-unknown", None))
             finally:
                 fresh.close()
                 migrated.close()
@@ -209,13 +208,12 @@ class GraphRemediationTests(unittest.TestCase):
 
     def _create_migrated_catalog(self, path: Path):
         conn = sqlite3.connect(path)
+        conn.executescript((ROOT / "catalog/schema.sql").read_text())
+        conn.execute("DELETE FROM schema_migrations WHERE name='023_delta_refresh'")
         conn.execute("CREATE TABLE evidence(id INTEGER PRIMARY KEY, value TEXT)")
         conn.execute("INSERT INTO evidence(value) VALUES ('snapshot')")
         conn.commit()
-        conn.executescript((ROOT / "migrations/017_graph_builds.sql").read_text())
-        conn.executescript(
-            (ROOT / "migrations/018_graph_build_status_previous.sql").read_text()
-        )
+        apply_delta_refresh_migration(conn)
         conn.close()
 
     @mock.patch("validation.validate_graph.validate_paths")
@@ -384,21 +382,73 @@ class GraphRemediationTests(unittest.TestCase):
             real_replace = os.replace
 
             def fail_candidate_replace(source, destination):
-                if ".candidate." in str(source) and Path(destination) == active:
+                if (
+                    ".candidate." in str(source)
+                    and Path(destination).resolve() == active.resolve()
+                ):
                     raise OSError("simulated atomic replace failure")
                 return real_replace(source, destination)
 
-            with mock.patch(
-                "scripts.build_graph.os.replace", side_effect=fail_candidate_replace
+            with (
+                mock.patch(
+                    "scripts.build_graph.os.replace", side_effect=fail_candidate_replace
+                ),
+                self.assertRaisesRegex(OSError, "simulated atomic"),
             ):
-                with self.assertRaisesRegex(OSError, "simulated atomic"):
-                    promote_validated_graph(str(catalog), str(active))
+                promote_validated_graph(str(catalog), str(active))
 
             self.assertEqual(active.read_bytes(), b"old-active")
-            self.assertEqual(
-                active.with_name("graph.lbug.previous").read_bytes(),
-                b"old-active",
-            )
+            self.assertFalse(active.with_name("graph.lbug.previous").exists())
+
+    @mock.patch("validation.validate_graph.validate_paths")
+    @mock.patch("scripts.build_graph.build_graph")
+    def test_metadata_activation_failure_restores_graph_and_fails_build(
+        self, mocked_build, mocked_validate
+    ):
+        with tempfile.TemporaryDirectory() as directory:
+            catalog = Path(directory) / "catalog.db"
+            active = Path(directory) / "graph.lbug"
+            previous = active.with_name("graph.lbug.previous")
+            active.write_bytes(b"old-active")
+            previous.write_bytes(b"old-previous")
+            self._create_migrated_catalog(catalog)
+            conn = sqlite3.connect(catalog)
+            try:
+                conn.execute(
+                    """INSERT INTO graph_builds(
+                           graph_path,source_db,status,source_fingerprint,build_mode
+                       ) VALUES (?,?, 'active',?,'full')""",
+                    (str(active), str(catalog), "old-fingerprint"),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            mocked_build.side_effect = lambda _snapshot, candidate: Path(
+                candidate
+            ).write_bytes(b"new-active")
+            mocked_validate.return_value = '{"exact_check_count": 52}'
+
+            with (
+                mock.patch(
+                    "scripts.build_graph._activate_graph_metadata",
+                    side_effect=sqlite3.OperationalError("activation failed"),
+                ),
+                self.assertRaisesRegex(sqlite3.OperationalError, "activation failed"),
+            ):
+                promote_validated_graph(str(catalog), str(active))
+
+            self.assertEqual(active.read_bytes(), b"old-active")
+            self.assertEqual(previous.read_bytes(), b"old-previous")
+            conn = sqlite3.connect(catalog)
+            try:
+                statuses = conn.execute(
+                    "SELECT status,error FROM graph_builds ORDER BY id"
+                ).fetchall()
+                self.assertEqual(statuses[0], ("active", None))
+                self.assertEqual(statuses[1][0], "failed")
+                self.assertIn("activation failed", statuses[1][1])
+            finally:
+                conn.close()
 
     def test_traversal_uses_global_budget_and_minimum_depth(self):
         graph = FakeGraphConnection()

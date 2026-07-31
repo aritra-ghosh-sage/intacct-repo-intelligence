@@ -101,8 +101,7 @@ import json
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Optional
-
+from typing import Any
 
 # ---------------------------------------------------------------------
 # Schema
@@ -280,7 +279,7 @@ def verify_paths_on_disk(entry: dict, repo_root: Path) -> list[str]:
     """
     notes: list[str] = []
 
-    def _exists(rel_path: Optional[str]) -> bool:
+    def _exists(rel_path: str | None) -> bool:
         if not rel_path:
             return True
         p = (repo_root / rel_path).resolve()
@@ -366,7 +365,7 @@ def choose_better(a: dict, b: dict) -> dict:
 def merge_entities(
     input_path: Path,
     output_path: Path,
-    repo_root: Optional[Path],
+    repo_root: Path | None,
     verify: bool,
     strict: bool,
 ) -> int:

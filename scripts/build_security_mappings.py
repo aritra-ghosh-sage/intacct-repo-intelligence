@@ -7,9 +7,10 @@ import json
 import re
 import sqlite3
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import click
 from tqdm import tqdm
@@ -526,7 +527,7 @@ def parse_all_assigned_arrays(
                 {
                     "category": "parse_error",
                     "file_path": file_path or "<unknown>",
-                    "reason": f"tree-sitter parse failed: {str(exc)}",
+                    "reason": f"tree-sitter parse failed: {exc!s}",
                 }
             )
         return {}

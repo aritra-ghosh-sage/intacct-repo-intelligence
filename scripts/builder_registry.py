@@ -6,8 +6,36 @@ builders, but cannot accidentally run a dependent builder against stale input.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import Iterable
+from pathlib import PurePosixPath
+
+from scripts.scan_ent_files import is_entity_input_path
+
+SourceMatcher = Callable[[str], bool]
+
+
+def _any(_path: str) -> bool:
+    return True
+
+
+def _suffix(*suffixes: str) -> SourceMatcher:
+    allowed = frozenset(value.lower() for value in suffixes)
+    return lambda path: PurePosixPath(path).suffix.lower() in allowed
+
+
+def _contains(*parts: str) -> SourceMatcher:
+    lowered = tuple(part.lower() for part in parts)
+    return lambda path: any(part in path.lower() for part in lowered)
+
+
+def _exact(*paths: str) -> SourceMatcher:
+    allowed = frozenset(PurePosixPath(path).as_posix().lower() for path in paths)
+    return lambda path: PurePosixPath(path).as_posix().lower() in allowed
+
+
+def _or(*matchers: SourceMatcher) -> SourceMatcher:
+    return lambda path: any(matcher(path) for matcher in matchers)
 
 
 @dataclass(frozen=True)
@@ -15,40 +43,133 @@ class Builder:
     name: str
     dependencies: tuple[str, ...] = ()
     profiles: frozenset[str] = frozenset({"generic", "intacct_app", "rest_automation"})
+    delta_capability: str = "scoped_full"
+    source_matcher: SourceMatcher = _any
+    invalidates: tuple[str, ...] = ()
 
 
 BUILDERS: dict[str, Builder] = {
-    "scan": Builder("scan"),
-    "symbols": Builder("symbols", ("scan",)),
-    "relationships": Builder("relationships", ("symbols",)),
-    "entities": Builder("entities", ("scan",), frozenset({"intacct_app"})),
-    "entity_roots": Builder(
-        "entity_roots", ("entities", "symbols"), frozenset({"intacct_app"})
+    "scan": Builder("scan", delta_capability="exact", source_matcher=_any),
+    "symbols": Builder(
+        "symbols",
+        ("scan",),
+        delta_capability="exact",
+        source_matcher=_any,
+        invalidates=(
+            "entity_roots",
+            "workflows",
+            "entity_semantics",
+            "entity_access_links",
+        ),
     ),
-    "openapi_scan": Builder("openapi_scan", ("scan",), frozenset({"intacct_app"})),
+    "relationships": Builder(
+        "relationships",
+        ("symbols",),
+        delta_capability="exact",
+        source_matcher=_any,
+        invalidates=("integration_links",),
+    ),
+    "entities": Builder(
+        "entities",
+        ("scan",),
+        frozenset({"intacct_app"}),
+        source_matcher=is_entity_input_path,
+        invalidates=(
+            "entity_roots",
+            "openapi_link",
+            "workflows",
+            "rest_endpoints",
+            "entity_semantics",
+            "entity_access_links",
+        ),
+    ),
+    "entity_roots": Builder(
+        "entity_roots",
+        ("entities", "symbols"),
+        frozenset({"intacct_app"}),
+        source_matcher=_or(_suffix(".ent"), _any),
+    ),
+    "openapi_scan": Builder(
+        "openapi_scan",
+        ("scan",),
+        frozenset({"intacct_app"}),
+        source_matcher=_contains("openapispec", "openapi"),
+        invalidates=(
+            "entities",
+            "openapi_link",
+            "workflows",
+            "rest_endpoints",
+            "entity_semantics",
+            "entity_access_links",
+        ),
+    ),
     "openapi_link": Builder(
-        "openapi_link", ("openapi_scan", "entities"), frozenset({"intacct_app"})
+        "openapi_link",
+        ("openapi_scan", "entities"),
+        frozenset({"intacct_app"}),
+        source_matcher=_or(_contains("openapispec", "openapi"), _suffix(".ent")),
+        invalidates=(
+            "workflows",
+            "rest_endpoints",
+            "entity_semantics",
+            "entity_access_links",
+        ),
     ),
     "workflows": Builder(
-        "workflows", ("entity_roots", "openapi_scan"), frozenset({"intacct_app"})
+        "workflows",
+        ("entity_roots", "openapi_scan"),
+        frozenset({"intacct_app"}),
+        source_matcher=_or(_contains("workflow", "allowedoperations"), _suffix(".ent")),
+        invalidates=("entity_access_links",),
     ),
-    "security": Builder("security", ("scan",), frozenset({"intacct_app"})),
+    "security": Builder(
+        "security",
+        ("scan",),
+        frozenset({"intacct_app"}),
+        source_matcher=_or(
+            _contains("security", "permission", "menu"),
+            _suffix(".pol", ".menu"),
+            _exact("app/source/common/dbschema.inc"),
+        ),
+        invalidates=("entity_semantics", "entity_access_links"),
+    ),
     "rest_endpoints": Builder(
-        "rest_endpoints", ("openapi_link",), frozenset({"intacct_app"})
+        "rest_endpoints",
+        ("openapi_link",),
+        frozenset({"intacct_app"}),
+        source_matcher=_or(
+            _contains("openapispec", "openapi", "registr"), _suffix(".ent")
+        ),
+        invalidates=("entity_semantics", "entity_access_links", "gherkin_coverage"),
     ),
     "entity_semantics": Builder(
         "entity_semantics",
         ("entities", "openapi_link", "security", "rest_endpoints"),
         frozenset({"intacct_app"}),
+        source_matcher=_or(
+            _suffix(".ent"), _contains("openapispec", "security", "permission")
+        ),
+        invalidates=("entity_access_links",),
     ),
     "entity_access_links": Builder(
         "entity_access_links",
         ("workflows", "security", "rest_endpoints", "entity_semantics"),
         frozenset({"intacct_app"}),
+        source_matcher=_any,
     ),
-    "integration_links": Builder("integration_links", ("relationships",)),
+    "integration_links": Builder(
+        "integration_links",
+        ("relationships",),
+        delta_capability="unsupported",
+        source_matcher=_any,
+    ),
     "gherkin_coverage": Builder(
-        "gherkin_coverage", ("integration_links",), frozenset({"rest_automation"})
+        "gherkin_coverage",
+        ("integration_links",),
+        frozenset({"rest_automation"}),
+        source_matcher=_or(
+            _suffix(".feature", ".properties"), _contains("object-mapping.json")
+        ),
     ),
 }
 
@@ -123,3 +244,55 @@ def build_plan(profile: str, requested: Iterable[str] | None = None) -> list[str
     for name in selected:
         visit(name)
     return ordered
+
+
+def invalidated_builders(
+    plan: Iterable[str], changed_paths: Iterable[str], forced: Iterable[str] = ()
+) -> dict[str, str]:
+    """Return selected builders and concrete transitive invalidation reasons."""
+
+    ordered = list(plan)
+    selected = set(ordered)
+    reasons: dict[str, str] = {}
+    for name in ordered:
+        matcher = BUILDERS[name].source_matcher
+        matches = sorted(path for path in changed_paths if matcher(path))
+        if matches:
+            reasons[name] = f"source change: {matches[0]}"
+    for name in forced:
+        if name in selected:
+            reasons[name] = "cross-repository dependency invalidation"
+
+    changed = True
+    while changed:
+        changed = False
+        for source in ordered:
+            if source not in reasons:
+                continue
+            for target in BUILDERS[source].invalidates:
+                if target in selected and target not in reasons:
+                    reasons[target] = f"invalidated by {source}"
+                    changed = True
+    return reasons
+
+
+def stage_execution_modes(
+    plan: Iterable[str],
+    *,
+    repository_mode: str,
+    changed_paths: Iterable[str] = (),
+    forced: Iterable[str] = (),
+) -> dict[str, tuple[str, str]]:
+    ordered = list(plan)
+    if repository_mode == "full":
+        return {name: ("full", "full repository refresh") for name in ordered}
+    reasons = invalidated_builders(ordered, changed_paths, forced)
+    result: dict[str, tuple[str, str]] = {}
+    for name in ordered:
+        reason = reasons.get(name)
+        if reason is None:
+            result[name] = ("skipped", "source inputs unchanged")
+            continue
+        capability = BUILDERS[name].delta_capability
+        result[name] = ("delta" if capability == "exact" else "full", reason)
+    return result

@@ -5,13 +5,91 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from intacct_mcp.server import Catalog
-
+from catalog.graph_projection import GRAPH_PROJECTION_VERSION
+from intacct_mcp.server import Catalog, CatalogState
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class McpMultiRepoTests(unittest.TestCase):
+    def test_graph_freshness_is_scoped_to_configured_graph_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db_path = root / "catalog.db"
+            configured_graph = root / "configured.lbug"
+            other_graph = root / "other.lbug"
+            configured_graph.write_bytes(b"stale")
+            conn = sqlite3.connect(db_path)
+            try:
+                conn.executescript((ROOT / "catalog/schema.sql").read_text())
+                catalog_build_id = conn.execute(
+                    """INSERT INTO catalog_builds(
+                           build_token,catalog_path,requested_mode,effective_mode,
+                           status,source_revisions_json,delta_contract_version,
+                           content_fingerprint,completed_at
+                       ) VALUES (?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)""",
+                    (
+                        "catalog",
+                        str(db_path),
+                        "full",
+                        "full",
+                        "active",
+                        "{}",
+                        2,
+                        "current-fingerprint",
+                    ),
+                ).lastrowid
+                conn.execute(
+                    """INSERT INTO graph_builds(
+                           graph_path,source_db,status,source_fingerprint,
+                           catalog_build_id,build_mode,projection_version,
+                           source_revisions_json
+                       ) VALUES (?,?,?,?,?,?,?,?)""",
+                    (
+                        str(configured_graph.resolve()),
+                        str(db_path),
+                        "active",
+                        "stale-fingerprint",
+                        catalog_build_id,
+                        "full",
+                        GRAPH_PROJECTION_VERSION,
+                        "{}",
+                    ),
+                )
+                conn.execute(
+                    """INSERT INTO graph_builds(
+                           graph_path,source_db,status,source_fingerprint,
+                           catalog_build_id,build_mode,projection_version,
+                           source_revisions_json
+                       ) VALUES (?,?,?,?,?,?,?,?)""",
+                    (
+                        str(other_graph.resolve()),
+                        str(db_path),
+                        "active",
+                        "current-fingerprint",
+                        catalog_build_id,
+                        "full",
+                        GRAPH_PROJECTION_VERSION,
+                        "{}",
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            state = CatalogState(db_path, configured_graph)
+            catalog_conn = state.conn()
+            try:
+                snapshot = state.snapshot(catalog_conn)
+                self.assertFalse(snapshot["graph_fresh"])
+                self.assertEqual(
+                    snapshot["active_graph_build"]["source_fingerprint"],
+                    "stale-fingerprint",
+                )
+                self.assertFalse(state.graph_active(catalog_conn))
+            finally:
+                catalog_conn.close()
+
     def test_entity_context_and_repository_status_are_repo_qualified(self):
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "catalog.db"

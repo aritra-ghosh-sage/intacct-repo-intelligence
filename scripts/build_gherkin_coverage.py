@@ -12,9 +12,10 @@ import json
 import re
 import sqlite3
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import click
 
@@ -32,24 +33,26 @@ except ModuleNotFoundError:  # helpful error for operators rather than fallback 
 
 DEFAULT_DB = "catalog/catalog.db"
 PRODUCTION_REST_REPO_KEY = "ia-main"
-VERSION_TAG = re.compile(r"^@version:([^\s]+)$", re.I)
+VERSION_TAG = re.compile(r"^@version:([^\s]+)$", re.IGNORECASE)
 JIRA_TAG = re.compile(r"^@([A-Z][A-Z0-9]+-\d+)$")
 STATUS = re.compile(
-    r"\b(?:status(?:\s+code)?|response\s+code)(?:\s+is)?\s*[\"']?(\d{3})", re.I
+    r"\b(?:status(?:\s+code)?|response\s+code)(?:\s+is)?\s*[\"']?(\d{3})", re.IGNORECASE
 )
 QUOTED = re.compile(r'"([^"]*)"')
 GENERIC_REQUEST = re.compile(
     r'"(?P<method>GET|POST|PUT|PATCH|DELETE)"\s+to\s+(?:(?:child\s+)?"(?P<object>[^"]+)")',
-    re.I,
+    re.IGNORECASE,
 )
 SIMPLE_REQUEST = re.compile(
     r"\bI\s+(?P<verb>read|create|update|delete|patch|post|put)\s+(?:object)?\s*\"(?P<object>[^\"]+)\"",
-    re.I,
+    re.IGNORECASE,
 )
-KEY = re.compile(r'\bwith\s+key\s+"([^"]*)"', re.I)
-PARENT = re.compile(r'\bfor\s+parent\s+"([^"]+)"\s+with\s+key\s+"([^"]*)"', re.I)
-STEP_VERSION = re.compile(r'\bfor\s+version\s+"([^"]+)"', re.I)
-ACTION = re.compile(r'\b(?:action|workflow)\s+"([^"]+)"', re.I)
+KEY = re.compile(r'\bwith\s+key\s+"([^"]*)"', re.IGNORECASE)
+PARENT = re.compile(
+    r'\bfor\s+parent\s+"([^"]+)"\s+with\s+key\s+"([^"]*)"', re.IGNORECASE
+)
+STEP_VERSION = re.compile(r'\bfor\s+version\s+"([^"]+)"', re.IGNORECASE)
+ACTION = re.compile(r'\b(?:action|workflow)\s+"([^"]+)"', re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -175,7 +178,9 @@ def _versioned_feature_evidence(
             feature_text = feature_path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             feature_text = feature_path.read_text(encoding="utf-8", errors="replace")
-        if re.search(rf"@version:{re.escape(version)}(?:\b|$)", feature_text, re.I):
+        if re.search(
+            rf"@version:{re.escape(version)}(?:\b|$)", feature_text, re.IGNORECASE
+        ):
             return feature_path, properties_path
     return None
 
@@ -332,7 +337,7 @@ def _path_for_request(
 
 def canonicalize_path(path: str) -> str:
     path = "/" + path.strip().strip("/")
-    path = re.sub(r"^/services/(?:v[^/]+|s\d+)(?=/)", "", path, flags=re.I)
+    path = re.sub(r"^/services/(?:v[^/]+|s\d+)(?=/)", "", path, flags=re.IGNORECASE)
     path = re.sub(r"//+", "/", path)
     return path.rstrip("/") or "/"
 

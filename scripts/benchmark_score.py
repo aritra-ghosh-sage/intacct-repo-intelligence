@@ -6,11 +6,11 @@
 #         --manifest manifest.yaml \
 #         --out scorecard/
 # ============================================================
+import argparse
 import json
 import sqlite3
-import argparse
-import time
 import statistics as st
+import time
 from pathlib import Path
 
 

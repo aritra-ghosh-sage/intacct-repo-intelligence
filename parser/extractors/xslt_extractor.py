@@ -1,6 +1,7 @@
 # parser/extractors/xslt_extractor.py
 
 import re
+
 from .base import Symbol
 
 _TEMPLATE = re.compile(r'<xsl:template\s+[^>]*name\s*=\s*"([^"]+)"', re.IGNORECASE)

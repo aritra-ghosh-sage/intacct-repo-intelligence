@@ -357,7 +357,9 @@ for op in ops["data"]["operations"]:
         menus = c["menu_references"]
 
 # Entity linkage by surface
-links = entity_access_detail(entity_name="GLBatch", surface_type="security_operation", limit=25)
+links = entity_access_detail(
+    entity_name="GLBatch", surface_type="security_operation", limit=25
+)
 surface_links = links["data"]["links"]
 ```
 

@@ -1,18 +1,20 @@
 import json
-
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
+
 from tqdm import tqdm
 
 from catalog.db import get_connection, require_foreign_key_integrity
-from parser.repo_context import require_repo_scoped_files, resolve_repo
+from catalog.migrations import symbol_stable_key
 from parser.extractors import (
     java_extractor,
     php_extractor,
     sql_extractor,
-    yaml_extractor,
     xslt_extractor,
+    yaml_extractor,
 )
+from parser.repo_context import require_repo_scoped_files, resolve_repo
 
 EXTRACTORS = {
     "java": java_extractor,
@@ -24,6 +26,20 @@ EXTRACTORS = {
 
 OUTPUT_DIR = Path("outputs")
 YAML_PARSE_FAILURES_LOG = OUTPUT_DIR / "yaml_parse_failures.jsonl"
+
+
+@dataclass(frozen=True)
+class SymbolChangeSummary:
+    added_ids: tuple[int, ...] = ()
+    changed_ids: tuple[int, ...] = ()
+    deleted_ids: tuple[int, ...] = ()
+    added_names: tuple[str, ...] = ()
+    changed_names: tuple[str, ...] = ()
+    deleted_names: tuple[str, ...] = ()
+
+    @property
+    def affected_count(self) -> int:
+        return len(self.added_ids) + len(self.changed_ids) + len(self.deleted_ids)
 
 
 def write_jsonl(path: Path, rows: list[dict[str, str]]) -> None:
@@ -39,13 +55,14 @@ def extract_all(
     repo_key: str | None = None,
     db_path: str | None = None,
     write_logs: bool = True,
-):
+    file_ids: list[int] | tuple[int, ...] | set[int] | None = None,
+) -> SymbolChangeSummary:
     conn = get_connection(db_path)
     cur = conn.cursor()
     require_repo_scoped_files(conn)
     repo = resolve_repo(conn, repo_key)
 
-    started = datetime.now(timezone.utc).isoformat()
+    started = datetime.now(UTC).isoformat()
 
     selected_languages = [
         lang for lang in (languages or list(EXTRACTORS.keys())) if lang in EXTRACTORS
@@ -53,12 +70,24 @@ def extract_all(
     if not selected_languages:
         print("⚠️  No valid extractors selected.")
         conn.close()
-        return
+        return SymbolChangeSummary()
 
     placeholders = ",".join(["?"] * len(selected_languages))
     lang_tuple = tuple(selected_languages)
 
-    if only_changed:
+    if file_ids is not None:
+        normalized_ids = sorted({int(file_id) for file_id in file_ids})
+        if normalized_ids:
+            id_placeholders = ",".join("?" for _ in normalized_ids)
+            rows = cur.execute(
+                f"""SELECT id,path,language FROM files
+                    WHERE repo_id=? AND id IN ({id_placeholders})
+                      AND language IN ({placeholders}) ORDER BY id""",
+                (repo.id, *normalized_ids, *lang_tuple),
+            ).fetchall()
+        else:
+            rows = []
+    elif only_changed:
         # A file needs (re-)extraction if:
         #   1. It has never been extracted, OR
         #   2. It's been re-scanned since the last extraction
@@ -90,6 +119,13 @@ def extract_all(
 
     total_symbols = 0
     errors = 0
+    error_messages: list[str] = []
+    added_ids: list[int] = []
+    changed_ids: list[int] = []
+    deleted_ids: list[int] = []
+    added_names: list[str] = []
+    changed_names: list[str] = []
+    deleted_names: list[str] = []
 
     if "yaml" in selected_languages and hasattr(yaml_extractor, "reset_stats"):
         yaml_extractor.reset_stats()
@@ -109,9 +145,6 @@ def extract_all(
             with open(abs_path, "rb") as f:
                 source = f.read()
 
-            # Remove old symbols for this file (idempotent re-extraction)
-            cur.execute("DELETE FROM symbols WHERE file_id = ?", (file_id,))
-
             # Pass file path to extractor for format-specific delegation (e.g., .cqry -> cqry_extractor)
             if (
                 hasattr(extractor, "extract")
@@ -120,26 +153,97 @@ def extract_all(
                 symbols = extractor.extract(source, rel_path)
             else:
                 symbols = extractor.extract(source)
-            for s in symbols:
-                cur.execute(
-                    """
-                    INSERT INTO symbols
-                    (file_id, name, kind, parent_symbol,
-                     start_line, end_line, signature, language)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                    (
-                        file_id,
-                        s.name,
-                        s.kind,
-                        s.parent_symbol,
-                        s.start_line,
-                        s.end_line,
-                        s.signature,
-                        s.language,
-                    ),
+            staged: list[tuple[str, object]] = []
+            ordinals: dict[tuple[object, ...], int] = {}
+            for symbol in symbols:
+                identity = (
+                    symbol.kind,
+                    symbol.name,
+                    symbol.parent_symbol,
+                    symbol.signature,
                 )
+                ordinal = ordinals.get(identity, 0)
+                ordinals[identity] = ordinal + 1
+                staged.append(
+                    (
+                        symbol_stable_key(
+                            kind=symbol.kind,
+                            name=symbol.name,
+                            parent_symbol=symbol.parent_symbol,
+                            signature=symbol.signature,
+                            duplicate_ordinal=ordinal,
+                        ),
+                        symbol,
+                    )
+                )
+
+            existing = {
+                str(existing_row["stable_key"]): existing_row
+                for existing_row in cur.execute(
+                    """SELECT id,name,kind,parent_symbol,start_line,end_line,
+                              signature,language,stable_key
+                       FROM symbols WHERE file_id=?""",
+                    (file_id,),
+                ).fetchall()
+                if existing_row["stable_key"] is not None
+            }
+            staged_keys: set[str] = set()
+            for stable_key, symbol in staged:
+                staged_keys.add(stable_key)
+                old = existing.get(stable_key)
+                values = (
+                    symbol.name,
+                    symbol.kind,
+                    symbol.parent_symbol,
+                    symbol.start_line,
+                    symbol.end_line,
+                    symbol.signature,
+                    symbol.language,
+                )
+                if old is None:
+                    inserted = cur.execute(
+                        """INSERT INTO symbols(
+                               file_id,name,kind,parent_symbol,start_line,end_line,
+                               signature,language,stable_key
+                           ) VALUES (?,?,?,?,?,?,?,?,?)""",
+                        (file_id, *values, stable_key),
+                    )
+                    added_ids.append(int(inserted.lastrowid))
+                    added_names.append(str(symbol.name))
+                else:
+                    old_values = tuple(
+                        old[column]
+                        for column in (
+                            "name",
+                            "kind",
+                            "parent_symbol",
+                            "start_line",
+                            "end_line",
+                            "signature",
+                            "language",
+                        )
+                    )
+                    cur.execute(
+                        """UPDATE symbols SET name=?,kind=?,parent_symbol=?,
+                               start_line=?,end_line=?,signature=?,language=?
+                           WHERE id=?""",
+                        (*values, int(old["id"])),
+                    )
+                    if old_values != values:
+                        changed_ids.append(int(old["id"]))
+                        changed_names.append(str(symbol.name))
                 total_symbols += 1
+
+            stale = [row for key, row in existing.items() if key not in staged_keys]
+            if stale:
+                stale_ids = [int(old["id"]) for old in stale]
+                deleted_ids.extend(stale_ids)
+                deleted_names.extend(str(old["name"]) for old in stale)
+                delete_placeholders = ",".join("?" for _ in stale_ids)
+                cur.execute(
+                    f"DELETE FROM symbols WHERE id IN ({delete_placeholders})",
+                    stale_ids,
+                )
 
             # ✅ Only stamp on success — failed files remain unmarked
             #     so they'll be retried on the next incremental run.
@@ -156,7 +260,9 @@ def extract_all(
             cur.execute("ROLLBACK TO SAVEPOINT symbol_file")
             cur.execute("RELEASE SAVEPOINT symbol_file")
             errors += 1
-            print(f"⚠️  {rel_path}: {e}")
+            message = f"{rel_path}: {e}"
+            error_messages.append(message)
+            print(f"⚠️  {message}")
 
     require_foreign_key_integrity(conn, context="symbol extraction")
     conn.commit()
@@ -176,6 +282,20 @@ def extract_all(
         if write_logs:
             write_jsonl(YAML_PARSE_FAILURES_LOG, parse_failures)
             print(f"   YAML parse fail log: {YAML_PARSE_FAILURES_LOG.as_posix()}")
+
+    if error_messages:
+        raise RuntimeError(
+            f"symbol extraction failed for {len(error_messages)} file(s): "
+            + "; ".join(error_messages[:3])
+        )
+    return SymbolChangeSummary(
+        tuple(added_ids),
+        tuple(changed_ids),
+        tuple(deleted_ids),
+        tuple(sorted(set(added_names))),
+        tuple(sorted(set(changed_names))),
+        tuple(sorted(set(deleted_names))),
+    )
 
 
 if __name__ == "__main__":

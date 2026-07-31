@@ -1,0 +1,284 @@
+"""Read-only structural and generation-state validation for catalog SQLite DBs."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sqlite3
+from pathlib import Path
+from typing import Any
+
+from catalog.content_fingerprint import logical_content_fingerprint
+
+
+class CatalogIntegrityError(RuntimeError):
+    """The catalog cannot be promoted or trusted as an active generation."""
+
+
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+        ).fetchone()
+        is not None
+    )
+
+
+def _count(conn: sqlite3.Connection, sql: str) -> int:
+    return int(conn.execute(sql).fetchone()[0])
+
+
+def _logical_orphan_checks(conn: sqlite3.Connection) -> dict[str, int]:
+    checks = {
+        "entity_roots_without_mapping": """
+            SELECT COUNT(*) FROM entity_roots er
+            LEFT JOIN entity_mappings em
+              ON em.repo_id=er.repo_id AND em.entity_id=er.entity_id
+             AND em.symbol_id=er.symbol_id
+            WHERE em.id IS NULL
+        """,
+        "workflow_nodes_without_workflow": """
+            SELECT COUNT(*) FROM workflow_nodes wn
+            LEFT JOIN workflows w ON w.id=wn.workflow_id WHERE w.id IS NULL
+        """,
+        "workflow_edges_without_nodes": """
+            SELECT COUNT(*) FROM workflow_edges we
+            LEFT JOIN workflow_nodes src ON src.id=we.from_node_id
+            LEFT JOIN workflow_nodes dst ON dst.id=we.to_node_id
+            WHERE src.id IS NULL OR dst.id IS NULL
+        """,
+        "dbschema_fields_without_table": """
+            SELECT COUNT(*) FROM dbschema_fields df
+            LEFT JOIN dbschema_tables dt ON dt.id=df.dbschema_table_id
+            WHERE dt.id IS NULL
+        """,
+        "security_values_without_policy": """
+            SELECT COUNT(*) FROM security_policy_values spv
+            LEFT JOIN security_policies sp ON sp.id=spv.policy_id WHERE sp.id IS NULL
+        """,
+        "security_menu_items_without_menu": """
+            SELECT COUNT(*) FROM security_menu_items smi
+            LEFT JOIN security_menus sm ON sm.id=smi.menu_id WHERE sm.id IS NULL
+        """,
+        "entity_components_without_occurrence": """
+            SELECT COUNT(*) FROM entity_schema_components esc
+            LEFT JOIN entity_occurrences eo ON eo.id=esc.occurrence_id
+            WHERE eo.id IS NULL
+        """,
+        "entity_relationship_facts_without_source": """
+            SELECT COUNT(*) FROM entity_relationship_facts erf
+            LEFT JOIN entity_occurrences eo ON eo.id=erf.source_occurrence_id
+            WHERE eo.id IS NULL
+        """,
+        "entity_operation_facts_without_occurrence": """
+            SELECT COUNT(*) FROM entity_operation_facts eof
+            LEFT JOIN entity_occurrences eo ON eo.id=eof.occurrence_id
+            WHERE eo.id IS NULL
+        """,
+        "entity_access_links_without_typed_target": """
+            SELECT COUNT(*) FROM entity_access_links eal
+            WHERE (surface='workflow' AND NOT EXISTS (
+                       SELECT 1 FROM workflows w WHERE w.id=eal.record_id))
+               OR (surface='rest_endpoint' AND NOT EXISTS (
+                       SELECT 1 FROM rest_endpoints re WHERE re.id=eal.record_id))
+               OR (surface IN ('security_operation','security_resource') AND NOT EXISTS (
+                       SELECT 1 FROM security_operations so WHERE so.id=eal.record_id))
+               OR (surface='security_policy' AND NOT EXISTS (
+                       SELECT 1 FROM security_policies sp WHERE sp.id=eal.record_id))
+               OR (surface='security_menu' AND NOT EXISTS (
+                       SELECT 1 FROM security_menus sm WHERE sm.id=eal.record_id))
+               OR (surface='security_menu_item' AND NOT EXISTS (
+                       SELECT 1 FROM security_menu_items smi WHERE smi.id=eal.record_id))
+               OR (surface='dbschema_table' AND NOT EXISTS (
+                       SELECT 1 FROM dbschema_tables dt WHERE dt.id=eal.record_id))
+        """,
+        "repo_scoped_file_ownership_mismatches": """
+            SELECT COUNT(*) FROM (
+                SELECT so.id FROM security_operations so JOIN files f ON f.id=so.file_id
+                 WHERE so.file_id IS NOT NULL AND so.repo_id<>f.repo_id
+                UNION ALL
+                SELECT sp.id FROM security_policies sp JOIN files f ON f.id=sp.file_id
+                 WHERE sp.file_id IS NOT NULL AND sp.repo_id<>f.repo_id
+                UNION ALL
+                SELECT sm.id FROM security_menus sm JOIN files f ON f.id=sm.file_id
+                 WHERE sm.file_id IS NOT NULL AND sm.repo_id<>f.repo_id
+                UNION ALL
+                SELECT dt.id FROM dbschema_tables dt JOIN files f ON f.id=dt.file_id
+                 WHERE dt.file_id IS NOT NULL AND dt.repo_id<>f.repo_id
+                UNION ALL
+                SELECT eo.id FROM entity_occurrences eo JOIN files f ON f.id=eo.source_file_id
+                 WHERE eo.source_file_id IS NOT NULL AND eo.repo_id<>f.repo_id
+            )
+        """,
+    }
+    results: dict[str, int] = {}
+    for name, sql in checks.items():
+        try:
+            results[name] = _count(conn, sql)
+        except sqlite3.OperationalError:
+            # The validator also supports legacy fixtures; migration presence is
+            # reported separately and makes missing refresh metadata a failure.
+            results[name] = -1
+    return results
+
+
+def validate_catalog_connection(
+    conn: sqlite3.Connection,
+    *,
+    expected_catalog_build_id: int | None = None,
+) -> dict[str, Any]:
+    integrity = str(conn.execute("PRAGMA integrity_check").fetchone()[0])
+    fk_rows = [tuple(row) for row in conn.execute("PRAGMA foreign_key_check")]
+    migration_present = bool(
+        _table_exists(conn, "schema_migrations")
+        and conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name='023_delta_refresh'"
+        ).fetchone()
+    )
+    refresh_contract_migration_present = bool(
+        _table_exists(conn, "schema_migrations")
+        and conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name='024_refresh_contracts'"
+        ).fetchone()
+    )
+    active_rows = (
+        conn.execute(
+            "SELECT id,content_fingerprint,source_revisions_json,completed_at,diagnostic_error "
+            "FROM catalog_builds WHERE status='active' ORDER BY id"
+        ).fetchall()
+        if _table_exists(conn, "catalog_builds")
+        else []
+    )
+    orphan_counts = _logical_orphan_checks(conn)
+    stable_key_missing = _count(
+        conn, "SELECT COUNT(*) FROM symbols WHERE COALESCE(stable_key,'')=''"
+    )
+    stable_key_duplicates = _count(
+        conn,
+        "SELECT COUNT(*) FROM (SELECT file_id,stable_key FROM symbols "
+        "GROUP BY file_id,stable_key HAVING COUNT(*)>1)",
+    )
+    in_progress = {
+        "catalog_builds": _count(
+            conn,
+            "SELECT COUNT(*) FROM catalog_builds WHERE status IN ('building','validated')",
+        ),
+        "repo_index_runs": _count(
+            conn,
+            "SELECT COUNT(*) FROM repo_index_runs WHERE status IN ('building','validated')",
+        ),
+        "repo_change_sets": _count(
+            conn,
+            "SELECT COUNT(*) FROM repo_change_sets WHERE status IN ('planned','running')",
+        ),
+    }
+
+    active_id = int(active_rows[0][0]) if len(active_rows) == 1 else None
+    stored_fingerprint = active_rows[0][1] if len(active_rows) == 1 else None
+    actual_fingerprint = logical_content_fingerprint(conn)
+    revisions_valid = False
+    revision_mismatches: list[str] = []
+    if len(active_rows) == 1:
+        try:
+            revisions = json.loads(str(active_rows[0][2]))
+            revisions_valid = isinstance(revisions, dict)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            revisions = {}
+        if revisions_valid:
+            for repo_key, indexed_sha in conn.execute(
+                "SELECT repo_key,indexed_commit_sha FROM repos ORDER BY repo_key"
+            ):
+                if revisions.get(repo_key) != indexed_sha:
+                    revision_mismatches.append(str(repo_key))
+
+    active_change_set_failures = 0
+    if active_id is not None:
+        active_change_set_failures = _count(
+            conn,
+            "SELECT COUNT(*) FROM repo_change_sets rcs "
+            "JOIN repo_index_runs rir ON rir.id=rcs.repo_index_run_id "
+            f"WHERE rcs.catalog_build_id={active_id} "
+            "AND (rcs.status<>'succeeded' OR rir.status<>'active')",
+        )
+
+    summary: dict[str, Any] = {
+        "integrity_check": integrity,
+        "foreign_key_violations": len(fk_rows),
+        "foreign_key_sample": fk_rows[:5],
+        "migration_023_present": migration_present,
+        "migration_024_present": refresh_contract_migration_present,
+        "active_catalog_build_count": len(active_rows),
+        "active_catalog_build_id": active_id,
+        "expected_catalog_build_id": expected_catalog_build_id,
+        "content_fingerprint_matches": bool(
+            stored_fingerprint and stored_fingerprint == actual_fingerprint
+        ),
+        "source_revisions_valid": revisions_valid,
+        "source_revision_mismatches": revision_mismatches,
+        "active_change_set_failures": active_change_set_failures,
+        "stable_key_missing": stable_key_missing,
+        "stable_key_duplicates": stable_key_duplicates,
+        "in_progress": in_progress,
+        "logical_orphans": orphan_counts,
+    }
+    failures = []
+    if integrity != "ok":
+        failures.append("integrity_check")
+    if fk_rows:
+        failures.append("foreign_key_check")
+    if not migration_present:
+        failures.append("migration_023")
+    if not refresh_contract_migration_present:
+        failures.append("migration_024")
+    if len(active_rows) != 1:
+        failures.append("active_catalog_build_count")
+    elif (
+        expected_catalog_build_id is not None and active_id != expected_catalog_build_id
+    ):
+        failures.append("active_catalog_build_id")
+    if len(active_rows) == 1 and (
+        active_rows[0][3] is None or active_rows[0][4] is not None
+    ):
+        failures.append("active_catalog_completion")
+    if not summary["content_fingerprint_matches"]:
+        failures.append("content_fingerprint")
+    if not revisions_valid or revision_mismatches:
+        failures.append("source_revisions")
+    if active_change_set_failures:
+        failures.append("active_change_sets")
+    if stable_key_missing or stable_key_duplicates:
+        failures.append("symbol_stable_keys")
+    if any(in_progress.values()):
+        failures.append("in_progress_state")
+    if any(value != 0 for value in orphan_counts.values()):
+        failures.append("logical_orphans")
+    summary["ok"] = not failures
+    summary["failures"] = failures
+    if failures:
+        raise CatalogIntegrityError(json.dumps(summary, sort_keys=True))
+    return summary
+
+
+def validate_catalog_path(path: str | Path) -> dict[str, Any]:
+    resolved = Path(path).resolve()
+    conn = sqlite3.connect(f"file:{resolved}?mode=ro", uri=True)
+    try:
+        return validate_catalog_connection(conn)
+    finally:
+        conn.close()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--db", default="catalog/catalog.db")
+    args = parser.parse_args()
+    try:
+        summary = validate_catalog_path(args.db)
+    except CatalogIntegrityError as exc:
+        print(str(exc))
+        raise SystemExit(1) from exc
+    print(json.dumps(summary, sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()

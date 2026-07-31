@@ -242,15 +242,15 @@ is atomically promoted. Build or validation failures leave the active graph
 available, and successful promotion retains the prior graph as
 `catalog/graph.lbug.previous`.
 
-Apply the graph-build metadata migration once to an existing catalog before the
-first safe rebuild:
+Apply the catalog migrations once to an existing catalog before the first safe
+delta refresh or generation-linked graph rebuild:
 
 ```bash
-python -c "import sqlite3; from pathlib import Path; c=sqlite3.connect('catalog/catalog.db'); [c.executescript(Path(m).read_text()) for m in ('migrations/017_graph_builds.sql', 'migrations/018_graph_build_status_previous.sql')]; c.close()"
+./.venv/bin/python -c "from catalog.db import migrate_multi_repo; migrate_multi_repo(db_path='catalog/catalog.db', local_root='/Users/aritra.ghosh/projects/main')"
 ```
 
-Fresh catalogs initialized through `catalog.db.init_db()` already contain this
-schema. Full Ladybug construction is a lengthy operator-run workflow and must
+Fresh catalogs initialized through `catalog.db.init_db()` already contain the
+post-024 schema. Full Ladybug construction is a lengthy operator-run workflow and must
 not be started during an agentic session. Agents should restrict themselves to
 read-only parity validation and focused unit tests. SQLite query commands remain
 the authoritative evidence path; Ladybug is a rebuildable traversal projection.
@@ -459,10 +459,89 @@ python -c "from catalog.db import migrate_multi_repo; migrate_multi_repo(local_r
 python scripts/catalog_repos.py --db catalog/catalog.db register --manifest config/workspace_repos.yaml
 ```
 
-Refresh one repository with a clean checkout:
+Refresh one repository dependency closure with a clean, committed checkout.
+The effective source root from `config.py` for `ia-main` is
+`/Users/aritra.ghosh/projects/main`:
 
 ```bash
-python scripts/refresh_workspace.py --db catalog/catalog.db --manifest config/workspace_repos.yaml --repo ia-main
+./.venv/bin/python scripts/refresh_workspace.py \
+  --db catalog/catalog.db \
+  --manifest config/workspace_repos.yaml \
+  --repo ia-main \
+  --mode auto
+```
+
+`--mode full` runs every selected builder and does not require an incremental
+base. `--mode auto` uses exact committed-SHA deltas when their contract can be
+proven and falls back to repository-scoped full builders with a recorded reason.
+`--mode delta` fails before candidate construction when any repository lacks a
+safe base. Checkouts must be clean, attached to the configured branch, and at a
+committed revision; the indexed base must exist and be an ancestor of `HEAD`.
+
+Delta compatibility is repository-scoped. Each successful repository run stores
+a hash of its normalized manifest entry (excluding operator-local `local_root`)
+and its expanded builder plan. Catalog-build manifest and plan hashes are audit
+summaries for the complete input manifest and selected closure; they are not
+used to certify a later repository delta. This permits independent repository
+closures to be refreshed in alternating order without false incompatibility.
+
+An existing migration-023 baseline has no compatibility hashes. Its first
+`auto` refresh therefore records `compatibility metadata unavailable` and runs
+full for the affected repositories; forced `delta` fails with the same reason.
+Migration 024 adds the `not_started` effective mode so preflight and planning
+failures retain the requested mode without claiming that a build ran. Git diff,
+parsing, and path-normalization failures are recoverable in `auto` and fail
+closed in forced `delta`. Checkout-integrity and active-catalog fingerprint
+failures remain strict in every mode.
+
+The complete dependency closure is built dependency-first in one SQLite
+candidate and promoted once. A later repository or validation failure cannot
+partially promote an earlier dependency. A closure whose target revisions are
+identical to the indexed revisions records a no-op attempt without creating a
+catalog generation or invalidating the graph. If a revision advances through
+only out-of-scope files, refresh creates a metadata-only delta generation so
+repository provenance advances; evidence builders remain skipped and the graph
+is marked stale because the projected repository revision changed.
+
+`catalog_builds` retains the full logical SQLite generation history, while
+`graph_builds` records the separately projected Ladybug generations. Only the
+current and immediately previous physical artifacts are retained as
+`catalog.db`, `catalog.db.previous`, `graph.lbug`, and
+`graph.lbug.previous`; older metadata rows remain in SQLite. SQLite promotion
+marks the prior graph generation stale. Graph-backed queries remain explicitly
+unavailable/stale until a graph build linked to the active catalog fingerprint
+is promoted.
+
+Graph construction is a separate operator action:
+
+```bash
+./.venv/bin/python scripts/build_graph.py \
+  --db catalog/catalog.db \
+  --graph catalog/graph.lbug \
+  --mode auto
+```
+
+Graph `auto` applies a generation delta only when the previous SQLite catalog,
+parent graph build, source revisions, logical fingerprints, and projection
+version all match. Otherwise it records the fallback and performs a full graph
+build. Forced `--mode delta` fails closed. `bash scripts/refresh.sh` remains the
+canonical full SQLite-only workflow; it passes `--mode full` and never builds
+Ladybug.
+
+Projection contract version 2 records graph delta counts under the actual
+Ladybug relationship table names (for example `CALLS` and
+`ENTITY_HAS_OCCURRENCE`) rather than SQLite source-table groupings. Full graph
+loading, delta comparison, and exact parity validation share that relationship
+registry.
+
+Every SQLite candidate must pass physical integrity, foreign-key, logical
+ownership-orphan, generation-state, repository-revision, stable-symbol-key, and
+logical-fingerprint checks before promotion. The active catalog can be audited
+read-only at any time:
+
+```bash
+PYTHONPATH=. ./.venv/bin/python validation/validate_catalog_integrity.py \
+  --db catalog/catalog.db
 ```
 
 REST automation coverage is a repository-scoped candidate builder. With the

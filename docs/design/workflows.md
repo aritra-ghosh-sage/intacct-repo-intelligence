@@ -139,9 +139,19 @@ OpenAPI linking is DB-first by design:
 This keeps the linking path reproducible after scans/migrations and avoids coupling runtime
 link decisions to generated JSONL artifacts.
 
+## Refresh Boundary
+
+This analysis is about workflow semantics, not the refresh pipeline. Catalog
+refresh is now SQLite-first and may promote a new catalog generation before the
+separate Ladybug projection is rebuilt. A successful SQLite refresh can leave
+the graph intentionally stale until the operator runs the graph build step.
+
+Workflow extraction itself still follows the same evidence rules and does not
+depend on whether the refresh ran in full, auto, or delta mode.
+
 ---
 
 **Document Status:** Final Decision Recorded  
 **Decision Maker:** Phase 2D Execution Agent  
-**Last Updated:** 2026-07-07  
+**Last Updated:** 2026-07-31
 **Approval Status:** Pending (awaiting stakeholder review)

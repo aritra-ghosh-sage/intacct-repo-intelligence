@@ -13,8 +13,8 @@ Emits:
 import json
 import sqlite3
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
-from datetime import datetime, timezone
 
 
 def get_connection():
@@ -27,7 +27,7 @@ def get_connection():
 def get_verified_state(conn):
     """Extract actual state from catalog.db."""
     verified = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "phases": {
             "phase2d": {
                 "status": "verified",
@@ -211,9 +211,7 @@ def compute_drift(verified, declared):
     drift["missing_tables"] = sorted(list(declared_tables - verified_tables))
     drift["extra_tables"] = sorted(
         list(verified_tables - declared_tables - ignored_tables)
-    )[
-        :20
-    ]  # Show first 20
+    )[:20]  # Show first 20
 
     # Check mapping types
     declared_mapping_types = set(
@@ -267,7 +265,7 @@ def generate_inventory():
         # Assemble final inventory
         inventory = {
             "project_name": "intacct-repo-intelligence",
-            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "generated_at": datetime.now(UTC).isoformat(),
             "generator": "scripts/generate_inventory.py",
             "verified_state": verified,
             "declared_state": declared,

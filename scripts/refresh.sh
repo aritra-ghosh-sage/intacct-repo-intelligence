@@ -40,4 +40,4 @@ db.init_db()
 "
 fi
 
-exec "$PYTHON_BIN" -m scripts.refresh_workspace --db "$DB" --manifest "$MANIFEST" --repo "$REPO_KEY"
+exec "$PYTHON_BIN" -m scripts.refresh_workspace --db "$DB" --manifest "$MANIFEST" --repo "$REPO_KEY" --mode full

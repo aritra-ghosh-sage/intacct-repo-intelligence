@@ -767,7 +767,10 @@ def main() -> None:
     all_findings = [
         ("Scan output checks", check_scan_output_roles(entities_rows)),
         ("Schema contract checks", check_schema_contract(conn)),
-        ("JSONL vs DB checks", check_entities_jsonl_vs_db(conn, entities_rows)),
+        (
+            "JSONL vs DB checks",
+            check_entities_jsonl_vs_db(conn, entities_rows, args.repo_root),
+        ),
         ("Mapping/roots checks", check_mapping_roles_and_roots(conn)),
         ("Structural checks", check_structural(conn)),
         ("Filesystem checks", check_filesystem(conn, args.repo_root)),

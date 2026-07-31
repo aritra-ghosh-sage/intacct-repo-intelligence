@@ -1,6 +1,7 @@
 # parser/extractors/java_extractor.py
 
 from tree_sitter_languages import get_parser
+
 from .base import Symbol
 
 _parser = get_parser("java")

@@ -21,10 +21,10 @@ import argparse
 import json
 import re
 from collections import Counter
-from dataclasses import dataclass, asdict
-from datetime import datetime, timezone
+from collections.abc import Iterable
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
 
 from tqdm import tqdm
 
@@ -41,12 +41,36 @@ CLASS_EXTS = (
     ".js",
     ".rpt",
 )
+ENTITY_INPUT_SUFFIXES = frozenset((*CLASS_EXTS, ".xsl"))
+OPENAPI_INPUT_SUFFIXES = frozenset({".yaml", ".yml"})
 MISSING_METADATA_LOG_PATH = (
     Path(__file__).resolve().parents[1] / "outputs" / "missing_metadata.jsonl"
 )
 SCHEMA_FILE_RE = re.compile(
     r"^(?P<kind>objects|services)\.(?P<prefix>.+?)\.(?P<object>[^.]+)\.s1\.schema\.yaml$"
 )
+
+
+def is_entity_input_path(path: str) -> bool:
+    """Return whether a repository path can change emitted entity definitions."""
+
+    normalized = path.replace("\\", "/").lstrip("./").lower()
+    candidate = Path(normalized)
+    suffix = candidate.suffix
+    if suffix in {".ent", ".rpt", ".xsl"}:
+        return True
+    if suffix in ENTITY_INPUT_SUFFIXES:
+        stem = re.sub(r"[^a-z0-9]", "", candidate.stem)
+        if any(
+            stem.endswith(role.replace("_", ""))
+            for role in ALLOWED_COMPANION_ROLES
+        ):
+            return True
+    return normalized.startswith("app/source/openapispec/") and (
+        suffix in OPENAPI_INPUT_SUFFIXES
+    )
+
+
 WORKFLOW_SCHEMA_FILE_RE = re.compile(
     r"^workflows\.(?P<prefix>[^.]+)\.(?P<workflow>.+)\.s1\.schema\.yaml$"
 )
@@ -79,55 +103,55 @@ ALLOWED_COMPANION_ROLES = (
 @dataclass
 class EntityDefinition:
     entity_name: str
-    ent_file: Optional[str]
-    module: Optional[str]
-    module_source: Optional[str]
-    module_path_hint: Optional[str]
-    table: Optional[str]
-    view: Optional[str]
+    ent_file: str | None
+    module: str | None
+    module_source: str | None
+    module_path_hint: str | None
+    table: str | None
+    view: str | None
     dummy: bool
-    companion_classes: Dict[str, Optional[str]]
-    openapi_prefix: Optional[str]
-    openapi_module: Optional[str]
-    openapi_folder: Optional[str]
-    openapi_schema_file: Optional[str]
-    openapi_api_file: Optional[str]
-    openapi_history_file: Optional[str]
-    x_mapped_to: Optional[str]
+    companion_classes: dict[str, str | None]
+    openapi_prefix: str | None
+    openapi_module: str | None
+    openapi_folder: str | None
+    openapi_schema_file: str | None
+    openapi_api_file: str | None
+    openapi_history_file: str | None
+    x_mapped_to: str | None
     openapi_status: str
-    openapi_reason: Optional[str]
-    workflow_prefix: Optional[str]
-    workflow_module: Optional[str]
-    workflow_folder: Optional[str]
-    workflow_schema_file: Optional[str]
-    workflow_api_files: Optional[List[str]]
-    workflow_history_file: Optional[str]
-    workflow_x_mapped_to: Optional[str]
+    openapi_reason: str | None
+    workflow_prefix: str | None
+    workflow_module: str | None
+    workflow_folder: str | None
+    workflow_schema_file: str | None
+    workflow_api_files: list[str] | None
+    workflow_history_file: str | None
+    workflow_x_mapped_to: str | None
     workflow_status: str
-    workflow_reason: Optional[str]
-    service_prefix: Optional[str]
-    service_module: Optional[str]
-    service_folder: Optional[str]
-    service_schema_file: Optional[str]
-    service_api_files: Optional[List[str]]
-    service_history_file: Optional[str]
-    service_x_mapped_to: Optional[str]
+    workflow_reason: str | None
+    service_prefix: str | None
+    service_module: str | None
+    service_folder: str | None
+    service_schema_file: str | None
+    service_api_files: list[str] | None
+    service_history_file: str | None
+    service_x_mapped_to: str | None
     service_status: str
-    service_reason: Optional[str]
-    xslt_files: Optional[List[str]]
-    rpt_files: Optional[List[str]]
+    service_reason: str | None
+    xslt_files: list[str] | None
+    rpt_files: list[str] | None
 
 
 def to_repo_relative(path: Path, repo_root: Path) -> str:
     return path.relative_to(repo_root).as_posix()
 
 
-def build_prefix_acronyms(repo_root: Path) -> Dict[str, str]:
+def build_prefix_acronyms(repo_root: Path) -> dict[str, str]:
     """
     Build acronym hints from module folders under app/source only.
     This intentionally avoids class-derived guesses.
     """
-    hints: Dict[str, str] = {}
+    hints: dict[str, str] = {}
     source_dir = repo_root / "app" / "source"
     if not source_dir.exists():
         return hints
@@ -141,12 +165,12 @@ def build_prefix_acronyms(repo_root: Path) -> Dict[str, str]:
     return hints
 
 
-def fallback_pascal_case(stem: str, prefix_acronyms: Dict[str, str]) -> str:
+def fallback_pascal_case(stem: str, prefix_acronyms: dict[str, str]) -> str:
     """
     Deterministic fallback if no companion class reveals canonical casing.
     """
     parts = [p for p in re.split(r"[_\-]+", stem) if p]
-    out: List[str] = []
+    out: list[str] = []
 
     for part in parts:
         low = part.lower()
@@ -165,7 +189,7 @@ def fallback_pascal_case(stem: str, prefix_acronyms: Dict[str, str]) -> str:
     return "".join(out) if out else stem.capitalize()
 
 
-def find_module_from_ent_path(ent_path: Path, repo_root: Path) -> Optional[str]:
+def find_module_from_ent_path(ent_path: Path, repo_root: Path) -> str | None:
     """
     Module is the first folder under app/source/.
     """
@@ -181,11 +205,11 @@ def find_module_from_ent_path(ent_path: Path, repo_root: Path) -> Optional[str]:
     return None
 
 
-def discover_rpt_files(ent_stem: str, entity_dir: Path, repo_root: Path) -> List[str]:
+def discover_rpt_files(ent_stem: str, entity_dir: Path, repo_root: Path) -> list[str]:
     """
     Discover RPT files in the entity directory that match the entity stem.
     """
-    rpt_files: List[str] = []
+    rpt_files: list[str] = []
     stem_low = ent_stem.lower()
 
     for rpt_file in sorted(entity_dir.glob("*.rpt")):
@@ -198,7 +222,7 @@ def discover_rpt_files(ent_stem: str, entity_dir: Path, repo_root: Path) -> List
 
 def discover_rpt_files_with_fallback(
     ent_stem: str, entity_dir: Path, repo_root: Path
-) -> List[str]:
+) -> list[str]:
     """
     Prefer strict stem-prefix matching, then fallback for single-entity folders.
 
@@ -224,11 +248,11 @@ def discover_rpt_files_with_fallback(
     ]
 
 
-def discover_xslt_files(ent_stem: str, entity_dir: Path, repo_root: Path) -> List[str]:
+def discover_xslt_files(ent_stem: str, entity_dir: Path, repo_root: Path) -> list[str]:
     """
     Discover XSLT files in the entity directory that match the entity stem.
     """
-    xslt_files: List[str] = []
+    xslt_files: list[str] = []
     stem_low = ent_stem.lower()
 
     for xslt_file in sorted(entity_dir.glob("*.xsl")):
@@ -268,8 +292,8 @@ def discover_companions(
     ent_stem: str,
     entity_dir: Path,
     repo_root: Path,
-    prefix_acronyms: Dict[str, str],
-) -> Tuple[str, Dict[str, Optional[str]]]:
+    prefix_acronyms: dict[str, str],
+) -> tuple[str, dict[str, str | None]]:
     """
     Verify companion classes from disk only.
 
@@ -280,8 +304,8 @@ def discover_companions(
     Canonical entity_name is derived from discovered class prefix; fallback is
     deterministic and uses code-derived acronym hints.
     """
-    companions_raw: Dict[str, List[Path]] = {}
-    canonical_candidates: List[str] = []
+    companions_raw: dict[str, list[Path]] = {}
+    canonical_candidates: list[str] = []
     stem_low = ent_stem.lower()
     stem_len = len(ent_stem)
 
@@ -302,9 +326,7 @@ def discover_companions(
 
         canonical_candidates.append(cls_stem[:stem_len])
 
-    companions: Dict[str, Optional[str]] = {
-        role: None for role in ALLOWED_COMPANION_ROLES
-    }
+    companions: dict[str, str | None] = {role: None for role in ALLOWED_COMPANION_ROLES}
     for role, paths in sorted(companions_raw.items()):
         chosen = sorted(paths, key=lambda p: p.as_posix())[0]
         companions[role] = to_repo_relative(chosen, repo_root)
@@ -329,7 +351,7 @@ class OpenApiMapping:
     openapi_api_file: str
     openapi_history_file: str
     openapi_status: str
-    openapi_reason: Optional[str]
+    openapi_reason: str | None
 
 
 @dataclass
@@ -339,26 +361,26 @@ class WorkflowMapping:
     workflow_module: str
     workflow_folder: str
     workflow_schema_file: str
-    workflow_api_files: List[str]
-    workflow_history_file: Optional[str]
+    workflow_api_files: list[str]
+    workflow_history_file: str | None
     workflow_status: str
-    workflow_reason: Optional[str]
+    workflow_reason: str | None
 
 
 @dataclass
 class ServiceMapping:
-    service_x_mapped_to: Optional[str]
+    service_x_mapped_to: str | None
     service_prefix: str
     service_module: str
     service_folder: str
     service_schema_file: str
-    service_api_files: List[str]
-    service_history_file: Optional[str]
+    service_api_files: list[str]
+    service_history_file: str | None
     service_status: str
-    service_reason: Optional[str]
+    service_reason: str | None
 
 
-def _read_openapi_root_x_mapped_to(schema_path: Path) -> Optional[str]:
+def _read_openapi_root_x_mapped_to(schema_path: Path) -> str | None:
     try:
         text = schema_path.read_text(encoding="utf-8", errors="ignore")
     except OSError:
@@ -373,12 +395,12 @@ def _read_openapi_root_x_mapped_to(schema_path: Path) -> Optional[str]:
 
 def _iter_openapi_schema_infos(
     repo_root: Path,
-) -> Iterable[Tuple[Path, re.Match[str], Optional[str]]]:
+) -> Iterable[tuple[Path, re.Match[str], str | None]]:
     openapi_root = repo_root / "app" / "source" / "openapispec"
     if not openapi_root.exists():
         return []
 
-    items: List[Tuple[Path, re.Match[str], Optional[str]]] = []
+    items: list[tuple[Path, re.Match[str], str | None]] = []
     for schema_path in sorted(
         openapi_root.rglob("*.schema.yaml"), key=lambda p: p.as_posix()
     ):
@@ -402,7 +424,7 @@ def _build_openapi_mapping(
     openapi_module = schema_path.parent.parent.name
     openapi_folder = to_repo_relative(schema_path.parent.parent, repo_root)
 
-    object_name_candidates: List[str] = [object_name]
+    object_name_candidates: list[str] = [object_name]
     if kind == "services":
         for suffix in ("-request", "-response"):
             if object_name.endswith(suffix):
@@ -430,10 +452,10 @@ def _build_openapi_mapping(
     api_exists = api_path.exists()
     history_exists = history_path.exists()
     status = "ok"
-    reason: Optional[str] = None
+    reason: str | None = None
     if not api_exists or not history_exists:
         status = "partial"
-        missing: List[str] = []
+        missing: list[str] = []
         if not api_exists:
             missing.append("api")
         if not history_exists:
@@ -453,11 +475,11 @@ def _build_openapi_mapping(
     )
 
 
-def build_openapi_index(repo_root: Path) -> Dict[str, OpenApiMapping]:
+def build_openapi_index(repo_root: Path) -> dict[str, OpenApiMapping]:
     """
     Build an index from the OpenAPI spec tree keyed by root x-mappedTo.
     """
-    index: Dict[str, OpenApiMapping] = {}
+    index: dict[str, OpenApiMapping] = {}
     for schema_path, schema_match, x_mapped_to in _iter_openapi_schema_infos(repo_root):
         if not x_mapped_to:
             continue
@@ -474,11 +496,11 @@ def build_openapi_index(repo_root: Path) -> Dict[str, OpenApiMapping]:
     return index
 
 
-def build_openapi_name_index(repo_root: Path) -> Dict[str, OpenApiMapping]:
+def build_openapi_name_index(repo_root: Path) -> dict[str, OpenApiMapping]:
     """
     Build a name-based index keyed by schema object name for fallback matching.
     """
-    index: Dict[str, OpenApiMapping] = {}
+    index: dict[str, OpenApiMapping] = {}
     for schema_path, schema_match, x_mapped_to in _iter_openapi_schema_infos(repo_root):
         mapping = _build_openapi_mapping(
             repo_root, schema_path, schema_match, x_mapped_to or ""
@@ -504,14 +526,14 @@ def _build_service_mapping(
     repo_root: Path,
     schema_path: Path,
     schema_match: re.Match[str],
-    x_mapped_to: Optional[str],
+    x_mapped_to: str | None,
 ) -> ServiceMapping:
     prefix = schema_match.group("prefix")
     object_name = schema_match.group("object")
     service_module = schema_path.parent.parent.name
     service_folder = to_repo_relative(schema_path.parent.parent, repo_root)
 
-    object_name_candidates: List[str] = [object_name]
+    object_name_candidates: list[str] = [object_name]
     for suffix in ("-request", "-response"):
         if object_name.endswith(suffix):
             base_object_name = object_name[: -len(suffix)]
@@ -523,7 +545,7 @@ def _build_service_mapping(
     apis_dir = schema_path.parent.parent / "apis"
     history_dir = schema_path.parent.parent / "history"
 
-    api_paths: List[Path] = []
+    api_paths: list[Path] = []
     if paths_dir.exists():
         for candidate in object_name_candidates:
             api_paths.extend(
@@ -541,7 +563,7 @@ def _build_service_mapping(
                 )
             )
 
-    deduped_api_paths: List[Path] = []
+    deduped_api_paths: list[Path] = []
     seen_api_paths = set()
     for api_path in sorted(api_paths, key=lambda p: p.as_posix()):
         key = api_path.as_posix()
@@ -557,7 +579,7 @@ def _build_service_mapping(
     history_path = next((path for path in history_candidates if path.exists()), None)
 
     status = "ok"
-    reason: Optional[str] = None
+    reason: str | None = None
     has_history = history_path is not None
     if not deduped_api_paths and not has_history:
         status = "partial"
@@ -588,8 +610,8 @@ def _build_service_mapping(
 
 def build_service_indexes(
     repo_root: Path,
-) -> Tuple[
-    Dict[str, ServiceMapping], Dict[str, ServiceMapping], Dict[str, ServiceMapping]
+) -> tuple[
+    dict[str, ServiceMapping], dict[str, ServiceMapping], dict[str, ServiceMapping]
 ]:
     """
     Build service indexes:
@@ -597,9 +619,9 @@ def build_service_indexes(
       - by derived name key (fallback, including services.reports special matching)
       - by schema path (for synthetic row emission)
     """
-    by_x_mapped: Dict[str, ServiceMapping] = {}
-    by_name: Dict[str, ServiceMapping] = {}
-    by_schema: Dict[str, ServiceMapping] = {}
+    by_x_mapped: dict[str, ServiceMapping] = {}
+    by_name: dict[str, ServiceMapping] = {}
+    by_schema: dict[str, ServiceMapping] = {}
 
     for schema_path, schema_match, x_mapped_to in _iter_openapi_schema_infos(repo_root):
         if schema_match.group("kind") != "services":
@@ -630,11 +652,11 @@ def build_service_indexes(
     return by_x_mapped, by_name, by_schema
 
 
-def build_workflow_index(repo_root: Path) -> Dict[str, WorkflowMapping]:
+def build_workflow_index(repo_root: Path) -> dict[str, WorkflowMapping]:
     """
     Build an index from OpenAPI workflow schema files keyed by x-mappedTo.
     """
-    index: Dict[str, WorkflowMapping] = {}
+    index: dict[str, WorkflowMapping] = {}
     openapi_root = repo_root / "app" / "source" / "openapispec"
     if not openapi_root.exists():
         return index
@@ -662,7 +684,7 @@ def build_workflow_index(repo_root: Path) -> Dict[str, WorkflowMapping]:
             history_dir / f"workflows.{prefix}.{workflow_name}.schema.history.yaml"
         )
 
-        api_paths: List[Path] = []
+        api_paths: list[Path] = []
         if paths_dir.exists():
             api_paths.extend(
                 sorted(
@@ -691,7 +713,7 @@ def build_workflow_index(repo_root: Path) -> Dict[str, WorkflowMapping]:
             )
 
         # De-duplicate while preserving deterministic order.
-        deduped_api_paths: List[Path] = []
+        deduped_api_paths: list[Path] = []
         seen_api_paths = set()
         for api_path in sorted(api_paths, key=lambda p: p.as_posix()):
             key = api_path.as_posix()
@@ -700,7 +722,7 @@ def build_workflow_index(repo_root: Path) -> Dict[str, WorkflowMapping]:
             seen_api_paths.add(key)
             deduped_api_paths.append(api_path)
 
-        action_history_paths: List[Path] = []
+        action_history_paths: list[Path] = []
         for api_path in deduped_api_paths:
             api_name = api_path.name
             if not api_name.endswith(".s1.api.yaml"):
@@ -715,7 +737,7 @@ def build_workflow_index(repo_root: Path) -> Dict[str, WorkflowMapping]:
         )
 
         status = "ok"
-        reason: Optional[str] = None
+        reason: str | None = None
         has_workflow_history = history_path.exists()
         has_complete_history = has_workflow_history or has_all_action_histories
 
@@ -808,7 +830,7 @@ def _skip_comment(text: str, i: int) -> int:
     return i
 
 
-def _find_schema_array_start(text: str) -> Optional[int]:
+def _find_schema_array_start(text: str) -> int | None:
     """
     Find index of opening '[' or '(' for:
       $kSchemas['name'] = [ ... ]
@@ -838,7 +860,7 @@ def _find_schema_array_start(text: str) -> Optional[int]:
 
 def parse_top_level_ent_metadata(
     ent_path: Path,
-) -> Tuple[Optional[str], Optional[str], Optional[str], bool]:
+) -> tuple[str | None, str | None, str | None, bool]:
     """
     Parse top-level 'table', 'view', 'module', and 'dummy' from .ent (PHP array syntax).
     """
@@ -851,9 +873,9 @@ def parse_top_level_ent_metadata(
     if start is None:
         return None, None, None, False
 
-    table: Optional[str] = None
-    view: Optional[str] = None
-    module: Optional[str] = None
+    table: str | None = None
+    view: str | None = None
+    module: str | None = None
     dummy: bool = False
 
     i = start + 1
@@ -886,8 +908,8 @@ def parse_top_level_ent_metadata(
                         j += 1
 
                     # Parse scalar RHS for keys we care about.
-                    rhs_value: Optional[str] = None
-                    rhs_bool: Optional[bool] = None
+                    rhs_value: str | None = None
+                    rhs_bool: bool | None = None
 
                     if j < n and text[j] in ("'", '"'):
                         q = text[j]
@@ -940,16 +962,16 @@ def parse_top_level_ent_metadata(
     return table, view, module, dummy
 
 
-def _write_missing_metadata_log(log_path: Path, records: List[dict]) -> None:
+def _write_missing_metadata_log(log_path: Path, records: list[dict]) -> None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("w", encoding="utf-8") as f:
         for record in records:
             f.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
 
 
-def extract_required_ent_paths(text: str) -> List[str]:
+def extract_required_ent_paths(text: str) -> list[str]:
     seen: set[str] = set()
-    out: List[str] = []
+    out: list[str] = []
 
     for match in REQUIRE_INCLUDE_ENT_RE.finditer(text):
         value = match.group(1).strip()
@@ -964,8 +986,8 @@ def extract_required_ent_paths(text: str) -> List[str]:
     return out
 
 
-def load_entity_definition_index(repo_root: Path) -> Dict[str, dict]:
-    index: Dict[str, dict] = {}
+def load_entity_definition_index(repo_root: Path) -> dict[str, dict]:
+    index: dict[str, dict] = {}
     jsonl_path = repo_root / "config" / "entity_definitions.jsonl"
     if not jsonl_path.exists():
         return index
@@ -1003,10 +1025,10 @@ def _resolve_required_ent_path(
     require_value: str,
     current_ent_path: Path,
     repo_root: Path,
-    entity_index: Dict[str, dict],
-) -> Optional[Path]:
+    entity_index: dict[str, dict],
+) -> Path | None:
     require_name = Path(require_value).name
-    candidates: List[Path] = []
+    candidates: list[Path] = []
 
     direct_candidate = (current_ent_path.parent / require_value).resolve()
     candidates.append(direct_candidate)
@@ -1056,7 +1078,7 @@ def scan(repo_root: Path, out_file: Path) -> int:
         repo_root
     )
     out_file.parent.mkdir(parents=True, exist_ok=True)
-    missing_metadata_records: List[dict] = []
+    missing_metadata_records: list[dict] = []
 
     count = 0
     consumed_service_schema_files = set()
@@ -1098,7 +1120,7 @@ def scan(repo_root: Path, out_file: Path) -> int:
                         else "missing table key in top-level kSchemas definition",
                         "source": "scan_ent_files",
                         "stage": "module_extraction",
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "timestamp": datetime.now(UTC).isoformat(),
                     }
                 )
 
@@ -1318,7 +1340,7 @@ def resolve_ent_metadata(
     repo_root: Path | None,
     entity_index: dict[str, dict[str, str | None]],
     visited: set[str],
-) -> tuple[Optional[str], Optional[str], Optional[str], bool, Optional[str]]:
+) -> tuple[str | None, str | None, str | None, bool, str | None]:
     if ent_path is None or str(ent_path) in visited:
         return None, None, None, False, None
 

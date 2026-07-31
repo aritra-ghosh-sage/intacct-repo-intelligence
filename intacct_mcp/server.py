@@ -18,6 +18,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
+from catalog.graph_projection import GRAPH_PROJECTION_VERSION
 from catalog.rest_coverage import REQUIRED_TABLES, coverage_rows, coverage_summary
 from config import CATALOG_DB, GRAPH_DB
 
@@ -32,6 +33,7 @@ class CatalogSnapshot(TypedDict, total=False):
     sqlite_snapshot: str
     graph_exists: bool
     active_graph_build: dict[str, Any] | None
+    active_catalog_build: dict[str, Any] | None
     graph_fresh: bool
     repositories: list[dict[str, Any]]
 
@@ -281,12 +283,54 @@ class CatalogState:
 
     def snapshot(self, c: sqlite3.Connection) -> CatalogSnapshot:
         """Capture current catalog state."""
+        catalog_build = None
+        if self.table_exists(c, "catalog_builds"):
+            catalog_build = c.execute(
+                """SELECT id,parent_catalog_build_id,requested_mode,effective_mode,
+                          status,content_fingerprint,source_revisions_json
+                   FROM catalog_builds WHERE status='active' ORDER BY id DESC LIMIT 1"""
+            ).fetchone()
         build = None
         if self.table_exists(c, "graph_builds"):
-            build = c.execute(
-                "SELECT id,status,source_fingerprint,started_at,completed_at "
-                "FROM graph_builds WHERE status='active' ORDER BY id DESC LIMIT 1"
-            ).fetchone()
+            graph_columns = {
+                str(row[1]) for row in c.execute("PRAGMA table_info(graph_builds)")
+            }
+            generation_columns = {
+                "catalog_build_id",
+                "base_graph_build_id",
+                "build_mode",
+                "projection_version",
+                "validation_summary",
+            }
+            canonical_graph_path = str(self.graph_path.expanduser().resolve())
+            if generation_columns.issubset(graph_columns):
+                build = c.execute(
+                    """SELECT id,status,source_fingerprint,started_at,completed_at,
+                              catalog_build_id,base_graph_build_id,build_mode,
+                              projection_version,validation_summary
+                       FROM graph_builds
+                       WHERE status='active' AND graph_path=?
+                       ORDER BY id DESC LIMIT 1""",
+                    (canonical_graph_path,),
+                ).fetchone()
+            else:
+                build = c.execute(
+                    """SELECT id,status,source_fingerprint,started_at,completed_at
+                       FROM graph_builds
+                       WHERE status='active' AND graph_path=?
+                       ORDER BY id DESC LIMIT 1""",
+                    (canonical_graph_path,),
+                ).fetchone()
+
+        graph_fresh = bool(
+            catalog_build
+            and build
+            and "catalog_build_id" in build.keys()
+            and self.graph_path.is_file()
+            and int(build["catalog_build_id"] or -1) == int(catalog_build["id"])
+            and build["source_fingerprint"] == catalog_build["content_fingerprint"]
+            and int(build["projection_version"] or -1) == GRAPH_PROJECTION_VERSION
+        )
 
         repositories: list[dict[str, Any]] = []
         if self.table_exists(c, "repos"):
@@ -303,24 +347,32 @@ class CatalogState:
         return {
             "sqlite_snapshot": "read_transaction",
             "graph_exists": self.graph_path.is_file(),
+            "active_catalog_build": dict(catalog_build) if catalog_build else None,
             "active_graph_build": dict(build) if build else None,
-            "graph_fresh": bool(
-                build
-                and self.graph_path.is_file()
-                and build["source_fingerprint"]
-            ),
+            "graph_fresh": graph_fresh,
             "repositories": repositories,
         }
 
     def graph_active(self, c: sqlite3.Connection) -> bool:
         """Check if there's an active graph matching current catalog."""
-        if not self.table_exists(c, "graph_builds"):
+        if not self.table_exists(c, "graph_builds") or not self.table_exists(
+            c, "catalog_builds"
+        ):
             return False
-        build = c.execute(
-            "SELECT source_fingerprint FROM graph_builds "
-            "WHERE status='active' ORDER BY id DESC LIMIT 1"
+        row = c.execute(
+            """SELECT gb.id FROM graph_builds gb
+               JOIN catalog_builds cb ON cb.id=gb.catalog_build_id
+               WHERE gb.status='active' AND cb.status='active'
+                 AND gb.graph_path=?
+                 AND gb.source_fingerprint=cb.content_fingerprint
+                 AND gb.projection_version=?
+               ORDER BY gb.id DESC LIMIT 1""",
+            (
+                str(self.graph_path.expanduser().resolve()),
+                GRAPH_PROJECTION_VERSION,
+            ),
         ).fetchone()
-        return bool(self.graph_path.is_file() and build and build["source_fingerprint"])
+        return bool(self.graph_path.is_file() and row)
 
 
 # ============================================================================
@@ -450,7 +502,9 @@ def workflow_structure_impl(
         )
         if workflow_id:
             sql += " AND w.id = ?"
-            workflows = c.execute(sql, (entity_name, repo_key, repo_key, workflow_id)).fetchall()
+            workflows = c.execute(
+                sql, (entity_name, repo_key, repo_key, workflow_id)
+            ).fetchall()
         else:
             workflows = c.execute(sql, (entity_name, repo_key, repo_key)).fetchall()
 
@@ -459,7 +513,8 @@ def workflow_structure_impl(
                 state,
                 "workflow_structure",
                 "workflow_not_found",
-                f"No workflow found for entity {entity_name}" + (f" with id {workflow_id}" if workflow_id else ""),
+                f"No workflow found for entity {entity_name}"
+                + (f" with id {workflow_id}" if workflow_id else ""),
                 c,
             )
 
@@ -484,11 +539,13 @@ def workflow_structure_impl(
                     (wf_id,),
                 )
             ]
-            data_list.append({
-                "workflow": row_to_dict(wf),
-                "nodes": nodes,
-                "edges": edges,
-            })
+            data_list.append(
+                {
+                    "workflow": row_to_dict(wf),
+                    "nodes": nodes,
+                    "edges": edges,
+                }
+            )
 
         return make_response(
             state,
@@ -545,9 +602,7 @@ def entity_access_detail_impl(
 
         sql += " ORDER BY eal.surface, eal.record_id, eal.id"
 
-        rows = c.execute(
-            sql + " LIMIT ? OFFSET ?", (*args, lim + 1, off)
-        ).fetchall()
+        rows = c.execute(sql + " LIMIT ? OFFSET ?", (*args, lim + 1, off)).fetchall()
         data, nxt = paginate(rows, lim, off)
 
         return make_response(
@@ -629,12 +684,14 @@ def security_dependency_chain_impl(
                 )
             ]
 
-            chains.append({
-                "operation": row_to_dict(op),
-                "allowed_operations": allowops,
-                "policy_grants": policy_eops,
-                "menu_references": menu_items,
-            })
+            chains.append(
+                {
+                    "operation": row_to_dict(op),
+                    "allowed_operations": allowops,
+                    "policy_grants": policy_eops,
+                    "menu_references": menu_items,
+                }
+            )
 
         return make_response(
             state,
@@ -788,11 +845,9 @@ def catalog_risk_summary_impl(state: CatalogState) -> CatalogResponse:
         ).fetchone()
 
         # Graph freshness
-        graph_build = None
-        if state.table_exists(c, "graph_builds"):
-            graph_build = c.execute(
-                "SELECT status, source_fingerprint FROM graph_builds WHERE status='active' ORDER BY id DESC LIMIT 1"
-            ).fetchone()
+        graph_snapshot = state.snapshot(c)
+        graph_build = graph_snapshot.get("active_graph_build")
+        graph_fresh = bool(graph_snapshot.get("graph_fresh"))
 
         # Repository health
         repo_stats = c.execute(
@@ -803,26 +858,37 @@ def catalog_risk_summary_impl(state: CatalogState) -> CatalogResponse:
         ).fetchone()
 
         # Compute risk scores
-        rel_confidence_score = float(rel_stats["avg_confidence"]) if rel_stats["avg_confidence"] else 0.0
+        rel_confidence_score = (
+            float(rel_stats["avg_confidence"]) if rel_stats["avg_confidence"] else 0.0
+        )
         rel_resolution_score = 1.0 - (
-            (rel_stats["unresolved"] + rel_stats["heuristic"]) / max(rel_stats["total"], 1)
+            (rel_stats["unresolved"] + rel_stats["heuristic"])
+            / max(rel_stats["total"], 1)
         )
 
         entities_with_roots = roots_stats["entities_with_roots"] or 0
         total_entities = entity_stats["total_entities"] or 1
-        entity_completeness_score = entities_with_roots / total_entities if total_entities > 0 else 0.0
+        entity_completeness_score = (
+            entities_with_roots / total_entities if total_entities > 0 else 0.0
+        )
 
         sec_conflict_score = 1.0 - (
-            (conflict_count + unresolved_allowops["count"]) / max(sec_stats["total_operations"], 1)
+            (conflict_count + unresolved_allowops["count"])
+            / max(sec_stats["total_operations"], 1)
         )
 
-        openapi_linkage = openapi_stats["with_mapping"] / max(openapi_stats["total_specs"], 1)
+        openapi_linkage = openapi_stats["with_mapping"] / max(
+            openapi_stats["total_specs"], 1
+        )
         openapi_quality_score = 1.0 - (
-            (openapi_stats["unknown_kind"] + openapi_stats["path_slug_leakage"]) / max(openapi_stats["total_specs"], 1)
+            (openapi_stats["unknown_kind"] + openapi_stats["path_slug_leakage"])
+            / max(openapi_stats["total_specs"], 1)
         )
 
-        graph_freshness_score = 1.0 if (graph_build and state.graph_path.is_file()) else 0.5
-        repo_health_score = (repo_stats["active_repos"] or 0) / max(repo_stats["total_repos"], 1)
+        graph_freshness_score = 1.0 if graph_fresh else 0.5
+        repo_health_score = (repo_stats["active_repos"] or 0) / max(
+            repo_stats["total_repos"], 1
+        )
 
         overall_score = (
             rel_resolution_score * 0.2
@@ -840,7 +906,9 @@ def catalog_risk_summary_impl(state: CatalogState) -> CatalogResponse:
             {
                 "relationships": {
                     "total": rel_stats["total"],
-                    "avg_confidence": round(rel_stats["avg_confidence"], 3) if rel_stats["avg_confidence"] else None,
+                    "avg_confidence": round(rel_stats["avg_confidence"], 3)
+                    if rel_stats["avg_confidence"]
+                    else None,
                     "low_confidence": rel_stats["low_confidence"],
                     "unresolved": rel_stats["unresolved"],
                     "heuristic": rel_stats["heuristic"],
@@ -866,7 +934,7 @@ def catalog_risk_summary_impl(state: CatalogState) -> CatalogResponse:
                     "path_slug_leakage": openapi_stats["path_slug_leakage"],
                 },
                 "graph": {
-                    "active": bool(graph_build and state.graph_path.is_file()),
+                    "active": graph_fresh,
                     "build_status": graph_build["status"] if graph_build else None,
                 },
                 "repositories": {
@@ -1099,7 +1167,11 @@ def confidence_band_query_impl(
         return make_response(
             state,
             "confidence_band_query",
-            {"category": category, "confidence_range": [confidence_min, confidence_max], "records": data},
+            {
+                "category": category,
+                "confidence_range": [confidence_min, confidence_max],
+                "records": data,
+            },
             c,
             next_cursor=nxt,
         )
@@ -1200,9 +1272,7 @@ def catalog_search_impl(
             rows = c.execute(
                 sql + " LIMIT ? OFFSET ?", (*args, lim + 1, off)
             ).fetchall()
-            records += [
-                {"kind": label, "record": row_to_dict(r)} for r in rows
-            ]
+            records += [{"kind": label, "record": row_to_dict(r)} for r in rows]
 
         records.sort(key=lambda r: (r["kind"], str(r["record"])))
 
@@ -1307,12 +1377,10 @@ def entity_context_impl(
             ),
         }.items():
             data[key] = [
-                row_to_dict(r)
-                for r in c.execute(sql, (entity_id, repo_key, repo_key))
+                row_to_dict(r) for r in c.execute(sql, (entity_id, repo_key, repo_key))
             ]
 
         return make_response(state, "entity_context", data, c)
-
 
 
 def rest_coverage_impl(
@@ -1356,9 +1424,7 @@ def rest_coverage_impl(
         endpoints, diagnostics = coverage_rows(c, entity_id, version, lim)
 
         version_predicate = (
-            "AND (source_version = ? OR source_version IS NULL)"
-            if version
-            else ""
+            "AND (source_version = ? OR source_version IS NULL)" if version else ""
         )
         total = c.execute(
             f"SELECT COUNT(*) FROM rest_endpoints "
@@ -1606,7 +1672,9 @@ def relationship_query_impl(
     args: list[Any] = [name, repo_key, repo_key]
 
     if resolution_classes:
-        sql += " AND resolution_class IN (" + ",".join("?" * len(resolution_classes)) + ")"
+        sql += (
+            " AND resolution_class IN (" + ",".join("?" * len(resolution_classes)) + ")"
+        )
         args += resolution_classes
 
     if confidence_min is not None:
@@ -1620,9 +1688,7 @@ def relationship_query_impl(
     sql += " ORDER BY rel.id"
 
     with state.conn() as c:
-        rows = c.execute(
-            sql + " LIMIT ? OFFSET ?", (*args, lim + 1, off)
-        ).fetchall()
+        rows = c.execute(sql + " LIMIT ? OFFSET ?", (*args, lim + 1, off)).fetchall()
         data, nxt = paginate(rows, lim, off)
         return make_response(
             state,
@@ -1631,7 +1697,6 @@ def relationship_query_impl(
             c,
             next_cursor=nxt,
         )
-
 
 
 def api_surface_impl(
@@ -1671,9 +1736,7 @@ def api_surface_impl(
     sql += " ORDER BY r.path,r.method,r.id"
 
     with state.conn() as c:
-        rows = c.execute(
-            sql + " LIMIT ? OFFSET ?", (*args, lim + 1, off)
-        ).fetchall()
+        rows = c.execute(sql + " LIMIT ? OFFSET ?", (*args, lim + 1, off)).fetchall()
         data, nxt = paginate(rows, lim, off)
         return make_response(
             state,
@@ -1741,9 +1804,7 @@ def security_surface_impl(
     )
 
     with state.conn() as c:
-        rows = c.execute(
-            sql + " LIMIT ? OFFSET ?", (*args, lim + 1, off)
-        ).fetchall()
+        rows = c.execute(sql + " LIMIT ? OFFSET ?", (*args, lim + 1, off)).fetchall()
         data, nxt = paginate(rows, lim, off)
         return make_response(
             state,
@@ -1917,9 +1978,7 @@ def file_impact_impl(
                 "file_impact",
                 {
                     "file": row_to_dict(f),
-                    "seed_symbols": enrich_symbols_from_sql(
-                        c, allnodes[: len(seeds)]
-                    ),
+                    "seed_symbols": enrich_symbols_from_sql(c, allnodes[: len(seeds)]),
                     "direct_entity_occurrences": direct_occurrences,
                     "affected_symbols": enrich_symbols_from_sql(c, allnodes),
                     "traversal": {
@@ -2106,7 +2165,13 @@ def object_relationships_impl(
         raise ValueError("direction must be incoming, outgoing, or both")
     if not 1 <= depth <= 3:
         raise ValueError("depth must be 1..3")
-    include = include or ["components", "relationships", "operations", "coverage", "conflicts"]
+    include = include or [
+        "components",
+        "relationships",
+        "operations",
+        "coverage",
+        "conflicts",
+    ]
 
     with state.conn() as c:
         missing = _semantic_tables_missing(state, c)
@@ -2123,19 +2188,26 @@ def object_relationships_impl(
         ).fetchall()
         if not occurrences:
             return make_error_response(
-                state, "object_relationships", "entity_not_found",
-                f"No entity named {object_name}", c,
+                state,
+                "object_relationships",
+                "entity_not_found",
+                f"No entity named {object_name}",
+                c,
             )
         if repo_key is None and len(occurrences) > 1:
             return make_response(
-                state, "object_relationships",
-                {"candidates": [row_to_dict(row) for row in occurrences]}, c,
+                state,
+                "object_relationships",
+                {"candidates": [row_to_dict(row) for row in occurrences]},
+                c,
                 status="ambiguous",
                 error={"code": "ambiguous_entity", "message": "Retry with repo_key"},
             )
         occurrence = occurrences[0]
         occurrence_id = int(occurrence["occurrence_id"])
-        repo_id = c.execute("SELECT id FROM repos WHERE repo_key=?", (occurrence["repo_key"],)).fetchone()[0]
+        repo_id = c.execute(
+            "SELECT id FROM repos WHERE repo_key=?", (occurrence["repo_key"],)
+        ).fetchone()[0]
         placeholders = ",".join("?" for _ in requested_axes)
         relation_where = [f"rf.axis IN ({placeholders})"]
         relation_args: list[Any] = [*requested_axes]
@@ -2146,7 +2218,9 @@ def object_relationships_impl(
             relation_where.append("rf.target_occurrence_id=?")
             relation_args.append(occurrence_id)
         else:
-            relation_where.append("(rf.source_occurrence_id=? OR rf.target_occurrence_id=?)")
+            relation_where.append(
+                "(rf.source_occurrence_id=? OR rf.target_occurrence_id=?)"
+            )
             relation_args.extend([occurrence_id, occurrence_id])
         if confidence_min is not None:
             if not 0 <= confidence_min <= 1:
@@ -2170,21 +2244,29 @@ def object_relationships_impl(
         # caller's page separately, then aggregate every matching assertion.
         axis_status_rows = c.execute(
             "SELECT rf.axis,rf.assertion_status,COUNT(*) count FROM "
-            "entity_relationship_facts rf WHERE " + " AND ".join(relation_where) +
-            " GROUP BY rf.axis,rf.assertion_status",
+            "entity_relationship_facts rf WHERE "
+            + " AND ".join(relation_where)
+            + " GROUP BY rf.axis,rf.assertion_status",
             relation_args,
         ).fetchall()
-        rel_rows = c.execute(relation_sql + " LIMIT ? OFFSET ?", (*relation_args, lim + 1, off)).fetchall()
+        rel_rows = c.execute(
+            relation_sql + " LIMIT ? OFFSET ?", (*relation_args, lim + 1, off)
+        ).fetchall()
         relationships, next_cursor = paginate(rel_rows, lim, off)
         for relationship in relationships:
-            relationship["qualifiers"] = json.loads(relationship.pop("qualifiers_json") or "{}")
+            relationship["qualifiers"] = json.loads(
+                relationship.pop("qualifiers_json") or "{}"
+            )
 
         graph_status = "not_required"
         graph_used = False
         semantic_traversal: list[dict[str, Any]] = []
         if depth > 1:
             if state.graph_active(c):
-                from scripts.query_graph import get_graph_connection, query_semantic_relationship_traversal
+                from scripts.query_graph import (
+                    get_graph_connection,
+                    query_semantic_relationship_traversal,
+                )
 
                 graph_db, graph = get_graph_connection(str(state.graph_path))
                 try:
@@ -2221,8 +2303,7 @@ def object_relationships_impl(
         data: dict[str, Any] = {
             "object": row_to_dict(occurrence),
             "axes": {
-                axis: {"status": "NOT_OBSERVED", "facts": []}
-                for axis in requested_axes
+                axis: {"status": "NOT_OBSERVED", "facts": []} for axis in requested_axes
             },
             "traversal": {
                 "requested_depth": depth,
@@ -2260,7 +2341,8 @@ def object_relationships_impl(
             data["relationships"] = relationships
         if "components" in include:
             data["components"] = [
-                row_to_dict(row) for row in c.execute(
+                row_to_dict(row)
+                for row in c.execute(
                     "SELECT id,component_kind,component_path,declared_name,target_literal,"
                     "data_type,cardinality,writeability,properties_json,source_path,start_line,"
                     "end_line,evidence_text,extractor,extractor_version,confidence "
@@ -2269,22 +2351,30 @@ def object_relationships_impl(
                 )
             ]
             for component in data["components"]:
-                component["properties"] = json.loads(component.pop("properties_json") or "{}")
+                component["properties"] = json.loads(
+                    component.pop("properties_json") or "{}"
+                )
         if "operations" in include:
             data["operations"] = [
-                row_to_dict(row) for row in c.execute(
+                row_to_dict(row)
+                for row in c.execute(
                     "SELECT id,axis,operation,surface_kind,availability,invocation_context,"
                     "persistence_scope,standalone,parent_occurrence_id,qualifiers_json,source_path,"
                     "start_line,end_line,evidence_text,confidence FROM entity_operation_facts "
-                    "WHERE occurrence_id=? AND axis IN (" + placeholders + ") ORDER BY id",
+                    "WHERE occurrence_id=? AND axis IN ("
+                    + placeholders
+                    + ") ORDER BY id",
                     (occurrence_id, *requested_axes),
                 )
             ]
             for operation in data["operations"]:
-                operation["qualifiers"] = json.loads(operation.pop("qualifiers_json") or "{}")
+                operation["qualifiers"] = json.loads(
+                    operation.pop("qualifiers_json") or "{}"
+                )
         if "coverage" in include:
             data["coverage"] = [
-                row_to_dict(row) for row in c.execute(
+                row_to_dict(row)
+                for row in c.execute(
                     "SELECT declaration_family,source_path,status,component_count,fact_count,diagnostic,"
                     "extractor,extractor_version FROM entity_extraction_coverage "
                     "WHERE occurrence_id=? ORDER BY id DESC",
@@ -2293,7 +2383,8 @@ def object_relationships_impl(
             ]
         if "conflicts" in include:
             data["conflicts"] = [
-                row_to_dict(row) for row in c.execute(
+                row_to_dict(row)
+                for row in c.execute(
                     "SELECT id,fact_key,conflict_kind,status,reason,resolution_evidence,confidence "
                     "FROM entity_semantic_conflicts WHERE repo_id=? AND fact_key IN "
                     "(SELECT fact_key FROM entity_relationship_facts WHERE source_occurrence_id=? "
@@ -2302,11 +2393,23 @@ def object_relationships_impl(
                 )
             ]
         status = "ok" if depth == 1 or graph_used else "graph_unavailable"
-        error = None if depth == 1 or graph_used else {
-            "code": "graph_stale_or_unprojected",
-            "message": "Semantic multi-hop traversal requires a fresh Ladybug semantic projection",
-        }
-        return make_response(state, "object_relationships", data, c, status=status, error=error, next_cursor=next_cursor)
+        error = (
+            None
+            if depth == 1 or graph_used
+            else {
+                "code": "graph_stale_or_unprojected",
+                "message": "Semantic multi-hop traversal requires a fresh Ladybug semantic projection",
+            }
+        )
+        return make_response(
+            state,
+            "object_relationships",
+            data,
+            c,
+            status=status,
+            error=error,
+            next_cursor=next_cursor,
+        )
 
 
 def qa_impact_impl(
@@ -2329,9 +2432,17 @@ def qa_impact_impl(
         missing = _semantic_tables_missing(state, c)
         if missing:
             return _semantic_capability_error(state, "qa_impact", c, missing)
-        repo = c.execute("SELECT id FROM repos WHERE repo_key=?", (repo_key,)).fetchone()
+        repo = c.execute(
+            "SELECT id FROM repos WHERE repo_key=?", (repo_key,)
+        ).fetchone()
         if not repo:
-            return make_error_response(state, "qa_impact", "repo_not_found", f"Unknown repository {repo_key}", c)
+            return make_error_response(
+                state,
+                "qa_impact",
+                "repo_not_found",
+                f"Unknown repository {repo_key}",
+                c,
+            )
         repo_id = int(repo[0])
         paths = [str(change.get("file_path") or "") for change in changes]
         if any(not path for path in paths):
@@ -2433,13 +2544,22 @@ def qa_impact_impl(
             "semantic_relationships": [],
             "semantic_operations": [],
             "components": [],
-            "surfaces": {"mappings": [], "rest_endpoints": [], "workflows": [], "db_tables": [], "tests": []},
+            "surfaces": {
+                "mappings": [],
+                "rest_endpoints": [],
+                "workflows": [],
+                "db_tables": [],
+                "tests": [],
+            },
             "coverage_gaps": [],
             "semantic_coverage": [],
             "conflicts": [],
             "impacted_components": [],
-            "traversal": {"requested_depth": depth, "graph_used": False,
-                          "graph_status": "not_required" if depth == 1 else "graph_unavailable"},
+            "traversal": {
+                "requested_depth": depth,
+                "graph_used": False,
+                "graph_status": "not_required" if depth == 1 else "graph_unavailable",
+            },
         }
         for resolution in input_resolution:
             if resolution["status"] == "unresolved":
@@ -2453,83 +2573,121 @@ def qa_impact_impl(
         if occurrence_ids:
             ids = ",".join("?" for _ in occurrence_ids)
             axis_placeholders = ",".join("?" for _ in requested_axes)
-            data["semantic_relationships"] = [row_to_dict(row) for row in c.execute(
-                "SELECT id,axis,relation_kind,fact_key,assertion_status,target_entity_name,"
-                "target_literal,confidence,source_path,start_line,end_line,evidence_text "
-                f"FROM entity_relationship_facts WHERE source_occurrence_id IN ({ids}) "
-                f"AND axis IN ({axis_placeholders}) ORDER BY id",
-                (*occurrence_ids, *requested_axes),
-            )]
-            data["semantic_operations"] = [row_to_dict(row) for row in c.execute(
-                "SELECT id,axis,operation,surface_kind,availability,invocation_context,"
-                "persistence_scope,standalone,parent_occurrence_id,confidence,source_path,"
-                "start_line,end_line,evidence_text FROM entity_operation_facts "
-                f"WHERE occurrence_id IN ({ids}) AND axis IN ({axis_placeholders}) ORDER BY id",
-                (*occurrence_ids, *requested_axes),
-            )]
-            data["components"] = [row_to_dict(row) for row in c.execute(
-                "SELECT id,component_kind,component_path,declared_name,target_literal,"
-                "source_path,start_line,end_line,evidence_text,confidence "
-                f"FROM entity_schema_components WHERE occurrence_id IN ({ids}) ORDER BY id",
-                occurrence_ids,
-            )]
-            data["semantic_coverage"] = [row_to_dict(row) for row in c.execute(
-                "SELECT eo.id occurrence_id,en.name entity_name,ec.declaration_family,"
-                "ec.status,ec.diagnostic,ec.source_path,ec.component_count,ec.fact_count "
-                "FROM entity_extraction_coverage ec "
-                "JOIN entity_occurrences eo ON eo.id=ec.occurrence_id "
-                "JOIN entity_nodes en ON en.id=eo.entity_id "
-                f"WHERE ec.occurrence_id IN ({ids}) "
-                f"AND ec.declaration_family IN ({axis_placeholders}) "
-                "ORDER BY eo.id,ec.declaration_family,ec.id DESC",
-                (*occurrence_ids, *requested_axes),
-            )]
-            data["conflicts"] = [row_to_dict(row) for row in c.execute(
-                "SELECT esc.id,esc.fact_key,esc.conflict_kind,esc.status,esc.reason,"
-                "esc.resolution_evidence,esc.confidence "
-                "FROM entity_semantic_conflicts esc WHERE esc.repo_id=? AND esc.fact_key IN ("
-                f"SELECT fact_key FROM entity_relationship_facts WHERE source_occurrence_id IN ({ids})"
-                ") ORDER BY esc.id",
-                (repo_id, *occurrence_ids),
-            )]
+            data["semantic_relationships"] = [
+                row_to_dict(row)
+                for row in c.execute(
+                    "SELECT id,axis,relation_kind,fact_key,assertion_status,target_entity_name,"
+                    "target_literal,confidence,source_path,start_line,end_line,evidence_text "
+                    f"FROM entity_relationship_facts WHERE source_occurrence_id IN ({ids}) "
+                    f"AND axis IN ({axis_placeholders}) ORDER BY id",
+                    (*occurrence_ids, *requested_axes),
+                )
+            ]
+            data["semantic_operations"] = [
+                row_to_dict(row)
+                for row in c.execute(
+                    "SELECT id,axis,operation,surface_kind,availability,invocation_context,"
+                    "persistence_scope,standalone,parent_occurrence_id,confidence,source_path,"
+                    "start_line,end_line,evidence_text FROM entity_operation_facts "
+                    f"WHERE occurrence_id IN ({ids}) AND axis IN ({axis_placeholders}) ORDER BY id",
+                    (*occurrence_ids, *requested_axes),
+                )
+            ]
+            data["components"] = [
+                row_to_dict(row)
+                for row in c.execute(
+                    "SELECT id,component_kind,component_path,declared_name,target_literal,"
+                    "source_path,start_line,end_line,evidence_text,confidence "
+                    f"FROM entity_schema_components WHERE occurrence_id IN ({ids}) ORDER BY id",
+                    occurrence_ids,
+                )
+            ]
+            data["semantic_coverage"] = [
+                row_to_dict(row)
+                for row in c.execute(
+                    "SELECT eo.id occurrence_id,en.name entity_name,ec.declaration_family,"
+                    "ec.status,ec.diagnostic,ec.source_path,ec.component_count,ec.fact_count "
+                    "FROM entity_extraction_coverage ec "
+                    "JOIN entity_occurrences eo ON eo.id=ec.occurrence_id "
+                    "JOIN entity_nodes en ON en.id=eo.entity_id "
+                    f"WHERE ec.occurrence_id IN ({ids}) "
+                    f"AND ec.declaration_family IN ({axis_placeholders}) "
+                    "ORDER BY eo.id,ec.declaration_family,ec.id DESC",
+                    (*occurrence_ids, *requested_axes),
+                )
+            ]
+            data["conflicts"] = [
+                row_to_dict(row)
+                for row in c.execute(
+                    "SELECT esc.id,esc.fact_key,esc.conflict_kind,esc.status,esc.reason,"
+                    "esc.resolution_evidence,esc.confidence "
+                    "FROM entity_semantic_conflicts esc WHERE esc.repo_id=? AND esc.fact_key IN ("
+                    f"SELECT fact_key FROM entity_relationship_facts WHERE source_occurrence_id IN ({ids})"
+                    ") ORDER BY esc.id",
+                    (repo_id, *occurrence_ids),
+                )
+            ]
             entity_ids = [int(row["entity_id"]) for row in occurrences]
             entity_placeholders = ",".join("?" for _ in entity_ids)
-            data["surfaces"]["mappings"] = [row_to_dict(row) for row in c.execute(
-                "SELECT en.name entity_name,em.mapping_type,f.path file_path,s.name symbol_name,"
-                "s.start_line,s.end_line,em.confidence FROM entity_mappings em "
-                "JOIN entity_nodes en ON en.id=em.entity_id LEFT JOIN files f ON f.id=em.file_id "
-                "LEFT JOIN symbols s ON s.id=em.symbol_id WHERE em.repo_id=? AND em.entity_id IN (" + entity_placeholders + ") ORDER BY em.id",
-                (repo_id, *entity_ids),
-            )]
-            data["surfaces"]["rest_endpoints"] = [row_to_dict(row) for row in c.execute(
-                "SELECT en.name entity_name,re.method,re.path,re.source_version,f.path file_path "
-                "FROM rest_endpoints re JOIN entity_nodes en ON en.id=re.entity_id "
-                "LEFT JOIN files f ON f.id=re.file_id WHERE re.repo_id=? AND re.entity_id IN (" + entity_placeholders + ") ORDER BY re.id",
-                (repo_id, *entity_ids),
-            )]
-            data["surfaces"]["workflows"] = [row_to_dict(row) for row in c.execute(
-                "SELECT en.name entity_name,w.name,w.workflow_type,w.source_kind,w.source_file,w.confidence "
-                "FROM workflows w JOIN entity_nodes en ON en.id=w.entity_id WHERE w.repo_id=? AND w.entity_id IN (" + entity_placeholders + ") ORDER BY w.id",
-                (repo_id, *entity_ids),
-            )]
-            data["surfaces"]["db_tables"] = [row_to_dict(row) for row in c.execute(
-                "SELECT DISTINCT en.name entity_name,dt.id dbschema_table_id,dt.table_name,"
-                "dt.source_file,dt.source_line FROM entity_access_links eal "
-                "JOIN entity_nodes en ON en.id=eal.entity_id "
-                "JOIN dbschema_tables dt ON dt.id=eal.record_id "
-                "WHERE eal.repo_id=? AND eal.surface='dbschema_table' "
-                "AND eal.entity_id IN (" + entity_placeholders + ") ORDER BY dt.id",
-                (repo_id, *entity_ids),
-            )]
-            if include_tests:
-                data["surfaces"]["tests"] = [row_to_dict(row) for row in c.execute(
-                    "SELECT en.name entity_name,tc.id test_case_id,tc.feature_name,tc.scenario_name,"
-                    "tc.eligibility,tc.scenario_line FROM test_entity_links tel "
-                    "JOIN entity_nodes en ON en.id=tel.entity_id JOIN test_requests tr ON tr.id=tel.test_request_id "
-                    "JOIN test_cases tc ON tc.id=tr.test_case_id "
-                    "WHERE tc.repo_id=? AND tel.entity_id IN (" + entity_placeholders + ") ORDER BY tc.id",
+            data["surfaces"]["mappings"] = [
+                row_to_dict(row)
+                for row in c.execute(
+                    "SELECT en.name entity_name,em.mapping_type,f.path file_path,s.name symbol_name,"
+                    "s.start_line,s.end_line,em.confidence FROM entity_mappings em "
+                    "JOIN entity_nodes en ON en.id=em.entity_id LEFT JOIN files f ON f.id=em.file_id "
+                    "LEFT JOIN symbols s ON s.id=em.symbol_id WHERE em.repo_id=? AND em.entity_id IN ("
+                    + entity_placeholders
+                    + ") ORDER BY em.id",
                     (repo_id, *entity_ids),
-                )]
+                )
+            ]
+            data["surfaces"]["rest_endpoints"] = [
+                row_to_dict(row)
+                for row in c.execute(
+                    "SELECT en.name entity_name,re.method,re.path,re.source_version,f.path file_path "
+                    "FROM rest_endpoints re JOIN entity_nodes en ON en.id=re.entity_id "
+                    "LEFT JOIN files f ON f.id=re.file_id WHERE re.repo_id=? AND re.entity_id IN ("
+                    + entity_placeholders
+                    + ") ORDER BY re.id",
+                    (repo_id, *entity_ids),
+                )
+            ]
+            data["surfaces"]["workflows"] = [
+                row_to_dict(row)
+                for row in c.execute(
+                    "SELECT en.name entity_name,w.name,w.workflow_type,w.source_kind,w.source_file,w.confidence "
+                    "FROM workflows w JOIN entity_nodes en ON en.id=w.entity_id WHERE w.repo_id=? AND w.entity_id IN ("
+                    + entity_placeholders
+                    + ") ORDER BY w.id",
+                    (repo_id, *entity_ids),
+                )
+            ]
+            data["surfaces"]["db_tables"] = [
+                row_to_dict(row)
+                for row in c.execute(
+                    "SELECT DISTINCT en.name entity_name,dt.id dbschema_table_id,dt.table_name,"
+                    "dt.source_file,dt.source_line FROM entity_access_links eal "
+                    "JOIN entity_nodes en ON en.id=eal.entity_id "
+                    "JOIN dbschema_tables dt ON dt.id=eal.record_id "
+                    "WHERE eal.repo_id=? AND eal.surface='dbschema_table' "
+                    "AND eal.entity_id IN (" + entity_placeholders + ") ORDER BY dt.id",
+                    (repo_id, *entity_ids),
+                )
+            ]
+            if include_tests:
+                data["surfaces"]["tests"] = [
+                    row_to_dict(row)
+                    for row in c.execute(
+                        "SELECT en.name entity_name,tc.id test_case_id,tc.feature_name,tc.scenario_name,"
+                        "tc.eligibility,tc.scenario_line FROM test_entity_links tel "
+                        "JOIN entity_nodes en ON en.id=tel.entity_id JOIN test_requests tr ON tr.id=tel.test_request_id "
+                        "JOIN test_cases tc ON tc.id=tr.test_case_id "
+                        "WHERE tc.repo_id=? AND tel.entity_id IN ("
+                        + entity_placeholders
+                        + ") ORDER BY tc.id",
+                        (repo_id, *entity_ids),
+                    )
+                ]
             for occurrence in occurrences:
                 entity_id = int(occurrence["entity_id"])
                 count = c.execute(
@@ -2540,58 +2698,84 @@ def qa_impact_impl(
                     (entity_id, repo_id),
                 ).fetchone()[0]
                 if not count:
-                    data["coverage_gaps"].append({
-                        "entity_name": occurrence["name"],
-                        "kind": "investigation_gap",
-                        "reason": "No linked test requests were observed; no BDD scenario is inferred.",
-                    })
+                    data["coverage_gaps"].append(
+                        {
+                            "entity_name": occurrence["name"],
+                            "kind": "investigation_gap",
+                            "reason": "No linked test requests were observed; no BDD scenario is inferred.",
+                        }
+                    )
         # Risk ranking is a deterministic triage signal, not a claim that a
         # behavioral regression will occur.  Each item retains the extracted
         # evidence that caused it to be surfaced.
         impact_rows: list[dict[str, Any]] = []
         for row in data["semantic_relationships"]:
-            impact_rows.append({
-                "risk": "high", "component_type": "semantic_relationship",
-                "reason": f"Axis {row['axis']} relationship can change object semantics",
-                "evidence": row,
-            })
+            impact_rows.append(
+                {
+                    "risk": "high",
+                    "component_type": "semantic_relationship",
+                    "reason": f"Axis {row['axis']} relationship can change object semantics",
+                    "evidence": row,
+                }
+            )
         for row in data["semantic_operations"]:
-            impact_rows.append({
-                "risk": "high" if row["operation"] in {"create", "update", "delete"} else "medium",
-                "component_type": "semantic_operation",
-                "reason": "Operation behavior is declared for the changed object",
-                "evidence": row,
-            })
+            impact_rows.append(
+                {
+                    "risk": "high"
+                    if row["operation"] in {"create", "update", "delete"}
+                    else "medium",
+                    "component_type": "semantic_operation",
+                    "reason": "Operation behavior is declared for the changed object",
+                    "evidence": row,
+                }
+            )
         for surface_name in ("rest_endpoints", "workflows"):
             for row in data["surfaces"][surface_name]:
-                impact_rows.append({
-                    "risk": "high", "component_type": surface_name,
-                    "reason": f"Linked {surface_name.rstrip('s')} surface",
-                    "evidence": row,
-                })
+                impact_rows.append(
+                    {
+                        "risk": "high",
+                        "component_type": surface_name,
+                        "reason": f"Linked {surface_name.rstrip('s')} surface",
+                        "evidence": row,
+                    }
+                )
         for surface_name in ("mappings", "db_tables"):
             for row in data["surfaces"][surface_name]:
-                impact_rows.append({
-                    "risk": "medium", "component_type": surface_name,
-                    "reason": f"Linked {surface_name.rstrip('s')} surface",
-                    "evidence": row,
-                })
+                impact_rows.append(
+                    {
+                        "risk": "medium",
+                        "component_type": surface_name,
+                        "reason": f"Linked {surface_name.rstrip('s')} surface",
+                        "evidence": row,
+                    }
+                )
         for row in data["semantic_coverage"]:
             if row["status"] in {"partial", "failed"}:
-                impact_rows.append({
-                    "risk": "unresolved", "component_type": "extraction_coverage",
-                    "reason": row["diagnostic"], "evidence": row,
-                })
+                impact_rows.append(
+                    {
+                        "risk": "unresolved",
+                        "component_type": "extraction_coverage",
+                        "reason": row["diagnostic"],
+                        "evidence": row,
+                    }
+                )
         risk_order = {"high": 0, "medium": 1, "low": 2, "unresolved": 3}
         data["impacted_components"] = sorted(
             impact_rows,
-            key=lambda row: (risk_order[row["risk"]], row["component_type"], str(row["evidence"])),
+            key=lambda row: (
+                risk_order[row["risk"]],
+                row["component_type"],
+                str(row["evidence"]),
+            ),
         )
         graph_used = False
         graph_status = "not_required"
         if depth > 1:
             if state.graph_active(c):
-                from scripts.query_graph import get_graph_connection, query_semantic_relationship_traversal
+                from scripts.query_graph import (
+                    get_graph_connection,
+                    query_semantic_relationship_traversal,
+                )
 
                 graph_db, graph = get_graph_connection(str(state.graph_path))
                 try:
@@ -2614,10 +2798,14 @@ def qa_impact_impl(
         data["traversal"]["graph_used"] = graph_used
         data["traversal"]["graph_status"] = graph_status
         status = "ok" if depth == 1 or graph_used else "graph_unavailable"
-        error = None if depth == 1 or graph_used else {
-            "code": "graph_stale_or_unprojected",
-            "message": "Semantic multi-hop traversal requires a fresh Ladybug semantic projection",
-        }
+        error = (
+            None
+            if depth == 1 or graph_used
+            else {
+                "code": "graph_stale_or_unprojected",
+                "message": "Semantic multi-hop traversal requires a fresh Ladybug semantic projection",
+            }
+        )
         return make_response(state, "qa_impact", data, c, status=status, error=error)
 
 
@@ -2708,9 +2896,7 @@ def create_server(
             ),
         ],
         kind: Annotated[
-            Literal[
-                "all", "entity", "file", "symbol", "api", "workflow", "security"
-            ],
+            Literal["all", "entity", "file", "symbol", "api", "workflow", "security"],
             Field(
                 description=(
                     "Catalog record family to search. 'all' searches every family "
@@ -2764,8 +2950,7 @@ def create_server(
             Field(
                 min_length=1,
                 description=(
-                    "Response sections to include; omit to include all five "
-                    "sections."
+                    "Response sections to include; omit to include all five sections."
                 ),
             ),
         ]
@@ -2776,8 +2961,16 @@ def create_server(
     ) -> CatalogResponse:
         """Query provenance-backed ownership, hierarchy, visibility, and entity-context facts for one entity."""
         return object_relationships_impl(
-            state, object_name, repo_key, axes, direction, depth, include,
-            confidence_min, limit, cursor,
+            state,
+            object_name,
+            repo_key,
+            axes,
+            direction,
+            depth,
+            include,
+            confidence_min,
+            limit,
+            cursor,
         )
 
     @mcp.tool(annotations=READ_ONLY_TOOL_ANNOTATIONS)
@@ -2790,15 +2983,7 @@ def create_server(
                     "Changed files. Every item must contain file_path using the "
                     "exact repository-relative catalog path."
                 ),
-                examples=[
-                    [
-                        {
-                            "file_path": (
-                                "app/source/apar/ARInvoiceManager.cls"
-                            )
-                        }
-                    ]
-                ],
+                examples=[[{"file_path": ("app/source/apar/ARInvoiceManager.cls")}]],
             ),
         ],
         repo_key: RepositoryKey,
@@ -2901,7 +3086,15 @@ def create_server(
     ) -> CatalogResponse:
         """Return direct extracted relationships for an exact source or target symbol name; call twice for both directions."""
         return relationship_query_impl(
-            state, name, direction, resolution_classes, confidence_min, confidence_max, repo_key, limit, cursor
+            state,
+            name,
+            direction,
+            resolution_classes,
+            confidence_min,
+            confidence_max,
+            repo_key,
+            limit,
+            cursor,
         )
 
     # Phase 1: Dependency Surface Tools
@@ -2934,7 +3127,9 @@ def create_server(
         cursor: PaginationCursor | None = None,
     ) -> CatalogResponse:
         """Return an entity's links to workflow, REST, security, and database surfaces with evidence IDs."""
-        return entity_access_detail_impl(state, entity_name, surface_type, repo_key, limit, cursor)
+        return entity_access_detail_impl(
+            state, entity_name, surface_type, repo_key, limit, cursor
+        )
 
     @mcp.tool(annotations=READ_ONLY_TOOL_ANNOTATIONS)
     def security_dependency_chain(
@@ -2999,7 +3194,9 @@ def create_server(
         cursor: PaginationCursor | None = None,
     ) -> CatalogResponse:
         """Return paginated evidence rows for one category from catalog_risk_summary."""
-        return risk_detail_impl(state, category, entity_name, symbol_name, repo_key, limit, cursor)
+        return risk_detail_impl(
+            state, category, entity_name, symbol_name, repo_key, limit, cursor
+        )
 
     @mcp.tool(annotations=READ_ONLY_TOOL_ANNOTATIONS)
     def confidence_band_query(
@@ -3011,7 +3208,9 @@ def create_server(
         cursor: PaginationCursor | None = None,
     ) -> CatalogResponse:
         """Return records whose confidence or entity-root weight falls in an inclusive 0.0..1.0 band."""
-        return confidence_band_query_impl(state, category, confidence_min, confidence_max, repo_key, limit, cursor)
+        return confidence_band_query_impl(
+            state, category, confidence_min, confidence_max, repo_key, limit, cursor
+        )
 
     @mcp.tool(annotations=READ_ONLY_TOOL_ANNOTATIONS)
     def api_surface(
@@ -3033,7 +3232,9 @@ def create_server(
         cursor: PaginationCursor | None = None,
     ) -> CatalogResponse:
         """Find REST endpoints by exact entity name, endpoint-path fragment, or both."""
-        return api_surface_impl(state, entity_name, path_fragment, repo_key, limit, cursor)
+        return api_surface_impl(
+            state, entity_name, path_fragment, repo_key, limit, cursor
+        )
 
     @mcp.tool(annotations=READ_ONLY_TOOL_ANNOTATIONS)
     def workflow_context(

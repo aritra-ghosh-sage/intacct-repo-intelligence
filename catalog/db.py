@@ -2,8 +2,8 @@
 
 import sqlite3
 from pathlib import Path
-from config import CATALOG_DB
 
+from config import CATALOG_DB
 
 _connection: sqlite3.Connection | None = None
 _connection_path: str | None = None

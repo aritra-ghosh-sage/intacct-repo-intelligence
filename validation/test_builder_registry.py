@@ -13,7 +13,9 @@ class BuilderRegistryTests(unittest.TestCase):
         self.assertLess(plan.index("openapi_scan"), plan.index("openapi_link"))
         self.assertLess(plan.index("openapi_link"), plan.index("rest_endpoints"))
         self.assertLess(plan.index("entities"), plan.index("entity_semantics"))
-        self.assertLess(plan.index("entity_semantics"), plan.index("entity_access_links"))
+        self.assertLess(
+            plan.index("entity_semantics"), plan.index("entity_access_links")
+        )
         self.assertLess(plan.index("workflows"), plan.index("entity_access_links"))
 
     def test_generic_profile_rejects_app_builder(self) -> None:

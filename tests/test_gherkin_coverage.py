@@ -17,7 +17,6 @@ from scripts.build_gherkin_coverage import (
 )
 from scripts.query_rest import _coverage_rows
 
-
 FEATURE = """@version:v1-beta2
 @IA-100
 Feature: Accounts
@@ -318,11 +317,15 @@ Feature: Account
             ).fetchone()[0],
         )
 
-    def test_v1_beta2_account_label_compatibility_is_seeded_once_and_replaces_beta_row(self) -> None:
+    def test_v1_beta2_account_label_compatibility_is_seeded_once_and_replaces_beta_row(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             suite_root = root / "suite"
-            features_root = suite_root / "src" / "test" / "resources" / "features" / "rest-api"
+            features_root = (
+                suite_root / "src" / "test" / "resources" / "features" / "rest-api"
+            )
             features_root.mkdir(parents=True)
             feature = features_root / "account-label.feature"
             feature.write_text(
@@ -340,11 +343,7 @@ Feature: Account label
             mapping_path = suite_root / "object-mapping.json"
             mapping_path.write_text(
                 json.dumps(
-                    {
-                        "cm": {
-                            "ap-account-label": "accounts-payable/account-label"
-                        }
-                    }
+                    {"cm": {"ap-account-label": "accounts-payable/account-label"}}
                 ),
                 encoding="utf-8",
             )
@@ -365,7 +364,10 @@ Feature: Account label
 
             self.assertEqual(1, stats["compatibility_rows"])
             self.assertEqual(
-                1, conn.execute("SELECT COUNT(*) FROM api_version_compatibility").fetchone()[0]
+                1,
+                conn.execute(
+                    "SELECT COUNT(*) FROM api_version_compatibility"
+                ).fetchone()[0],
             )
             compatibility = conn.execute(
                 "SELECT test_version, endpoint_version, status FROM api_version_compatibility"
@@ -380,7 +382,8 @@ Feature: Account label
                 ).fetchone()[0],
             )
             self.assertEqual(
-                1, conn.execute("SELECT COUNT(*) FROM test_endpoint_links").fetchone()[0]
+                1,
+                conn.execute("SELECT COUNT(*) FROM test_endpoint_links").fetchone()[0],
             )
             self.assertEqual(
                 "compatible_version",
@@ -400,7 +403,10 @@ Feature: Account label
             )
             self.assertEqual(1, rerun_stats["compatibility_rows"])
             self.assertEqual(
-                1, conn.execute("SELECT COUNT(*) FROM api_version_compatibility").fetchone()[0]
+                1,
+                conn.execute(
+                    "SELECT COUNT(*) FROM api_version_compatibility"
+                ).fetchone()[0],
             )
             self.assertEqual(
                 0,
@@ -409,7 +415,8 @@ Feature: Account label
                 ).fetchone()[0],
             )
             self.assertEqual(
-                1, conn.execute("SELECT COUNT(*) FROM test_endpoint_links").fetchone()[0]
+                1,
+                conn.execute("SELECT COUNT(*) FROM test_endpoint_links").fetchone()[0],
             )
 
     def test_orphan_properties_is_diagnostic_without_case_data(self) -> None:

@@ -34,10 +34,12 @@ try:
 except ImportError:
     from _query_json import emit_json, error_response, success_response
 
-from config import CATALOG_DB as SQLITE_DB, GRAPH_DB
+from config import CATALOG_DB as SQLITE_DB
+from config import GRAPH_DB
 
 DEFAULT_DB = os.environ.get("CATALOG_DB", SQLITE_DB)
 DEFAULT_GRAPH = os.environ.get("GRAPH_DB", GRAPH_DB)
+
 
 class EntityAmbiguityError(ValueError):
     """Raised when a canonical entity has several repo-scoped occurrences."""
@@ -138,7 +140,6 @@ def enrich_symbols_from_sql(
 @click.group()
 def cli() -> None:
     """Query the Ladybug graph database with hybrid Cypher + SQLite enrichment."""
-    pass
 
 
 # ============================================================================
@@ -234,12 +235,18 @@ def query_semantic_relationship_traversal(
             target_id = int(row[10])
             results.append(
                 {
-                    "fact_id": int(row[0]), "axis": row[1],
-                    "relation_kind": row[2], "fact_key": row[3],
-                    "assertion_status": row[4], "confidence": row[5],
-                    "source_path": row[6], "start_line": row[7],
-                    "end_line": row[8], "source_occurrence_id": int(row[9]),
-                    "target_occurrence_id": target_id, "depth": level,
+                    "fact_id": int(row[0]),
+                    "axis": row[1],
+                    "relation_kind": row[2],
+                    "fact_key": row[3],
+                    "assertion_status": row[4],
+                    "confidence": row[5],
+                    "source_path": row[6],
+                    "start_line": row[7],
+                    "end_line": row[8],
+                    "source_occurrence_id": int(row[9]),
+                    "target_occurrence_id": target_id,
+                    "depth": level,
                 }
             )
             if target_id not in discovered:
@@ -516,7 +523,8 @@ def file_impact(
         symbol_entities = _query_entities_from_symbols(graph_conn, seed_ids, repo_key)
         seen_occurrences = {entity["occurrence_id"] for entity in direct_entities}
         direct_entities.extend(
-            entity for entity in symbol_entities
+            entity
+            for entity in symbol_entities
             if entity["occurrence_id"] not in seen_occurrences
         )
         entities = _query_entities_from_symbols(graph_conn, affected_ids, repo_key)
@@ -526,10 +534,17 @@ def file_impact(
         # empty impact report.
         seen_affected_occurrences = {entity["occurrence_id"] for entity in entities}
         entities.extend(
-            entity for entity in direct_entities
+            entity
+            for entity in direct_entities
             if entity["occurrence_id"] not in seen_affected_occurrences
         )
-        entities.sort(key=lambda entity: (entity["repo_key"], entity["entity_id"], entity["occurrence_id"]))
+        entities.sort(
+            key=lambda entity: (
+                entity["repo_key"],
+                entity["entity_id"],
+                entity["occurrence_id"],
+            )
+        )
         occurrence_ids = [e["occurrence_id"] for e in entities]
         surfaces = _query_surfaces_from_occurrences(graph_conn, occurrence_ids)
 

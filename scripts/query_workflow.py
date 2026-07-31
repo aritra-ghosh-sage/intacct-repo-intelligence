@@ -1,9 +1,10 @@
 # scripts/query_workflow.py
 
-from collections import defaultdict
-import click
 import sys
+from collections import defaultdict
 from pathlib import Path
+
+import click
 
 try:
     from catalog.db import get_connection

@@ -7,7 +7,10 @@ values while changing the legacy global path uniqueness constraint.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import sqlite3
+import uuid
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -15,6 +18,8 @@ MULTI_REPO_MIGRATION = "019_multi_repo"
 REST_AUTOMATION_COVERAGE_MIGRATION = "020_rest_automation_coverage"
 ENTITY_SEMANTICS_MIGRATION = "021_entity_semantics"
 ENTITY_SEMANTICS_REPO_SCOPE_MIGRATION = "022_entity_semantics_repo_scope"
+DELTA_REFRESH_MIGRATION = "023_delta_refresh"
+REFRESH_CONTRACTS_MIGRATION = "024_refresh_contracts"
 LEGACY_REPO_KEY = "ia-main"
 
 
@@ -992,7 +997,9 @@ def _apply_entity_semantics_repo_scope_migration(conn: sqlite3.Connection) -> No
         "entity_extraction_coverage",
         "entity_semantic_conflicts",
     ):
-        columns = ",".join(row[1] for row in conn.execute(f"PRAGMA table_info({table})"))
+        columns = ",".join(
+            row[1] for row in conn.execute(f"PRAGMA table_info({table})")
+        )
         conn.execute(
             f"INSERT INTO {table}({columns}) SELECT {columns} FROM _021_{table}"
         )
@@ -1033,6 +1040,317 @@ def _apply_entity_semantics_repo_scope_migration(conn: sqlite3.Connection) -> No
             "entity semantic repository ownership violations after migration 022: "
             f"{violations}"
         )
+
+
+def _entity_semantics_repo_scope_is_current(conn: sqlite3.Connection) -> bool:
+    if not _table_exists(conn, "entity_relationship_facts"):
+        return False
+    groups: dict[int, set[str]] = {}
+    for row in conn.execute("PRAGMA foreign_key_list(entity_relationship_facts)"):
+        groups.setdefault(int(row[0]), set()).add(str(row[3]))
+    required_indexes = {
+        "uq_entity_occurrences_id_repo",
+        "uq_entity_schema_components_id_repo",
+        "uq_entity_relationship_facts_id_repo",
+    }
+    present_indexes = {
+        str(row[0])
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")
+    }
+    return {
+        "source_occurrence_id",
+        "repo_id",
+    } in groups.values() and required_indexes.issubset(present_indexes)
+
+
+def symbol_stable_key(
+    *,
+    kind: str | None,
+    name: str | None,
+    parent_symbol: str | None,
+    signature: str | None,
+    duplicate_ordinal: int,
+) -> str:
+    """Return the repository-extraction identity for one symbol.
+
+    Line numbers are intentionally absent so IDs survive movement-only edits.
+    The ordinal distinguishes identical extractor records in the same file.
+    """
+
+    payload = json.dumps(
+        [
+            kind or "",
+            name or "",
+            parent_symbol or "",
+            signature or "",
+            duplicate_ordinal,
+        ],
+        ensure_ascii=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def _canonical_schema_objects(
+    conn: sqlite3.Connection, tables: tuple[str, ...]
+) -> None:
+    """Install selected tables and their explicit indexes from schema.sql."""
+
+    template = sqlite3.connect(":memory:")
+    try:
+        template.executescript((Path(__file__).with_name("schema.sql")).read_text())
+        for table in tables:
+            if _table_exists(conn, table):
+                continue
+            ddl = template.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)
+            ).fetchone()
+            if ddl is None:
+                raise RuntimeError(f"canonical schema is missing {table}")
+            conn.execute(str(ddl[0]))
+            for (index_ddl,) in template.execute(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type='index' AND tbl_name=? AND sql IS NOT NULL",
+                (table,),
+            ):
+                conn.execute(str(index_ddl))
+    finally:
+        template.close()
+
+
+def _populate_symbol_stable_keys(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "symbols"):
+        return
+    _add_columns(conn, "symbols", ("stable_key TEXT",))
+    columns = _columns(conn, "symbols")
+    selected = ["id", "file_id", "kind", "name", "parent_symbol", "signature"]
+    expressions = [
+        column if column in columns else f"NULL AS {column}" for column in selected
+    ]
+    rows = conn.execute(
+        "SELECT " + ",".join(expressions) + " FROM symbols ORDER BY file_id,id"
+    ).fetchall()
+    ordinals: dict[tuple[object, ...], int] = {}
+    for row in rows:
+        group = tuple(row[index] for index in range(1, 6))
+        ordinal = ordinals.get(group, 0)
+        ordinals[group] = ordinal + 1
+        stable_key = symbol_stable_key(
+            kind=row[2],
+            name=row[3],
+            parent_symbol=row[4],
+            signature=row[5],
+            duplicate_ordinal=ordinal,
+        )
+        conn.execute(
+            "UPDATE symbols SET stable_key=? WHERE id=?", (stable_key, int(row[0]))
+        )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_symbols_file_stable_key "
+        "ON symbols(file_id,stable_key)"
+    )
+
+
+def _rebuild_graph_builds_023(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "graph_builds"):
+        _canonical_schema_objects(conn, ("graph_builds",))
+        return
+    columns = _columns(conn, "graph_builds")
+    if {
+        "catalog_build_id",
+        "base_graph_build_id",
+        "build_mode",
+        "projection_version",
+        "source_revisions_json",
+    }.issubset(columns):
+        return
+    conn.execute("DROP INDEX IF EXISTS idx_graph_builds_status_started")
+    conn.execute("DROP INDEX IF EXISTS idx_graph_builds_catalog")
+    conn.execute("DROP INDEX IF EXISTS uq_graph_builds_active_path")
+    conn.execute("ALTER TABLE graph_builds RENAME TO graph_builds_legacy_023")
+    _canonical_schema_objects(conn, ("graph_builds",))
+    legacy_columns = _columns(conn, "graph_builds_legacy_023")
+
+    def legacy(column: str, fallback: str = "NULL") -> str:
+        return column if column in legacy_columns else fallback
+
+    conn.execute(
+        """INSERT INTO graph_builds(
+               id,graph_path,source_db,status,source_fingerprint,build_mode,
+               started_at,completed_at,validation_summary,error
+           )
+           SELECT id,graph_path,source_db,
+                  CASE WHEN status IN ('building','validated','active','previous','failed')
+                       THEN status ELSE 'failed' END,
+                  COALESCE(source_fingerprint,'legacy-unknown'),'full',
+                  started_at,completed_at,validation_summary,error
+           FROM graph_builds_legacy_023"""
+    )
+    conn.execute("DROP TABLE graph_builds_legacy_023")
+
+
+def _seed_baseline_catalog_build(conn: sqlite3.Connection) -> None:
+    if (
+        conn.execute(
+            "SELECT 1 FROM catalog_builds WHERE status='active' LIMIT 1"
+        ).fetchone()
+        is not None
+    ):
+        return
+    from catalog.content_fingerprint import logical_content_fingerprint
+    from catalog.delta import DELTA_CONTRACT_VERSION
+
+    revisions = {
+        str(row[0]): row[1]
+        for row in conn.execute(
+            "SELECT repo_key,indexed_commit_sha FROM repos ORDER BY repo_key"
+        )
+    }
+    database_path = next(
+        (
+            str(row[2])
+            for row in conn.execute("PRAGMA database_list")
+            if row[1] == "main"
+        ),
+        "",
+    )
+    fingerprint = logical_content_fingerprint(conn)
+    conn.execute(
+        """INSERT INTO catalog_builds(
+               build_token,catalog_path,requested_mode,effective_mode,status,
+               source_revisions_json,delta_contract_version,content_fingerprint,
+               completed_at,validation_summary
+           ) VALUES (?,?, 'full','full','active',?,?,?,CURRENT_TIMESTAMP,?)""",
+        (
+            str(uuid.uuid4()),
+            database_path or ":memory:",
+            json.dumps(revisions, sort_keys=True, separators=(",", ":")),
+            DELTA_CONTRACT_VERSION,
+            fingerprint,
+            json.dumps({"baseline": True}, separators=(",", ":")),
+        ),
+    )
+
+
+def _apply_delta_refresh_migration(conn: sqlite3.Connection) -> None:
+    _canonical_schema_objects(
+        conn, ("catalog_builds", "repo_change_sets", "repo_changed_paths")
+    )
+    _add_columns(
+        conn,
+        "repo_index_stages",
+        (
+            "execution_mode TEXT CHECK(execution_mode IN ('full','delta','skipped'))",
+            "invalidation_reason TEXT",
+            "affected_record_count INTEGER CHECK(affected_record_count IS NULL OR affected_record_count >= 0)",
+        ),
+    )
+    _populate_symbol_stable_keys(conn)
+    _rebuild_graph_builds_023(conn)
+    _seed_baseline_catalog_build(conn)
+
+
+def _apply_refresh_contracts_migration(conn: sqlite3.Connection) -> None:
+    """Widen failed-build modes while preserving generation and child IDs."""
+
+    required = {
+        "id",
+        "build_token",
+        "parent_catalog_build_id",
+        "catalog_path",
+        "requested_mode",
+        "effective_mode",
+        "status",
+        "source_revisions_json",
+        "manifest_hash",
+        "builder_plan_hash",
+        "delta_contract_version",
+        "content_fingerprint",
+        "started_at",
+        "completed_at",
+        "validation_summary",
+        "diagnostic_error",
+    }
+    present = _columns(conn, "catalog_builds")
+    missing = sorted(required - present)
+    if missing:
+        raise RuntimeError(
+            "refresh metadata unavailable: catalog_builds is missing core columns: "
+            + ", ".join(missing)
+        )
+
+    conn.execute("DROP INDEX IF EXISTS uq_catalog_builds_active")
+    conn.execute("DROP INDEX IF EXISTS idx_catalog_builds_status_started")
+    prior_legacy = int(conn.execute("PRAGMA legacy_alter_table").fetchone()[0])
+    conn.execute("PRAGMA legacy_alter_table=ON")
+    try:
+        conn.execute("ALTER TABLE catalog_builds RENAME TO catalog_builds_legacy_024")
+        _canonical_schema_objects(conn, ("catalog_builds",))
+        columns = ",".join(
+            row[1] for row in conn.execute("PRAGMA table_info(catalog_builds)")
+        )
+        conn.execute(
+            f"INSERT INTO catalog_builds({columns}) "
+            f"SELECT {columns} FROM catalog_builds_legacy_024"
+        )
+        from catalog.delta import DELTA_CONTRACT_VERSION
+
+        conn.execute(
+            """UPDATE catalog_builds SET delta_contract_version=?
+               WHERE status='active' AND manifest_hash IS NULL
+                 AND builder_plan_hash IS NULL
+                 AND validation_summary='{"baseline":true}'""",
+            (DELTA_CONTRACT_VERSION,),
+        )
+        conn.execute("DROP TABLE catalog_builds_legacy_024")
+    finally:
+        conn.execute(f"PRAGMA legacy_alter_table={prior_legacy}")
+
+
+def apply_delta_refresh_migration(conn: sqlite3.Connection) -> None:
+    """Apply refresh migrations 023 and 024 to a repository-scoped catalog."""
+
+    if conn.in_transaction:
+        raise RuntimeError(
+            "apply_delta_refresh_migration requires a connection without an open transaction"
+        )
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS schema_migrations ("
+            "name TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        )
+        applied = conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name=?", (DELTA_REFRESH_MIGRATION,)
+        ).fetchone()
+        if applied is None:
+            _apply_delta_refresh_migration(conn)
+            conn.execute(
+                "INSERT INTO schema_migrations(name) VALUES (?)",
+                (DELTA_REFRESH_MIGRATION,),
+            )
+        contracts_applied = conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name=?",
+            (REFRESH_CONTRACTS_MIGRATION,),
+        ).fetchone()
+        if contracts_applied is None:
+            _apply_refresh_contracts_migration(conn)
+            conn.execute(
+                "INSERT INTO schema_migrations(name) VALUES (?)",
+                (REFRESH_CONTRACTS_MIGRATION,),
+            )
+        violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise RuntimeError(
+                f"foreign key check failed before {DELTA_REFRESH_MIGRATION} commit: {violations[:3]}"
+            )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
 
 
 def apply_multi_repo_migration(
@@ -1089,9 +1407,7 @@ def apply_multi_repo_migration(
         legacy = conn.execute(
             "SELECT id FROM repos WHERE repo_key = ?", (LEGACY_REPO_KEY,)
         ).fetchone()
-        _ensure_entity_occurrences(
-            conn, int(legacy[0]) if legacy is not None else None
-        )
+        _ensure_entity_occurrences(conn, int(legacy[0]) if legacy is not None else None)
         semantics_applied = conn.execute(
             "SELECT 1 FROM schema_migrations WHERE name = ?",
             (ENTITY_SEMANTICS_MIGRATION,),
@@ -1107,10 +1423,31 @@ def apply_multi_repo_migration(
             (ENTITY_SEMANTICS_REPO_SCOPE_MIGRATION,),
         ).fetchone()
         if semantics_scope_applied is None:
-            _apply_entity_semantics_repo_scope_migration(conn)
+            if not _entity_semantics_repo_scope_is_current(conn):
+                _apply_entity_semantics_repo_scope_migration(conn)
             conn.execute(
                 "INSERT INTO schema_migrations(name) VALUES (?)",
                 (ENTITY_SEMANTICS_REPO_SCOPE_MIGRATION,),
+            )
+        delta_applied = conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name = ?",
+            (DELTA_REFRESH_MIGRATION,),
+        ).fetchone()
+        if delta_applied is None:
+            _apply_delta_refresh_migration(conn)
+            conn.execute(
+                "INSERT INTO schema_migrations(name) VALUES (?)",
+                (DELTA_REFRESH_MIGRATION,),
+            )
+        contracts_applied = conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name = ?",
+            (REFRESH_CONTRACTS_MIGRATION,),
+        ).fetchone()
+        if contracts_applied is None:
+            _apply_refresh_contracts_migration(conn)
+            conn.execute(
+                "INSERT INTO schema_migrations(name) VALUES (?)",
+                (REFRESH_CONTRACTS_MIGRATION,),
             )
         # FK enforcement is necessarily off while legacy parent tables are
         # rebuilt, but foreign_key_check still validates the candidate before

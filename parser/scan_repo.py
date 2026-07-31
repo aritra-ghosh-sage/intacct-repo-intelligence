@@ -1,14 +1,35 @@
 # parser/scan_repo.py
 
-import os
 import hashlib
-from datetime import datetime, timezone
+import os
+import subprocess
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
+
 from tqdm import tqdm
 
-from config import INCLUDE_EXTENSIONS, EXCLUDE_DIRS
 from catalog.db import get_connection
+from catalog.delta import ChangedPath, ChangeType, path_is_in_scan_scope
+from config import EXCLUDE_DIRS, INCLUDE_EXTENSIONS
 from parser.repo_context import RepoContext, require_repo_scoped_files, resolve_repo
+
+
+@dataclass(frozen=True)
+class DeletedFile:
+    file_id: int
+    path: str
+    sha1: str | None
+
+
+@dataclass(frozen=True)
+class ScanDeltaResult:
+    affected_file_ids: tuple[int, ...]
+    deleted_files: tuple[DeletedFile, ...]
+
+    @property
+    def affected_count(self) -> int:
+        return len(self.affected_file_ids) + len(self.deleted_files)
 
 
 def detect_language(path: str) -> str:
@@ -83,13 +104,132 @@ def _purge_deleted_files(conn, repo: RepoContext, seen_paths: set[str]) -> int:
     return len(missing)
 
 
+def _raw_sha1_for_git_blob(root: Path, blob_sha: str | None) -> str | None:
+    if not blob_sha:
+        return None
+    result = subprocess.run(
+        ["git", "-C", str(root), "cat-file", "blob", blob_sha],
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode:
+        raise RuntimeError(f"expected Git blob is unavailable: {blob_sha}")
+    return hashlib.sha1(result.stdout).hexdigest()
+
+
+def apply_changed_paths(
+    changed_paths: list[ChangedPath] | tuple[ChangedPath, ...],
+    *,
+    repo_key: str | None = None,
+    db_path: str | None = None,
+) -> ScanDeltaResult:
+    """Apply an explicit committed path delta without walking the repository."""
+
+    conn = get_connection(db_path)
+    conn.execute("PRAGMA foreign_keys = ON")
+    require_repo_scoped_files(conn)
+    repo = resolve_repo(conn, repo_key)
+    started = datetime.now(UTC).isoformat()
+    affected_ids: list[int] = []
+    deleted: list[DeletedFile] = []
+
+    def delete_path(path: str, expected_blob_sha: str | None) -> None:
+        row = conn.execute(
+            "SELECT id,path,sha1 FROM files WHERE repo_id=? AND path=?",
+            (repo.id, path),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError(f"delta delete has no owned catalog file: {path}")
+        expected_raw = _raw_sha1_for_git_blob(repo.local_root, expected_blob_sha)
+        if expected_raw is not None and row["sha1"] != expected_raw:
+            raise RuntimeError(
+                f"delta delete hash mismatch for {path}: catalog={row['sha1']} expected={expected_raw}"
+            )
+        file_id = int(row["id"])
+        deleted.append(DeletedFile(file_id, str(row["path"]), row["sha1"]))
+        # Ownership is the source file.  Explicit cleanup remains necessary for
+        # catalogs opened by older callers without FK enforcement.
+        conn.execute("DELETE FROM relationships WHERE file_id=?", (file_id,))
+        conn.execute("DELETE FROM symbols WHERE file_id=?", (file_id,))
+        conn.execute("DELETE FROM files WHERE id=?", (file_id,))
+
+    def upsert_path(path: str, expected_old_blob_sha: str | None) -> None:
+        if not path_is_in_scan_scope(path):
+            raise RuntimeError(f"delta add/update is outside scan scope: {path}")
+        absolute = repo.local_root / path
+        if not absolute.is_file():
+            raise RuntimeError(f"delta source path does not exist: {absolute}")
+        row = conn.execute(
+            "SELECT id,sha1 FROM files WHERE repo_id=? AND path=?", (repo.id, path)
+        ).fetchone()
+        expected_raw = _raw_sha1_for_git_blob(repo.local_root, expected_old_blob_sha)
+        if row is not None and expected_raw is not None and row["sha1"] != expected_raw:
+            raise RuntimeError(
+                f"delta update hash mismatch for {path}: catalog={row['sha1']} expected={expected_raw}"
+            )
+        stat = absolute.stat()
+        sha1 = compute_sha1(str(absolute))
+        modified = datetime.fromtimestamp(stat.st_mtime, tz=UTC).isoformat()
+        if row is None:
+            cursor = conn.execute(
+                """INSERT INTO files(
+                       repo_id,path,language,size_bytes,sha1,last_modified,last_indexed
+                   ) VALUES (?,?,?,?,?,?,?)""",
+                (
+                    repo.id,
+                    path,
+                    detect_language(path),
+                    stat.st_size,
+                    sha1,
+                    modified,
+                    started,
+                ),
+            )
+            affected_ids.append(int(cursor.lastrowid))
+        else:
+            conn.execute(
+                """UPDATE files SET language=?,size_bytes=?,sha1=?,last_modified=?,
+                       last_indexed=? WHERE id=?""",
+                (
+                    detect_language(path),
+                    stat.st_size,
+                    sha1,
+                    modified,
+                    started,
+                    int(row["id"]),
+                ),
+            )
+            affected_ids.append(int(row["id"]))
+
+    try:
+        for change in changed_paths:
+            if change.change_type == ChangeType.RENAMED:
+                delete_path(str(change.old_path), change.old_blob_sha)
+                upsert_path(str(change.new_path), None)
+            elif change.change_type == ChangeType.DELETED:
+                delete_path(str(change.old_path), change.old_blob_sha)
+            elif change.change_type == ChangeType.ADDED:
+                upsert_path(str(change.new_path), None)
+            elif change.change_type == ChangeType.MODIFIED:
+                upsert_path(str(change.new_path), change.old_blob_sha)
+            else:
+                raise RuntimeError(f"unsupported change type: {change.change_type}")
+        conn.commit()
+        return ScanDeltaResult(tuple(sorted(set(affected_ids))), tuple(deleted))
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def scan(repo_key: str | None = None, db_path: str | None = None):
     conn = get_connection(db_path)
     cur = conn.cursor()
     require_repo_scoped_files(conn)
     repo = resolve_repo(conn, repo_key)
 
-    started = datetime.now(timezone.utc).isoformat()
+    started = datetime.now(UTC).isoformat()
     files_scanned = 0
     files_added = 0
     files_updated = 0
@@ -107,7 +247,7 @@ def scan(repo_key: str | None = None, db_path: str | None = None):
             seen_paths.add(rel_path)
             size = os.path.getsize(filepath)
             mtime = datetime.fromtimestamp(
-                os.path.getmtime(filepath), tz=timezone.utc
+                os.path.getmtime(filepath), tz=UTC
             ).isoformat()
 
             # Fetch existing row

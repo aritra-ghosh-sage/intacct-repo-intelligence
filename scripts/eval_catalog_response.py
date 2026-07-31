@@ -94,7 +94,10 @@ class CaseScore:
         faithfulness = self.deepeval.get("faithfulness", {}).get("score")
         relevance = self.deepeval.get("relevance", {}).get("score")
         hallucination = self.deepeval.get("hallucination", {}).get("score")
-        if not all(isinstance(value, (int, float)) for value in (faithfulness, relevance, hallucination)):
+        if not all(
+            isinstance(value, (int, float))
+            for value in (faithfulness, relevance, hallucination)
+        ):
             return None
         return round((faithfulness + relevance + (1 - hallucination)) / 3, 3)
 
@@ -111,7 +114,11 @@ class CaseScore:
             3,
         )
         semantic = self.semantic_score
-        return round(0.7 * deterministic + 0.3 * semantic, 3) if semantic is not None else deterministic
+        return (
+            round(0.7 * deterministic + 0.3 * semantic, 3)
+            if semantic is not None
+            else deterministic
+        )
 
     @property
     def verdict(self) -> str:
@@ -235,20 +242,32 @@ def _needs_row_examples(case: dict[str, Any]) -> bool:
     if case.get("expected_behavior") not in {"lookup", "hard_lookup"}:
         return False
     text = _case_text(case)
-    return any(keyword in text for keyword in ("list", "match", "matches", "path", "paths", "strongest", "top"))
+    return any(
+        keyword in text
+        for keyword in ("list", "match", "matches", "path", "paths", "strongest", "top")
+    )
 
 
 def _primary_row_terms(payload: dict[str, Any]) -> list[str]:
     data = payload.get("data", {})
     if data.get("matches"):
         first = data["matches"][0]
-        return [str(first.get("path", "")).lower(), str(first.get("language", "")).lower()]
+        return [
+            str(first.get("path", "")).lower(),
+            str(first.get("language", "")).lower(),
+        ]
     if data.get("mapped_symbols"):
         first = data["mapped_symbols"][0]
-        return [str(first.get("name", "")).lower(), str(first.get("mapping_type", "")).lower()]
+        return [
+            str(first.get("name", "")).lower(),
+            str(first.get("mapping_type", "")).lower(),
+        ]
     if data.get("endpoint_coverage"):
         first = data["endpoint_coverage"][0]
-        return [str(first.get("path", "")).lower(), str(first.get("coverage", "")).lower()]
+        return [
+            str(first.get("path", "")).lower(),
+            str(first.get("coverage", "")).lower(),
+        ]
     if data.get("directories"):
         first = data["directories"][0]
         return [str(first.get("top_dir", "")).lower()]
@@ -325,7 +344,10 @@ def _contains_subset(actual: Any, expected: Any) -> bool:
     if isinstance(expected, list):
         if not isinstance(actual, list) or len(actual) < len(expected):
             return False
-        return all(any(_contains_subset(candidate, item) for candidate in actual) for item in expected)
+        return all(
+            any(_contains_subset(candidate, item) for candidate in actual)
+            for item in expected
+        )
     return actual == expected
 
 
@@ -359,7 +381,16 @@ def score_tool_path(
         return 1.0, [], summarize_trace(trace, case) if trace is not None else None
     if trace is None:
         if require_trace:
-            return 0.0, ["missing_trace"], {"required_tool": required_tool, "required_tool_present": False, "tool_count": 0, "tool_names": []}
+            return (
+                0.0,
+                ["missing_trace"],
+                {
+                    "required_tool": required_tool,
+                    "required_tool_present": False,
+                    "tool_count": 0,
+                    "tool_names": [],
+                },
+            )
         return 1.0, [], None
 
     summary = summarize_trace(trace, case)
@@ -423,7 +454,13 @@ def score_grounding(answer: str, case: dict[str, Any]) -> tuple[float, list[str]
         return 1.0, []
     terms = required_evidence_terms(case)
     answer_l = answer.lower()
-    matched = sum(_value_mentioned(answer_l, term) if term.replace(".", "", 1).isdigit() else term in answer_l for term in terms if term)
+    matched = sum(
+        _value_mentioned(answer_l, term)
+        if term.replace(".", "", 1).isdigit()
+        else term in answer_l
+        for term in terms
+        if term
+    )
     score = 1.0 if not terms else matched / len(terms)
     notes = ["low_signal_overlap"] if score < 0.5 else []
     return round(score, 3), notes
@@ -444,10 +481,16 @@ def score_completeness(answer: str, case: dict[str, Any]) -> tuple[float, list[s
         required_values.extend((term, 2) for term in _primary_row_terms(payload))
     if not required_values:
         return 1.0, []
-    hits = sum(weight for term, weight in required_values if _value_mentioned(answer_l, term))
+    hits = sum(
+        weight for term, weight in required_values if _value_mentioned(answer_l, term)
+    )
     score = hits / sum(weight for _, weight in required_values)
     notes = []
-    if any(not _value_mentioned(answer_l, term) for term, weight in required_values if weight > 1):
+    if any(
+        not _value_mentioned(answer_l, term)
+        for term, weight in required_values
+        if weight > 1
+    ):
         notes.append("missing_primary_signal")
     if score < 0.5:
         notes.append("missing_key_counts")
@@ -459,7 +502,11 @@ def score_uncertainty(answer: str, case: dict[str, Any]) -> tuple[float, list[st
     if case.get("expected_behavior") == "uncertainty":
         ok = any(term in answer_l for term in UNCERTAINTY_TERMS)
         return (1.0 if ok else 0.0), ([] if ok else ["uncertainty_not_explicit"])
-    return (0.8, ["unnecessary_uncertainty"]) if any(term in answer_l for term in UNCERTAINTY_TERMS) else (1.0, [])
+    return (
+        (0.8, ["unnecessary_uncertainty"])
+        if any(term in answer_l for term in UNCERTAINTY_TERMS)
+        else (1.0, [])
+    )
 
 
 def score_format(answer: str, case: dict[str, Any]) -> tuple[float, list[str]]:
@@ -483,9 +530,17 @@ def score_case(
     completeness, completeness_notes = score_completeness(answer, case)
     uncertainty, uncertainty_notes = score_uncertainty(answer, case)
     response_format, format_notes = score_format(answer, case)
-    tool_path, tool_path_notes, trace_summary = score_tool_path(case, trace, require_trace=require_trace)
+    tool_path, tool_path_notes, trace_summary = score_tool_path(
+        case, trace, require_trace=require_trace
+    )
     flags = hallucination_flags(answer, case["payload"])
-    notes = grounding_notes + completeness_notes + uncertainty_notes + format_notes + tool_path_notes
+    notes = (
+        grounding_notes
+        + completeness_notes
+        + uncertainty_notes
+        + format_notes
+        + tool_path_notes
+    )
     if flags:
         notes.append("hard_evidence_violation")
     return CaseScore(
@@ -517,9 +572,18 @@ def run_deepeval(case: dict[str, Any], answer: str) -> dict[str, Any] | None:
         expected_output=case.get("reference"),
     )
     metric_specs = (
-        ("hallucination", HallucinationMetric(threshold=0.15, async_mode=False, verbose_mode=False)),
-        ("relevance", AnswerRelevancyMetric(threshold=0.70, async_mode=False, verbose_mode=False)),
-        ("faithfulness", FaithfulnessMetric(threshold=0.85, async_mode=False, verbose_mode=False)),
+        (
+            "hallucination",
+            HallucinationMetric(threshold=0.15, async_mode=False, verbose_mode=False),
+        ),
+        (
+            "relevance",
+            AnswerRelevancyMetric(threshold=0.70, async_mode=False, verbose_mode=False),
+        ),
+        (
+            "faithfulness",
+            FaithfulnessMetric(threshold=0.85, async_mode=False, verbose_mode=False),
+        ),
     )
     scores: dict[str, Any] = {}
     try:
@@ -544,7 +608,9 @@ def _adapter_input(case: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def run_adapter(command: list[str], case: dict[str, Any], timeout: int) -> dict[str, Any]:
+def run_adapter(
+    command: list[str], case: dict[str, Any], timeout: int
+) -> dict[str, Any]:
     completed = subprocess.run(
         command,
         input=json.dumps(_adapter_input(case)),
@@ -554,13 +620,21 @@ def run_adapter(command: list[str], case: dict[str, Any], timeout: int) -> dict[
         check=False,
     )
     if completed.returncode:
-        raise RuntimeError(f"adapter failed for {case['case_id']}: {completed.stderr.strip()}")
+        raise RuntimeError(
+            f"adapter failed for {case['case_id']}: {completed.stderr.strip()}"
+        )
     try:
         output = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"adapter returned invalid JSON for {case['case_id']}") from exc
-    if output.get("case_id") != case["case_id"] or not isinstance(output.get("answer"), str):
-        raise RuntimeError(f"adapter response must contain matching case_id and string answer for {case['case_id']}")
+        raise RuntimeError(
+            f"adapter returned invalid JSON for {case['case_id']}"
+        ) from exc
+    if output.get("case_id") != case["case_id"] or not isinstance(
+        output.get("answer"), str
+    ):
+        raise RuntimeError(
+            f"adapter response must contain matching case_id and string answer for {case['case_id']}"
+        )
     return {
         "answer": output["answer"].strip(),
         "trace": output.get("trace"),
@@ -576,7 +650,9 @@ def load_recorded_runs(path: Path) -> dict[str, dict[str, Any]]:
         if record.get("case_id") in answers:
             raise ValueError(f"duplicate recorded answer: {record['case_id']}")
         if not isinstance(record.get("answer"), str):
-            raise ValueError(f"recorded answer must be a string for {record.get('case_id')}")
+            raise ValueError(
+                f"recorded answer must be a string for {record.get('case_id')}"
+            )
         answers[record["case_id"]] = {
             "answer": record["answer"].strip(),
             "trace": record.get("trace"),
@@ -591,9 +667,15 @@ def main() -> int:
     parser.add_argument("--actual-output")
     parser.add_argument("--actual-output-file")
     parser.add_argument("--responses-jsonl", type=Path)
-    parser.add_argument("--adapter-command-json", help="JSON argv for a per-case response adapter.")
+    parser.add_argument(
+        "--adapter-command-json", help="JSON argv for a per-case response adapter."
+    )
     parser.add_argument("--adapter-timeout", type=int, default=120)
-    parser.add_argument("--require-trace", action="store_true", help="Require a trace for cases that declare a required tool.")
+    parser.add_argument(
+        "--require-trace",
+        action="store_true",
+        help="Require a trace for cases that declare a required tool.",
+    )
     parser.add_argument("--run-deepeval", action="store_true")
     parser.add_argument("--require-deepeval", action="store_true")
     parser.add_argument("--json", action="store_true")
@@ -601,7 +683,15 @@ def main() -> int:
 
     if args.require_deepeval and not args.run_deepeval:
         parser.error("--require-deepeval requires --run-deepeval")
-    sources = sum(bool(value) for value in (args.actual_output, args.actual_output_file, args.responses_jsonl, args.adapter_command_json))
+    sources = sum(
+        bool(value)
+        for value in (
+            args.actual_output,
+            args.actual_output_file,
+            args.responses_jsonl,
+            args.adapter_command_json,
+        )
+    )
     if sources != 1:
         parser.error("choose exactly one answer source")
     cases = load_cases(args.cases)
@@ -613,15 +703,26 @@ def main() -> int:
 
     if args.adapter_command_json:
         command = json.loads(args.adapter_command_json)
-        if not isinstance(command, list) or not all(isinstance(item, str) for item in command):
+        if not isinstance(command, list) or not all(
+            isinstance(item, str) for item in command
+        ):
             parser.error("--adapter-command-json must be a JSON string array")
-        answers = {case["case_id"]: run_adapter(command, case, args.adapter_timeout) for case in cases}
+        answers = {
+            case["case_id"]: run_adapter(command, case, args.adapter_timeout)
+            for case in cases
+        }
     elif args.responses_jsonl:
         answers = load_recorded_runs(args.responses_jsonl)
     else:
-        answer = args.actual_output if args.actual_output is not None else Path(args.actual_output_file).read_text()
+        answer = (
+            args.actual_output
+            if args.actual_output is not None
+            else Path(args.actual_output_file).read_text()
+        )
         if len(cases) != 1:
-            parser.error("--actual-output and --actual-output-file require exactly one case")
+            parser.error(
+                "--actual-output and --actual-output-file require exactly one case"
+            )
         answers = {cases[0]["case_id"]: {"answer": answer.strip(), "trace": None}}
 
     results: list[CaseScore] = []
@@ -639,22 +740,44 @@ def main() -> int:
             result.deepeval = run_deepeval(case, run["answer"])
         results.append(result)
 
-    deepeval_skipped = any(result.deepeval and result.deepeval.get("skipped") for result in results)
-    if args.require_deepeval and (DEEPEVAL_IMPORT_ERROR is not None or deepeval_skipped):
-        raise SystemExit("Deepeval was required but could not produce metrics for every case")
+    deepeval_skipped = any(
+        result.deepeval and result.deepeval.get("skipped") for result in results
+    )
+    if args.require_deepeval and (
+        DEEPEVAL_IMPORT_ERROR is not None or deepeval_skipped
+    ):
+        raise SystemExit(
+            "Deepeval was required but could not produce metrics for every case"
+        )
     summary = {
         "case_count": len(results),
         "pass_count": sum(result.verdict == "pass" for result in results),
         "hard_fail_count": sum(result.verdict == "hard_fail" for result in results),
-        "quality_fail_count": sum(result.verdict == "quality_fail" for result in results),
-        "overall_mean": round(sum(result.overall for result in results) / len(results), 3),
-        "grounding_mean": round(sum(result.grounding_score for result in results) / len(results), 3),
-        "completeness_mean": round(sum(result.completeness_score for result in results) / len(results), 3),
-        "uncertainty_mean": round(sum(result.uncertainty_score for result in results) / len(results), 3),
-        "format_mean": round(sum(result.format_score for result in results) / len(results), 3),
-        "tool_path_mean": round(sum(result.tool_path_score for result in results) / len(results), 3),
+        "quality_fail_count": sum(
+            result.verdict == "quality_fail" for result in results
+        ),
+        "overall_mean": round(
+            sum(result.overall for result in results) / len(results), 3
+        ),
+        "grounding_mean": round(
+            sum(result.grounding_score for result in results) / len(results), 3
+        ),
+        "completeness_mean": round(
+            sum(result.completeness_score for result in results) / len(results), 3
+        ),
+        "uncertainty_mean": round(
+            sum(result.uncertainty_score for result in results) / len(results), 3
+        ),
+        "format_mean": round(
+            sum(result.format_score for result in results) / len(results), 3
+        ),
+        "tool_path_mean": round(
+            sum(result.tool_path_score for result in results) / len(results), 3
+        ),
         "deepeval_available": DEEPEVAL_IMPORT_ERROR is None,
-        "deepeval_error": None if DEEPEVAL_IMPORT_ERROR is None else str(DEEPEVAL_IMPORT_ERROR),
+        "deepeval_error": None
+        if DEEPEVAL_IMPORT_ERROR is None
+        else str(DEEPEVAL_IMPORT_ERROR),
     }
     report = {
         "summary": summary,
@@ -672,7 +795,9 @@ def main() -> int:
     else:
         print(json.dumps(summary, indent=2))
         for result in results:
-            print(f"- {result.verdict.upper()} {result.case_id}: {result.overall} ({', '.join(result.notes) or 'none'})")
+            print(
+                f"- {result.verdict.upper()} {result.case_id}: {result.overall} ({', '.join(result.notes) or 'none'})"
+            )
     return 0
 
 

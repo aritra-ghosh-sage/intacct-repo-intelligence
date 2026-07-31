@@ -8,7 +8,6 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-
 DEFAULT_DB = "catalog/catalog.db"
 DEFAULT_REPORT = "validation/phase2d1_report.md"
 

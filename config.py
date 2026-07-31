@@ -1,13 +1,11 @@
 # config.py
-from pathlib import Path
 import os
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
 REPO_PATH = os.environ.get("REPO_PATH", os.path.expanduser("~/projects/main"))
-CATALOG_DB = os.environ.get(
-    "CATALOG_DB", str(PROJECT_ROOT / "catalog" / "catalog.db")
-)
+CATALOG_DB = os.environ.get("CATALOG_DB", str(PROJECT_ROOT / "catalog" / "catalog.db"))
 GRAPH_DB = os.environ.get("GRAPH_DB", str(PROJECT_ROOT / "catalog" / "graph.lbug"))
 
 INCLUDE_EXTENSIONS = {
@@ -32,6 +30,8 @@ INCLUDE_EXTENSIONS = {
     ".xsl",
     ".xslt",
     ".rpt",
+    ".feature",
+    ".properties",
 }
 
 EXCLUDE_DIRS = {

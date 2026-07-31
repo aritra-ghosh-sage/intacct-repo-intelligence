@@ -5,10 +5,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from catalog.rest_coverage import coverage_summary
 from intacct_mcp.server import Catalog
 from scripts.query_rest import _coverage_rows
-from catalog.rest_coverage import coverage_summary
-
 
 ROOT = Path(__file__).resolve().parents[1]
 

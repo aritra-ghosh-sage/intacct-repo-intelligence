@@ -46,12 +46,12 @@ def _reject_unknown_keys(
     unknown = sorted(str(key) for key in mapping if key not in allowed)
     if unknown:
         noun = "field" if len(unknown) == 1 else "fields"
-        raise RepositoryError(f"{context} contains unknown {noun}: {', '.join(unknown)}")
+        raise RepositoryError(
+            f"{context} contains unknown {noun}: {', '.join(unknown)}"
+        )
 
 
-def _required_non_empty_string(
-    entry: dict[str, Any], field: str, context: str
-) -> str:
+def _required_non_empty_string(entry: dict[str, Any], field: str, context: str) -> str:
     if field not in entry:
         raise RepositoryError(f"{context} is missing required field: {field}")
     value = entry[field]
@@ -62,9 +62,7 @@ def _required_non_empty_string(
     return normalized
 
 
-def _normalize_optional_string(
-    entry: dict[str, Any], field: str, context: str
-) -> None:
+def _normalize_optional_string(entry: dict[str, Any], field: str, context: str) -> None:
     if field not in entry or entry[field] is None:
         return
     value = entry[field]
@@ -224,9 +222,7 @@ def _normalize_dependency_list(
     return dependencies
 
 
-def _validate_dependency_cycles(
-    dependencies: dict[str, list[str] | None]
-) -> None:
+def _validate_dependency_cycles(dependencies: dict[str, list[str] | None]) -> None:
     permanent: set[str] = set()
     visiting: list[str] = []
     visiting_set: set[str] = set()

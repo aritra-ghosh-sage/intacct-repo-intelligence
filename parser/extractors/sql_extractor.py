@@ -1,6 +1,7 @@
 # parser/extractors/sql_extractor.py
 
 import re
+
 from .base import Symbol
 
 _CREATE_TABLE = re.compile(

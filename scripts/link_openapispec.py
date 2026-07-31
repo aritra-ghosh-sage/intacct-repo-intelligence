@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import sys
-import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import click
@@ -451,7 +451,7 @@ def _reconcile_with_entity_definitions(
     repo_id: int,
 ) -> list[dict]:
     diagnostics: list[dict] = []
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     rows = _read_entity_definitions_jsonl(jsonl_path)
 
     by_mapped_to_jsonl: dict[str, dict] = {}
@@ -565,7 +565,7 @@ def _link_openapispec(
 
     stats = LinkStats()
     missing_records: list[dict] = []
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     entities_by_name = _get_entities_by_name(conn, repo_id)
     entities_across_modules = _get_entities_across_modules(entities_by_name)
     valid_ent_stems = _load_valid_ent_stems(repo_root)

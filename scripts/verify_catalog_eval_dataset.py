@@ -38,9 +38,22 @@ def query_command(case: dict[str, Any], db: Path) -> list[str]:
     if command in {"stats", "toplevel"}:
         return [sys.executable, "scripts/query_catalog.py", command, "--json"]
     if command == "find":
-        return [sys.executable, "scripts/query_catalog.py", "find", args["keyword"], "--limit", str(args["limit"]), "--json"]
+        return [
+            sys.executable,
+            "scripts/query_catalog.py",
+            "find",
+            args["keyword"],
+            "--limit",
+            str(args["limit"]),
+            "--json",
+        ]
     if command == "symbols":
-        result = [sys.executable, "scripts/query_catalog.py", "symbols", args["keyword"]]
+        result = [
+            sys.executable,
+            "scripts/query_catalog.py",
+            "symbols",
+            args["keyword"],
+        ]
         if args.get("kind"):
             result.extend(["--kind", args["kind"]])
         return result + ["--limit", str(args["limit"]), "--json"]
@@ -83,17 +96,31 @@ def run_query(case: dict[str, Any], db: Path) -> dict[str, Any]:
         env=_query_env(db),
     )
     if completed.returncode:
-        raise RuntimeError(f"query failed for {case['case_id']}: {completed.stderr.strip()}")
+        raise RuntimeError(
+            f"query failed for {case['case_id']}: {completed.stderr.strip()}"
+        )
     return json.loads(completed.stdout)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--cases", type=Path, default=ROOT / "evals/catalog_eval_cases.jsonl")
+    parser.add_argument(
+        "--cases", type=Path, default=ROOT / "evals/catalog_eval_cases.jsonl"
+    )
     parser.add_argument("--db", type=Path, default=ROOT / "catalog/catalog.db")
-    parser.add_argument("--manifest", type=Path, default=ROOT / "evals/catalog_eval_provenance.jsonl")
-    parser.add_argument("--verify", action="store_true", help="Fail when a live query differs from a stored non-synthetic payload.")
-    parser.add_argument("--refresh-output", type=Path, help="Write a refreshed JSONL dataset with live payloads regenerated.")
+    parser.add_argument(
+        "--manifest", type=Path, default=ROOT / "evals/catalog_eval_provenance.jsonl"
+    )
+    parser.add_argument(
+        "--verify",
+        action="store_true",
+        help="Fail when a live query differs from a stored non-synthetic payload.",
+    )
+    parser.add_argument(
+        "--refresh-output",
+        type=Path,
+        help="Write a refreshed JSONL dataset with live payloads regenerated.",
+    )
     args = parser.parse_args()
 
     db_hash = hashlib.sha256(args.db.read_bytes()).hexdigest()
@@ -129,7 +156,9 @@ def main() -> int:
     args.manifest.write_text("".join(canonical(record) + "\n" for record in records))
     if args.refresh_output:
         args.refresh_output.parent.mkdir(parents=True, exist_ok=True)
-        args.refresh_output.write_text("".join(canonical(case) + "\n" for case in refreshed_cases))
+        args.refresh_output.write_text(
+            "".join(canonical(case) + "\n" for case in refreshed_cases)
+        )
     if failures:
         print(f"Payload drift detected: {', '.join(failures)}", file=sys.stderr)
         return 1

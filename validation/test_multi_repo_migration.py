@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from catalog.delta import DELTA_CONTRACT_VERSION
 from catalog.migrations import apply_multi_repo_migration
 from catalog.repositories import (
     RepositoryError,
@@ -70,18 +71,15 @@ class MultiRepoMigrationTests(unittest.TestCase):
     def test_manifest_rejects_missing_or_invalid_required_fields(self) -> None:
         entries = (
             (
-                "    local_root: /tmp/service\n"
-                "    tracked_branch: main\n",
+                "    local_root: /tmp/service\n    tracked_branch: main\n",
                 "missing required field: repo_key",
             ),
             (
-                "    repo_key: service\n"
-                "    tracked_branch: main\n",
+                "    repo_key: service\n    tracked_branch: main\n",
                 "missing required field: local_root",
             ),
             (
-                "    repo_key: service\n"
-                "    local_root: /tmp/service\n",
+                "    repo_key: service\n    local_root: /tmp/service\n",
                 "missing required field: tracked_branch",
             ),
             (
@@ -335,6 +333,42 @@ class MultiRepoMigrationTests(unittest.TestCase):
             ).fetchone()[0],
             1,
         )
+        self.assertEqual(
+            conn.execute(
+                "SELECT COUNT(*) FROM schema_migrations WHERE name='023_delta_refresh'"
+            ).fetchone()[0],
+            1,
+        )
+        self.assertEqual(
+            conn.execute(
+                "SELECT COUNT(*) FROM schema_migrations WHERE name='024_refresh_contracts'"
+            ).fetchone()[0],
+            1,
+        )
+        conn.execute(
+            """INSERT INTO catalog_builds(
+                   build_token,catalog_path,requested_mode,effective_mode,status,
+                   source_revisions_json,delta_contract_version,diagnostic_error
+               ) VALUES ('failed-plan',':memory:','delta','not_started','failed','{}',1,'preflight')"""
+        )
+        self.assertEqual(
+            conn.execute(
+                "SELECT effective_mode FROM catalog_builds WHERE build_token='failed-plan'"
+            ).fetchone()[0],
+            "not_started",
+        )
+        baseline = conn.execute(
+            "SELECT status,length(content_fingerprint),delta_contract_version,"
+            "manifest_hash,builder_plan_hash FROM catalog_builds WHERE status='active'"
+        ).fetchone()
+        self.assertEqual(
+            tuple(baseline),
+            ("active", 64, DELTA_CONTRACT_VERSION, None, None),
+        )
+        stable = conn.execute("SELECT stable_key FROM symbols WHERE id=11").fetchone()[
+            0
+        ]
+        self.assertEqual(len(stable), 64)
         self.assertIsNotNone(
             conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' "
@@ -347,12 +381,92 @@ class MultiRepoMigrationTests(unittest.TestCase):
         composite_groups: dict[int, set[str]] = {}
         for row in relationship_fks:
             composite_groups.setdefault(int(row[0]), set()).add(str(row[3]))
-        self.assertIn(
-            {"source_occurrence_id", "repo_id"}, composite_groups.values()
+        self.assertIn({"source_occurrence_id", "repo_id"}, composite_groups.values())
+        self.assertIn({"target_occurrence_id", "repo_id"}, composite_groups.values())
+
+    def test_delta_migration_preserves_graph_build_ids_and_installs_constraints(
+        self,
+    ) -> None:
+        conn = self.legacy_connection()
+        conn.executescript(
+            """CREATE TABLE graph_builds(
+                   id INTEGER PRIMARY KEY AUTOINCREMENT,graph_path TEXT NOT NULL,
+                   source_db TEXT NOT NULL,status TEXT NOT NULL,
+                   source_fingerprint TEXT NOT NULL,
+                   started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                   completed_at TEXT,validation_summary TEXT,error TEXT);
+               INSERT INTO graph_builds(id,graph_path,source_db,status,source_fingerprint)
+               VALUES (17,'graph.lbug','catalog.db','active','legacy');"""
         )
-        self.assertIn(
-            {"target_occurrence_id", "repo_id"}, composite_groups.values()
+        conn.commit()
+        apply_multi_repo_migration(conn, local_root="/tmp/main")
+        row = conn.execute(
+            "SELECT id,catalog_build_id,projection_version FROM graph_builds"
+        ).fetchone()
+        self.assertEqual(tuple(row), (17, None, None))
+        stage_columns = {
+            item[1] for item in conn.execute("PRAGMA table_info(repo_index_stages)")
+        }
+        self.assertTrue(
+            {"execution_mode", "invalidation_reason", "affected_record_count"}.issubset(
+                stage_columns
+            )
         )
+        with self.assertRaises(sqlite3.IntegrityError):
+            conn.execute(
+                """INSERT INTO repo_changed_paths(change_set_id,change_type,old_path,new_path)
+                   VALUES (999,'added','old.py','new.py')"""
+            )
+        conn.rollback()
+        self.assertEqual(conn.execute("PRAGMA foreign_key_check").fetchall(), [])
+
+    def test_refresh_contract_migration_preserves_generation_links(self) -> None:
+        conn = self.legacy_connection()
+        apply_multi_repo_migration(conn, local_root="/tmp/main")
+        repo_id = conn.execute(
+            "SELECT id FROM repos WHERE repo_key='ia-main'"
+        ).fetchone()[0]
+        build_id = conn.execute(
+            "SELECT id FROM catalog_builds WHERE status='active'"
+        ).fetchone()[0]
+        run_id = conn.execute(
+            """INSERT INTO repo_index_runs(
+                   repo_id,tracked_branch,commit_sha,status
+               ) VALUES (?,'main','base','active')""",
+            (repo_id,),
+        ).lastrowid
+        change_id = conn.execute(
+            """INSERT INTO repo_change_sets(
+                   catalog_build_id,repo_index_run_id,repo_id,base_commit_sha,
+                   target_commit_sha,requested_mode,effective_mode,status
+               ) VALUES (?,?,?,'base','base','auto','noop','succeeded')""",
+            (build_id, run_id, repo_id),
+        ).lastrowid
+        graph_id = conn.execute(
+            """INSERT INTO graph_builds(
+                   graph_path,source_db,status,source_fingerprint,catalog_build_id,
+                   build_mode
+               ) VALUES ('graph.lbug','catalog.db','active','fingerprint',?,'full')""",
+            (build_id,),
+        ).lastrowid
+        conn.execute("DELETE FROM schema_migrations WHERE name='024_refresh_contracts'")
+        conn.commit()
+
+        apply_multi_repo_migration(conn, local_root="/tmp/main")
+
+        self.assertEqual(
+            conn.execute(
+                "SELECT catalog_build_id FROM repo_change_sets WHERE id=?", (change_id,)
+            ).fetchone()[0],
+            build_id,
+        )
+        self.assertEqual(
+            conn.execute(
+                "SELECT catalog_build_id FROM graph_builds WHERE id=?", (graph_id,)
+            ).fetchone()[0],
+            build_id,
+        )
+        self.assertEqual(conn.execute("PRAGMA foreign_key_check").fetchall(), [])
 
     def test_repo_scope_upgrade_preserves_semantic_record_ids(self) -> None:
         conn = self.legacy_connection()
@@ -366,8 +480,7 @@ class MultiRepoMigrationTests(unittest.TestCase):
         )
         conn.execute("INSERT INTO entity_nodes(id,name) VALUES (1,'Customer')")
         occurrence_id = conn.execute(
-            "INSERT INTO entity_occurrences(repo_id,entity_id,ent_file) "
-            "VALUES (?,?,?)",
+            "INSERT INTO entity_occurrences(repo_id,entity_id,ent_file) VALUES (?,?,?)",
             (repo_id, 1, "customer.ent"),
         ).lastrowid
         conn.execute(
@@ -414,8 +527,7 @@ class MultiRepoMigrationTests(unittest.TestCase):
             ),
         )
         conn.execute(
-            "DELETE FROM schema_migrations "
-            "WHERE name='022_entity_semantics_repo_scope'"
+            "DELETE FROM schema_migrations WHERE name='022_entity_semantics_repo_scope'"
         )
         conn.execute("DROP INDEX uq_entity_schema_components_id_repo")
         conn.execute("DROP INDEX uq_entity_relationship_facts_id_repo")
@@ -424,15 +536,15 @@ class MultiRepoMigrationTests(unittest.TestCase):
 
         apply_multi_repo_migration(conn, local_root="/tmp/main")
         self.assertEqual(
-            conn.execute(
-                "SELECT id FROM entity_schema_components"
-            ).fetchone()[0],
+            conn.execute("SELECT id FROM entity_schema_components").fetchone()[0],
             41,
         )
         self.assertEqual(
-            tuple(conn.execute(
-                "SELECT id,source_component_id FROM entity_relationship_facts"
-            ).fetchone()),
+            tuple(
+                conn.execute(
+                    "SELECT id,source_component_id FROM entity_relationship_facts"
+                ).fetchone()
+            ),
             (42, 41),
         )
         self.assertEqual(conn.execute("PRAGMA foreign_key_check").fetchall(), [])

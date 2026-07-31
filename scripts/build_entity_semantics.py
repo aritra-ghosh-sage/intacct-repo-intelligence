@@ -11,14 +11,13 @@ import hashlib
 import json
 import re
 import sqlite3
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
 
 import click
 
 from catalog.db import get_connection, require_foreign_key_integrity
-
 
 EXTRACTOR = "entity_semantics"
 EXTRACTOR_VERSION = "1"
@@ -65,7 +64,7 @@ def _skip_comment(text: str, index: int) -> int:
     if text.startswith("/*", index):
         end = text.find("*/", index + 2)
         return len(text) if end == -1 else end + 2
-    if text[index:index + 1] == "#":
+    if text[index : index + 1] == "#":
         end = text.find("\n", index)
         return len(text) if end == -1 else end + 1
     return index
@@ -145,7 +144,7 @@ def _literal_value(item: str, key: str) -> str | None:
 
 
 def _has_key(item: str, key: str) -> bool:
-    return bool(re.search(rf"['\"]{re.escape(key)}['\"]\s*=>", item, re.I))
+    return bool(re.search(rf"['\"]{re.escape(key)}['\"]\s*=>", item, re.IGNORECASE))
 
 
 def _evidence(text: str, start: int, end: int) -> Evidence:
@@ -161,7 +160,7 @@ def _hash(value: str) -> str:
 
 
 def _find_block(text: str, key: str) -> tuple[int, int] | None:
-    match = re.search(rf"['\"]{re.escape(key)}['\"]\s*=>", text, re.I)
+    match = re.search(rf"['\"]{re.escape(key)}['\"]\s*=>", text, re.IGNORECASE)
     return _array_after(text, match.end()) if match else None
 
 
@@ -213,10 +212,22 @@ def _insert_component(
                end_line,evidence_text,evidence_hash,extractor,extractor_version,confidence
            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
-            repo_id, occurrence_id, kind, path, declared_name, target,
-            json.dumps(properties or {}, sort_keys=True), source_file_id, source_path,
-            evidence.start_line, evidence.end_line, evidence.text, evidence_hash,
-            EXTRACTOR, EXTRACTOR_VERSION, confidence,
+            repo_id,
+            occurrence_id,
+            kind,
+            path,
+            declared_name,
+            target,
+            json.dumps(properties or {}, sort_keys=True),
+            source_file_id,
+            source_path,
+            evidence.start_line,
+            evidence.end_line,
+            evidence.text,
+            evidence_hash,
+            EXTRACTOR,
+            EXTRACTOR_VERSION,
+            confidence,
         ),
     )
     row = conn.execute(
@@ -253,11 +264,25 @@ def _insert_relationship(
                end_line,evidence_text,evidence_hash,extractor,extractor_version,confidence
            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
-            repo_id, occurrence_id, component_id, axis, relation_kind, fact_key,
-            _target_occurrence_id(conn, repo_id, target_name), target_name,
-            target_literal, status, json.dumps(qualifiers or {}, sort_keys=True),
-            source_file_id, source_path, evidence.start_line, evidence.end_line,
-            evidence.text, _hash(evidence.text), EXTRACTOR, EXTRACTOR_VERSION,
+            repo_id,
+            occurrence_id,
+            component_id,
+            axis,
+            relation_kind,
+            fact_key,
+            _target_occurrence_id(conn, repo_id, target_name),
+            target_name,
+            target_literal,
+            status,
+            json.dumps(qualifiers or {}, sort_keys=True),
+            source_file_id,
+            source_path,
+            evidence.start_line,
+            evidence.end_line,
+            evidence.text,
+            _hash(evidence.text),
+            EXTRACTOR,
+            EXTRACTOR_VERSION,
             confidence,
         ),
     )
@@ -284,11 +309,25 @@ def _insert_operation(
                evidence_hash,extractor,extractor_version,confidence
            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
-            repo_id, occurrence_id, "E", operation, "ent_api_permission", availability,
-            "unresolved", "unresolved", None, parent_occurrence_id,
-            json.dumps(qualifiers or {}, sort_keys=True), source_file_id, source_path,
-            evidence.start_line, evidence.end_line, evidence.text,
-            _hash(f"{operation}:{evidence.text}"), EXTRACTOR, EXTRACTOR_VERSION,
+            repo_id,
+            occurrence_id,
+            "E",
+            operation,
+            "ent_api_permission",
+            availability,
+            "unresolved",
+            "unresolved",
+            None,
+            parent_occurrence_id,
+            json.dumps(qualifiers or {}, sort_keys=True),
+            source_file_id,
+            source_path,
+            evidence.start_line,
+            evidence.end_line,
+            evidence.text,
+            _hash(f"{operation}:{evidence.text}"),
+            EXTRACTOR,
+            EXTRACTOR_VERSION,
             1.0,
         ),
     )
@@ -315,22 +354,38 @@ def _extract_occurrence(
         path = _literal_value(item, "path") or f"ownedobjects/{ordinal}"
         evidence = _evidence(source, start, end)
         component_id = _insert_component(
-            conn, repo_id=repo_id, occurrence_id=occurrence_id,
-            kind="owned_collection", path=path, declared_name=None,
-            target=target, evidence=evidence, source_file_id=source_file_id,
+            conn,
+            repo_id=repo_id,
+            occurrence_id=occurrence_id,
+            kind="owned_collection",
+            path=path,
+            declared_name=None,
+            target=target,
+            evidence=evidence,
+            source_file_id=source_file_id,
             source_path=source_path,
-            properties={"fkey": _literal_value(item, "fkey"), "invfkey": _literal_value(item, "invfkey")},
+            properties={
+                "fkey": _literal_value(item, "fkey"),
+                "invfkey": _literal_value(item, "invfkey"),
+            },
         )
         component_count += 1
         status = "VERIFIED" if target else "UNRESOLVED"
         if target is None:
             partial_reasons.append("ownedobjects target is dynamic")
         _insert_relationship(
-            conn, repo_id=repo_id, occurrence_id=occurrence_id,
-            component_id=component_id, axis="A", relation_kind="owns_collection",
+            conn,
+            repo_id=repo_id,
+            occurrence_id=occurrence_id,
+            component_id=component_id,
+            axis="A",
+            relation_kind="owns_collection",
             fact_key=f"{entity_name.lower()}.owns.{(target or path).lower()}",
-            target_name=target, target_literal=None if target else item,
-            status=status, evidence=evidence, source_file_id=source_file_id,
+            target_name=target,
+            target_literal=None if target else item,
+            status=status,
+            evidence=evidence,
+            source_file_id=source_file_id,
             source_path=source_path,
         )
         fact_count += 1
@@ -342,7 +397,7 @@ def _extract_occurrence(
 
     # Some declarations append literal child objects after the base schema.
     # They are static facts too, but do not form part of the base array above.
-    appended_owned = re.compile(r"\[['\"]ownedobjects['\"]\]\s*\[\]\s*=", re.I)
+    appended_owned = re.compile(r"\[['\"]ownedobjects['\"]\]\s*\[\]\s*=", re.IGNORECASE)
     for ordinal, match in enumerate(appended_owned.finditer(source), start=10_000):
         array = _array_after(source, match.end())
         if array is None:
@@ -352,25 +407,44 @@ def _extract_occurrence(
         add_owned_item(match.start(), end + 1, ordinal)
 
     parent_entity_match = re.search(
-        r"['\"]parententity['\"]\s*=>\s*(['\"])(.*?)\1", source, re.I | re.S
+        r"['\"]parententity['\"]\s*=>\s*(['\"])(.*?)\1",
+        source,
+        re.IGNORECASE | re.DOTALL,
     )
     parent_occurrence_id = None
     if parent_entity_match:
         target = parent_entity_match.group(2)
-        evidence = _evidence(source, parent_entity_match.start(), parent_entity_match.end())
+        evidence = _evidence(
+            source, parent_entity_match.start(), parent_entity_match.end()
+        )
         component_id = _insert_component(
-            conn, repo_id=repo_id, occurrence_id=occurrence_id, kind="parent_entity",
-            path="parententity", declared_name="parententity", target=target,
-            evidence=evidence, source_file_id=source_file_id, source_path=source_path,
+            conn,
+            repo_id=repo_id,
+            occurrence_id=occurrence_id,
+            kind="parent_entity",
+            path="parententity",
+            declared_name="parententity",
+            target=target,
+            evidence=evidence,
+            source_file_id=source_file_id,
+            source_path=source_path,
         )
         component_count += 1
         parent_occurrence_id = _target_occurrence_id(conn, repo_id, target)
         _insert_relationship(
-            conn, repo_id=repo_id, occurrence_id=occurrence_id,
-            component_id=component_id, axis="A", relation_kind="owned_by_parent_entity",
+            conn,
+            repo_id=repo_id,
+            occurrence_id=occurrence_id,
+            component_id=component_id,
+            axis="A",
+            relation_kind="owned_by_parent_entity",
             fact_key=f"{entity_name.lower()}.parententity.{target.lower()}",
-            target_name=target, target_literal=None, status="VERIFIED", evidence=evidence,
-            source_file_id=source_file_id, source_path=source_path,
+            target_name=target,
+            target_literal=None,
+            status="VERIFIED",
+            evidence=evidence,
+            source_file_id=source_file_id,
+            source_path=source_path,
         )
         fact_count += 1
 
@@ -386,65 +460,132 @@ def _extract_occurrence(
             target = _literal_value(item, "entity")
             fullname = _literal_value(item, "fullname") or ""
             evidence = _evidence(source, start, end)
-            if path and target and target.lower() == entity_name.lower() and "PARENT" in path.upper():
+            if (
+                path
+                and target
+                and target.lower() == entity_name.lower()
+                and "PARENT" in path.upper()
+            ):
                 component_id = _insert_component(
-                    conn, repo_id=repo_id, occurrence_id=occurrence_id, kind="field",
-                    path=path, declared_name=fullname or path, target=entity_name,
-                    evidence=evidence, source_file_id=source_file_id, source_path=source_path,
+                    conn,
+                    repo_id=repo_id,
+                    occurrence_id=occurrence_id,
+                    kind="field",
+                    path=path,
+                    declared_name=fullname or path,
+                    target=entity_name,
+                    evidence=evidence,
+                    source_file_id=source_file_id,
+                    source_path=source_path,
                 )
                 component_count += 1
                 is_location = entity_name.lower() == "location"
-                has_hierarchy = bool(re.search(r"['\"]showhierarchy['\"]\s*=>\s*true", source, re.I))
+                has_hierarchy = bool(
+                    re.search(
+                        r"['\"]showhierarchy['\"]\s*=>\s*true", source, re.IGNORECASE
+                    )
+                )
                 # A self-target pointer and a self table parent join are separate
                 # source declarations.  Location additionally needs hierarchy
                 # metadata to receive axis C.
-                has_parent_join = bool(re.search(
-                    rf"['\"]parent['\"]\s*=>\s*(?:array\s*)?\(.*?['\"]table['\"]\s*=>\s*['\"]{re.escape(entity_name)}['\"]",
-                    source, re.I | re.S,
-                ))
+                has_parent_join = bool(
+                    re.search(
+                        rf"['\"]parent['\"]\s*=>\s*(?:array\s*)?\(.*?['\"]table['\"]\s*=>\s*['\"]{re.escape(entity_name)}['\"]",
+                        source,
+                        re.IGNORECASE | re.DOTALL,
+                    )
+                )
                 axis = "C" if is_location and has_hierarchy else "B"
-                status = "CORROBORATED" if has_parent_join or has_hierarchy else "UNRESOLVED"
+                status = (
+                    "CORROBORATED" if has_parent_join or has_hierarchy else "UNRESOLVED"
+                )
                 _insert_relationship(
-                    conn, repo_id=repo_id, occurrence_id=occurrence_id,
-                    component_id=component_id, axis=axis,
-                    relation_kind="location_parent_reference" if axis == "C" else "business_parent_reference",
-                    fact_key=f"{entity_name.lower()}.parent", target_name=entity_name,
-                    target_literal=None, status=status, evidence=evidence,
-                    source_file_id=source_file_id, source_path=source_path,
-                    qualifiers={"has_parent_join": has_parent_join, "has_hierarchy": has_hierarchy},
+                    conn,
+                    repo_id=repo_id,
+                    occurrence_id=occurrence_id,
+                    component_id=component_id,
+                    axis=axis,
+                    relation_kind="location_parent_reference"
+                    if axis == "C"
+                    else "business_parent_reference",
+                    fact_key=f"{entity_name.lower()}.parent",
+                    target_name=entity_name,
+                    target_literal=None,
+                    status=status,
+                    evidence=evidence,
+                    source_file_id=source_file_id,
+                    source_path=source_path,
+                    qualifiers={
+                        "has_parent_join": has_parent_join,
+                        "has_hierarchy": has_hierarchy,
+                    },
                 )
                 fact_count += 1
             elif path == "PARENTENTRY":
                 component_id = _insert_component(
-                    conn, repo_id=repo_id, occurrence_id=occurrence_id, kind="field",
-                    path=path, declared_name=fullname or path, target=None,
-                    evidence=evidence, source_file_id=source_file_id, source_path=source_path,
+                    conn,
+                    repo_id=repo_id,
+                    occurrence_id=occurrence_id,
+                    kind="field",
+                    path=path,
+                    declared_name=fullname or path,
+                    target=None,
+                    evidence=evidence,
+                    source_file_id=source_file_id,
+                    source_path=source_path,
                 )
                 component_count += 1
                 _insert_relationship(
-                    conn, repo_id=repo_id, occurrence_id=occurrence_id,
-                    component_id=component_id, axis="B", relation_kind="business_parent_reference",
-                    fact_key=f"{entity_name.lower()}.parententry", target_name=None,
-                    target_literal="PARENTENTRY", status="UNRESOLVED", evidence=evidence,
-                    source_file_id=source_file_id, source_path=source_path,
-                    qualifiers={"reason": "integer field has no deterministically declared target"},
+                    conn,
+                    repo_id=repo_id,
+                    occurrence_id=occurrence_id,
+                    component_id=component_id,
+                    axis="B",
+                    relation_kind="business_parent_reference",
+                    fact_key=f"{entity_name.lower()}.parententry",
+                    target_name=None,
+                    target_literal="PARENTENTRY",
+                    status="UNRESOLVED",
+                    evidence=evidence,
+                    source_file_id=source_file_id,
+                    source_path=source_path,
+                    qualifiers={
+                        "reason": "integer field has no deterministically declared target"
+                    },
                 )
                 fact_count += 1
             elif path == "OBJECTRESTRICTION":
-                values = re.findall(r"['\"](Unrestricted|RootOnly|Restricted)['\"]", item, re.I)
+                values = re.findall(
+                    r"['\"](Unrestricted|RootOnly|Restricted)['\"]", item, re.IGNORECASE
+                )
                 component_id = _insert_component(
-                    conn, repo_id=repo_id, occurrence_id=occurrence_id,
-                    kind="visibility_value", path=path, declared_name=fullname or path,
-                    target=None, evidence=evidence, source_file_id=source_file_id,
-                    source_path=source_path, properties={"values": values},
+                    conn,
+                    repo_id=repo_id,
+                    occurrence_id=occurrence_id,
+                    kind="visibility_value",
+                    path=path,
+                    declared_name=fullname or path,
+                    target=None,
+                    evidence=evidence,
+                    source_file_id=source_file_id,
+                    source_path=source_path,
+                    properties={"values": values},
                 )
                 component_count += 1
                 _insert_relationship(
-                    conn, repo_id=repo_id, occurrence_id=occurrence_id,
-                    component_id=component_id, axis="D", relation_kind="visibility_enum",
-                    fact_key=f"{entity_name.lower()}.visibility", target_name=None,
-                    target_literal=path, status="VERIFIED", evidence=evidence,
-                    source_file_id=source_file_id, source_path=source_path,
+                    conn,
+                    repo_id=repo_id,
+                    occurrence_id=occurrence_id,
+                    component_id=component_id,
+                    axis="D",
+                    relation_kind="visibility_enum",
+                    fact_key=f"{entity_name.lower()}.visibility",
+                    target_name=None,
+                    target_literal=path,
+                    status="VERIFIED",
+                    evidence=evidence,
+                    source_file_id=source_file_id,
+                    source_path=source_path,
                     qualifiers={"values": values},
                 )
                 fact_count += 1
@@ -452,12 +593,25 @@ def _extract_occurrence(
     # Explicit self-target parent pointers are considered hierarchy only with
     # corroborating structural evidence.  Location uses its own axis C.
     self_target_pattern = re.compile(
-        r"['\"]entity['\"]\s*=>\s*(['\"])(?P<target>[^'\"]+)\1", re.I
+        r"['\"]entity['\"]\s*=>\s*(['\"])(?P<target>[^'\"]+)\1", re.IGNORECASE
     )
-    self_targets = [m for m in self_target_pattern.finditer(source)
-                    if m.group("target").lower() == entity_name.lower()]
-    has_parent_storage = bool(re.search(r"['\"]parent['\"]\s*=>.*?['\"]table['\"]\s*=>\s*['\"]" + re.escape(entity_name.lower()) + r"['\"]", source, re.I | re.S))
-    has_hierarchy = bool(re.search(r"['\"]showhierarchy['\"]\s*=>\s*true", source, re.I))
+    self_targets = [
+        m
+        for m in self_target_pattern.finditer(source)
+        if m.group("target").lower() == entity_name.lower()
+    ]
+    has_parent_storage = bool(
+        re.search(
+            r"['\"]parent['\"]\s*=>.*?['\"]table['\"]\s*=>\s*['\"]"
+            + re.escape(entity_name.lower())
+            + r"['\"]",
+            source,
+            re.IGNORECASE | re.DOTALL,
+        )
+    )
+    has_hierarchy = bool(
+        re.search(r"['\"]showhierarchy['\"]\s*=>\s*true", source, re.IGNORECASE)
+    )
     for ordinal, match in enumerate(self_targets):
         context_start = max(0, source.rfind("array", 0, match.start()))
         context_end = source.find("),", match.end())
@@ -468,79 +622,147 @@ def _extract_occurrence(
             continue
         evidence = _evidence(source, context_start, context_end)
         component_id = _insert_component(
-            conn, repo_id=repo_id, occurrence_id=occurrence_id, kind="field",
-            path=path, declared_name=path, target=entity_name, evidence=evidence,
-            source_file_id=source_file_id, source_path=source_path,
+            conn,
+            repo_id=repo_id,
+            occurrence_id=occurrence_id,
+            kind="field",
+            path=path,
+            declared_name=path,
+            target=entity_name,
+            evidence=evidence,
+            source_file_id=source_file_id,
+            source_path=source_path,
         )
         component_count += 1
         axis = "C" if entity_name.lower() == "location" and has_hierarchy else "B"
         status = "CORROBORATED" if has_parent_storage or has_hierarchy else "UNRESOLVED"
         _insert_relationship(
-            conn, repo_id=repo_id, occurrence_id=occurrence_id,
-            component_id=component_id, axis=axis,
-            relation_kind="location_parent_reference" if axis == "C" else "business_parent_reference",
-            fact_key=f"{entity_name.lower()}.parent", target_name=entity_name,
-            target_literal=None, status=status, evidence=evidence,
-            source_file_id=source_file_id, source_path=source_path,
-            qualifiers={"has_parent_storage": has_parent_storage, "has_hierarchy": has_hierarchy},
+            conn,
+            repo_id=repo_id,
+            occurrence_id=occurrence_id,
+            component_id=component_id,
+            axis=axis,
+            relation_kind="location_parent_reference"
+            if axis == "C"
+            else "business_parent_reference",
+            fact_key=f"{entity_name.lower()}.parent",
+            target_name=entity_name,
+            target_literal=None,
+            status=status,
+            evidence=evidence,
+            source_file_id=source_file_id,
+            source_path=source_path,
+            qualifiers={
+                "has_parent_storage": has_parent_storage,
+                "has_hierarchy": has_hierarchy,
+            },
         )
         fact_count += 1
 
     visibility_match = re.search(
         r"['\"]path['\"]\s*=>\s*['\"]OBJECTRESTRICTION['\"].{0,1600}?['\"]validvalues['\"]\s*=>\s*(?:array\s*\()?\s*\[?\s*['\"]Unrestricted['\"]",
-        source, re.I | re.S,
+        source,
+        re.IGNORECASE | re.DOTALL,
     )
     if visibility_match:
         evidence = _evidence(source, visibility_match.start(), visibility_match.end())
         component_id = _insert_component(
-            conn, repo_id=repo_id, occurrence_id=occurrence_id, kind="visibility_value",
-            path="OBJECTRESTRICTION", declared_name="OBJECTRESTRICTION", target=None,
-            evidence=evidence, source_file_id=source_file_id, source_path=source_path,
+            conn,
+            repo_id=repo_id,
+            occurrence_id=occurrence_id,
+            kind="visibility_value",
+            path="OBJECTRESTRICTION",
+            declared_name="OBJECTRESTRICTION",
+            target=None,
+            evidence=evidence,
+            source_file_id=source_file_id,
+            source_path=source_path,
             properties={"values": ["Unrestricted", "RootOnly", "Restricted"]},
         )
         component_count += 1
         _insert_relationship(
-            conn, repo_id=repo_id, occurrence_id=occurrence_id,
-            component_id=component_id, axis="D", relation_kind="visibility_enum",
-            fact_key=f"{entity_name.lower()}.visibility", target_name=None,
-            target_literal="OBJECTRESTRICTION", status="VERIFIED", evidence=evidence,
-            source_file_id=source_file_id, source_path=source_path,
+            conn,
+            repo_id=repo_id,
+            occurrence_id=occurrence_id,
+            component_id=component_id,
+            axis="D",
+            relation_kind="visibility_enum",
+            fact_key=f"{entity_name.lower()}.visibility",
+            target_name=None,
+            target_literal="OBJECTRESTRICTION",
+            status="VERIFIED",
+            evidence=evidence,
+            source_file_id=source_file_id,
+            source_path=source_path,
             qualifiers={"values": ["Unrestricted", "RootOnly", "Restricted"]},
         )
         fact_count += 1
 
-    for match in re.finditer(r"['\"]path['\"]\s*=>\s*['\"]ENTITY['\"]", source, re.I):
+    for match in re.finditer(
+        r"['\"]path['\"]\s*=>\s*['\"]ENTITY['\"]", source, re.IGNORECASE
+    ):
         evidence = _evidence(source, match.start(), match.end())
         component_id = _insert_component(
-            conn, repo_id=repo_id, occurrence_id=occurrence_id, kind="field",
-            path="ENTITY", declared_name="ENTITY", target=None, evidence=evidence,
-            source_file_id=source_file_id, source_path=source_path,
+            conn,
+            repo_id=repo_id,
+            occurrence_id=occurrence_id,
+            kind="field",
+            path="ENTITY",
+            declared_name="ENTITY",
+            target=None,
+            evidence=evidence,
+            source_file_id=source_file_id,
+            source_path=source_path,
         )
         component_count += 1
         _insert_relationship(
-            conn, repo_id=repo_id, occurrence_id=occurrence_id,
-            component_id=component_id, axis="E", relation_kind="entity_context_field",
-            fact_key=f"{entity_name.lower()}.entity_context", target_name=None,
-            target_literal="ENTITY", status="VERIFIED", evidence=evidence,
-            source_file_id=source_file_id, source_path=source_path,
+            conn,
+            repo_id=repo_id,
+            occurrence_id=occurrence_id,
+            component_id=component_id,
+            axis="E",
+            relation_kind="entity_context_field",
+            fact_key=f"{entity_name.lower()}.entity_context",
+            target_name=None,
+            target_literal="ENTITY",
+            status="VERIFIED",
+            evidence=evidence,
+            source_file_id=source_file_id,
+            source_path=source_path,
         )
         fact_count += 1
 
-    for match in re.finditer(r"['\"]entityContext['\"]\s*=>\s*true", source, re.I):
+    for match in re.finditer(
+        r"['\"]entityContext['\"]\s*=>\s*true", source, re.IGNORECASE
+    ):
         evidence = _evidence(source, match.start(), match.end())
         component_id = _insert_component(
-            conn, repo_id=repo_id, occurrence_id=occurrence_id,
-            kind="entity_context_metadata", path=f"entityContext/{evidence.start_line}",
-            declared_name="entityContext", target=None, evidence=evidence,
-            source_file_id=source_file_id, source_path=source_path,
+            conn,
+            repo_id=repo_id,
+            occurrence_id=occurrence_id,
+            kind="entity_context_metadata",
+            path=f"entityContext/{evidence.start_line}",
+            declared_name="entityContext",
+            target=None,
+            evidence=evidence,
+            source_file_id=source_file_id,
+            source_path=source_path,
         )
         component_count += 1
         _insert_relationship(
-            conn, repo_id=repo_id, occurrence_id=occurrence_id,
-            component_id=component_id, axis="E", relation_kind="entity_context_metadata",
+            conn,
+            repo_id=repo_id,
+            occurrence_id=occurrence_id,
+            component_id=component_id,
+            axis="E",
+            relation_kind="entity_context_metadata",
             fact_key=f"{entity_name.lower()}.entity_context_metadata.{evidence.start_line}",
-            target_name=None, target_literal="entityContext", status="VERIFIED",
-            evidence=evidence, source_file_id=source_file_id, source_path=source_path,
+            target_name=None,
+            target_literal="entityContext",
+            status="VERIFIED",
+            evidence=evidence,
+            source_file_id=source_file_id,
+            source_path=source_path,
             qualifiers={"value": True},
         )
         fact_count += 1
@@ -549,7 +771,7 @@ def _extract_occurrence(
         match = re.search(
             rf"['\"]{key}['\"]\s*=>\s*(?P<value>'[^']*'|\"[^\"]*\"|[^,\r\n]+)",
             source,
-            re.I,
+            re.IGNORECASE,
         )
         if not match:
             continue
@@ -559,14 +781,19 @@ def _extract_occurrence(
             and raw_requirement[0] == raw_requirement[-1]
             and raw_requirement[0] in {"'", '"'}
         )
-        requirement = (
-            raw_requirement[1:-1] if is_literal else raw_requirement
-        )
+        requirement = raw_requirement[1:-1] if is_literal else raw_requirement
         evidence = _evidence(source, match.start(), match.end())
         _insert_operation(
-            conn, repo_id=repo_id, occurrence_id=occurrence_id, operation=operation,
-            availability="denied" if is_literal and requirement.upper() == "NONE" else "unresolved",
-            evidence=evidence, source_file_id=source_file_id, source_path=source_path,
+            conn,
+            repo_id=repo_id,
+            occurrence_id=occurrence_id,
+            operation=operation,
+            availability="denied"
+            if is_literal and requirement.upper() == "NONE"
+            else "unresolved",
+            evidence=evidence,
+            source_file_id=source_file_id,
+            source_path=source_path,
             parent_occurrence_id=parent_occurrence_id,
             qualifiers={
                 "permission_requirement": requirement,
@@ -611,32 +838,51 @@ def _materialize_conflicts(conn: sqlite3.Connection, repo_id: int) -> int:
                        reason,source_file_id,source_path,confidence
                    ) VALUES (?,?,?,?,?,'open',?,?,?,?)""",
                 (
-                    repo_id, fact_key, int(left["id"]), int(right["id"]),
+                    repo_id,
+                    fact_key,
+                    int(left["id"]),
+                    int(right["id"]),
                     "incompatible_target",
                     "Static assertions with one fact key resolve to different targets",
-                    left["source_file_id"], left["source_path"], 1.0,
+                    left["source_file_id"],
+                    left["source_path"],
+                    1.0,
                 ),
             )
             inserted += 1
     return inserted
 
 
-def build(db: str, repo_root: str | Path, repo_key: str, reset: bool = True) -> dict[str, int]:
+def build(
+    db: str, repo_root: str | Path, repo_key: str, reset: bool = True
+) -> dict[str, int]:
     """Build semantic facts for all .ent occurrences in a repository."""
     root = Path(repo_root)
     conn = get_connection(db)
     try:
-        repo = conn.execute("SELECT id FROM repos WHERE repo_key=?", (repo_key,)).fetchone()
+        repo = conn.execute(
+            "SELECT id FROM repos WHERE repo_key=?", (repo_key,)
+        ).fetchone()
         if repo is None:
             raise click.ClickException(f"Unknown repository key: {repo_key}")
         repo_id = int(repo[0])
         conn.execute("BEGIN IMMEDIATE")
         if reset:
-            conn.execute("DELETE FROM entity_semantic_conflicts WHERE repo_id=?", (repo_id,))
-            conn.execute("DELETE FROM entity_operation_facts WHERE repo_id=?", (repo_id,))
-            conn.execute("DELETE FROM entity_relationship_facts WHERE repo_id=?", (repo_id,))
-            conn.execute("DELETE FROM entity_schema_components WHERE repo_id=?", (repo_id,))
-            conn.execute("DELETE FROM entity_extraction_coverage WHERE repo_id=?", (repo_id,))
+            conn.execute(
+                "DELETE FROM entity_semantic_conflicts WHERE repo_id=?", (repo_id,)
+            )
+            conn.execute(
+                "DELETE FROM entity_operation_facts WHERE repo_id=?", (repo_id,)
+            )
+            conn.execute(
+                "DELETE FROM entity_relationship_facts WHERE repo_id=?", (repo_id,)
+            )
+            conn.execute(
+                "DELETE FROM entity_schema_components WHERE repo_id=?", (repo_id,)
+            )
+            conn.execute(
+                "DELETE FROM entity_extraction_coverage WHERE repo_id=?", (repo_id,)
+            )
 
         rows = conn.execute(
             "SELECT eo.id,eo.ent_file,eo.source_file_id,f.path "
@@ -644,7 +890,13 @@ def build(db: str, repo_root: str | Path, repo_key: str, reset: bool = True) -> 
             "WHERE eo.repo_id=? AND eo.ent_file IS NOT NULL ORDER BY eo.id",
             (repo_id,),
         ).fetchall()
-        totals = {"occurrences": 0, "components": 0, "facts": 0, "partial": 0, "failed": 0}
+        totals = {
+            "occurrences": 0,
+            "components": 0,
+            "facts": 0,
+            "partial": 0,
+            "failed": 0,
+        }
         for row in rows:
             occurrence_id = int(row[0])
             source_path = str(row[1])
@@ -654,8 +906,12 @@ def build(db: str, repo_root: str | Path, repo_key: str, reset: bool = True) -> 
             try:
                 source = path.read_text(encoding="utf-8", errors="ignore")
                 components, facts, diagnostic = _extract_occurrence(
-                    conn, repo_id=repo_id, occurrence_id=occurrence_id,
-                    source_file_id=source_file_id, source_path=source_path, source=source,
+                    conn,
+                    repo_id=repo_id,
+                    occurrence_id=occurrence_id,
+                    source_file_id=source_file_id,
+                    source_path=source_path,
+                    source=source,
                 )
                 status = "partial" if diagnostic else "complete"
                 totals["components"] += components
@@ -695,7 +951,11 @@ def build(db: str, repo_root: str | Path, repo_key: str, reset: bool = True) -> 
             }
             for family, family_state in family_status.items():
                 family_components = components if family == "components" else 0
-                family_facts = facts if family == "components" else int(axis_fact_counts.get(family, 0))
+                family_facts = (
+                    facts
+                    if family == "components"
+                    else int(axis_fact_counts.get(family, 0))
+                )
                 family_diagnostic = diagnostic
                 if family_state == "partial" and not family_diagnostic:
                     family_diagnostic = "declaration family is not yet closed-world"
@@ -706,9 +966,18 @@ def build(db: str, repo_root: str | Path, repo_key: str, reset: bool = True) -> 
                            component_count,fact_count,diagnostic
                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
-                        repo_id, occurrence_id, source_file_id, source_path, EXTRACTOR,
-                        EXTRACTOR_VERSION, family, source_hash, family_state,
-                        family_components, family_facts, family_diagnostic,
+                        repo_id,
+                        occurrence_id,
+                        source_file_id,
+                        source_path,
+                        EXTRACTOR,
+                        EXTRACTOR_VERSION,
+                        family,
+                        source_hash,
+                        family_state,
+                        family_components,
+                        family_facts,
+                        family_diagnostic,
                     ),
                 )
         totals["conflicts"] = _materialize_conflicts(conn, repo_id)
@@ -725,7 +994,9 @@ def build(db: str, repo_root: str | Path, repo_key: str, reset: bool = True) -> 
 
 @click.command()
 @click.option("--db", default="catalog/catalog.db", show_default=True)
-@click.option("--repo-root", required=True, type=click.Path(path_type=Path, exists=True))
+@click.option(
+    "--repo-root", required=True, type=click.Path(path_type=Path, exists=True)
+)
 @click.option("--repo", "repo_key", required=True)
 @click.option("--reset/--no-reset", default=True)
 def main(db: str, repo_root: Path, repo_key: str, reset: bool) -> None:

@@ -1,6 +1,7 @@
 # parser/extractors/php_extractor.py
 
 from tree_sitter_languages import get_parser
+
 from .base import Symbol
 
 # Path B: Delegate .cqry/.qry files to dedicated extractor.

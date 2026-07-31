@@ -12,7 +12,6 @@ import argparse
 import sqlite3
 from pathlib import Path
 
-
 DEFAULT_DB = "catalog/catalog.db"
 DEFAULT_REPORT = "validation/phase2c1_report.md"
 

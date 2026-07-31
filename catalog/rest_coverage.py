@@ -5,7 +5,6 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
-
 REQUIRED_TABLES = (
     "rest_endpoints",
     "entity_nodes",
