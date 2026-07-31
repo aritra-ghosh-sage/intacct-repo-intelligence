@@ -11,7 +11,6 @@ import sqlite3
 from collections.abc import Iterable
 from pathlib import Path
 
-
 MULTI_REPO_MIGRATION = "019_multi_repo"
 REST_AUTOMATION_COVERAGE_MIGRATION = "020_rest_automation_coverage"
 ENTITY_SEMANTICS_MIGRATION = "021_entity_semantics"
@@ -979,11 +978,11 @@ def _apply_entity_semantics_repo_scope_migration(conn: sqlite3.Connection) -> No
     _create_repo_scoped_entity_semantics_tables(conn)
     # Composite child FKs require their parent keys before rows are copied.
     conn.execute(
-        "CREATE UNIQUE INDEX uq_entity_schema_components_id_repo "
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_entity_schema_components_id_repo "
         "ON entity_schema_components(id,repo_id)"
     )
     conn.execute(
-        "CREATE UNIQUE INDEX uq_entity_relationship_facts_id_repo "
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_entity_relationship_facts_id_repo "
         "ON entity_relationship_facts(id,repo_id)"
     )
     for table in (
@@ -1007,21 +1006,21 @@ def _apply_entity_semantics_repo_scope_migration(conn: sqlite3.Connection) -> No
         conn.execute(f"DROP TABLE _021_{table}")
 
     index_script = """
-        CREATE INDEX idx_entity_schema_components_occurrence
+        CREATE INDEX IF NOT EXISTS idx_entity_schema_components_occurrence
             ON entity_schema_components(repo_id,occurrence_id,component_kind);
-        CREATE INDEX idx_entity_schema_components_source
+        CREATE INDEX IF NOT EXISTS idx_entity_schema_components_source
             ON entity_schema_components(repo_id,source_path);
-        CREATE INDEX idx_entity_relationship_facts_occurrence
+        CREATE INDEX IF NOT EXISTS idx_entity_relationship_facts_occurrence
             ON entity_relationship_facts(repo_id,source_occurrence_id,axis);
-        CREATE INDEX idx_entity_relationship_facts_target
+        CREATE INDEX IF NOT EXISTS idx_entity_relationship_facts_target
             ON entity_relationship_facts(repo_id,target_occurrence_id,axis);
-        CREATE INDEX idx_entity_relationship_facts_status
+        CREATE INDEX IF NOT EXISTS idx_entity_relationship_facts_status
             ON entity_relationship_facts(repo_id,assertion_status);
-        CREATE INDEX idx_entity_operation_facts_occurrence
+        CREATE INDEX IF NOT EXISTS idx_entity_operation_facts_occurrence
             ON entity_operation_facts(repo_id,occurrence_id,operation);
-        CREATE INDEX idx_entity_extraction_coverage_occurrence
+        CREATE INDEX IF NOT EXISTS idx_entity_extraction_coverage_occurrence
             ON entity_extraction_coverage(repo_id,occurrence_id,declaration_family);
-        CREATE INDEX idx_entity_semantic_conflicts_fact_key
+        CREATE INDEX IF NOT EXISTS idx_entity_semantic_conflicts_fact_key
             ON entity_semantic_conflicts(repo_id,fact_key,status)
     """
     for statement in index_script.split(";"):
