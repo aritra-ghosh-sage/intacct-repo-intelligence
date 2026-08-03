@@ -174,9 +174,9 @@ Feature: BOM handling
         conn.row_factory = sqlite3.Row
         conn.executescript("""
             CREATE TABLE rest_endpoints(id INTEGER, repo_id INTEGER, method TEXT, path TEXT, source_version TEXT, entity_id INTEGER);
-            CREATE TABLE api_version_compatibility(id INTEGER, test_version TEXT, endpoint_version TEXT, status TEXT);
+            CREATE TABLE api_version_compatibility(id INTEGER, repo_id INTEGER, test_version TEXT, endpoint_version TEXT, status TEXT);
             INSERT INTO rest_endpoints VALUES(1, 1, 'GET', '/services/s1/objects/accounts-payable/account/{key}', 's1', 9);
-            INSERT INTO api_version_compatibility VALUES(10, 'v0', 's1', 'active');
+            INSERT INTO api_version_compatibility VALUES(10, 2, 'v0', 's1', 'active');
         """)
         self.assertEqual(
             canonicalize_path("/services/s1/objects/accounts-payable/account/{key}"),
@@ -185,6 +185,7 @@ Feature: BOM handling
         compatible = _endpoint_matches(
             conn,
             1,
+            2,
             "GET",
             "/objects/accounts-payable/account/{key}",
             ("v0",),
@@ -195,7 +196,12 @@ Feature: BOM handling
         )
         self.assertEqual(
             _endpoint_matches(
-                conn, 1, "GET", "/objects/accounts-payable/account/{key}", ("v2",)
+                conn,
+                1,
+                2,
+                "GET",
+                "/objects/accounts-payable/account/{key}",
+                ("v2",),
             ),
             [],
         )
@@ -251,9 +257,10 @@ Feature: BOM handling
         conn.execute(
             """
             INSERT INTO api_version_compatibility(
-                test_version, endpoint_version, status, rationale, evidence
+                repo_id, test_version, endpoint_version, status, rationale, evidence
             )
             VALUES(
+                2,
                 'beta',
                 's1',
                 'active',
