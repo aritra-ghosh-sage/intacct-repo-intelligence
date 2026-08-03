@@ -10,7 +10,11 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
 QUALITY_BASELINE_SCHEMA = "catalog-quality-baseline"
-QUALITY_BASELINE_VERSION = 1
+# Version 2 adds an explicit contract for a first, empty-catalog baseline.
+# Version 1 reports remain accepted by ``load_quality_report`` for operators
+# who prepared them before bootstrap promotion existed.
+QUALITY_BASELINE_VERSION = 2
+QUALITY_BASELINE_V1 = 1
 QUALITY_RUN_SCHEMA = "catalog-quality-run"
 QUALITY_RUN_VERSION = 1
 _DIAGNOSTIC_FIELDS = {
@@ -32,6 +36,8 @@ QUALITY_QUERIES: dict[str, str] = {
     "entity_occurrences": "SELECT COUNT(*) FROM entity_occurrences WHERE repo_id=:repo_id",
     "entity_roots": "SELECT COUNT(*) FROM entity_roots WHERE repo_id=:repo_id",
     "openapispec_index": "SELECT COUNT(*) FROM openapispec_index WHERE repo_id=:repo_id",
+    "api_registry_entries": "SELECT COUNT(*) FROM api_registry_entries WHERE repo_id=:repo_id",
+    "api_registry_entry_links": "SELECT COUNT(*) FROM api_registry_entry_links WHERE repo_id=:repo_id",
     "openapi_entity_mappings": "SELECT COUNT(*) FROM entity_mappings WHERE repo_id=:repo_id AND mapping_type LIKE 'openapispec_%'",
     "rest_endpoints": "SELECT COUNT(*) FROM rest_endpoints WHERE repo_id=:repo_id",
     "entity_access_links": "SELECT COUNT(*) FROM entity_access_links WHERE repo_id=:repo_id",
@@ -64,6 +70,7 @@ BUILDER_METRICS: dict[str, frozenset[str]] = {
     "entities": frozenset({"entity_occurrences"}),
     "entity_roots": frozenset({"entity_roots"}),
     "openapi_scan": frozenset({"openapispec_index"}),
+    "api_registry": frozenset({"api_registry_entries", "api_registry_entry_links"}),
     "openapi_link": frozenset({"openapi_entity_mappings"}),
     "rest_endpoints": frozenset({"rest_endpoints"}),
     "entity_access_links": frozenset({"entity_access_links"}),
@@ -114,9 +121,21 @@ def approval_sha256(payload: Mapping[str, object]) -> str:
 
 
 def collect_repository_counts(conn, repo_id: int) -> dict[str, int]:
+    """Collect reset-builder metrics, treating pre-028 parents explicitly.
+
+    Older active generations predate Registry tables.  Their Registry metrics
+    are therefore a known zero baseline rather than an implicit SQL failure;
+    candidate validation still requires the migration tables to exist.
+    """
     counts: dict[str, int] = {}
     for name, sql in QUALITY_QUERIES.items():
-        value = conn.execute(sql, {"repo_id": repo_id}).fetchone()[0]
+        try:
+            value = conn.execute(sql, {"repo_id": repo_id}).fetchone()[0]
+        except Exception as exc:
+            if name.startswith("api_registry_") and "no such table" in str(exc):
+                value = 0
+            else:
+                raise
         count = int(value)
         if count < 0:
             raise RefreshQualityError(f"negative quality count for {name}")
@@ -195,6 +214,7 @@ def build_quality_payload(
     runtime_fingerprint: str,
     repositories: Sequence[Mapping[str, object]],
     global_counts: Mapping[str, int],
+    bootstrap: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     normalized_repositories = sorted(
         (dict(repository) for repository in repositories),
@@ -216,6 +236,8 @@ def build_quality_payload(
         "repositories": normalized_repositories,
         "global_counts": dict(sorted(global_counts.items())),
     }
+    if bootstrap is not None:
+        payload["bootstrap"] = dict(bootstrap)
     validate_quality_payload(payload)
     return payload
 
@@ -313,13 +335,16 @@ def _validate_diagnostics(diagnostics: object, context: str) -> None:
 def validate_quality_payload(payload: Mapping[str, object]) -> None:
     if not isinstance(payload, dict):
         raise RefreshQualityError("quality payload must be an object")
-    _require_exact_keys(
-        payload,
-        {"schema", "version", "parent", "contract", "repositories", "global_counts"},
-        "quality payload",
-    )
-    if payload["schema"] != QUALITY_BASELINE_SCHEMA or payload["version"] != 1:
+    version = payload.get("version")
+    if payload.get("schema") != QUALITY_BASELINE_SCHEMA or version not in {
+        QUALITY_BASELINE_V1,
+        QUALITY_BASELINE_VERSION,
+    }:
         raise RefreshQualityError("unsupported quality payload schema/version")
+    expected = {"schema", "version", "parent", "contract", "repositories", "global_counts"}
+    if version == QUALITY_BASELINE_VERSION and "bootstrap" in payload:
+        expected.add("bootstrap")
+    _require_exact_keys(payload, expected, "quality payload")
     parent = payload["parent"]
     if not isinstance(parent, dict):
         raise RefreshQualityError("quality parent must be an object")
@@ -328,15 +353,54 @@ def validate_quality_payload(payload: Mapping[str, object]) -> None:
         {"catalog_build_id", "build_token", "content_fingerprint"},
         "quality parent",
     )
+    is_bootstrap = version == QUALITY_BASELINE_VERSION and "bootstrap" in payload
     if (
         isinstance(parent["catalog_build_id"], bool)
         or not isinstance(parent["catalog_build_id"], int)
-        or parent["catalog_build_id"] <= 0
+        or (parent["catalog_build_id"] < 0 if is_bootstrap else parent["catalog_build_id"] <= 0)
     ):
-        raise RefreshQualityError("quality parent build id must be positive")
-    if not isinstance(parent["build_token"], str) or not parent["build_token"]:
+        raise RefreshQualityError("quality parent build id is invalid")
+    if not isinstance(parent["build_token"], str) or (
+        not parent["build_token"] and not (is_bootstrap and parent["catalog_build_id"] == 0)
+    ):
         raise RefreshQualityError("quality parent build token must be non-empty")
     _require_hash(parent["content_fingerprint"], "quality parent content fingerprint")
+    if is_bootstrap:
+        bootstrap = payload["bootstrap"]
+        if not isinstance(bootstrap, dict):
+            raise RefreshQualityError("quality bootstrap must be an object")
+        _require_exact_keys(
+            bootstrap,
+            {
+                "empty_catalog_fingerprint",
+                "manifest_hash",
+                "source_revisions",
+                "runtime_fingerprint",
+                "builder_plan_hash",
+            },
+            "quality bootstrap",
+        )
+        for field in (
+            "empty_catalog_fingerprint",
+            "manifest_hash",
+            "runtime_fingerprint",
+            "builder_plan_hash",
+        ):
+            _require_hash(bootstrap[field], f"quality bootstrap {field}")
+        if bootstrap["empty_catalog_fingerprint"] != parent["content_fingerprint"]:
+            raise RefreshQualityError("quality bootstrap fingerprint does not match parent")
+        revisions = bootstrap["source_revisions"]
+        if not isinstance(revisions, dict) or not revisions:
+            raise RefreshQualityError("quality bootstrap source revisions are invalid")
+        for repo_key, sha in revisions.items():
+            if not isinstance(repo_key, str) or not repo_key:
+                raise RefreshQualityError("quality bootstrap repository key is invalid")
+            if (
+                not isinstance(sha, str)
+                or len(sha) not in {40, 64}
+                or any(character not in "0123456789abcdef" for character in sha)
+            ):
+                raise RefreshQualityError("quality bootstrap source revision is invalid")
     contract = payload["contract"]
     if not isinstance(contract, dict):
         raise RefreshQualityError("quality contract must be an object")

@@ -148,6 +148,43 @@ def _add_diagnostic_issue(
     )
 
 
+def _add_source_diagnostic(
+    snapshot: UiSnapshot,
+    *,
+    files: dict[str, sqlite3.Row],
+    diagnostic: Any,
+    source_kind: str,
+) -> None:
+    """Retain a UI source diagnostic that has no canonical UI parent.
+
+    In particular, a valid bare UIMeta can be source evidence without proving
+    a NextGen family.  It must not be made into a surface merely to attach a
+    diagnostic.
+    """
+
+    source_file = str(diagnostic.source_file)
+    file_row = _need_file(files, source_file)
+    start_line = int(diagnostic.start_line)
+    end_line = int(diagnostic.end_line)
+    evidence = diagnostic.evidence
+    diagnostic_key = _issue_key(
+        str(diagnostic.code), source_file, start_line, end_line, evidence
+    )
+    snapshot.add(
+        "ui_source_diagnostics",
+        _key(diagnostic_key),
+        source_file_id=int(file_row["id"]),
+        source_path=source_file,
+        source_kind=source_kind,
+        source_pointer=f"lines:{start_line}-{end_line}",
+        diagnostic_key=diagnostic_key,
+        severity=diagnostic.severity,
+        diagnostic_code=diagnostic.code,
+        message=diagnostic.message,
+        evidence_text=evidence,
+    )
+
+
 def _event_key_for_call(result: Any, event_keys: tuple[str, ...], call: Any) -> str:
     matches = [
         key
@@ -446,10 +483,19 @@ def assemble_ui_snapshot(conn: sqlite3.Connection, *, repo_id: int, repo_root: P
     for diagnostic in result.diagnostics:
         artifact = artifacts_by_source.get(diagnostic.source_file)
         if artifact is None:
-            raise UiSnapshotError(
-                "NextGen diagnostic cannot be attached to a source-backed UI surface: "
-                f"{diagnostic.source_file}:{diagnostic.start_line} {diagnostic.code}"
+            source_kind = _artifact_kind_from_path(diagnostic.source_file)
+            if source_kind is None:
+                raise UiSnapshotError(
+                    "NextGen source diagnostic has an unsupported source kind: "
+                    f"{diagnostic.source_file}:{diagnostic.start_line} {diagnostic.code}"
+                )
+            _add_source_diagnostic(
+                snapshot,
+                files=files,
+                diagnostic=diagnostic,
+                source_kind=source_kind,
             )
+            continue
         _add_diagnostic_issue(
             snapshot,
             surface_key=f"nextgen:{artifact.family_key}",
@@ -459,7 +505,20 @@ def assemble_ui_snapshot(conn: sqlite3.Connection, *, repo_id: int, repo_root: P
     return snapshot
 
 
-_ORDER = ("ui_surfaces", "ui_artifacts", "ui_entity_references", "ui_artifact_includes", "ui_fields", "ui_events", "ui_script_dependencies", "ui_event_calls", "ui_resolution_issues")
+def _artifact_kind_from_path(source_file: str) -> str | None:
+    """Return the accepted NextGen source kind without exposing parser internals."""
+
+    name = PurePosixPath(source_file).name.lower()
+    if ".uimeta" in name and name.endswith((".yaml", ".yml")):
+        return "uimeta"
+    if ".viewmeta" in name and name.endswith((".yaml", ".yml")):
+        return "viewmeta"
+    if name.endswith((".view.yaml", ".view.yml")):
+        return "view"
+    return None
+
+
+_ORDER = ("ui_surfaces", "ui_artifacts", "ui_entity_references", "ui_artifact_includes", "ui_fields", "ui_events", "ui_script_dependencies", "ui_event_calls", "ui_resolution_issues", "ui_source_diagnostics")
 _DELETE_ORDER = tuple(reversed(_ORDER))
 
 
@@ -524,6 +583,7 @@ def synchronize_ui_snapshot(conn: sqlite3.Connection, *, repo_id: int, snapshot:
             "ui_script_dependencies": ("surface_id", "source_artifact_id", "dependency_key"),
             "ui_event_calls": ("event_id", "dependency_id", "call_key"),
             "ui_resolution_issues": ("surface_id", "issue_key"),
+            "ui_source_diagnostics": ("diagnostic_key",),
         }
         for table in _ORDER:
             desired = sorted(snapshot.rows.get(table, ()), key=lambda row: row.key)
@@ -532,7 +592,7 @@ def synchronize_ui_snapshot(conn: sqlite3.Connection, *, repo_id: int, snapshot:
             for row in desired:
                 values = dict(row.values); values["repo_id"] = repo_id
                 source_surface_key = str(values.get("surface_key", ""))
-                if table == "ui_surfaces":
+                if table in {"ui_surfaces", "ui_source_diagnostics"}:
                     source_surface_key = ""
                 else:
                     values.pop("surface_key", None)
@@ -599,10 +659,15 @@ def synchronize_ui_snapshot(conn: sqlite3.Connection, *, repo_id: int, snapshot:
             "ui_script_dependencies": "surface_id NOT IN ({})",
             "ui_event_calls": "event_id IN (SELECT event.id FROM ui_events event JOIN ui_artifacts artifact ON artifact.id=event.artifact_id WHERE artifact.surface_id NOT IN ({}))",
             "ui_resolution_issues": "surface_id NOT IN ({})",
+            "ui_source_diagnostics": "1=1",
         }
         for table in _DELETE_ORDER:
             clause = " AND " + protected[table].format(",".join("?" for _ in protected_ids)) if protected else ""
-            conn.execute(f"DELETE FROM {table} WHERE repo_id=? AND id NOT IN (SELECT id FROM desired_{table}){clause}", (repo_id, *protected_ids))
+            params = (repo_id, *protected_ids) if "?" in clause else (repo_id,)
+            conn.execute(
+                f"DELETE FROM {table} WHERE repo_id=? AND id NOT IN (SELECT id FROM desired_{table}){clause}",
+                params,
+            )
         require_foreign_key_integrity(conn, context="UI snapshot synchronization")
         conn.commit()
     except Exception:

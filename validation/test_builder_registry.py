@@ -17,6 +17,7 @@ class BuilderRegistryTests(unittest.TestCase):
         self.assertLess(plan.index("scan"), plan.index("symbols"))
         self.assertLess(plan.index("entities"), plan.index("entity_roots"))
         self.assertLess(plan.index("openapi_scan"), plan.index("openapi_link"))
+        self.assertLess(plan.index("openapi_scan"), plan.index("api_registry"))
         self.assertLess(plan.index("openapi_link"), plan.index("rest_endpoints"))
         self.assertLess(plan.index("scan"), plan.index("ui_surfaces"))
         self.assertLess(plan.index("relationships"), plan.index("ui_surfaces"))
@@ -27,6 +28,29 @@ class BuilderRegistryTests(unittest.TestCase):
             plan.index("entity_semantics"), plan.index("entity_access_links")
         )
         self.assertLess(plan.index("workflows"), plan.index("entity_access_links"))
+
+    def test_registry_only_delta_does_not_invalidate_rest_or_ui(self) -> None:
+        plan = build_plan("intacct_app")
+        modes = stage_execution_modes(
+            plan,
+            repository_mode="delta",
+            changed_paths=("app/source/api/registries/RegistryV1.json",),
+        )
+        self.assertEqual(modes["api_registry"][0], "full")
+        self.assertEqual(modes["rest_endpoints"][0], "skipped")
+        self.assertEqual(modes["ui_surfaces"][0], "skipped")
+
+    def test_openapi_change_runs_registry_but_registry_is_not_rest_input(self) -> None:
+        plan = build_plan("intacct_app")
+        modes = stage_execution_modes(
+            plan,
+            repository_mode="delta",
+            changed_paths=(
+                "app/source/openapispec/gl/models/objects.general-ledger.journal-entry.s1.schema.yaml",
+            ),
+        )
+        self.assertEqual(modes["api_registry"][0], "full")
+        self.assertEqual(modes["rest_endpoints"][0], "full")
 
     def test_generic_profile_rejects_app_builder(self) -> None:
         with self.assertRaisesRegex(BuilderPlanError, "not supported"):

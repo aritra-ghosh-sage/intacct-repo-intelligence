@@ -627,6 +627,35 @@ def _run_builder(
             return _outcome_with_diagnostics(outcome, diagnostics)
         finally:
             conn.close()
+    elif builder == "api_registry":
+        from catalog.api_registry import build_api_registry
+        from catalog.db import get_connection
+
+        conn = get_connection(candidate_db)
+        try:
+            result = build_api_registry(conn, repo_id=repo_id, repo_root=root)
+            conn.commit()
+            outcome = BuilderOutcome(
+                result.entries_written + result.links_written + result.issues_written,
+                {
+                    "entries_written": result.entries_written,
+                    "links_written": result.links_written,
+                    "issues_written": result.issues_written,
+                },
+            )
+            diagnostics = [
+                _builder_diagnostic(
+                    builder="api_registry",
+                    code=record["issue_code"],
+                    severity=record["severity"],
+                    record=record,
+                    delta_context=delta_context,
+                )
+                for record in result.diagnostics
+            ]
+            return _outcome_with_diagnostics(outcome, diagnostics)
+        finally:
+            conn.close()
     elif builder == "openapi_link":
         from catalog.db import get_connection
         from scripts.link_openapispec import OPENAPI_MAPPING_TYPES, _link_openapispec
@@ -695,9 +724,28 @@ def _run_builder(
                     "ui_script_dependencies",
                     "ui_event_calls",
                     "ui_resolution_issues",
+                    "ui_source_diagnostics",
                 )
             }
-            return BuilderOutcome(sum(metrics.values()), metrics)
+            diagnostics = [
+                _builder_diagnostic(
+                    builder="ui_surfaces",
+                    code=str(row["diagnostic_code"]),
+                    severity=str(row["severity"]),
+                    record=dict(row),
+                    delta_context=delta_context,
+                )
+                for row in conn.execute(
+                    """SELECT source_path,source_pointer,diagnostic_key,severity,
+                               diagnostic_code,message
+                       FROM ui_source_diagnostics WHERE repo_id=?
+                       ORDER BY diagnostic_key""",
+                    (repo_id,),
+                )
+            ]
+            return _outcome_with_diagnostics(
+                BuilderOutcome(sum(metrics.values()), metrics), diagnostics
+            )
         finally:
             conn.close()
     elif builder == "workflows":
@@ -1835,6 +1883,23 @@ def _refresh_repository_closure(
     outcomes_by_repo: dict[str, dict[str, BuilderOutcome]] = {}
     manifest_digest = _manifest_hash(manifest)
     plan_digest = _builder_plan_hash(plans, runtime_hash)
+    # A first catalog generation has no active parent row.  Bind its quality
+    # approval to the exact initialized SQLite evidence and all execution
+    # inputs, so a prepare token cannot be replayed after any drift.
+    bootstrap_contract: dict[str, object] | None = None
+    if parent.catalog_build_id == 0:
+        bootstrap_conn = sqlite3.connect(f"file:{active_db}?mode=ro", uri=True)
+        try:
+            empty_fingerprint = logical_content_fingerprint(bootstrap_conn)
+        finally:
+            bootstrap_conn.close()
+        bootstrap_contract = {
+            "empty_catalog_fingerprint": empty_fingerprint,
+            "manifest_hash": manifest_digest,
+            "source_revisions": dict(sorted(start_revisions.items())),
+            "runtime_fingerprint": runtime_hash,
+            "builder_plan_hash": plan_digest,
+        }
     failed_repo = refresh_order[0] if refresh_order else "unknown"
     failed_step = "backup_database"
     prepare_only = prepare_quality_baseline is not None
@@ -2099,6 +2164,29 @@ def _refresh_repository_closure(
                 raise RefreshError(
                     "unsupported integration-link rows remain in candidate"
                 )
+            failed_step = "migration_028_validation"
+            if not conn.execute(
+                "SELECT 1 FROM schema_migrations WHERE name='028_api_registry'"
+            ).fetchone():
+                raise RefreshError("migration 028 is absent from candidate")
+            missing_registry_tables = [
+                table
+                for table in (
+                    "api_registry_entries",
+                    "api_registry_entry_links",
+                    "api_registry_issues",
+                    "ui_source_diagnostics",
+                )
+                if not conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                    (table,),
+                ).fetchone()
+            ]
+            if missing_registry_tables:
+                raise RefreshError(
+                    "migration 028 tables are absent from candidate: "
+                    + ", ".join(missing_registry_tables)
+                )
 
             candidate_repositories: list[dict[str, object]] = []
             quality_failures: list[str] = []
@@ -2167,7 +2255,31 @@ def _refresh_repository_closure(
                 )
                 report = quality_report(payload)
                 approval = str(report["approval_sha256"])
+            elif parent.catalog_build_id == 0:
+                if bootstrap_contract is None:
+                    raise RefreshQualityError(
+                        "first-generation quality baseline has no bootstrap contract"
+                    )
+                payload = build_quality_payload(
+                    parent={
+                        "catalog_build_id": 0,
+                        "build_token": "",
+                        "content_fingerprint": bootstrap_contract[
+                            "empty_catalog_fingerprint"
+                        ],
+                    },
+                    delta_contract_version=DELTA_CONTRACT_VERSION,
+                    runtime_fingerprint=runtime_hash,
+                    repositories=candidate_repositories,
+                    global_counts=candidate_global_counts,
+                    bootstrap=bootstrap_contract,
+                )
+                report = quality_report(payload)
+                approval = str(report["approval_sha256"])
             else:
+                # A legacy active generation without a stored logical
+                # fingerprint must take the supported full-refresh recovery
+                # path.  It is not an empty catalog bootstrap.
                 report = None
                 approval = hashlib.sha256(
                     _stable_json(candidate_repositories).encode()
@@ -2180,10 +2292,6 @@ def _refresh_repository_closure(
                 for repo_key in refresh_order
             )
             if prepare_only:
-                if report is None:
-                    raise RefreshQualityError(
-                        "cannot prepare a baseline without an active parent generation"
-                    )
                 _recheck_source_revisions(manifest, start_revisions)
                 _assert_parent_unchanged(active_db, parent)
                 write_quality_report_atomic(prepare_quality_baseline, report)

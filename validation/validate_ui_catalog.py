@@ -24,6 +24,7 @@ UI_TABLES = (
     "ui_script_dependencies",
     "ui_event_calls",
     "ui_resolution_issues",
+    "ui_source_diagnostics",
 )
 
 NATURAL_KEY_SPECS: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -48,6 +49,7 @@ NATURAL_KEY_SPECS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
     ("ui_event_calls", ("repo_id", "event_id", "dependency_id", "call_key")),
     ("ui_resolution_issues", ("repo_id", "surface_id", "issue_key")),
+    ("ui_source_diagnostics", ("repo_id", "diagnostic_key")),
 )
 
 
@@ -237,6 +239,14 @@ def _ownership_checks(conn: sqlite3.Connection) -> dict[str, int]:
                         OR dependency.surface_id<>issue.surface_id))
                OR COALESCE(TRIM(issue.issue_key), '') = ''
         """,
+        "source_diagnostic_file_provenance_mismatches": """
+            SELECT COUNT(*) FROM ui_source_diagnostics diagnostic
+            LEFT JOIN files file ON file.id=diagnostic.source_file_id
+            WHERE file.id IS NULL OR file.repo_id<>diagnostic.repo_id
+               OR diagnostic.source_path<>file.path
+               OR COALESCE(TRIM(diagnostic.source_kind), '') = ''
+               OR COALESCE(TRIM(diagnostic.diagnostic_key), '') = ''
+        """,
     }
     return {name: _count(conn, sql) for name, sql in checks.items()}
 
@@ -250,6 +260,24 @@ def _strict_resolution_issue_count(conn: sqlite3.Connection) -> int:
            OR LOWER(issue_code) LIKE '%ambiguous%'
         """,
     )
+
+
+def _source_diagnostic_counts(conn: sqlite3.Connection) -> tuple[int, int, int]:
+    """Return total, normal-mode blocking, and strict-only source diagnostics."""
+
+    total = _count(conn, "SELECT COUNT(*) FROM ui_source_diagnostics")
+    blocking = _count(
+        conn, "SELECT COUNT(*) FROM ui_source_diagnostics WHERE severity='error'"
+    )
+    strict = _count(
+        conn,
+        """
+        SELECT COUNT(*) FROM ui_source_diagnostics
+        WHERE LOWER(diagnostic_code) LIKE '%unresolved%'
+           OR LOWER(diagnostic_code) LIKE '%ambiguous%'
+        """,
+    )
+    return total, blocking, strict
 
 
 def validate_ui_catalog_connection(
@@ -282,6 +310,9 @@ def validate_ui_catalog_connection(
         conn, "SELECT COUNT(*) FROM ui_resolution_issues WHERE severity='error'"
     )
     strict_issues = _strict_resolution_issue_count(conn)
+    source_diagnostic_count, blocking_source_diagnostics, strict_source_diagnostics = (
+        _source_diagnostic_counts(conn)
+    )
 
     summary = {
         "strict_resolution": strict_resolution,
@@ -292,6 +323,9 @@ def validate_ui_catalog_connection(
         "duplicate_natural_key_groups": duplicate_keys,
         "blocking_resolution_issues": blocking_issues,
         "strict_resolution_issues": strict_issues,
+        "source_diagnostics": source_diagnostic_count,
+        "blocking_source_diagnostics": blocking_source_diagnostics,
+        "strict_source_diagnostics": strict_source_diagnostics,
     }
     failures: list[str] = []
     if foreign_key_rows:
@@ -304,8 +338,12 @@ def validate_ui_catalog_connection(
         failures.append("stable_natural_keys")
     if blocking_issues:
         failures.append("blocking_resolution_issues")
+    if blocking_source_diagnostics:
+        failures.append("blocking_source_diagnostics")
     if strict_resolution and strict_issues:
         failures.append("strict_resolution_issues")
+    if strict_resolution and strict_source_diagnostics:
+        failures.append("strict_source_diagnostics")
     summary["failures"] = failures
     summary["ok"] = not failures
     if failures:

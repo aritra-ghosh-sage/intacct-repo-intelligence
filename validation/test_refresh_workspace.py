@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from catalog.api_registry import RegistryBuildStats
 from catalog.refresh_quality import RefreshQualityError, load_quality_report
 from catalog.repositories import RepositoryError
 from scripts.refresh_workspace import (
@@ -16,6 +17,7 @@ from scripts.refresh_workspace import (
     _assert_parent_unchanged,
     _parent_descriptor,
     _refresh_lock,
+    _run_builder,
     refresh_repository,
 )
 from validation.validate_catalog_integrity import CatalogIntegrityError
@@ -231,6 +233,40 @@ class WorkspaceRefreshTests(unittest.TestCase):
             self.assertIsNone(stage[2])
         finally:
             conn.close()
+
+    def test_api_registry_builder_dispatches_connection_level_builder(self) -> None:
+        directory, checkout, database, _manifest = self._fixture()
+        self.addCleanup(directory.cleanup)
+        expected = RegistryBuildStats(
+            entries_written=3,
+            links_written=4,
+            issues_written=0,
+            source_optional=1,
+        )
+
+        with mock.patch(
+            "catalog.api_registry.build_api_registry", return_value=expected
+        ) as build_api_registry:
+            outcome = _run_builder(
+                "api_registry",
+                "intacct_app",
+                17,
+                checkout,
+                str(database),
+                {"repo_key": "intacct_app"},
+                git_root=checkout,
+                output_root=Path(directory.name) / "output",
+            )
+
+        build_api_registry.assert_called_once()
+        self.assertEqual(build_api_registry.call_args.kwargs["repo_id"], 17)
+        self.assertEqual(build_api_registry.call_args.kwargs["repo_root"], checkout)
+        self.assertEqual(outcome.affected_count, 7)
+        self.assertEqual(
+            outcome.metrics,
+            {"entries_written": 3, "links_written": 4, "issues_written": 0},
+        )
+        self.assertEqual(outcome.diagnostics, ())
 
     def test_refresh_honors_manifest_dependency_order(self) -> None:
         directory, _checkout, database, manifest = self._fixture()

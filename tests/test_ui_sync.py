@@ -259,6 +259,60 @@ class FooEditor extends FormEditor {
     }.issubset(issue_codes)
 
 
+def test_bare_uimeta_persists_only_one_source_diagnostic_and_removes_it_when_resolved(
+    tmp_path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    bare_uimeta = "app/source/openapispec/inv/uimeta/objects.aisle.s1.uimeta.yaml"
+    _write(repo_root, bare_uimeta, "uiLabel: IA.AISLE\nfields: {}\n")
+    conn, repo_id = _conn()
+    source_file_id = int(
+        conn.execute("INSERT INTO files(repo_id,path) VALUES (?,?)", (repo_id, bare_uimeta)).lastrowid
+    )
+    conn.commit()
+
+    synchronize_ui_snapshot(
+        conn,
+        repo_id=repo_id,
+        snapshot=assemble_ui_snapshot(conn, repo_id=repo_id, repo_root=repo_root),
+    )
+
+    diagnostics = conn.execute(
+        """SELECT source_file_id,source_path,source_kind,source_pointer,severity,
+                  diagnostic_code,message,evidence_text
+           FROM ui_source_diagnostics"""
+    ).fetchall()
+    assert [tuple(row) for row in diagnostics] == [
+        (
+            source_file_id,
+            bare_uimeta,
+            "uimeta",
+            "lines:1-1",
+            "warning",
+            "nextgen.family.unresolved",
+            "No explicit object key is available; this artifact cannot be assigned to a NextGen family.",
+            "objects.aisle.s1.uimeta.yaml",
+        )
+    ]
+    assert conn.execute("SELECT COUNT(*) FROM ui_surfaces").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM ui_artifacts").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM ui_entity_references").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM api_registry_entries").fetchone()[0] == 0
+
+    # The desired-snapshot deletion is deterministic: once source evidence
+    # proves a family, the old unattached warning cannot survive.
+    _write(repo_root, bare_uimeta, "object: inventory-control/aisle\n")
+    synchronize_ui_snapshot(
+        conn,
+        repo_id=repo_id,
+        snapshot=assemble_ui_snapshot(conn, repo_id=repo_id, repo_root=repo_root),
+    )
+    assert conn.execute("SELECT COUNT(*) FROM ui_source_diagnostics").fetchone()[0] == 0
+    assert conn.execute("SELECT surface_key FROM ui_surfaces").fetchone()[0] == (
+        "nextgen:inventory-control/aisle"
+    )
+
+
 def test_assemble_glbatch_actionui_and_nextgen_evidence() -> None:
     conn, repo_id = _conn()
     paths = (

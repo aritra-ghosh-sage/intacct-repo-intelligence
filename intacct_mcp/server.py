@@ -21,6 +21,13 @@ from pydantic import Field
 from catalog.graph_projection import GRAPH_PROJECTION_VERSION
 from catalog.rest_coverage import REQUIRED_TABLES, coverage_rows, coverage_summary
 from config import CATALOG_DB, GRAPH_DB
+from scripts.query_api_registry import (
+    ApiRegistryQueryError,
+    query_api_registry_file,
+    query_api_registry_issues,
+    query_api_registry_releases,
+    query_api_registry_resource,
+)
 from scripts.query_ui import (
     UiQueryError,
     query_ui_impact,
@@ -160,6 +167,62 @@ UiDetailRecordKind = Annotated[
             "100 nested handler-call records per event."
         ),
         examples=["events"],
+    ),
+]
+ApiRegistryOperation = Annotated[
+    Literal["releases", "resource", "file", "issues"],
+    Field(
+        description=(
+            "Registry evidence operation. releases summarizes exact Registry files; "
+            "resource requires release, module, resource_kind, and resource_path; "
+            "file requires file_path; issues returns Registry-local diagnostics."
+        ),
+        examples=["resource"],
+    ),
+]
+ApiRegistryRelease = Annotated[
+    Literal["V1", "Beta", "V2i"],
+    Field(
+        description="Exact Registry release. Valid values are V1, Beta, and V2i.",
+        examples=["V1"],
+    ),
+]
+ApiRegistryModule = Annotated[
+    str,
+    Field(
+        min_length=1,
+        description=(
+            "Exact Registry module, required when operation='resource'. Use "
+            "api_registry(operation='releases') to discover available releases."
+        ),
+        examples=["accounts-payable"],
+    ),
+]
+ApiRegistryResourceKind = Annotated[
+    str,
+    Field(
+        min_length=1,
+        description="Exact Registry resource kind, required when operation='resource'.",
+        examples=["objects"],
+    ),
+]
+ApiRegistryResourcePath = Annotated[
+    str,
+    Field(
+        min_length=1,
+        description="Exact Registry resource path, required when operation='resource'.",
+        examples=["bill"],
+    ),
+]
+ApiRegistryFilePath = Annotated[
+    str,
+    Field(
+        min_length=1,
+        description=(
+            "Exact repository-relative Registry source file path, required when "
+            "operation='file'. Never pass an absolute filesystem path."
+        ),
+        examples=["app/source/api/registries/RegistryV1.json"],
     ),
 ]
 ConfidenceScore = Annotated[
@@ -2204,6 +2267,115 @@ def ui_surface_detail_impl(
         )
 
 
+def api_registry_impl(
+    state: CatalogState,
+    operation: str,
+    repo_key: str,
+    release: str | None = None,
+    module: str | None = None,
+    resource_kind: str | None = None,
+    resource_path: str | None = None,
+    file_path: str | None = None,
+    limit: int = DEFAULT_LIMIT,
+    cursor: str | None = None,
+) -> CatalogResponse:
+    """Return exact Registry evidence through the shared CLI query functions.
+
+    The Registry CLI owns selection, pagination, ordering, and source-pointer
+    payloads.  This adapter only adds the catalog MCP response envelope.
+    """
+
+    with state.conn() as c:
+        try:
+            if operation == "releases":
+                data = query_api_registry_releases(
+                    c,
+                    repo_key=repo_key,
+                    release=release,
+                    limit=limit,
+                    cursor=cursor,
+                )
+            elif operation == "resource":
+                required = {
+                    "release": release,
+                    "module": module,
+                    "resource_kind": resource_kind,
+                    "resource_path": resource_path,
+                }
+                missing = sorted(name for name, value in required.items() if value is None)
+                if missing:
+                    return make_error_response(
+                        state,
+                        "api_registry",
+                        "missing_required_parameters",
+                        "resource requires release, module, resource_kind, and resource_path.",
+                        c,
+                        details={"operation": operation, "missing_parameters": missing},
+                    )
+                data = query_api_registry_resource(
+                    c,
+                    repo_key=repo_key,
+                    release=release,
+                    module=module,
+                    resource_kind=resource_kind,
+                    resource_path=resource_path,
+                    limit=limit,
+                    cursor=cursor,
+                )
+            elif operation == "file":
+                if file_path is None:
+                    return make_error_response(
+                        state,
+                        "api_registry",
+                        "missing_required_parameters",
+                        "file requires file_path.",
+                        c,
+                        details={"operation": operation, "missing_parameters": ["file_path"]},
+                    )
+                data = query_api_registry_file(
+                    c,
+                    repo_key=repo_key,
+                    file_path=file_path,
+                    release=release,
+                    limit=limit,
+                    cursor=cursor,
+                )
+            elif operation == "issues":
+                data = query_api_registry_issues(
+                    c,
+                    repo_key=repo_key,
+                    release=release,
+                    limit=limit,
+                    cursor=cursor,
+                )
+            else:
+                return make_error_response(
+                    state,
+                    "api_registry",
+                    "invalid_operation",
+                    "operation must be one of: releases, resource, file, issues.",
+                    c,
+                    details={"operation": operation},
+                )
+        except ApiRegistryQueryError as error:
+            return make_error_response(
+                state,
+                "api_registry",
+                error.code,
+                str(error),
+                c,
+                details=dict(error.details),
+            )
+
+        return make_response(
+            state,
+            "api_registry",
+            data,
+            c,
+            next_cursor=data["page"]["next_cursor"],
+        )
+
+
 def catalog_status_impl(state: CatalogState) -> CatalogResponse:
     """Get catalog statistics (row counts per table)."""
     with state.conn() as c:
@@ -3050,6 +3222,32 @@ def create_server(
         """Return one paged evidence family for an exact actionUI or NextGen surface."""
         return ui_surface_detail_impl(
             state, surface_key, repo_key, record_kind, limit, cursor
+        )
+
+    @mcp.tool(annotations=READ_ONLY_TOOL_ANNOTATIONS)
+    def api_registry(
+        operation: ApiRegistryOperation,
+        repo_key: RepositoryKey,
+        release: ApiRegistryRelease | None = None,
+        module: ApiRegistryModule | None = None,
+        resource_kind: ApiRegistryResourceKind | None = None,
+        resource_path: ApiRegistryResourcePath | None = None,
+        file_path: ApiRegistryFilePath | None = None,
+        limit: ResultLimit = DEFAULT_LIMIT,
+        cursor: PaginationCursor | None = None,
+    ) -> CatalogResponse:
+        """Read exact V1, Beta, or V2i Registry evidence and Registry-local diagnostics without traversing OpenAPI-derived facts."""
+        return api_registry_impl(
+            state,
+            operation,
+            repo_key,
+            release,
+            module,
+            resource_kind,
+            resource_path,
+            file_path,
+            limit,
+            cursor,
         )
 
     @mcp.tool(annotations=READ_ONLY_TOOL_ANNOTATIONS)

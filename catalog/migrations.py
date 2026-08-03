@@ -23,6 +23,7 @@ REFRESH_CONTRACTS_MIGRATION = "024_refresh_contracts"
 DELTA_REFRESH_HARDENING_MIGRATION = "025_delta_refresh_hardening"
 UI_CATALOG_MIGRATION = "026_ui_catalog"
 UI_NEGATIVE_EVENT_CALL_MIGRATION = "027_ui_negative_event_calls"
+API_REGISTRY_MIGRATION = "028_api_registry"
 LEGACY_REPO_KEY = "ia-main"
 
 
@@ -1427,8 +1428,35 @@ def _apply_ui_negative_event_call_migration(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE ui_event_calls_legacy_027")
 
 
+def _apply_api_registry_migration(conn: sqlite3.Connection) -> None:
+    """Install repository-scoped Registry evidence and source-only UI diagnostics.
+
+    Both fact families use composite file ownership foreign keys.  They are
+    intentionally isolated from reset-style OpenAPI and canonical UI tables so
+    a source diagnostic cannot manufacture a Registry or UI association.
+    """
+
+    required_parents = ("repos", "files")
+    missing = [table for table in required_parents if not _table_exists(conn, table)]
+    if missing:
+        raise RuntimeError(
+            "api registry migration requires repository-scoped parent tables: "
+            + ", ".join(missing)
+        )
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_files_id_repo ON files(id, repo_id)")
+    _canonical_schema_objects(
+        conn,
+        (
+            "api_registry_entries",
+            "api_registry_entry_links",
+            "api_registry_issues",
+            "ui_source_diagnostics",
+        ),
+    )
+
+
 def apply_delta_refresh_migration(conn: sqlite3.Connection) -> None:
-    """Apply refresh migrations 023 through 027 to a repository-scoped catalog."""
+    """Apply refresh migrations 023 through 028 to a repository-scoped catalog."""
 
     if conn.in_transaction:
         raise RuntimeError(
@@ -1489,6 +1517,16 @@ def apply_delta_refresh_migration(conn: sqlite3.Connection) -> None:
             conn.execute(
                 "INSERT INTO schema_migrations(name) VALUES (?)",
                 (UI_NEGATIVE_EVENT_CALL_MIGRATION,),
+            )
+        api_registry_applied = conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name=?",
+            (API_REGISTRY_MIGRATION,),
+        ).fetchone()
+        _apply_api_registry_migration(conn)
+        if api_registry_applied is None:
+            conn.execute(
+                "INSERT INTO schema_migrations(name) VALUES (?)",
+                (API_REGISTRY_MIGRATION,),
             )
         violations = conn.execute("PRAGMA foreign_key_check").fetchall()
         if violations:
@@ -1628,6 +1666,16 @@ def apply_multi_repo_migration(
             conn.execute(
                 "INSERT INTO schema_migrations(name) VALUES (?)",
                 (UI_NEGATIVE_EVENT_CALL_MIGRATION,),
+            )
+        api_registry_applied = conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name=?",
+            (API_REGISTRY_MIGRATION,),
+        ).fetchone()
+        _apply_api_registry_migration(conn)
+        if api_registry_applied is None:
+            conn.execute(
+                "INSERT INTO schema_migrations(name) VALUES (?)",
+                (API_REGISTRY_MIGRATION,),
             )
         # FK enforcement is necessarily off while legacy parent tables are
         # rebuilt, but foreign_key_check still validates the candidate before

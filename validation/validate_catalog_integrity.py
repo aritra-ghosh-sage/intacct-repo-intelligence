@@ -98,6 +98,30 @@ def _logical_orphan_checks(conn: sqlite3.Connection) -> dict[str, int]:
                OR (surface='dbschema_table' AND NOT EXISTS (
                        SELECT 1 FROM dbschema_tables dt WHERE dt.id=eal.record_id))
         """,
+        "api_registry_links_without_entry": """
+            SELECT COUNT(*) FROM api_registry_entry_links link
+            LEFT JOIN api_registry_entries entry
+              ON entry.id=link.entry_id AND entry.repo_id=link.repo_id
+            WHERE entry.id IS NULL
+        """,
+        "api_registry_links_without_source_file": """
+            SELECT COUNT(*) FROM api_registry_entry_links link
+            LEFT JOIN files file
+              ON file.id=link.source_file_id AND file.repo_id=link.repo_id
+            WHERE file.id IS NULL
+        """,
+        "api_registry_entries_without_registry_file": """
+            SELECT COUNT(*) FROM api_registry_entries entry
+            LEFT JOIN files file
+              ON file.id=entry.registry_file_id AND file.repo_id=entry.repo_id
+            WHERE file.id IS NULL
+        """,
+        "ui_source_diagnostics_without_source_file": """
+            SELECT COUNT(*) FROM ui_source_diagnostics diagnostic
+            LEFT JOIN files file
+              ON file.id=diagnostic.source_file_id AND file.repo_id=diagnostic.repo_id
+            WHERE file.id IS NULL
+        """,
         "repo_scoped_file_ownership_mismatches": """
             SELECT COUNT(*) FROM (
                 SELECT so.id FROM security_operations so JOIN files f ON f.id=so.file_id
@@ -213,6 +237,21 @@ def validate_catalog_connection(
             "SELECT 1 FROM schema_migrations WHERE name='025_delta_refresh_hardening'"
         ).fetchone()
     )
+    api_registry_migration_present = bool(
+        _table_exists(conn, "schema_migrations")
+        and conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name='028_api_registry'"
+        ).fetchone()
+    )
+    api_registry_tables_present = all(
+        _table_exists(conn, table)
+        for table in (
+            "api_registry_entries",
+            "api_registry_entry_links",
+            "api_registry_issues",
+            "ui_source_diagnostics",
+        )
+    )
     integration_link_rows = (
         _count(conn, "SELECT COUNT(*) FROM integration_links")
         if _table_exists(conn, "integration_links")
@@ -288,6 +327,8 @@ def validate_catalog_connection(
         "migration_023_present": migration_present,
         "migration_024_present": refresh_contract_migration_present,
         "migration_025_present": hardening_migration_present,
+        "migration_028_present": api_registry_migration_present,
+        "api_registry_tables_present": api_registry_tables_present,
         "integration_link_rows": integration_link_rows,
         "invalid_active_quality_runs": invalid_active_quality_runs,
         "active_catalog_build_count": len(active_rows),
@@ -315,6 +356,10 @@ def validate_catalog_connection(
         failures.append("migration_024")
     if not hardening_migration_present:
         failures.append("migration_025")
+    if not api_registry_migration_present:
+        failures.append("migration_028")
+    if not api_registry_tables_present:
+        failures.append("api_registry_tables")
     if integration_link_rows:
         failures.append("integration_links")
     if invalid_active_quality_runs:

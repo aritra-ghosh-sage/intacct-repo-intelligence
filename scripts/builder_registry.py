@@ -121,11 +121,26 @@ BUILDERS: dict[str, Builder] = {
         source_matcher=_contains("openapispec", "openapi"),
         invalidates=(
             "entities",
+            "api_registry",
             "openapi_link",
             "workflows",
             "rest_endpoints",
             "entity_semantics",
             "entity_access_links",
+        ),
+    ),
+    # Registry extraction is deliberately downstream of the OpenAPI scan for
+    # ordering consistency, but its facts are file-provenanced and never read
+    # or reference the reset-style ``openapispec_index`` table.
+    "api_registry": Builder(
+        "api_registry",
+        ("openapi_scan",),
+        frozenset({"intacct_app"}),
+        delta_capability="scoped_full",
+        source_matcher=_exact(
+            "app/source/api/registries/RegistryV1.json",
+            "app/source/api/registries/RegistryBeta.json",
+            "app/source/api/registries/RegistryV2i.json",
         ),
     ),
     "openapi_link": Builder(
@@ -169,9 +184,7 @@ BUILDERS: dict[str, Builder] = {
         "rest_endpoints",
         ("openapi_link",),
         frozenset({"intacct_app"}),
-        source_matcher=_or(
-            _contains("openapispec", "openapi", "registr"), _suffix(".ent")
-        ),
+        source_matcher=_or(_contains("openapispec", "openapi"), _suffix(".ent")),
         invalidates=("entity_semantics", "entity_access_links", "gherkin_coverage"),
     ),
     "entity_semantics": Builder(
@@ -218,6 +231,7 @@ PROFILE_DEFAULTS: dict[str, tuple[str, ...]] = {
         "entities",
         "entity_roots",
         "openapi_scan",
+        "api_registry",
         "openapi_link",
         "ui_surfaces",
         "workflows",

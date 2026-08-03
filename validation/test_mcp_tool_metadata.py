@@ -7,6 +7,7 @@ from typing import Any
 from intacct_mcp.server import create_server
 
 EXPECTED_TOOL_NAMES = {
+    "api_registry",
     "api_surface",
     "catalog_risk_summary",
     "catalog_search",
@@ -139,7 +140,7 @@ class McpToolMetadataTests(unittest.TestCase):
         )
 
     def test_ui_tools_publish_pagination_and_detail_contracts(self) -> None:
-        self.assertEqual(24, len(self.tools))
+        self.assertEqual(25, len(self.tools))
 
         impact = self.tools["ui_impact"]["inputSchema"]
         self.assertEqual(["entity_name", "repo_key"], impact["required"])
@@ -158,6 +159,20 @@ class McpToolMetadataTests(unittest.TestCase):
         self.assertIn("actionui:", detail["properties"]["surface_key"]["description"])
         self.assertEqual(1, detail["properties"]["limit"]["minimum"])
         self.assertEqual(100, detail["properties"]["limit"]["maximum"])
+
+    def test_api_registry_publishes_operation_specific_evidence_contract(self) -> None:
+        schema = self.tools["api_registry"]["inputSchema"]
+        self.assertEqual(["operation", "repo_key"], schema["required"])
+        self.assertEqual(
+            {"releases", "resource", "file", "issues"},
+            set(schema["properties"]["operation"]["enum"]),
+        )
+        self.assertEqual(1, schema["properties"]["limit"]["minimum"])
+        self.assertEqual(100, schema["properties"]["limit"]["maximum"])
+        self.assertIn("repository_list", schema["properties"]["repo_key"]["description"])
+        self.assertIn("Registry source file", schema["properties"]["file_path"]["anyOf"][0]["description"])
+        release = schema["properties"]["release"]["anyOf"][0]
+        self.assertEqual({"V1", "Beta", "V2i"}, set(release["enum"]))
 
 
 if __name__ == "__main__":

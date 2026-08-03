@@ -73,6 +73,26 @@ def test_unknown_entity_mapping_remains_an_issue_without_filename_guessing() -> 
     ]
 
 
+def test_bare_uimeta_is_an_unattached_source_diagnostic() -> None:
+    """A legacy filename without a module cannot prove a NextGen family."""
+
+    result = extract_nextgen_families(
+        (
+            NextGenSource(
+                source_file="app/source/openapispec/inv/uimeta/objects.aisle.s1.uimeta.yaml",
+                text="uiLabel: IA.AISLE\nfields: {}\n",
+            ),
+        )
+    )
+
+    assert result.families == ()
+    assert result.artifacts == ()
+    assert result.entity_references == ()
+    assert [(diagnostic.code, diagnostic.severity) for diagnostic in result.diagnostics] == [
+        ("nextgen.family.unresolved", "warning")
+    ]
+
+
 def test_viewmeta_uses_explicit_object_and_invalid_yaml_is_an_issue() -> None:
     result = extract_nextgen_families(
         (

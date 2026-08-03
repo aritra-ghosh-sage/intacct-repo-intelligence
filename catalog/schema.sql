@@ -1175,6 +1175,109 @@ CREATE TABLE IF NOT EXISTS ui_resolution_issues (
 CREATE INDEX IF NOT EXISTS idx_ui_resolution_issues_surface
     ON ui_resolution_issues(repo_id, surface_id, severity);
 
+-- Registry evidence is deliberately independent of ``openapispec_index``.
+-- That index is reset by every OpenAPI scan, while Registry entries and their
+-- exact component-file provenance are durable catalog evidence.
+CREATE TABLE IF NOT EXISTS api_registry_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
+    registry_release TEXT NOT NULL CHECK(registry_release IN ('V1', 'Beta', 'V2i')),
+    registry_file_id INTEGER NOT NULL,
+    json_pointer TEXT NOT NULL,
+    module TEXT NOT NULL,
+    resource_kind TEXT NOT NULL,
+    resource_path TEXT NOT NULL,
+    revision TEXT,
+    declared_hash TEXT,
+    api_type TEXT,
+    runtime_owner TEXT,
+    ui_metadata_hash TEXT,
+    source_optional INTEGER NOT NULL DEFAULT 0 CHECK(source_optional IN (0, 1)),
+    payload_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    FOREIGN KEY(registry_file_id, repo_id) REFERENCES files(id, repo_id) ON DELETE CASCADE,
+    UNIQUE(repo_id, registry_release, json_pointer)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_api_registry_entries_id_repo
+    ON api_registry_entries(id, repo_id);
+CREATE INDEX IF NOT EXISTS idx_api_registry_entries_release_resource
+    ON api_registry_entries(repo_id, registry_release, module, resource_kind, resource_path);
+CREATE INDEX IF NOT EXISTS idx_api_registry_entries_file
+    ON api_registry_entries(repo_id, registry_file_id);
+
+-- A Registry entry may prove one or more exact source components.  The link
+-- points only through ``files``; it must never reference the reset-style
+-- OpenAPI index or create entity/endpoint/UI associations.
+CREATE TABLE IF NOT EXISTS api_registry_entry_links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
+    entry_id INTEGER NOT NULL,
+    source_file_id INTEGER NOT NULL,
+    source_pointer TEXT NOT NULL,
+    link_kind TEXT NOT NULL,
+    component_hash TEXT,
+    evidence_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    FOREIGN KEY(entry_id, repo_id) REFERENCES api_registry_entries(id, repo_id) ON DELETE CASCADE,
+    FOREIGN KEY(source_file_id, repo_id) REFERENCES files(id, repo_id) ON DELETE CASCADE,
+    UNIQUE(repo_id, entry_id, source_file_id, source_pointer, link_kind)
+);
+CREATE INDEX IF NOT EXISTS idx_api_registry_entry_links_entry
+    ON api_registry_entry_links(repo_id, entry_id, link_kind);
+CREATE INDEX IF NOT EXISTS idx_api_registry_entry_links_source
+    ON api_registry_entry_links(repo_id, source_file_id);
+
+-- Stable extraction and resolution diagnostics remain Registry-local and keep
+-- source-file and JSON-pointer provenance even when no entry can be emitted.
+CREATE TABLE IF NOT EXISTS api_registry_issues (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
+    entry_id INTEGER,
+    source_file_id INTEGER NOT NULL,
+    source_pointer TEXT NOT NULL,
+    issue_key TEXT NOT NULL,
+    severity TEXT NOT NULL CHECK(severity IN ('warning', 'error')),
+    issue_code TEXT NOT NULL,
+    message TEXT NOT NULL,
+    details_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    FOREIGN KEY(entry_id, repo_id) REFERENCES api_registry_entries(id, repo_id) ON DELETE CASCADE,
+    FOREIGN KEY(source_file_id, repo_id) REFERENCES files(id, repo_id) ON DELETE CASCADE,
+    UNIQUE(repo_id, issue_key)
+);
+CREATE INDEX IF NOT EXISTS idx_api_registry_issues_entry
+    ON api_registry_issues(repo_id, entry_id, severity);
+CREATE INDEX IF NOT EXISTS idx_api_registry_issues_source
+    ON api_registry_issues(repo_id, source_file_id, issue_code);
+
+-- Source-only UI diagnostics intentionally do not reference UI surfaces,
+-- artifacts, entities, or Registry rows.  This preserves negative UIMeta
+-- evidence without fabricating a canonical association.
+CREATE TABLE IF NOT EXISTS ui_source_diagnostics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
+    source_file_id INTEGER NOT NULL,
+    source_path TEXT NOT NULL,
+    source_kind TEXT NOT NULL,
+    source_pointer TEXT,
+    diagnostic_key TEXT NOT NULL,
+    severity TEXT NOT NULL CHECK(severity IN ('warning', 'error')),
+    diagnostic_code TEXT NOT NULL,
+    message TEXT NOT NULL,
+    evidence_text TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    FOREIGN KEY(source_file_id, repo_id) REFERENCES files(id, repo_id) ON DELETE CASCADE,
+    UNIQUE(repo_id, diagnostic_key)
+);
+CREATE INDEX IF NOT EXISTS idx_ui_source_diagnostics_source
+    ON ui_source_diagnostics(repo_id, source_file_id, severity);
+CREATE INDEX IF NOT EXISTS idx_ui_source_diagnostics_code
+    ON ui_source_diagnostics(repo_id, diagnostic_code);
+
 -- SQLite cannot derive a symbol's repository through ``symbols.file_id`` in a
 -- declarative FK.  These triggers make that ownership check explicit.
 CREATE TRIGGER IF NOT EXISTS trg_ui_entity_references_entity_occurrence_insert
@@ -1406,4 +1509,6 @@ INSERT OR IGNORE INTO schema_migrations(name) VALUES
     ('023_delta_refresh'),
     ('024_refresh_contracts'),
     ('025_delta_refresh_hardening'),
-    ('026_ui_catalog');
+    ('026_ui_catalog'),
+    ('027_ui_negative_event_calls'),
+    ('028_api_registry');

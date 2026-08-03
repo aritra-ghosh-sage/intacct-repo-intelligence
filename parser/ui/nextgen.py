@@ -48,6 +48,13 @@ class ExplicitEntityMapping:
 
 @dataclass(frozen=True)
 class NextGenDiagnostic:
+    """A source-backed extraction diagnostic.
+
+    Diagnostics whose source cannot be assigned to a NextGen family are still
+    useful evidence.  Consumers must retain those separately from canonical UI
+    surfaces rather than inventing a family, artifact, or entity association.
+    """
+
     code: str
     message: str
     source_file: str

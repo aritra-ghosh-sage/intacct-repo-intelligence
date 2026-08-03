@@ -222,6 +222,42 @@ class UiCatalogValidatorTests(unittest.TestCase):
         with self.assertRaisesRegex(UiCatalogValidationError, "blocking_resolution_issues"):
             validate_ui_catalog_connection(conn)
 
+    def test_unattached_source_diagnostic_is_strict_only(self) -> None:
+        conn, _ = self._catalog()
+        self.addCleanup(conn.close)
+        source_path = "app/source/openapispec/inv/uimeta/objects.aisle.s1.uimeta.yaml"
+        source_file_id = int(
+            conn.execute(
+                "INSERT INTO files(repo_id,path,language) VALUES (1,?, 'yaml')",
+                (source_path,),
+            ).lastrowid
+        )
+        conn.execute(
+            """INSERT INTO ui_source_diagnostics(
+                   repo_id,source_file_id,source_path,source_kind,source_pointer,
+                   diagnostic_key,severity,diagnostic_code,message,evidence_text
+               ) VALUES (1,?,?, 'uimeta','lines:1-1','aisle-bare-uimeta','warning',
+                         'nextgen.family.unresolved','fixture','objects.aisle.s1.uimeta.yaml')""",
+            (source_file_id, source_path),
+        )
+        conn.commit()
+
+        self.assertTrue(validate_ui_catalog_connection(conn)["ok"])
+        with self.assertRaisesRegex(UiCatalogValidationError, "strict_source_diagnostics"):
+            validate_ui_catalog_connection(conn, strict_resolution=True)
+        self.assertEqual(
+            conn.execute("SELECT COUNT(*) FROM ui_surfaces").fetchone()[0],
+            2,
+        )
+        self.assertEqual(
+            conn.execute("SELECT COUNT(*) FROM ui_artifacts").fetchone()[0],
+            2,
+        )
+        self.assertEqual(
+            conn.execute("SELECT COUNT(*) FROM ui_entity_references").fetchone()[0],
+            1,
+        )
+
     def test_duplicate_key_helper_detects_duplicate_groups(self) -> None:
         conn = sqlite3.connect(":memory:")
         self.addCleanup(conn.close)

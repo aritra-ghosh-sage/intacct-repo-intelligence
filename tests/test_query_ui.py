@@ -11,6 +11,7 @@ from scripts.query_ui import (
     decode_cursor,
     encode_cursor,
     query_ui_impact,
+    query_ui_source_diagnostics,
     query_ui_surface_detail,
 )
 
@@ -21,6 +22,7 @@ def _conn() -> sqlite3.Connection:
     conn.executescript(
         """
         CREATE TABLE repos (id INTEGER PRIMARY KEY, repo_key TEXT UNIQUE);
+        CREATE TABLE files (id INTEGER PRIMARY KEY, repo_id INTEGER, path TEXT);
         CREATE TABLE entity_nodes (id INTEGER PRIMARY KEY, name TEXT);
         CREATE TABLE entity_occurrences (id INTEGER PRIMARY KEY, repo_id INTEGER, entity_id INTEGER);
         CREATE TABLE ui_surfaces (
@@ -68,7 +70,14 @@ def _conn() -> sqlite3.Connection:
             event_id INTEGER, dependency_id INTEGER, issue_key TEXT, severity TEXT,
             issue_code TEXT, message TEXT, evidence_text TEXT
         );
+        CREATE TABLE ui_source_diagnostics (
+            id INTEGER PRIMARY KEY, repo_id INTEGER, source_file_id INTEGER,
+            source_path TEXT, source_kind TEXT, source_pointer TEXT,
+            diagnostic_key TEXT, severity TEXT, diagnostic_code TEXT,
+            message TEXT, evidence_text TEXT
+        );
         INSERT INTO repos VALUES (1, 'ia-main');
+        INSERT INTO files VALUES (120, 1, 'app/source/openapispec/inv/uimeta/objects.aisle.s1.uimeta.yaml');
         INSERT INTO entity_nodes VALUES (10, 'GLBatch');
         INSERT INTO entity_occurrences VALUES (20, 1, 10);
         INSERT INTO ui_surfaces VALUES
@@ -93,6 +102,10 @@ def _conn() -> sqlite3.Connection:
             (100, 1, 70, 80, 'load:1', 'onLoadFunctionCalls', 90, 'resolved', 'exact active match', 'call');
         INSERT INTO ui_resolution_issues VALUES
             (110, 1, 30, 40, NULL, NULL, 'dynamic-loader', 'warning', 'loader.dynamic', 'Dynamic loader', 'x');
+        INSERT INTO ui_source_diagnostics VALUES
+            (130, 1, 120, 'app/source/openapispec/inv/uimeta/objects.aisle.s1.uimeta.yaml',
+             'uimeta', 'lines:1-1', 'bare-aisle', 'warning', 'nextgen.family.unresolved',
+             'No family', 'objects.aisle.s1.uimeta.yaml');
         """
     )
     return conn
@@ -165,6 +178,24 @@ def test_event_detail_keeps_dependencyless_negative_calls() -> None:
     assert missing["script_path"] is None
 
 
+def test_source_diagnostics_are_queryable_without_a_ui_surface() -> None:
+    data = query_ui_source_diagnostics(_conn(), repo_key="ia-main")
+
+    assert data["summary"] == {"diagnostic_count": 1}
+    assert data["diagnostics"] == [
+        {
+            "diagnostic_key": "bare-aisle",
+            "source_path": "app/source/openapispec/inv/uimeta/objects.aisle.s1.uimeta.yaml",
+            "source_kind": "uimeta",
+            "source_pointer": "lines:1-1",
+            "severity": "warning",
+            "diagnostic_code": "nextgen.family.unresolved",
+            "message": "No family",
+            "evidence_text": "objects.aisle.s1.uimeta.yaml",
+        }
+    ]
+
+
 def test_cli_emits_stable_envelope_and_error(tmp_path) -> None:
     db = tmp_path / "ui.db"
     target = sqlite3.connect(db)
@@ -183,6 +214,11 @@ def test_cli_emits_stable_envelope_and_error(tmp_path) -> None:
     bad_kind = runner.invoke(cli, ["detail", "missing", "bad", "--repo", "ia-main", "--db", str(db), "--json"])
     assert bad_kind.exit_code == 0
     assert json.loads(bad_kind.output)["error"]["code"] == "invalid_record_kind"
+    source_diagnostics = runner.invoke(
+        cli, ["source-diagnostics", "--repo", "ia-main", "--db", str(db), "--json"]
+    )
+    assert source_diagnostics.exit_code == 0, source_diagnostics.output
+    assert json.loads(source_diagnostics.output)["query"]["command"] == "ui_source_diagnostics"
 
 
 def test_cli_impact_renders_all_reference_evidence(tmp_path) -> None:

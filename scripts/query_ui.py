@@ -412,6 +412,39 @@ def query_ui_surface_detail(
     }
 
 
+def query_ui_source_diagnostics(
+    conn: sqlite3.Connection,
+    *,
+    repo_key: str,
+    limit: int = 25,
+    cursor: str | None = None,
+) -> dict[str, Any]:
+    """Return source-only UI diagnostics without manufacturing a surface link."""
+
+    limit = validate_limit(limit)
+    offset = decode_cursor(cursor)
+    _require_tables(conn, ("repos", "files", "ui_source_diagnostics"))
+    repo_id = _repo_id(conn, repo_key)
+    rows = conn.execute(
+        """
+        SELECT diagnostic_key,source_path,source_kind,source_pointer,severity,
+               diagnostic_code,message,evidence_text
+        FROM ui_source_diagnostics
+        WHERE repo_id=?
+        ORDER BY source_path, source_pointer, diagnostic_code, diagnostic_key, id
+        LIMIT ? OFFSET ?
+        """,
+        (repo_id, limit + 1, offset),
+    ).fetchall()
+    diagnostics, next_cursor = _page(rows, limit, offset)
+    return {
+        "repo_key": repo_key,
+        "diagnostics": diagnostics,
+        "page": {"next_cursor": next_cursor, "truncated": next_cursor is not None},
+        "summary": {"diagnostic_count": len(diagnostics)},
+    }
+
+
 def _emit_error(command: str, args: dict[str, object], error: UiQueryError, json_output: bool) -> None:
     if json_output:
         emit_json(
@@ -500,6 +533,46 @@ def detail_command(
         return
     click.echo(f"Surface: {data['surface']['surface_key']} ({data['surface']['surface_family']})")
     click.echo(f"{record_kind}: {data['summary']['record_count']}")
+
+
+@cli.command("source-diagnostics")
+@click.option("--repo", "repo_key", required=True, help="Repository key from repository_list.")
+@click.option("--db", default=DEFAULT_DB, show_default=True)
+@click.option("--limit", default=25, show_default=True, type=int)
+@click.option("--cursor", default=None, help="Opaque next_cursor from the previous page.")
+@click.option("--json", "json_output", is_flag=True, help="Emit stable JSON output.")
+def source_diagnostics_command(
+    repo_key: str, db: str, limit: int, cursor: str | None, json_output: bool
+) -> None:
+    """Show unattached, source-only UI diagnostics for one repository."""
+
+    args = {"repo_key": repo_key, "db": db, "limit": limit, "cursor": cursor}
+    conn = get_connection(db)
+    try:
+        data = query_ui_source_diagnostics(
+            conn, repo_key=repo_key, limit=limit, cursor=cursor
+        )
+    except UiQueryError as error:
+        _emit_error("ui_source_diagnostics", args, error, json_output)
+        return
+    finally:
+        conn.close()
+    if json_output:
+        emit_json(
+            success_response(
+                command="ui_source_diagnostics",
+                args=args,
+                data=data,
+                summary=data["summary"],
+            )
+        )
+        return
+    click.echo(f"UI source diagnostics: {data['summary']['diagnostic_count']} ({repo_key})")
+    for diagnostic in data["diagnostics"]:
+        click.echo(
+            f"[{diagnostic['severity']}] {diagnostic['diagnostic_code']} "
+            f"{diagnostic['source_path']}"
+        )
 
 
 if __name__ == "__main__":

@@ -65,6 +65,40 @@ class RefreshQualityTests(unittest.TestCase):
         with self.assertRaisesRegex(RefreshQualityError, "hash mismatch"):
             validate_quality_report(report)
 
+    def test_v1_reports_remain_readable_and_v2_bootstrap_is_bound(self) -> None:
+        legacy = self._payload()
+        legacy["version"] = 1
+        validate_quality_report(quality_report(legacy))
+
+        bootstrap = build_quality_payload(
+            parent={
+                "catalog_build_id": 0,
+                "build_token": "",
+                "content_fingerprint": "a" * 64,
+            },
+            delta_contract_version=3,
+            runtime_fingerprint="b" * 64,
+            repositories=[
+                {
+                    "repo_key": "service",
+                    "commit_sha": "c" * 40,
+                    "manifest_hash": "d" * 64,
+                    "builder_plan_hash": "e" * 64,
+                    "diagnostics": [],
+                    "counts": {},
+                }
+            ],
+            global_counts={},
+            bootstrap={
+                "empty_catalog_fingerprint": "a" * 64,
+                "manifest_hash": "d" * 64,
+                "source_revisions": {"service": "c" * 40},
+                "runtime_fingerprint": "b" * 64,
+                "builder_plan_hash": "e" * 64,
+            },
+        )
+        validate_quality_report(quality_report(bootstrap))
+
     def test_comparison_rejects_zero_drop_nondecrease_and_new_diagnostic(self) -> None:
         failures = compare_repository_quality(
             parent_counts={
