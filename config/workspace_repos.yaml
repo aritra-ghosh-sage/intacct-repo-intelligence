@@ -38,7 +38,6 @@ repositories:
       - scan
       - symbols
       - relationships
-      - integration_links
       - gherkin_coverage
     rest_automation:
       features_root: src/test/resources/features/rest-api

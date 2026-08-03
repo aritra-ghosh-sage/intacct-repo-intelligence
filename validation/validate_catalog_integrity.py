@@ -9,6 +9,11 @@ from pathlib import Path
 from typing import Any
 
 from catalog.content_fingerprint import logical_content_fingerprint
+from catalog.refresh_quality import (
+    RefreshQualityError,
+    resolve_reference_quality_run,
+    validate_quality_run,
+)
 
 
 class CatalogIntegrityError(RuntimeError):
@@ -122,6 +127,28 @@ def _logical_orphan_checks(conn: sqlite3.Connection) -> dict[str, int]:
     return results
 
 
+def _invalid_active_quality_runs(conn: sqlite3.Connection) -> int:
+    if not _table_exists(conn, "repo_index_runs"):
+        return 0
+    invalid = 0
+    rows = conn.execute(
+        """SELECT id,repo_id,validation_summary FROM repo_index_runs
+           WHERE status='active' ORDER BY id"""
+    ).fetchall()
+    for run_id, repo_id, raw_summary in rows:
+        if raw_summary is None:
+            invalid += 1
+            continue
+        try:
+            summary = json.loads(str(raw_summary))
+            validate_quality_run(summary)
+            if summary["kind"] == "reference":
+                resolve_reference_quality_run(conn, int(repo_id), int(run_id), summary)
+        except (TypeError, ValueError, json.JSONDecodeError, RefreshQualityError):
+            invalid += 1
+    return invalid
+
+
 def validate_catalog_connection(
     conn: sqlite3.Connection,
     *,
@@ -141,6 +168,18 @@ def validate_catalog_connection(
             "SELECT 1 FROM schema_migrations WHERE name='024_refresh_contracts'"
         ).fetchone()
     )
+    hardening_migration_present = bool(
+        _table_exists(conn, "schema_migrations")
+        and conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name='025_delta_refresh_hardening'"
+        ).fetchone()
+    )
+    integration_link_rows = (
+        _count(conn, "SELECT COUNT(*) FROM integration_links")
+        if _table_exists(conn, "integration_links")
+        else 0
+    )
+    invalid_active_quality_runs = _invalid_active_quality_runs(conn)
     active_rows = (
         conn.execute(
             "SELECT id,content_fingerprint,source_revisions_json,completed_at,diagnostic_error "
@@ -207,6 +246,9 @@ def validate_catalog_connection(
         "foreign_key_sample": fk_rows[:5],
         "migration_023_present": migration_present,
         "migration_024_present": refresh_contract_migration_present,
+        "migration_025_present": hardening_migration_present,
+        "integration_link_rows": integration_link_rows,
+        "invalid_active_quality_runs": invalid_active_quality_runs,
         "active_catalog_build_count": len(active_rows),
         "active_catalog_build_id": active_id,
         "expected_catalog_build_id": expected_catalog_build_id,
@@ -230,6 +272,12 @@ def validate_catalog_connection(
         failures.append("migration_023")
     if not refresh_contract_migration_present:
         failures.append("migration_024")
+    if not hardening_migration_present:
+        failures.append("migration_025")
+    if integration_link_rows:
+        failures.append("integration_links")
+    if invalid_active_quality_runs:
+        failures.append("quality_runs")
     if len(active_rows) != 1:
         failures.append("active_catalog_build_count")
     elif (

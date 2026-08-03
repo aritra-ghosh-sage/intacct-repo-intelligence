@@ -1352,7 +1352,14 @@ def build_workflows_for_entity(
     return wf_count
 
 
-def build(db: str, repo_root: Path, repo_id: int, reset: bool) -> BuildStats:
+def build(
+    db: str,
+    repo_root: Path,
+    repo_id: int,
+    reset: bool,
+    unresolved_log: Path | None = UNRESOLVED_WORKFLOW_FILE_IDS_LOG,
+    parse_failures_log: Path | None = WORKFLOW_PARSE_FAILURES_LOG,
+) -> BuildStats:
     stats = BuildStats()
     unresolved_sources: list[dict[str, Any]] = []
     parse_failures: list[dict[str, Any]] = []
@@ -1409,8 +1416,10 @@ def build(db: str, repo_root: Path, repo_id: int, reset: bool) -> BuildStats:
     finally:
         conn.close()
 
-    write_jsonl(UNRESOLVED_WORKFLOW_FILE_IDS_LOG, unresolved_sources)
-    write_jsonl(WORKFLOW_PARSE_FAILURES_LOG, parse_failures)
+    if unresolved_log is not None:
+        write_jsonl(unresolved_log, unresolved_sources)
+    if parse_failures_log is not None:
+        write_jsonl(parse_failures_log, parse_failures)
 
     return stats
 

@@ -62,6 +62,7 @@ MODULE_ALIASES: dict[str, str] = {
 }
 
 _cache: defaultdict[str, dict[str, tuple]] = defaultdict(dict)
+_DEFAULT_MISSING_SYMBOLS_PATH = object()
 
 
 @dataclass
@@ -658,7 +659,13 @@ def _resolve_repo_id(conn: sqlite3.Connection, repo_key: str) -> int:
     return int(row["id"])
 
 
-def build(db: str, entities: Path, reset: bool, repo_key: str) -> BuildStats:
+def build(
+    db: str,
+    entities: Path,
+    reset: bool,
+    repo_key: str,
+    missing_symbols_path: Path | None | object = _DEFAULT_MISSING_SYMBOLS_PATH,
+) -> BuildStats:
     """Build entity nodes and mappings idempotently using INSERT...WHERE NOT EXISTS."""
     rows = _read_entities_jsonl(entities)
     missing_symbols: list[dict[str, str]] = []
@@ -808,12 +815,16 @@ def build(db: str, entities: Path, reset: bool, repo_key: str) -> BuildStats:
         conn.close()
 
     stats.missing_symbols = len(missing_symbols)
-    out_path = Path(f"validation/missing_symbols_{repo_key}.json")
-    if missing_symbols:
+    out_path = (
+        Path(f"validation/missing_symbols_{repo_key}.json")
+        if missing_symbols_path is _DEFAULT_MISSING_SYMBOLS_PATH
+        else missing_symbols_path
+    )
+    if missing_symbols and out_path is not None:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(missing_symbols, indent=2), encoding="utf-8")
         click.echo(f"Missing symbols written to {out_path}")
-    elif out_path.exists():
+    elif out_path is not None and out_path.exists():
         out_path.unlink()
 
     return stats

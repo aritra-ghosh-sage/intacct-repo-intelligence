@@ -33,5 +33,8 @@ catalog/*.lbug.previous
 catalog/*.lbug.build.lock
 catalog/*.lbug.candidate.*
 catalog/*.lbug.snapshot.*.db
+catalog/backups/*.db
+catalog/backups/quality-baseline-*.json
+catalog/*.refresh.lock
 evals/runs/
 .DS_Store

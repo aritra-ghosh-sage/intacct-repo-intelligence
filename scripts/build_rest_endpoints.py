@@ -19,7 +19,7 @@ from __future__ import annotations
 import re
 import sqlite3
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -57,6 +57,7 @@ class BuildStats:
     symbol_fallback_endpoints: int = 0
     schema_bridge_hits: int = 0
     schema_bridge_overrides: int = 0
+    diagnostics: list[dict[str, str]] = field(default_factory=list)
 
 
 def _parse_yaml(file_path: Path) -> tuple[dict[str, Any], bool]:
@@ -497,17 +498,35 @@ def build(
             stats.specs_processed += 1
 
             if file_id is None:
+                stats.diagnostics.append(
+                    {
+                        "code": "rest_source_file_missing",
+                        "source_path": str(file_path),
+                    }
+                )
                 continue
 
             # Construct full path to the YAML file
             yaml_file_path = repo_root / file_path
             if not yaml_file_path.exists():
+                stats.diagnostics.append(
+                    {
+                        "code": "rest_source_file_missing",
+                        "source_path": str(file_path),
+                    }
+                )
                 continue
 
             # Parse the OpenAPI YAML file
             doc, parsed_ok = _parse_yaml(yaml_file_path)
             if not parsed_ok:
                 stats.yaml_parse_failures += 1
+                stats.diagnostics.append(
+                    {
+                        "code": "rest_yaml_parse_error",
+                        "source_path": str(file_path),
+                    }
+                )
 
             # Extract endpoints from the document first.
             endpoints = _extract_endpoints_from_yaml(doc) if parsed_ok else []
@@ -521,6 +540,12 @@ def build(
 
             if not endpoints:
                 stats.no_paths_found += 1
+                stats.diagnostics.append(
+                    {
+                        "code": "rest_no_paths_found",
+                        "source_path": str(file_path),
+                    }
+                )
                 continue
 
             if fallback_used:

@@ -373,11 +373,11 @@ def _resolve_mapped_to_entity(
     return None
 
 
-def _append_missing_metadata_records(records: list[dict]) -> None:
-    if not records:
+def _append_missing_metadata_records(
+    records: list[dict], log_path: Path | None = MISSING_METADATA_LOG_PATH
+) -> None:
+    if not records or log_path is None:
         return
-
-    log_path = MISSING_METADATA_LOG_PATH
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("a", encoding="utf-8") as f:
         for record in records:
@@ -539,6 +539,7 @@ def _link_openapispec(
     repo_root: Path,
     repo_id: int,
     reconcile_jsonl_path: Path | None,
+    missing_metadata_log: Path | None = MISSING_METADATA_LOG_PATH,
 ) -> LinkStats:
     if not _table_exists(conn, "openapispec_index"):
         raise click.ClickException(
@@ -695,7 +696,9 @@ def _link_openapispec(
             _reconcile_with_entity_definitions(conn, reconcile_jsonl_path, repo_id)
         )
 
-    _append_missing_metadata_records(records=missing_records)
+    _append_missing_metadata_records(
+        records=missing_records, log_path=missing_metadata_log
+    )
 
     return stats
 

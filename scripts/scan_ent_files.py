@@ -62,8 +62,7 @@ def is_entity_input_path(path: str) -> bool:
     if suffix in ENTITY_INPUT_SUFFIXES:
         stem = re.sub(r"[^a-z0-9]", "", candidate.stem)
         if any(
-            stem.endswith(role.replace("_", ""))
-            for role in ALLOWED_COMPANION_ROLES
+            stem.endswith(role.replace("_", "")) for role in ALLOWED_COMPANION_ROLES
         ):
             return True
     return normalized.startswith("app/source/openapispec/") and (
@@ -1064,7 +1063,11 @@ def _resolve_required_ent_path(
     return None
 
 
-def scan(repo_root: Path, out_file: Path) -> int:
+def scan(
+    repo_root: Path,
+    out_file: Path,
+    missing_metadata_log: Path | None = MISSING_METADATA_LOG_PATH,
+) -> int:
     app_dir = repo_root / "app"
     if not app_dir.exists():
         raise FileNotFoundError(f"{app_dir} does not exist")
@@ -1330,7 +1333,8 @@ def scan(repo_root: Path, out_file: Path) -> int:
             f.write(json.dumps(asdict(row), ensure_ascii=False, sort_keys=True) + "\n")
             count += 1
 
-    _write_missing_metadata_log(MISSING_METADATA_LOG_PATH, missing_metadata_records)
+    if missing_metadata_log is not None:
+        _write_missing_metadata_log(missing_metadata_log, missing_metadata_records)
 
     return count
 

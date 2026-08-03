@@ -1322,6 +1322,10 @@ def build(
     reset: bool,
     max_parse_failures: int,
     max_unresolved: int,
+    parse_failures_log: Path | None = PARSE_FAILURES_LOG,
+    unresolved_log: Path | None = UNRESOLVED_LOG,
+    conflicts_log: Path | None = CONFLICTS_LOG,
+    unresolved_sources_log: Path | None = UNRESOLVED_FILE_IDS_LOG,
 ) -> BuildStats:
     conn = get_connection(db)
     parse_failures: list[dict[str, Any]] = []
@@ -1366,10 +1370,14 @@ def build(
     finally:
         conn.close()
 
-    write_jsonl(PARSE_FAILURES_LOG, parse_failures)
-    write_jsonl(UNRESOLVED_LOG, unresolved)
-    write_jsonl(CONFLICTS_LOG, conflicts)
-    write_jsonl(UNRESOLVED_FILE_IDS_LOG, unresolved_sources)
+    if parse_failures_log is not None:
+        write_jsonl(parse_failures_log, parse_failures)
+    if unresolved_log is not None:
+        write_jsonl(unresolved_log, unresolved)
+    if conflicts_log is not None:
+        write_jsonl(conflicts_log, conflicts)
+    if unresolved_sources_log is not None:
+        write_jsonl(unresolved_sources_log, unresolved_sources)
 
     if max_parse_failures >= 0 and len(parse_failures) > max_parse_failures:
         raise click.ClickException(

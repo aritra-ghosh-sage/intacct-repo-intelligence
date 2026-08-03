@@ -53,6 +53,10 @@ PARENT = re.compile(
 )
 STEP_VERSION = re.compile(r'\bfor\s+version\s+"([^"]+)"', re.IGNORECASE)
 ACTION = re.compile(r'\b(?:action|workflow)\s+"([^"]+)"', re.IGNORECASE)
+FEATURE_LINE = re.compile(r"^\s*Feature\s*:", re.IGNORECASE | re.MULTILINE)
+COMMENTED_FEATURE_LINE = re.compile(
+    r"^\s*#\s*Feature\s*:", re.IGNORECASE | re.MULTILINE
+)
 
 
 @dataclass(frozen=True)
@@ -409,10 +413,21 @@ def _example_rows(scenario: dict[str, Any]) -> list[tuple[int | None, dict[str, 
 def parse_feature(path: Path, mapping: dict[str, str]) -> list[CaseEvidence]:
     if Parser is None:
         raise RuntimeError("gherkin-official is required; run uv sync")
-    document = Parser().parse(path.read_text(encoding="utf-8"))
+    text = path.read_text(encoding="utf-8")
+    if text.startswith("\ufeff"):
+        text = text.lstrip("\ufeff")
+    if not FEATURE_LINE.search(text) and COMMENTED_FEATURE_LINE.search(text):
+        raise ValueError(
+            "Feature file has no parseable Feature declaration; "
+            "ensure the Feature line is not commented out"
+        )
+    document = Parser().parse(text)
     feature = document.get("feature")
     if not feature:
-        raise ValueError("Feature file has no parseable Feature declaration")
+        raise ValueError(
+            "Feature file has no parseable Feature declaration; "
+            "ensure the Feature line is not commented out"
+        )
     feature_tags = _tags(feature.get("tags", []))
     metadata, property_lines, property_diagnostics = (
         _read_properties_metadata_with_lines(path.with_suffix(".properties"))
@@ -554,11 +569,9 @@ def _file_id(
     repo_id: int,
     root: Path,
     path: Path,
-    *,
-    read_contents: bool = True,
 ) -> int:
     relative = str(path.relative_to(root))
-    sha1 = hashlib.sha1(path.read_bytes()).hexdigest() if read_contents else None
+    sha1 = hashlib.sha1(path.read_bytes()).hexdigest()
     language = {
         ".feature": "gherkin",
         ".properties": "properties",
@@ -713,7 +726,6 @@ def build(
             repo_id,
             suite_root,
             properties_path,
-            read_contents=False,
         )
         conn.execute(
             "INSERT INTO test_diagnostics(repo_id,file_id,kind,message) VALUES(?,?,?,?)",

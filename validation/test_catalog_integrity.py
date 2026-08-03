@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from catalog.content_fingerprint import logical_content_fingerprint
+from catalog.migrations import apply_delta_refresh_migration
 from validation.validate_catalog_integrity import (
     CatalogIntegrityError,
     validate_catalog_connection,
@@ -80,6 +81,54 @@ class CatalogIntegrityTests(unittest.TestCase):
             validate_catalog_connection(conn)
         summary = json.loads(str(raised.exception))
         self.assertEqual(summary["logical_orphans"]["entity_roots_without_mapping"], 1)
+
+    def test_migration_025_removes_integration_rows_idempotently(self) -> None:
+        directory, conn = self._catalog()
+        self.addCleanup(directory.cleanup)
+        self.addCleanup(conn.close)
+        conn.execute(
+            """INSERT INTO integration_links(
+                   source_repo_id,relation_type,resolution_status,evidence,extractor
+               ) VALUES (1,'sentinel','unresolved','sentinel','test')"""
+        )
+        conn.commit()
+        apply_delta_refresh_migration(conn)
+        apply_delta_refresh_migration(conn)
+        self.assertEqual(
+            conn.execute("SELECT COUNT(*) FROM integration_links").fetchone()[0], 0
+        )
+        self.assertEqual(
+            conn.execute(
+                "SELECT COUNT(*) FROM schema_migrations WHERE name='025_delta_refresh_hardening'"
+            ).fetchone()[0],
+            1,
+        )
+
+    def test_reintroduced_integration_rows_fail_integrity(self) -> None:
+        directory, conn = self._catalog()
+        self.addCleanup(directory.cleanup)
+        self.addCleanup(conn.close)
+        conn.execute(
+            """INSERT INTO integration_links(
+                   source_repo_id,relation_type,resolution_status,evidence,extractor
+               ) VALUES (1,'sentinel','unresolved','sentinel','test')"""
+        )
+        conn.commit()
+        with self.assertRaisesRegex(CatalogIntegrityError, "integration_links"):
+            validate_catalog_connection(conn)
+
+    def test_malformed_active_quality_run_fails_integrity(self) -> None:
+        directory, conn = self._catalog()
+        self.addCleanup(directory.cleanup)
+        self.addCleanup(conn.close)
+        conn.execute(
+            """INSERT INTO repo_index_runs(
+                   repo_id,tracked_branch,commit_sha,status,completed_at,validation_summary
+               ) VALUES (1,'main','abc','active',CURRENT_TIMESTAMP,'{}')"""
+        )
+        conn.commit()
+        with self.assertRaisesRegex(CatalogIntegrityError, "quality_runs"):
+            validate_catalog_connection(conn)
 
 
 if __name__ == "__main__":

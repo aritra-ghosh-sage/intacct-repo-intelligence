@@ -250,7 +250,7 @@ delta refresh or generation-linked graph rebuild:
 ```
 
 Fresh catalogs initialized through `catalog.db.init_db()` already contain the
-post-024 schema. Full Ladybug construction is a lengthy operator-run workflow and must
+post-025 schema. Full Ladybug construction is a lengthy operator-run workflow and must
 not be started during an agentic session. Agents should restrict themselves to
 read-only parity validation and focused unit tests. SQLite query commands remain
 the authoritative evidence path; Ladybug is a rebuildable traversal projection.
@@ -472,11 +472,30 @@ The effective source root from `config.py` for `ia-main` is
 ```
 
 `--mode full` runs every selected builder and does not require an incremental
-base. `--mode auto` uses exact committed-SHA deltas when their contract can be
+base. `--mode auto` uses exact committed-SHA deltas when the contract can be
 proven and falls back to repository-scoped full builders with a recorded reason.
 `--mode delta` fails before candidate construction when any repository lacks a
 safe base. Checkouts must be clean, attached to the configured branch, and at a
 committed revision; the indexed base must exist and be an ancestor of `HEAD`.
+
+Change collection is byte-safe and commit-exact. Refresh runs exactly:
+
+```bash
+git diff --raw -z -M --no-abbrev <base-sha> <target-sha> --
+```
+
+The raw records retain both rename paths, modes, object IDs, and rename scores.
+Only regular `100644` and `100755` blobs are accepted. Symlinks, gitlinks,
+unsupported statuses or modes, malformed paths, missing objects, and non-blob
+objects fail closed. Changed paths are retained for planning even when they are
+outside generic file-scan scope.
+
+Builders never read evidence from mutable checkout bytes. Each repository with
+work to run is materialized from the exact target tree using `git ls-tree` and
+`git cat-file --batch`; raw blob bytes and executable modes are verified before
+builders run. Working-tree changes, ignored files, clean/smudge filters, and
+export attributes therefore cannot alter a candidate. Whole-tree snapshots are
+intentional in contract v3; partial-tree snapshot optimization is deferred.
 
 Delta compatibility is repository-scoped. Each successful repository run stores
 a hash of its normalized manifest entry (excluding operator-local `local_root`)
@@ -485,14 +504,22 @@ summaries for the complete input manifest and selected closure; they are not
 used to certify a later repository delta. This permits independent repository
 closures to be refreshed in alternating order without false incompatibility.
 
-An existing migration-023 baseline has no compatibility hashes. Its first
-`auto` refresh therefore records `compatibility metadata unavailable` and runs
-full for the affected repositories; forced `delta` fails with the same reason.
-Migration 024 adds the `not_started` effective mode so preflight and planning
-failures retain the requested mode without claiming that a build ran. Git diff,
-parsing, and path-normalization failures are recoverable in `auto` and fail
-closed in forced `delta`. Checkout-integrity and active-catalog fingerprint
-failures remain strict in every mode.
+Contract v3 fingerprints the evidence-affecting Python runtime and catalog,
+parser, migration, scan, link, builder, and integrity-validation sources. A
+contract-v2 generation, null fingerprint, or incompatible runtime/manifest/plan
+cannot authorize a v3 delta: `auto` records the reason and runs full, while
+forced `delta` fails before candidate creation. Git diff, object validation,
+and path parsing failures follow the same fallback rule. Never edit stored
+fingerprints to bypass this check; recover with a supported full refresh.
+
+Exact delta execution is limited to scan, symbols, and relationships. Scan
+touches only changed paths, symbols touch only affected file IDs, and
+relationships include the direct files plus symbol-dependent closure. Entities,
+entity roots, OpenAPI, workflows, security, REST endpoints, entity semantics,
+entity-access links, and Gherkin coverage are reset-style builders: when their
+declared source inputs or upstream evidence are invalidated, they run in full.
+Unsupported integration-link extraction is rejected, and migration 025 removes
+legacy integration-link rows.
 
 The complete dependency closure is built dependency-first in one SQLite
 candidate and promoted once. A later repository or validation failure cannot
@@ -503,6 +530,28 @@ only out-of-scope files, refresh creates a metadata-only delta generation so
 repository provenance advances; evidence builders remain skipped and the graph
 is marked stale because the projected repository revision changed.
 
+Repository scope remains operator-controlled. Requesting `ia-main` selects only
+`ia-main`; requesting `ia-restapi-automation` selects `ia-main` first and then
+the automation repository through its explicit `depends_on`. Reverse dependents
+are never inferred from Git ancestry, remotes, profiles, or manifest order. A
+main-only refresh is blocked before candidate creation when its REST endpoint
+stage would run while enabled automation coverage is out of scope. Use the
+explicit safe closure instead:
+
+```bash
+PYTHONPATH=. ./.venv/bin/python -m scripts.refresh_workspace \
+  --db catalog/catalog.db \
+  --manifest config/workspace_repos.yaml \
+  --repo ia-restapi-automation \
+  --mode full
+```
+
+Refresh holds an exclusive `catalog/catalog.db.refresh.lock` for the complete
+operation. Immediately before no-op history or promotion it rechecks every
+source SHA and compares the active parent build ID, token, content fingerprint,
+source revisions, and database identity. A lock or parent/source compare-and-swap
+failure cannot replace either active or previous catalog artifacts.
+
 `catalog_builds` retains the full logical SQLite generation history, while
 `graph_builds` records the separately projected Ladybug generations. Only the
 current and immediately previous physical artifacts are retained as
@@ -512,37 +561,61 @@ marks the prior graph generation stale. Graph-backed queries remain explicitly
 unavailable/stale until a graph build linked to the active catalog fingerprint
 is promoted.
 
-Graph construction is a separate operator action:
-
-```bash
-./.venv/bin/python scripts/build_graph.py \
-  --db catalog/catalog.db \
-  --graph catalog/graph.lbug \
-  --mode auto
-```
-
-Graph `auto` applies a generation delta only when the previous SQLite catalog,
-parent graph build, source revisions, logical fingerprints, and projection
-version all match. Otherwise it records the fallback and performs a full graph
-build. Forced `--mode delta` fails closed. `bash scripts/refresh.sh` remains the
-canonical full SQLite-only workflow; it passes `--mode full` and never builds
-Ladybug.
-
-Projection contract version 2 records graph delta counts under the actual
-Ladybug relationship table names (for example `CALLS` and
-`ENTITY_HAS_OCCURRENCE`) rather than SQLite source-table groupings. Full graph
-loading, delta comparison, and exact parity validation share that relationship
-registry.
+Ladybug construction and promotion are deliberately excluded from this refresh
+workflow. A SQLite promotion may mark an older graph generation stale, but this
+command never builds or promotes `graph.lbug`. Full graph construction remains
+a separate, lengthy operator-run workflow outside agentic refresh sessions.
 
 Every SQLite candidate must pass physical integrity, foreign-key, logical
 ownership-orphan, generation-state, repository-revision, stable-symbol-key, and
-logical-fingerprint checks before promotion. The active catalog can be audited
-read-only at any time:
+logical-fingerprint checks before promotion. Contract v3 additionally verifies
+target blobs, migration 025, absence of integration rows, source SHAs, semantic
+quality counts, stable diagnostic keys, and parent CAS in that order. The active
+catalog can be audited read-only at any time:
 
 ```bash
 PYTHONPATH=. ./.venv/bin/python validation/validate_catalog_integrity.py \
   --db catalog/catalog.db
 ```
+
+Intentional quality changes use a two-step, full-mode approval. Preparation
+builds and validates a candidate, writes a deterministic report, then deletes
+the candidate without changing active history or `catalog.db.previous`:
+
+```bash
+PYTHONPATH=. ./.venv/bin/python -m scripts.refresh_workspace \
+  --db catalog/catalog.db \
+  --manifest config/workspace_repos.yaml \
+  --repo ia-restapi-automation \
+  --mode full \
+  --prepare-quality-baseline catalog/backups/quality-baseline-v3.json
+```
+
+After reviewing the report, rebuild from the same parent and accept its exact
+`approval_sha256`:
+
+```bash
+PYTHONPATH=. ./.venv/bin/python -m scripts.refresh_workspace \
+  --db catalog/catalog.db \
+  --manifest config/workspace_repos.yaml \
+  --repo ia-restapi-automation \
+  --mode full \
+  --accept-quality-baseline <reviewed-sha256>
+```
+
+The accepted hash is bound to the exact parent generation used during
+preparation and is therefore single-use: after promotion, the parent build
+ID, token, and fingerprint change. Do not reuse the previous hash. For
+ordinary subsequent refreshes, omit `--accept-quality-baseline`; the active
+approved baseline is enforced automatically. Prepare and accept a new report
+only when intentionally approving a changed baseline.
+
+Any parent, source, runtime, manifest, builder-plan, count, or diagnostic change
+changes the approval hash. On failure, keep `catalog.db` and
+`catalog.db.previous`, inspect the first failing gate, and rerun prepare after
+repairing the evidence. The ignored `catalog/backups/catalog.db.build-<id>.db`
+files are recovery copies; restore one only through an operator-reviewed SQLite
+backup operation, never by editing generation metadata.
 
 REST automation coverage is a repository-scoped candidate builder. With the
 manifest dependency in place, refreshing `ia-restapi-automation` will refresh

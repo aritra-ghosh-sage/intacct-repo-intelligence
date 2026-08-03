@@ -134,9 +134,126 @@ class DeltaRefreshTests(unittest.TestCase):
         target = self._commit(checkout, "delete and boundary rename")
         changes = collect_changed_paths(checkout, base, target)
         self.assertEqual(
-            {(change.change_type, change.path) for change in changes},
-            {(ChangeType.DELETED, "added.py"), (ChangeType.DELETED, "source.php")},
+            {
+                (change.change_type, change.old_path, change.new_path)
+                for change in changes
+            },
+            {
+                (ChangeType.RENAMED, "added.py", "ignored.txt"),
+                (ChangeType.DELETED, "source.php", None),
+            },
         )
+
+    def test_raw_diff_preserves_modes_blobs_scores_and_unusual_paths(self) -> None:
+        directory, checkout, _database, _manifest, base = self._fixture()
+        self.addCleanup(directory.cleanup)
+        source = checkout / "source.php"
+        source.chmod(0o755)
+        chmod_target = self._commit(checkout, "chmod")
+        chmod = collect_changed_paths(checkout, base, chmod_target)
+        self.assertEqual(len(chmod), 1)
+        self.assertEqual(chmod[0].change_type, ChangeType.MODIFIED)
+        self.assertEqual((chmod[0].old_mode, chmod[0].new_mode), (0o100644, 0o100755))
+        self.assertEqual(chmod[0].old_blob_sha, chmod[0].new_blob_sha)
+
+        base = chmod_target
+        unusual = "odd\\name with space.py"
+        (checkout / unusual).write_text("VALUE = 1\n", encoding="utf-8")
+        unusual_target = self._commit(checkout, "unusual path")
+        added = collect_changed_paths(checkout, base, unusual_target)
+        self.assertEqual(added[0].new_path, unusual)
+
+        base = unusual_target
+        renamed = "renamed\\name.py"
+        self._git(checkout, "mv", unusual, renamed)
+        rename_target = self._commit(checkout, "rename")
+        change = collect_changed_paths(checkout, base, rename_target)[0]
+        self.assertEqual(change.change_type, ChangeType.RENAMED)
+        self.assertEqual((change.old_path, change.new_path), (unusual, renamed))
+        self.assertEqual(change.rename_score, 100)
+        self.assertEqual(change.old_blob_sha, change.new_blob_sha)
+
+    def test_raw_diff_rejects_status_modes_objects_and_paths(self) -> None:
+        directory, checkout, _database, _manifest, _base = self._fixture()
+        self.addCleanup(directory.cleanup)
+        zero = b"0" * 40
+        blob = self._git(checkout, "rev-parse", "HEAD:source.php").encode()
+
+        def parse(record: bytes):
+            with mock.patch("catalog.delta._object_id_length", return_value=40):
+                return delta_module._parse_raw_diff(checkout, record)
+
+        with self.assertRaisesRegex(DeltaUnavailable, "unsupported status"):
+            parse(b":100644 100644 " + blob + b" " + blob + b" T\0source.php\0")
+        for mode in (b"120000", b"160000"):
+            with (
+                self.subTest(mode=mode),
+                self.assertRaisesRegex(DeltaUnavailable, "unsupported Git tree mode"),
+            ):
+                parse(b":000000 " + mode + b" " + zero + b" " + blob + b" A\0bad\0")
+        with self.assertRaisesRegex(DeltaUnavailable, "not valid UTF-8"):
+            parse(b":000000 100644 " + zero + b" " + blob + b" A\0\xff.py\0")
+        with self.assertRaisesRegex(DeltaUnavailable, "escapes checkout"):
+            parse(b":000000 100644 " + zero + b" " + blob + b" A\0../bad.py\0")
+        missing = b"f" * 40
+        with self.assertRaisesRegex(DeltaUnavailable, "unavailable"):
+            parse(b":000000 100644 " + zero + b" " + missing + b" A\0missing.py\0")
+        commit = self._git(checkout, "rev-parse", "HEAD").encode()
+        with self.assertRaisesRegex(DeltaUnavailable, "unsupported type"):
+            parse(b":000000 100644 " + zero + b" " + commit + b" A\0commit.py\0")
+
+    def test_raw_diff_rejects_malformed_rename_and_duplicate_paths(self) -> None:
+        directory, checkout, _database, _manifest, _base = self._fixture()
+        self.addCleanup(directory.cleanup)
+        blob = self._git(checkout, "rev-parse", "HEAD:source.php").encode()
+
+        def parse(record: bytes):
+            with (
+                mock.patch("catalog.delta._object_id_length", return_value=40),
+                mock.patch("catalog.delta._verify_blob"),
+            ):
+                return delta_module._parse_raw_diff(checkout, record)
+
+        with self.assertRaisesRegex(DeltaUnavailable, "rename score"):
+            parse(b":100644 100644 " + blob + b" " + blob + b" R101\0old.py\0new.py\0")
+        record = b":000000 100644 " + b"0" * 40 + b" " + blob + b" A\0same.py\0"
+        with self.assertRaisesRegex(DeltaUnavailable, "duplicate path"):
+            parse(record + record)
+
+    def test_full_and_delta_scans_have_identical_file_evidence(self) -> None:
+        directory, checkout, delta_db, delta_manifest, _base = self._fixture()
+        self.addCleanup(directory.cleanup)
+        refresh_repository(delta_db, delta_manifest, "service", mode="full")
+
+        (checkout / "source.php").write_text("<?php\nclass Changed {}\n")
+        (checkout / "added.py").write_text("VALUE = 1\n", encoding="utf-8")
+        (checkout / ".venv").mkdir()
+        (checkout / ".venv" / "ignored.py").write_text("IGNORED = 1\n")
+        self._commit(checkout, "target")
+        refresh_repository(delta_db, delta_manifest, "service", mode="auto")
+
+        full_db = Path(directory.name) / "full.db"
+        conn = sqlite3.connect(full_db)
+        conn.executescript((ROOT / "catalog/schema.sql").read_text())
+        conn.close()
+        full_manifest = Path(directory.name) / "full-repos.yaml"
+        full_manifest.write_text(delta_manifest.read_text(encoding="utf-8"))
+        refresh_repository(full_db, full_manifest, "service", mode="full")
+
+        delta_conn = sqlite3.connect(delta_db)
+        full_conn = sqlite3.connect(full_db)
+        try:
+            delta_rows = delta_conn.execute(
+                "SELECT path,sha1 FROM files ORDER BY path"
+            ).fetchall()
+            full_rows = full_conn.execute(
+                "SELECT path,sha1 FROM files ORDER BY path"
+            ).fetchall()
+            self.assertEqual(delta_rows, full_rows)
+            self.assertNotIn(".venv/ignored.py", {row[0] for row in full_rows})
+        finally:
+            delta_conn.close()
+            full_conn.close()
 
     def test_rename_invalidation_uses_old_and_new_paths(self) -> None:
         change = RepositoryChangeSet(
@@ -208,11 +325,20 @@ class DeltaRefreshTests(unittest.TestCase):
                 "scripts.refresh_workspace._backup_database",
                 side_effect=RuntimeError("stop after invalidation planning"),
             ),
+            mock.patch("scripts.refresh_workspace._parent_descriptor"),
+            mock.patch(
+                "scripts.refresh_workspace._quality_parent_state",
+                return_value=({}, set(), {}),
+            ),
+            mock.patch(
+                "scripts.refresh_workspace._quality_parent_global_state",
+                return_value={"active_api_version_compatibility": 0},
+            ),
             mock.patch("scripts.refresh_workspace._record_failed_refresh"),
             self.assertRaisesRegex(RuntimeError, "stop after invalidation planning"),
         ):
             _refresh_repository_closure(
-                Path("/unused/catalog.db"),
+                Path("/tmp/catalog.db"),
                 manifest,
                 ["service"],
                 "auto",
@@ -227,6 +353,85 @@ class DeltaRefreshTests(unittest.TestCase):
                 "app/source/openapispec/ap/object.yaml",
             ),
         )
+
+    def test_main_only_refresh_is_blocked_only_when_rest_is_invalidated(self) -> None:
+        manifest = {
+            "repositories": [
+                {
+                    "repo_key": "ia-main",
+                    "local_root": "/unused/main",
+                    "tracked_branch": "main",
+                    "profile": "intacct_app",
+                    "builders": [],
+                    "depends_on": None,
+                },
+                {
+                    "repo_key": "ia-restapi-automation",
+                    "local_root": "/unused/automation",
+                    "tracked_branch": "main",
+                    "profile": "rest_automation",
+                    "builders": [],
+                    "depends_on": ["ia-main"],
+                },
+            ]
+        }
+        full = RepositoryChangeSet("ia-main", "base", "target", "full", "full")
+        with (
+            mock.patch(
+                "scripts.refresh_workspace._plan_repository_changes",
+                return_value=[full],
+            ),
+            mock.patch("scripts.refresh_workspace._parent_descriptor"),
+            mock.patch("scripts.refresh_workspace._backup_database") as backup,
+            self.assertRaisesRegex(
+                RefreshError,
+                r"--repo ia-restapi-automation --mode full",
+            ),
+        ):
+            _refresh_repository_closure(
+                Path("/tmp/catalog.db"),
+                manifest,
+                ["ia-main"],
+                "full",
+                start_revisions={"ia-main": "target"},
+            )
+        backup.assert_not_called()
+
+        docs_only = RepositoryChangeSet(
+            "ia-main",
+            "base",
+            "target",
+            "auto",
+            "delta",
+            (ChangedPath(ChangeType.ADDED, None, "README.md"),),
+        )
+        with (
+            mock.patch(
+                "scripts.refresh_workspace._plan_repository_changes",
+                return_value=[docs_only],
+            ),
+            mock.patch("scripts.refresh_workspace._parent_descriptor"),
+            mock.patch(
+                "scripts.refresh_workspace._quality_parent_state",
+                return_value=({}, set(), {}),
+            ),
+            mock.patch(
+                "scripts.refresh_workspace._quality_parent_global_state",
+                return_value={"active_api_version_compatibility": 0},
+            ),
+            mock.patch(
+                "scripts.refresh_workspace._backup_database",
+                side_effect=RuntimeError("main-only docs reached candidate creation"),
+            ),
+            self.assertRaisesRegex(RuntimeError, "reached candidate creation"),
+        ):
+            _refresh_repository_closure(
+                Path("/tmp/catalog.db"),
+                manifest,
+                ["ia-main"],
+                "auto",
+                start_revisions={"ia-main": "target"},
+            )
 
     def test_noop_and_line_only_delta_preserve_symbol_id(self) -> None:
         directory, checkout, database, manifest, _initial = self._fixture()
@@ -251,6 +456,14 @@ class DeltaRefreshTests(unittest.TestCase):
             ).fetchone()[0],
             "noop",
         )
+        summaries = conn.execute(
+            "SELECT id,validation_summary FROM repo_index_runs ORDER BY id"
+        ).fetchall()
+        materialized_id = summaries[-2][0]
+        reference = json.loads(summaries[-1][1])
+        self.assertEqual(reference["kind"], "reference")
+        self.assertEqual(reference["baseline_run_id"], materialized_id)
+        self.assertEqual(json.loads(summaries[-2][1])["kind"], "materialized")
         conn.close()
 
         (checkout / "source.php").write_text("\n<?php\nclass Source {}\n")
@@ -314,7 +527,8 @@ class DeltaRefreshTests(unittest.TestCase):
             target_commit_sha=target,
         )
         self.assertEqual(change.effective_mode, "delta")
-        self.assertEqual(change.changed_paths, ())
+        self.assertEqual(len(change.changed_paths), 1)
+        self.assertEqual(change.changed_paths[0].new_path, "README.md")
 
         refresh_repository(database, manifest, "service", mode="auto")
 
@@ -344,7 +558,7 @@ class DeltaRefreshTests(unittest.TestCase):
             ).fetchone()
             self.assertEqual(
                 tuple(change_row),
-                ("delta", 0, 0, 0, 0),
+                ("delta", 1, 0, 0, 0),
             )
             stage_modes = {
                 row[0]
@@ -375,6 +589,33 @@ class DeltaRefreshTests(unittest.TestCase):
             )
         finally:
             previous_conn.close()
+
+    def test_null_active_fingerprint_forces_full_and_rejects_forced_delta(self) -> None:
+        directory, _checkout, database, manifest, _initial = self._fixture()
+        self.addCleanup(directory.cleanup)
+        refresh_repository(database, manifest, "service", mode="full")
+        conn = sqlite3.connect(database)
+        conn.execute(
+            "UPDATE catalog_builds SET content_fingerprint=NULL WHERE status='active'"
+        )
+        conn.commit()
+        conn.close()
+
+        refresh_repository(database, manifest, "service", mode="auto")
+        conn = sqlite3.connect(database)
+        row = conn.execute(
+            "SELECT effective_mode,fallback_reason FROM repo_change_sets ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        self.assertEqual(row, ("full", "active content fingerprint unavailable"))
+        conn.execute(
+            "UPDATE catalog_builds SET content_fingerprint=NULL WHERE status='active'"
+        )
+        conn.commit()
+        conn.close()
+        with self.assertRaisesRegex(
+            DeltaUnavailable, "active content fingerprint unavailable"
+        ):
+            refresh_repository(database, manifest, "service", mode="delta")
 
     def test_true_noop_history_failure_rolls_back_all_in_progress_rows(self) -> None:
         directory, _checkout, database, manifest, _initial = self._fixture()
@@ -587,8 +828,11 @@ class DeltaRefreshTests(unittest.TestCase):
             ["git"], 0, stdout=b"Z\0source.php\0", stderr=b""
         )
         with (
-            mock.patch("catalog.delta.subprocess.run", return_value=malformed),
-            self.assertRaisesRegex(DeltaUnavailable, "unsupported status"),
+            mock.patch(
+                "catalog.delta._raw_changed_paths", return_value=malformed.stdout
+            ),
+            mock.patch("catalog.delta._object_id_length", return_value=40),
+            self.assertRaisesRegex(DeltaUnavailable, "malformed raw Git diff metadata"),
         ):
             collect_changed_paths(Path("/tmp/fake"), "base", "target")
 
@@ -615,7 +859,7 @@ class DeltaRefreshTests(unittest.TestCase):
         real_git = delta_module._git
 
         def fail_blob_lookup(root, *args, **kwargs):
-            if args and args[0] == "rev-parse" and ":" in args[-1]:
+            if args[:2] == ("cat-file", "-e") and not args[-1].endswith("^{commit}"):
                 return subprocess.CompletedProcess(
                     ["git"], 128, stdout="", stderr="fatal: injected blob failure"
                 )
@@ -889,7 +1133,7 @@ class DeltaRefreshTests(unittest.TestCase):
         self.assertEqual(modes["entity_semantics"][0], "full")
         self.assertTrue(modes["entity_semantics"][1].startswith("invalidated by "))
         self.assertEqual(modes["entity_access_links"][0], "full")
-        self.assertIn("app/source/common/dbschema.inc", modes["entity_access_links"][1])
+        self.assertTrue(modes["entity_access_links"][1].startswith("invalidated by "))
         self.assertEqual(modes["entities"], ("skipped", "source inputs unchanged"))
         self.assertEqual(modes["openapi_scan"], ("skipped", "source inputs unchanged"))
         self.assertEqual(

@@ -20,6 +20,7 @@ ENTITY_SEMANTICS_MIGRATION = "021_entity_semantics"
 ENTITY_SEMANTICS_REPO_SCOPE_MIGRATION = "022_entity_semantics_repo_scope"
 DELTA_REFRESH_MIGRATION = "023_delta_refresh"
 REFRESH_CONTRACTS_MIGRATION = "024_refresh_contracts"
+DELTA_REFRESH_HARDENING_MIGRATION = "025_delta_refresh_hardening"
 LEGACY_REPO_KEY = "ia-main"
 
 
@@ -1286,8 +1287,11 @@ def _apply_refresh_contracts_migration(conn: sqlite3.Connection) -> None:
     try:
         conn.execute("ALTER TABLE catalog_builds RENAME TO catalog_builds_legacy_024")
         _canonical_schema_objects(conn, ("catalog_builds",))
+        legacy_columns = _columns(conn, "catalog_builds_legacy_024")
         columns = ",".join(
-            row[1] for row in conn.execute("PRAGMA table_info(catalog_builds)")
+            row[1]
+            for row in conn.execute("PRAGMA table_info(catalog_builds)")
+            if row[1] in legacy_columns
         )
         conn.execute(
             f"INSERT INTO catalog_builds({columns}) "
@@ -1305,6 +1309,24 @@ def _apply_refresh_contracts_migration(conn: sqlite3.Connection) -> None:
         conn.execute("DROP TABLE catalog_builds_legacy_024")
     finally:
         conn.execute(f"PRAGMA legacy_alter_table={prior_legacy}")
+
+
+def _apply_delta_refresh_hardening_migration(conn: sqlite3.Connection) -> None:
+    """Install contract-v3 provenance fields and remove unsupported evidence."""
+
+    _add_columns(conn, "catalog_builds", ("runtime_fingerprint TEXT",))
+    _add_columns(conn, "repo_index_stages", ("result_summary TEXT",))
+    _add_columns(
+        conn,
+        "repo_changed_paths",
+        (
+            "old_mode INTEGER",
+            "new_mode INTEGER",
+            "rename_score INTEGER CHECK(rename_score IS NULL OR (rename_score >= 0 AND rename_score <= 100))",
+        ),
+    )
+    if _table_exists(conn, "integration_links"):
+        conn.execute("DELETE FROM integration_links")
 
 
 def apply_delta_refresh_migration(conn: sqlite3.Connection) -> None:
@@ -1339,6 +1361,16 @@ def apply_delta_refresh_migration(conn: sqlite3.Connection) -> None:
             conn.execute(
                 "INSERT INTO schema_migrations(name) VALUES (?)",
                 (REFRESH_CONTRACTS_MIGRATION,),
+            )
+        hardening_applied = conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name=?",
+            (DELTA_REFRESH_HARDENING_MIGRATION,),
+        ).fetchone()
+        _apply_delta_refresh_hardening_migration(conn)
+        if hardening_applied is None:
+            conn.execute(
+                "INSERT INTO schema_migrations(name) VALUES (?)",
+                (DELTA_REFRESH_HARDENING_MIGRATION,),
             )
         violations = conn.execute("PRAGMA foreign_key_check").fetchall()
         if violations:
@@ -1448,6 +1480,16 @@ def apply_multi_repo_migration(
             conn.execute(
                 "INSERT INTO schema_migrations(name) VALUES (?)",
                 (REFRESH_CONTRACTS_MIGRATION,),
+            )
+        hardening_applied = conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name = ?",
+            (DELTA_REFRESH_HARDENING_MIGRATION,),
+        ).fetchone()
+        if hardening_applied is None:
+            _apply_delta_refresh_hardening_migration(conn)
+            conn.execute(
+                "INSERT INTO schema_migrations(name) VALUES (?)",
+                (DELTA_REFRESH_HARDENING_MIGRATION,),
             )
         # FK enforcement is necessarily off while legacy parent tables are
         # rebuilt, but foreign_key_check still validates the candidate before

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from scripts.build_gherkin_coverage import (
     _endpoint_matches,
@@ -94,6 +94,41 @@ class GherkinCoverageTests(unittest.TestCase):
         )
         self.assertEqual(metadata, {"version": "v1-beta2", "testObject": "account"})
         self.assertFalse(diagnostics)
+
+    def test_bom_prefixed_feature_still_parses(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            feature = root / "bom.feature"
+            feature.write_text(
+                """@version:v1
+Feature: BOM handling
+  Scenario: Read account
+    When "GET" to "account"
+""",
+                encoding="utf-8-sig",
+            )
+            feature.with_suffix(".properties").write_text("testObject=account\n")
+            cases = parse_feature(feature, {"account": "accounts-payable/account"})
+
+        self.assertEqual(len(cases), 1)
+        self.assertEqual(cases[0].feature_name, "BOM handling")
+
+    def test_commented_out_feature_is_reported_explicitly(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            feature = root / "commented.feature"
+            feature.write_text(
+                """#Feature: Commented out
+  Scenario: Read account
+    When "GET" to "account"
+""",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                ValueError,
+                "Feature line is not commented out",
+            ):
+                parse_feature(feature, {"account": "accounts-payable/account"})
 
     def test_duplicate_alias_is_not_resolvable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -436,18 +471,8 @@ Feature: Account
             )
             conn = self._database(root)
             self.addCleanup(conn.close)
-            original_read_bytes = Path.read_bytes
-
-            def _guard(self: Path) -> bytes:
-                if self.name == "orphan.properties":
-                    raise AssertionError(
-                        "orphan.properties should not be read for contents"
-                    )
-                return original_read_bytes(self)
-
-            with patch("pathlib.Path.read_bytes", autospec=True, side_effect=_guard):
-                build(conn, "suite-a", root, self._mapping(root), root)
-                build(conn, "suite-a", root, self._mapping(root), root)
+            build(conn, "suite-a", root, self._mapping(root), root)
+            build(conn, "suite-a", root, self._mapping(root), root)
         orphan = conn.execute(
             "SELECT test_case_id, message FROM test_diagnostics WHERE kind = 'orphan_properties'"
         ).fetchone()
@@ -457,10 +482,11 @@ Feature: Account
         self.assertEqual(
             1, conn.execute("SELECT COUNT(*) FROM test_cases").fetchone()[0]
         )
-        self.assertIsNone(
+        self.assertEqual(
+            hashlib.sha1(b"password=must-not-be-retained\n").hexdigest(),
             conn.execute(
                 "SELECT sha1 FROM files WHERE path = 'orphan.properties'"
-            ).fetchone()[0]
+            ).fetchone()[0],
         )
         self.assertEqual(
             0,

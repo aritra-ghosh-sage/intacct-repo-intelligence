@@ -149,6 +149,40 @@ the graph intentionally stale until the operator runs the graph build step.
 Workflow extraction itself still follows the same evidence rules and does not
 depend on whether the refresh ran in full, auto, or delta mode.
 
+### Contract-v3 execution boundary
+
+Refresh planning compares committed revisions with the NUL-delimited raw Git
+contract:
+
+```bash
+git diff --raw -z -M --no-abbrev <base-sha> <target-sha> --
+```
+
+Both rename paths, tree modes, blob IDs, and rename scores are preserved. Only
+regular file blobs are accepted. Builders read a temporary target-commit
+snapshot materialized by `git ls-tree` plus `git cat-file --batch`; checkout
+bytes and Git filters are not evidence inputs.
+
+Only scan, symbols, and relationships have exact delta execution. Workflow
+extraction remains reset-style: a workflow source change, or invalidation from
+its declared entity-root/OpenAPI inputs, rebuilds all workflows, nodes, edges,
+and OpenAPI reference edges for that repository. Unrelated paths leave the
+workflow stage skipped. Candidate-local parse and unresolved-source diagnostics
+are converted to stable quality keys and never append to the standalone global
+logs.
+
+Repository prerequisites are explicit. An automation request builds `ia-main`
+and then `ia-restapi-automation` in one candidate; a main request does not infer
+the automation reverse dependent. If main REST endpoint evidence would be
+rebuilt without automation in scope, planning fails before snapshot or candidate
+creation.
+
+Promotion requires verified sources, repository validation, SQLite integrity,
+foreign keys, migration 025, semantic quality, restored manifest roots, a
+logical fingerprint, final source-SHA checks, and parent CAS. The refresh lock
+is held across preparation, no-op recording, failure recording, or promotion.
+Ladybug construction and promotion are outside this workflow.
+
 ---
 
 **Document Status:** Final Decision Recorded  

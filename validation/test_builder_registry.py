@@ -30,10 +30,13 @@ class BuilderRegistryTests(unittest.TestCase):
                 "scan",
                 "symbols",
                 "relationships",
-                "integration_links",
                 "gherkin_coverage",
             ],
         )
+
+    def test_explicit_unsupported_integration_builder_is_rejected(self) -> None:
+        with self.assertRaisesRegex(BuilderPlanError, "unsupported"):
+            build_plan("rest_automation", ["integration_links"])
 
     def test_unknown_builder_is_rejected(self) -> None:
         with self.assertRaisesRegex(BuilderPlanError, "unknown builder"):

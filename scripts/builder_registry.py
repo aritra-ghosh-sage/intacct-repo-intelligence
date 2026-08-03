@@ -10,6 +10,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
+from catalog.delta import path_is_in_scan_scope
 from scripts.scan_ent_files import is_entity_input_path
 
 SourceMatcher = Callable[[str], bool]
@@ -17,6 +18,10 @@ SourceMatcher = Callable[[str], bool]
 
 def _any(_path: str) -> bool:
     return True
+
+
+def _none(_path: str) -> bool:
+    return False
 
 
 def _suffix(*suffixes: str) -> SourceMatcher:
@@ -49,14 +54,15 @@ class Builder:
 
 
 BUILDERS: dict[str, Builder] = {
-    "scan": Builder("scan", delta_capability="exact", source_matcher=_any),
+    "scan": Builder(
+        "scan", delta_capability="exact", source_matcher=path_is_in_scan_scope
+    ),
     "symbols": Builder(
         "symbols",
         ("scan",),
         delta_capability="exact",
-        source_matcher=_any,
+        source_matcher=path_is_in_scan_scope,
         invalidates=(
-            "entity_roots",
             "workflows",
             "entity_semantics",
             "entity_access_links",
@@ -66,8 +72,7 @@ BUILDERS: dict[str, Builder] = {
         "relationships",
         ("symbols",),
         delta_capability="exact",
-        source_matcher=_any,
-        invalidates=("integration_links",),
+        source_matcher=path_is_in_scan_scope,
     ),
     "entities": Builder(
         "entities",
@@ -87,7 +92,7 @@ BUILDERS: dict[str, Builder] = {
         "entity_roots",
         ("entities", "symbols"),
         frozenset({"intacct_app"}),
-        source_matcher=_or(_suffix(".ent"), _any),
+        source_matcher=is_entity_input_path,
     ),
     "openapi_scan": Builder(
         "openapi_scan",
@@ -155,7 +160,7 @@ BUILDERS: dict[str, Builder] = {
         "entity_access_links",
         ("workflows", "security", "rest_endpoints", "entity_semantics"),
         frozenset({"intacct_app"}),
-        source_matcher=_any,
+        source_matcher=_none,
     ),
     "integration_links": Builder(
         "integration_links",
@@ -165,21 +170,18 @@ BUILDERS: dict[str, Builder] = {
     ),
     "gherkin_coverage": Builder(
         "gherkin_coverage",
-        ("integration_links",),
+        ("scan",),
         frozenset({"rest_automation"}),
-        source_matcher=_or(
-            _suffix(".feature", ".properties"), _contains("object-mapping.json")
-        ),
+        source_matcher=_none,
     ),
 }
 
 PROFILE_DEFAULTS: dict[str, tuple[str, ...]] = {
-    "generic": ("scan", "symbols", "relationships", "integration_links"),
+    "generic": ("scan", "symbols", "relationships"),
     "rest_automation": (
         "scan",
         "symbols",
         "relationships",
-        "integration_links",
         "gherkin_coverage",
     ),
     "intacct_app": (
@@ -195,7 +197,6 @@ PROFILE_DEFAULTS: dict[str, tuple[str, ...]] = {
         "rest_endpoints",
         "entity_semantics",
         "entity_access_links",
-        "integration_links",
     ),
 }
 
@@ -230,6 +231,10 @@ def build_plan(profile: str, requested: Iterable[str] | None = None) -> list[str
             raise BuilderPlanError(
                 f"builder {name!r} is not supported by profile {profile!r}"
             )
+        if builder.delta_capability == "unsupported":
+            raise BuilderPlanError(
+                f"builder {name!r} is unsupported and has no deterministic runner"
+            )
         if name in permanent:
             return
         if name in visiting:
@@ -247,7 +252,10 @@ def build_plan(profile: str, requested: Iterable[str] | None = None) -> list[str
 
 
 def invalidated_builders(
-    plan: Iterable[str], changed_paths: Iterable[str], forced: Iterable[str] = ()
+    plan: Iterable[str],
+    changed_paths: Iterable[str],
+    forced: Iterable[str] = (),
+    matcher_overrides: dict[str, SourceMatcher] | None = None,
 ) -> dict[str, str]:
     """Return selected builders and concrete transitive invalidation reasons."""
 
@@ -255,7 +263,7 @@ def invalidated_builders(
     selected = set(ordered)
     reasons: dict[str, str] = {}
     for name in ordered:
-        matcher = BUILDERS[name].source_matcher
+        matcher = (matcher_overrides or {}).get(name, BUILDERS[name].source_matcher)
         matches = sorted(path for path in changed_paths if matcher(path))
         if matches:
             reasons[name] = f"source change: {matches[0]}"
@@ -282,11 +290,14 @@ def stage_execution_modes(
     repository_mode: str,
     changed_paths: Iterable[str] = (),
     forced: Iterable[str] = (),
+    matcher_overrides: dict[str, SourceMatcher] | None = None,
 ) -> dict[str, tuple[str, str]]:
     ordered = list(plan)
     if repository_mode == "full":
         return {name: ("full", "full repository refresh") for name in ordered}
-    reasons = invalidated_builders(ordered, changed_paths, forced)
+    reasons = invalidated_builders(
+        ordered, changed_paths, forced, matcher_overrides=matcher_overrides
+    )
     result: dict[str, tuple[str, str]] = {}
     for name in ordered:
         reason = reasons.get(name)
@@ -296,3 +307,27 @@ def stage_execution_modes(
         capability = BUILDERS[name].delta_capability
         result[name] = ("delta" if capability == "exact" else "full", reason)
     return result
+
+
+def repository_matcher_overrides(manifest_entry: dict) -> dict[str, SourceMatcher]:
+    """Build exact operator-configured matchers without broad path heuristics."""
+
+    if manifest_entry.get("profile") != "rest_automation":
+        return {}
+    settings = manifest_entry.get("rest_automation") or {}
+    features_root = (
+        PurePosixPath(str(settings.get("features_root", ""))).as_posix().rstrip("/")
+    )
+    object_mapping = PurePosixPath(str(settings.get("object_mapping", ""))).as_posix()
+
+    def gherkin(path: str) -> bool:
+        normalized = PurePosixPath(path).as_posix()
+        under_features = bool(features_root) and normalized.startswith(
+            features_root + "/"
+        )
+        return normalized == object_mapping or (
+            under_features
+            and PurePosixPath(normalized).suffix.lower() in {".feature", ".properties"}
+        )
+
+    return {"gherkin_coverage": gherkin}

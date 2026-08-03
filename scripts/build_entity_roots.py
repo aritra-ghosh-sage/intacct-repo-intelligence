@@ -163,7 +163,7 @@ def build_entity_roots(conn: Any, reset: bool, repo_id: int) -> int:
     click.echo(f"Inserted entity_roots rows: {inserted}")
     click.echo(f"Shared root rows (is_shared=1): {shared_rows}")
     click.echo(f"Shared symbols: {shared_symbols}")
-    return 0
+    return inserted
 
 
 def check_structural(

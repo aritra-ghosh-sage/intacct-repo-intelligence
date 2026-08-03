@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import sqlite3
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +38,7 @@ class ScanStats:
     files_missing_in_catalog: int = 0
     yaml_parse_failures: int = 0
     template_files_skipped: int = 0
+    diagnostics: list[dict[str, str]] = field(default_factory=list)
 
 
 def _is_template_file(rel_path: str) -> bool:
@@ -271,11 +272,20 @@ def scan_openapispec(
         file_id = _get_file_id(conn, repo_id, rel_path)
         if file_id is None:
             stats.files_missing_in_catalog += 1
+            stats.diagnostics.append(
+                {
+                    "code": "openapi_file_missing_from_catalog",
+                    "source_path": rel_path,
+                }
+            )
             continue
 
         doc, parsed_ok = _parse_yaml(yaml_path)
         if not parsed_ok:
             stats.yaml_parse_failures += 1
+            stats.diagnostics.append(
+                {"code": "openapi_yaml_parse_error", "source_path": rel_path}
+            )
 
         rel_to_root = yaml_path.relative_to(root)
         module = rel_to_root.parts[0] if rel_to_root.parts else None

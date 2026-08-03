@@ -11,7 +11,7 @@ from tqdm import tqdm
 
 from catalog.db import get_connection
 from catalog.delta import ChangedPath, ChangeType, path_is_in_scan_scope
-from config import EXCLUDE_DIRS, INCLUDE_EXTENSIONS
+from config import EXCLUDE_DIRS
 from parser.repo_context import RepoContext, require_repo_scoped_files, resolve_repo
 
 
@@ -30,6 +30,19 @@ class ScanDeltaResult:
     @property
     def affected_count(self) -> int:
         return len(self.affected_file_ids) + len(self.deleted_files)
+
+
+@dataclass(frozen=True)
+class FullScanResult:
+    scanned: int
+    added: int
+    updated: int
+    unchanged: int
+    removed: int
+
+    @property
+    def affected_count(self) -> int:
+        return self.added + self.updated + self.removed
 
 
 def detect_language(path: str) -> str:
@@ -68,18 +81,23 @@ def compute_sha1(filepath: str, chunk_size: int = 65536) -> str:
     return h.hexdigest()
 
 
-def walk_repo(root: str):
+def walk_repo(root: str, errors: list[tuple[str, str]] | None = None):
     root = os.path.abspath(root)
-    for dirpath, dirnames, filenames in os.walk(root):
+    collected_errors = errors if errors is not None else []
+
+    def onerror(error: OSError) -> None:
+        collected_errors.append((str(error.filename or root), str(error)))
+
+    for dirpath, dirnames, filenames in os.walk(root, onerror=onerror):
         # prune excluded directories in-place
         dirnames[:] = [d for d in dirnames if d not in EXCLUDE_DIRS]
 
         for name in filenames:
-            ext = Path(name).suffix.lower()
-            if ext not in INCLUDE_EXTENSIONS:
-                # print(f'excluded file: ${ext}')
+            absolute = os.path.join(dirpath, name)
+            relative = Path(absolute).relative_to(root).as_posix()
+            if not path_is_in_scan_scope(relative):
                 continue
-            yield os.path.join(dirpath, name)
+            yield absolute
 
 
 def _purge_deleted_files(conn, repo: RepoContext, seen_paths: set[str]) -> int:
@@ -104,7 +122,7 @@ def _purge_deleted_files(conn, repo: RepoContext, seen_paths: set[str]) -> int:
     return len(missing)
 
 
-def _raw_sha1_for_git_blob(root: Path, blob_sha: str | None) -> str | None:
+def _raw_bytes_for_git_blob(root: Path, blob_sha: str | None) -> bytes | None:
     if not blob_sha:
         return None
     result = subprocess.run(
@@ -114,14 +132,21 @@ def _raw_sha1_for_git_blob(root: Path, blob_sha: str | None) -> str | None:
     )
     if result.returncode:
         raise RuntimeError(f"expected Git blob is unavailable: {blob_sha}")
-    return hashlib.sha1(result.stdout).hexdigest()
+    return result.stdout
+
+
+def _raw_sha1_for_git_blob(root: Path, blob_sha: str | None) -> str | None:
+    value = _raw_bytes_for_git_blob(root, blob_sha)
+    return hashlib.sha1(value).hexdigest() if value is not None else None
 
 
 def apply_changed_paths(
     changed_paths: list[ChangedPath] | tuple[ChangedPath, ...],
     *,
-    repo_key: str | None = None,
-    db_path: str | None = None,
+    repo_key: str,
+    db_path: str,
+    source_root: Path,
+    git_root: Path,
 ) -> ScanDeltaResult:
     """Apply an explicit committed path delta without walking the repository."""
 
@@ -140,7 +165,7 @@ def apply_changed_paths(
         ).fetchone()
         if row is None:
             raise RuntimeError(f"delta delete has no owned catalog file: {path}")
-        expected_raw = _raw_sha1_for_git_blob(repo.local_root, expected_blob_sha)
+        expected_raw = _raw_sha1_for_git_blob(git_root, expected_blob_sha)
         if expected_raw is not None and row["sha1"] != expected_raw:
             raise RuntimeError(
                 f"delta delete hash mismatch for {path}: catalog={row['sha1']} expected={expected_raw}"
@@ -153,22 +178,35 @@ def apply_changed_paths(
         conn.execute("DELETE FROM symbols WHERE file_id=?", (file_id,))
         conn.execute("DELETE FROM files WHERE id=?", (file_id,))
 
-    def upsert_path(path: str, expected_old_blob_sha: str | None) -> None:
+    def upsert_path(
+        path: str,
+        expected_old_blob_sha: str | None,
+        expected_new_blob_sha: str | None,
+    ) -> None:
         if not path_is_in_scan_scope(path):
             raise RuntimeError(f"delta add/update is outside scan scope: {path}")
-        absolute = repo.local_root / path
+        absolute = source_root / path
         if not absolute.is_file():
             raise RuntimeError(f"delta source path does not exist: {absolute}")
         row = conn.execute(
             "SELECT id,sha1 FROM files WHERE repo_id=? AND path=?", (repo.id, path)
         ).fetchone()
-        expected_raw = _raw_sha1_for_git_blob(repo.local_root, expected_old_blob_sha)
+        expected_raw = _raw_sha1_for_git_blob(git_root, expected_old_blob_sha)
         if row is not None and expected_raw is not None and row["sha1"] != expected_raw:
             raise RuntimeError(
                 f"delta update hash mismatch for {path}: catalog={row['sha1']} expected={expected_raw}"
             )
         stat = absolute.stat()
-        sha1 = compute_sha1(str(absolute))
+        source_bytes = absolute.read_bytes()
+        target_bytes = _raw_bytes_for_git_blob(git_root, expected_new_blob_sha)
+        if target_bytes is None:
+            raise RuntimeError(f"delta target blob is missing for {path}")
+        sha1 = hashlib.sha1(source_bytes).hexdigest()
+        target_sha1 = hashlib.sha1(target_bytes).hexdigest()
+        if sha1 != target_sha1:
+            raise RuntimeError(
+                f"delta target hash mismatch for {path}: snapshot={sha1} expected={target_sha1}"
+            )
         modified = datetime.fromtimestamp(stat.st_mtime, tz=UTC).isoformat()
         if row is None:
             cursor = conn.execute(
@@ -203,15 +241,36 @@ def apply_changed_paths(
 
     try:
         for change in changed_paths:
+            old_in_scope = bool(
+                change.old_path is not None and path_is_in_scan_scope(change.old_path)
+            )
+            new_in_scope = bool(
+                change.new_path is not None and path_is_in_scan_scope(change.new_path)
+            )
             if change.change_type == ChangeType.RENAMED:
-                delete_path(str(change.old_path), change.old_blob_sha)
-                upsert_path(str(change.new_path), None)
+                if old_in_scope:
+                    delete_path(str(change.old_path), change.old_blob_sha)
+                if new_in_scope:
+                    upsert_path(
+                        str(change.new_path),
+                        None,
+                        change.new_blob_sha,
+                    )
             elif change.change_type == ChangeType.DELETED:
-                delete_path(str(change.old_path), change.old_blob_sha)
+                if old_in_scope:
+                    delete_path(str(change.old_path), change.old_blob_sha)
             elif change.change_type == ChangeType.ADDED:
-                upsert_path(str(change.new_path), None)
+                if new_in_scope:
+                    upsert_path(str(change.new_path), None, change.new_blob_sha)
             elif change.change_type == ChangeType.MODIFIED:
-                upsert_path(str(change.new_path), change.old_blob_sha)
+                if old_in_scope and not new_in_scope:
+                    delete_path(str(change.old_path), change.old_blob_sha)
+                elif new_in_scope:
+                    upsert_path(
+                        str(change.new_path),
+                        change.old_blob_sha if old_in_scope else None,
+                        change.new_blob_sha,
+                    )
             else:
                 raise RuntimeError(f"unsupported change type: {change.change_type}")
         conn.commit()
@@ -223,7 +282,7 @@ def apply_changed_paths(
         conn.close()
 
 
-def scan(repo_key: str | None = None, db_path: str | None = None):
+def scan(repo_key: str | None = None, db_path: str | None = None) -> FullScanResult:
     conn = get_connection(db_path)
     cur = conn.cursor()
     require_repo_scoped_files(conn)
@@ -233,17 +292,21 @@ def scan(repo_key: str | None = None, db_path: str | None = None):
     files_scanned = 0
     files_added = 0
     files_updated = 0
-    files_skipped = 0
+    files_unchanged = 0
 
     print(f"📂 Scanning [{repo.repo_key}]: {repo.local_root}")
 
-    all_files = list(walk_repo(str(repo.local_root)))
+    walk_errors: list[tuple[str, str]] = []
+    all_files = list(walk_repo(str(repo.local_root), walk_errors))
     print(f"🔎 Found {len(all_files)} candidate files")
     seen_paths: set[str] = set()
 
+    failures: list[tuple[str, str]] = list(walk_errors)
     for filepath in tqdm(all_files, desc="Indexing"):
         try:
-            rel_path = os.path.relpath(filepath, repo.local_root)
+            rel_path = Path(filepath).relative_to(repo.local_root).as_posix()
+            if not path_is_in_scan_scope(rel_path):
+                continue
             seen_paths.add(rel_path)
             size = os.path.getsize(filepath)
             mtime = datetime.fromtimestamp(
@@ -255,12 +318,6 @@ def scan(repo_key: str | None = None, db_path: str | None = None):
                 "SELECT sha1, last_modified FROM files WHERE repo_id = ? AND path = ?",
                 (repo.id, rel_path),
             ).fetchone()
-
-            # Fast skip: same mtime + size heuristic
-            if row and row["last_modified"] == mtime:
-                files_skipped += 1
-                files_scanned += 1
-                continue
 
             sha1 = compute_sha1(filepath)
 
@@ -305,16 +362,18 @@ def scan(repo_key: str | None = None, db_path: str | None = None):
                 )
                 files_updated += 1
             else:
-                files_skipped += 1
+                files_unchanged += 1
 
             files_scanned += 1
 
-            # Commit periodically for safety
-            if files_scanned % 1000 == 0:
-                conn.commit()
+        except Exception as e:  # noqa: BLE001 - aggregate every per-file failure
+            failures.append((str(filepath), str(e)))
 
-        except Exception as e:
-            print(f"⚠️  Error on {filepath}: {e}")
+    if failures:
+        conn.rollback()
+        conn.close()
+        details = "; ".join(f"{path}: {message}" for path, message in sorted(failures))
+        raise RuntimeError(f"full scan input failures: {details}")
 
     files_removed = _purge_deleted_files(conn, repo, seen_paths)
     conn.commit()
@@ -324,8 +383,15 @@ def scan(repo_key: str | None = None, db_path: str | None = None):
     print(f"   Scanned:  {files_scanned}")
     print(f"   Added:    {files_added}")
     print(f"   Updated:  {files_updated}")
-    print(f"   Skipped:  {files_skipped}")
+    print(f"   Unchanged:{files_unchanged:>6}")
     print(f"   Removed:  {files_removed}")
+    return FullScanResult(
+        scanned=files_scanned,
+        added=files_added,
+        updated=files_updated,
+        unchanged=files_unchanged,
+        removed=files_removed,
+    )
 
 
 if __name__ == "__main__":

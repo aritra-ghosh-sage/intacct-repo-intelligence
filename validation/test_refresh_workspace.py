@@ -4,12 +4,20 @@ import os
 import sqlite3
 import subprocess
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
 
+from catalog.refresh_quality import RefreshQualityError, load_quality_report
 from catalog.repositories import RepositoryError
-from scripts.refresh_workspace import RefreshError, refresh_repository
+from scripts.refresh_workspace import (
+    RefreshError,
+    _assert_parent_unchanged,
+    _parent_descriptor,
+    _refresh_lock,
+    refresh_repository,
+)
 from validation.validate_catalog_integrity import CatalogIntegrityError
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -178,11 +186,18 @@ class WorkspaceRefreshTests(unittest.TestCase):
         with (
             mock.patch(
                 "scripts.refresh_workspace.build_plan",
-                return_value=["entity_semantics"],
+                return_value=["scan", "entity_semantics"],
             ),
             mock.patch(
                 "scripts.build_entity_semantics.build",
-                return_value={"occurrences": 0},
+                return_value={
+                    "occurrences": 0,
+                    "components": 0,
+                    "facts": 0,
+                    "partial": 0,
+                    "failed": 0,
+                    "conflicts": 0,
+                },
             ) as semantic_build,
         ):
             refresh_repository(database, manifest, "service")
@@ -193,9 +208,10 @@ class WorkspaceRefreshTests(unittest.TestCase):
                 "catalog.db.candidate."
             )
         )
-        self.assertEqual(
-            Path(semantic_build.call_args.args[1]).resolve(), checkout.resolve()
-        )
+        snapshot_root = Path(semantic_build.call_args.args[1])
+        self.assertTrue(snapshot_root.name.startswith("catalog-source-service-"))
+        self.assertNotEqual(snapshot_root.resolve(), checkout.resolve())
+        self.assertFalse(snapshot_root.exists())
         self.assertEqual(semantic_build.call_args.args[2], "service")
         self.assertTrue(semantic_build.call_args.kwargs["reset"])
 
@@ -207,7 +223,8 @@ class WorkspaceRefreshTests(unittest.TestCase):
             )
             stage = conn.execute(
                 "SELECT builder_name,status,diagnostic_error "
-                "FROM repo_index_stages ORDER BY id DESC LIMIT 1"
+                "FROM repo_index_stages WHERE builder_name='entity_semantics' "
+                "ORDER BY id DESC LIMIT 1"
             ).fetchone()
             self.assertEqual(stage[0], "entity_semantics")
             self.assertEqual(stage[1], "succeeded")
@@ -251,21 +268,13 @@ class WorkspaceRefreshTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        refresh_calls: list[str] = []
-
-        def record_refresh(
-            active: Path, manifest_document: dict, repo_key: str
-        ) -> None:
-            refresh_calls.append(repo_key)
-
         with (
             mock.patch(
                 "scripts.refresh_workspace._validate_refresh_preconditions"
             ) as validate_preconditions,
             mock.patch(
-                "scripts.refresh_workspace._refresh_repository_once",
-                side_effect=record_refresh,
-            ),
+                "scripts.refresh_workspace._refresh_repository_closure"
+            ) as refresh_closure,
         ):
             refresh_repository(database, manifest, "service")
 
@@ -274,7 +283,10 @@ class WorkspaceRefreshTests(unittest.TestCase):
             validate_preconditions.call_args.args[1],
             ["base", "shared", "sibling", "service"],
         )
-        self.assertEqual(refresh_calls, ["base", "shared", "sibling", "service"])
+        self.assertEqual(
+            refresh_closure.call_args.args[2],
+            ["base", "shared", "sibling", "service"],
+        )
 
     def test_refresh_rejects_disabled_dependencies_before_refreshing(self) -> None:
         directory, _checkout, database, manifest = self._fixture()
@@ -298,13 +310,15 @@ class WorkspaceRefreshTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        with mock.patch(
-            "scripts.refresh_workspace._refresh_repository_once"
-        ) as refresh_once:
-            with self.assertRaisesRegex(RefreshError, "disabled repository"):
-                refresh_repository(database, manifest, "service")
+        with (
+            mock.patch(
+                "scripts.refresh_workspace._refresh_repository_closure"
+            ) as refresh_closure,
+            self.assertRaisesRegex(RefreshError, "disabled repository"),
+        ):
+            refresh_repository(database, manifest, "service")
 
-        refresh_once.assert_not_called()
+        refresh_closure.assert_not_called()
 
     def test_refresh_rejects_later_disabled_dependency_before_refreshing(self) -> None:
         directory, _checkout, database, manifest = self._fixture()
@@ -329,13 +343,15 @@ class WorkspaceRefreshTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        with mock.patch(
-            "scripts.refresh_workspace._refresh_repository_once"
-        ) as refresh_once:
-            with self.assertRaisesRegex(RefreshError, "disabled repository: blocked"):
-                refresh_repository(database, manifest, "service")
+        with (
+            mock.patch(
+                "scripts.refresh_workspace._refresh_repository_closure"
+            ) as refresh_closure,
+            self.assertRaisesRegex(RefreshError, "disabled repository: blocked"),
+        ):
+            refresh_repository(database, manifest, "service")
 
-        refresh_once.assert_not_called()
+        refresh_closure.assert_not_called()
 
     def test_refresh_rejects_disabled_target_and_records_preflight(self) -> None:
         directory, _checkout, database, manifest = self._fixture()
@@ -353,15 +369,15 @@ class WorkspaceRefreshTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        with mock.patch(
-            "scripts.refresh_workspace._refresh_repository_once"
-        ) as refresh_once:
-            with self.assertRaisesRegex(
-                RefreshError, "repository is disabled: service"
-            ):
-                refresh_repository(database, manifest, "service")
+        with (
+            mock.patch(
+                "scripts.refresh_workspace._refresh_repository_closure"
+            ) as refresh_closure,
+            self.assertRaisesRegex(RefreshError, "repository is disabled: service"),
+        ):
+            refresh_repository(database, manifest, "service")
 
-        refresh_once.assert_not_called()
+        refresh_closure.assert_not_called()
         conn = sqlite3.connect(database)
         try:
             runs = conn.execute(
@@ -397,13 +413,15 @@ class WorkspaceRefreshTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        with mock.patch(
-            "scripts.refresh_workspace._refresh_repository_once"
-        ) as refresh_once:
-            with self.assertRaisesRegex(RepositoryError, "unknown repository"):
-                refresh_repository(database, manifest, "service")
+        with (
+            mock.patch(
+                "scripts.refresh_workspace._refresh_repository_closure"
+            ) as refresh_closure,
+            self.assertRaisesRegex(RepositoryError, "unknown repository"),
+        ):
+            refresh_repository(database, manifest, "service")
 
-        refresh_once.assert_not_called()
+        refresh_closure.assert_not_called()
         conn = sqlite3.connect(database)
         try:
             self.assertEqual(
@@ -433,13 +451,15 @@ class WorkspaceRefreshTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        with mock.patch(
-            "scripts.refresh_workspace._refresh_repository_once"
-        ) as refresh_once:
-            with self.assertRaisesRegex(RefreshError, "checkout root does not exist"):
-                refresh_repository(database, manifest, "service")
+        with (
+            mock.patch(
+                "scripts.refresh_workspace._refresh_repository_closure"
+            ) as refresh_closure,
+            self.assertRaisesRegex(RefreshError, "checkout root does not exist"),
+        ):
+            refresh_repository(database, manifest, "service")
 
-        refresh_once.assert_not_called()
+        refresh_closure.assert_not_called()
 
     def test_invalid_later_branch_fails_before_any_refresh(self) -> None:
         directory, checkout, database, manifest = self._fixture()
@@ -456,13 +476,15 @@ class WorkspaceRefreshTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        with mock.patch(
-            "scripts.refresh_workspace._refresh_repository_once"
-        ) as refresh_once:
-            with self.assertRaisesRegex(RefreshError, "missing-branch"):
-                refresh_repository(database, manifest, "service")
+        with (
+            mock.patch(
+                "scripts.refresh_workspace._refresh_repository_closure"
+            ) as refresh_closure,
+            self.assertRaisesRegex(RefreshError, "missing-branch"),
+        ):
+            refresh_repository(database, manifest, "service")
 
-        refresh_once.assert_not_called()
+        refresh_closure.assert_not_called()
 
     def test_missing_rest_evidence_fails_before_any_refresh(self) -> None:
         directory, checkout, database, manifest = self._fixture()
@@ -479,13 +501,15 @@ class WorkspaceRefreshTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        with mock.patch(
-            "scripts.refresh_workspace._refresh_repository_once"
-        ) as refresh_once:
-            with self.assertRaisesRegex(RepositoryError, "does not exist"):
-                refresh_repository(database, manifest, "service")
+        with (
+            mock.patch(
+                "scripts.refresh_workspace._refresh_repository_closure"
+            ) as refresh_closure,
+            self.assertRaisesRegex(RepositoryError, "does not exist"),
+        ):
+            refresh_repository(database, manifest, "service")
 
-        refresh_once.assert_not_called()
+        refresh_closure.assert_not_called()
 
     def test_dirty_checkout_records_dependency_preflight_failure_stage(self) -> None:
         directory, checkout, database, manifest = self._fixture()
@@ -610,6 +634,7 @@ Feature: Account
                 "--repo",
                 "service",
             ],
+            check=False,
             cwd=ROOT,
             text=True,
             capture_output=True,
@@ -629,6 +654,120 @@ Feature: Account
             )
         finally:
             conn.close()
+
+    def test_quality_prepare_then_accept_is_parent_bound(self) -> None:
+        directory, _checkout, database, manifest = self._fixture()
+        self.addCleanup(directory.cleanup)
+        refresh_repository(database, manifest, "service", mode="full")
+        report_path = Path(directory.name) / "quality.json"
+        previous = database.with_name(database.name + ".previous")
+        previous_bytes = previous.read_bytes()
+        conn = sqlite3.connect(database)
+        before_active = conn.execute(
+            "SELECT id FROM catalog_builds WHERE status='active'"
+        ).fetchone()[0]
+        before_build_count = conn.execute(
+            "SELECT COUNT(*) FROM catalog_builds"
+        ).fetchone()[0]
+        conn.close()
+
+        refresh_repository(
+            database,
+            manifest,
+            "service",
+            mode="full",
+            prepare_quality_baseline=report_path,
+        )
+        report = load_quality_report(report_path)
+        conn = sqlite3.connect(database)
+        self.assertEqual(
+            conn.execute(
+                "SELECT id FROM catalog_builds WHERE status='active'"
+            ).fetchone()[0],
+            before_active,
+        )
+        self.assertEqual(
+            conn.execute("SELECT COUNT(*) FROM catalog_builds").fetchone()[0],
+            before_build_count,
+        )
+        conn.close()
+        self.assertEqual(previous.read_bytes(), previous_bytes)
+        self.assertFalse(list(database.parent.glob(f"{database.name}.candidate.*")))
+
+        with self.assertRaisesRegex(
+            RefreshQualityError, "quality baseline hash mismatch"
+        ):
+            refresh_repository(
+                database,
+                manifest,
+                "service",
+                mode="full",
+                accept_quality_baseline="0" * 64,
+            )
+        conn = sqlite3.connect(database)
+        self.assertEqual(
+            conn.execute(
+                "SELECT id FROM catalog_builds WHERE status='active'"
+            ).fetchone()[0],
+            before_active,
+        )
+        conn.close()
+        self.assertEqual(previous.read_bytes(), previous_bytes)
+
+        refresh_repository(
+            database,
+            manifest,
+            "service",
+            mode="full",
+            accept_quality_baseline=str(report["approval_sha256"]),
+        )
+        conn = sqlite3.connect(database)
+        try:
+            self.assertGreater(
+                conn.execute(
+                    "SELECT id FROM catalog_builds WHERE status='active'"
+                ).fetchone()[0],
+                before_active,
+            )
+            summary = conn.execute(
+                "SELECT validation_summary FROM repo_index_runs "
+                "WHERE status='active' ORDER BY id DESC LIMIT 1"
+            ).fetchone()[0]
+            self.assertIn('"status":"approved"', summary)
+        finally:
+            conn.close()
+
+    def test_refresh_lock_serializes_contenders(self) -> None:
+        directory, _checkout, database, _manifest = self._fixture()
+        self.addCleanup(directory.cleanup)
+        acquired = threading.Event()
+
+        def contender() -> None:
+            with _refresh_lock(database):
+                acquired.set()
+
+        with _refresh_lock(database):
+            thread = threading.Thread(target=contender)
+            thread.start()
+            self.assertFalse(acquired.wait(0.1))
+        self.assertTrue(acquired.wait(2.0))
+        thread.join(timeout=2.0)
+        self.assertFalse(thread.is_alive())
+
+    def test_parent_descriptor_detects_generation_change(self) -> None:
+        directory, _checkout, database, manifest = self._fixture()
+        self.addCleanup(directory.cleanup)
+        refresh_repository(database, manifest, "service", mode="full")
+        parent = _parent_descriptor(database)
+        conn = sqlite3.connect(database)
+        conn.execute(
+            "UPDATE catalog_builds SET content_fingerprint=? WHERE status='active'",
+            ("0" * 64,),
+        )
+        conn.commit()
+        conn.close()
+        with self.assertRaisesRegex(RefreshError, "compare-and-swap"):
+            _assert_parent_unchanged(database, parent)
 
 
 if __name__ == "__main__":

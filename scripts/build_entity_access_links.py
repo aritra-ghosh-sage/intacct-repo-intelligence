@@ -408,8 +408,11 @@ def _security_key_diagnostic(
     return record
 
 
-def _write_security_key_diagnostics(records: list[dict]) -> None:
-    path = SECURITY_UNRESOLVED_LOG
+def _write_security_key_diagnostics(
+    records: list[dict], path: Path | None = SECURITY_UNRESOLVED_LOG
+) -> None:
+    if path is None:
+        return
     existing_lines: list[str] = []
     if path.exists():
         for line in path.read_text(encoding="utf-8").splitlines():
@@ -554,7 +557,12 @@ def link_security_surfaces(
     return total, linked_key_count
 
 
-def build(db: str, reset: bool, repo_key: str) -> BuildStats:
+def build(
+    db: str,
+    reset: bool,
+    repo_key: str,
+    unresolved_security_log: Path | None = SECURITY_UNRESOLVED_LOG,
+) -> BuildStats:
     conn = get_connection(db)
     stats = BuildStats()
     diagnostics: list[dict] = []
@@ -575,7 +583,7 @@ def build(db: str, reset: bool, repo_key: str) -> BuildStats:
         stats.rows_inserted += security_links
         stats.security_keys_linked = linked_key_count
         stats.security_keys_unresolved = len(diagnostics)
-        _write_security_key_diagnostics(diagnostics)
+        _write_security_key_diagnostics(diagnostics, unresolved_security_log)
         stats.rows_inserted += link_by_entity_fk(conn, repo_id)
         stats.rows_inserted += link_by_table_name_match(conn, repo_id)
 

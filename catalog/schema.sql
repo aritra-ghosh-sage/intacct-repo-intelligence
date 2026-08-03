@@ -622,6 +622,7 @@ CREATE TABLE IF NOT EXISTS repo_index_stages (
     execution_mode TEXT CHECK(execution_mode IN ('full', 'delta', 'skipped')),
     invalidation_reason TEXT,
     affected_record_count INTEGER CHECK(affected_record_count IS NULL OR affected_record_count >= 0),
+    result_summary TEXT,
     diagnostic_error TEXT,
     UNIQUE(run_id, builder_name),
     FOREIGN KEY(run_id) REFERENCES repo_index_runs(id) ON DELETE CASCADE
@@ -988,6 +989,7 @@ CREATE TABLE IF NOT EXISTS catalog_builds (
     manifest_hash TEXT,
     builder_plan_hash TEXT,
     delta_contract_version INTEGER NOT NULL,
+    runtime_fingerprint TEXT,
     content_fingerprint TEXT,
     started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     completed_at TEXT,
@@ -1032,8 +1034,11 @@ CREATE TABLE IF NOT EXISTS repo_changed_paths (
     change_type TEXT NOT NULL CHECK(change_type IN ('added', 'modified', 'deleted', 'renamed')),
     old_path TEXT,
     new_path TEXT,
+    old_mode INTEGER,
+    new_mode INTEGER,
     old_blob_sha TEXT,
     new_blob_sha TEXT,
+    rename_score INTEGER CHECK(rename_score IS NULL OR (rename_score >= 0 AND rename_score <= 100)),
     FOREIGN KEY(change_set_id) REFERENCES repo_change_sets(id) ON DELETE CASCADE,
     CHECK(
         (change_type = 'added' AND old_path IS NULL AND new_path IS NOT NULL) OR
@@ -1080,4 +1085,5 @@ INSERT OR IGNORE INTO schema_migrations(name) VALUES
     ('021_entity_semantics'),
     ('022_entity_semantics_repo_scope'),
     ('023_delta_refresh'),
-    ('024_refresh_contracts');
+    ('024_refresh_contracts'),
+    ('025_delta_refresh_hardening');
