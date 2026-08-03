@@ -14,7 +14,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any
 
-CATALOG_CONTENT_VERSION = 2
+CATALOG_CONTENT_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -34,6 +34,7 @@ _TIMESTAMP_COLUMNS = frozenset(
         "last_built_at",
         "last_attempted_at",
         "validated_at",
+        "archived_at",
     }
 )
 

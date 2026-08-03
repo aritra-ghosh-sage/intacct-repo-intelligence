@@ -15,6 +15,7 @@ from catalog.refresh_quality import (
     resolve_reference_quality_run,
     validate_quality_run,
 )
+from catalog.source_revisions import active_source_revisions
 
 
 class CatalogIntegrityError(RuntimeError):
@@ -213,6 +214,12 @@ def validate_catalog_connection(
             "SELECT 1 FROM schema_migrations WHERE name='025_delta_refresh_hardening'"
         ).fetchone()
     )
+    archival_migration_present = bool(
+        _table_exists(conn, "schema_migrations")
+        and conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name='029_repository_archival'"
+        ).fetchone()
+    )
     integration_link_rows = (
         _count(conn, "SELECT COUNT(*) FROM integration_links")
         if _table_exists(conn, "integration_links")
@@ -265,11 +272,15 @@ def validate_catalog_connection(
         except (TypeError, ValueError, json.JSONDecodeError):
             revisions = {}
         if revisions_valid:
-            for repo_key, indexed_sha in conn.execute(
-                "SELECT repo_key,indexed_commit_sha FROM repos ORDER BY repo_key"
-            ):
-                if revisions.get(repo_key) != indexed_sha:
-                    revision_mismatches.append(str(repo_key))
+            expected_revisions = active_source_revisions(conn)
+            revision_mismatches = sorted(
+                set(revisions).symmetric_difference(expected_revisions)
+                | {
+                    repo_key
+                    for repo_key in set(revisions).intersection(expected_revisions)
+                    if revisions[repo_key] != expected_revisions[repo_key]
+                }
+            )
 
     active_change_set_failures = 0
     if active_id is not None:
@@ -288,6 +299,7 @@ def validate_catalog_connection(
         "migration_023_present": migration_present,
         "migration_024_present": refresh_contract_migration_present,
         "migration_025_present": hardening_migration_present,
+        "migration_029_present": archival_migration_present,
         "integration_link_rows": integration_link_rows,
         "invalid_active_quality_runs": invalid_active_quality_runs,
         "active_catalog_build_count": len(active_rows),
@@ -315,6 +327,8 @@ def validate_catalog_connection(
         failures.append("migration_024")
     if not hardening_migration_present:
         failures.append("migration_025")
+    if not archival_migration_present:
+        failures.append("migration_029")
     if integration_link_rows:
         failures.append("integration_links")
     if invalid_active_quality_runs:

@@ -1373,6 +1373,9 @@ def build(
 
     conn = get_connection(db)
     try:
+        from catalog.repository_lifecycle import require_repository_id_extractable
+
+        require_repository_id_extractable(conn, repo_id)
         ensure_workflows_file_id_column(conn)
         conn.execute("BEGIN IMMEDIATE")
 
@@ -1447,7 +1450,8 @@ def cli() -> None:
 def build_command(db: str, repo: str, repo_root: Path | None, reset: bool) -> None:
     conn = get_connection(db)
     try:
-        repository = get_repository(conn, repo)
+        from catalog.repository_lifecycle import require_repository_extractable
+        repository = require_repository_extractable(conn, repo)
         resolved_root = (
             repo_root.resolve()
             if repo_root is not None

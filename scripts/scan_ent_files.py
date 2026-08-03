@@ -1063,7 +1063,7 @@ def _resolve_required_ent_path(
     return None
 
 
-def scan(
+def _scan_repo_root(
     repo_root: Path,
     out_file: Path,
     missing_metadata_log: Path | None = MISSING_METADATA_LOG_PATH,
@@ -1339,6 +1339,23 @@ def scan(
     return count
 
 
+def scan(
+    *, db: str, repo_key: str, out_file: Path,
+    missing_metadata_log: Path | None = MISSING_METADATA_LOG_PATH,
+) -> int:
+    """Public, lifecycle-gated .ent scan for one registered repository."""
+    from catalog.db import get_connection
+    from catalog.repository_lifecycle import require_repository_extractable
+
+    conn = get_connection(db)
+    try:
+        repository = require_repository_extractable(conn, repo_key)
+        root = Path(repository["local_root"]).expanduser().resolve()
+    finally:
+        conn.close()
+    return _scan_repo_root(root, out_file, missing_metadata_log)
+
+
 def resolve_ent_metadata(
     ent_path: Path | None,
     repo_root: Path | None,
@@ -1400,11 +1417,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Scan ia-app .ent files and emit deterministic JSONL metadata."
     )
-    parser.add_argument(
-        "--repo-root",
-        default=".",
-        help="Repository root (default: current directory).",
-    )
+    parser.add_argument("--db", required=True, help="Catalog database path.")
+    parser.add_argument("--repo", required=True, help="Registered repository key.")
     parser.add_argument(
         "--out",
         default="entity_definitions.jsonl",
@@ -1412,12 +1426,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    repo_root = Path(args.repo_root).resolve()
     out_file = Path(args.out)
-    if not out_file.is_absolute():
-        out_file = (repo_root / out_file).resolve()
-
-    count = scan(repo_root, out_file)
+    count = scan(db=args.db, repo_key=args.repo, out_file=out_file.resolve())
     print(f"Wrote {count} entities to {out_file}")
 
 

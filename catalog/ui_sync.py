@@ -190,6 +190,9 @@ def _entity_occurrences(conn: sqlite3.Connection, repo_id: int) -> dict[str, tup
 
 def assemble_ui_snapshot(conn: sqlite3.Connection, *, repo_id: int, repo_root: Path) -> UiSnapshot:
     """Read indexed sources and existing deterministic evidence into one snapshot."""
+    from catalog.repository_lifecycle import require_repository_id_extractable
+
+    require_repository_id_extractable(conn, repo_id)
     files = _file_rows(conn, repo_id)
     occurrences = _entity_occurrences(conn, repo_id)
     snapshot = UiSnapshot()
@@ -465,6 +468,9 @@ _DELETE_ORDER = tuple(reversed(_ORDER))
 
 def synchronize_ui_snapshot(conn: sqlite3.Connection, *, repo_id: int, snapshot: UiSnapshot) -> None:
     """Synchronize a prebuilt snapshot atomically, preserving matching row ids."""
+    from catalog.repository_lifecycle import require_repository_id_extractable
+
+    require_repository_id_extractable(conn, repo_id)
     _validate_snapshot(snapshot)
     if conn.in_transaction:
         raise UiSnapshotError("UI synchronization requires a connection without an active transaction")

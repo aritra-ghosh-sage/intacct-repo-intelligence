@@ -190,7 +190,10 @@ def _versioned_feature_evidence(
 
 
 def seed_api_version_compatibility(
-    conn: sqlite3.Connection, suite_root: Path, features_root: Path
+    conn: sqlite3.Connection,
+    repo_id: int,
+    suite_root: Path,
+    features_root: Path,
 ) -> int:
     """Seed explicit version compatibility evidence for v1-beta2 REST coverage."""
     evidence_pair = _versioned_feature_evidence(features_root, "v1-beta2")
@@ -201,8 +204,9 @@ def seed_api_version_compatibility(
     conn.execute(
         """
         DELETE FROM api_version_compatibility
-        WHERE test_version = 'beta' AND endpoint_version = 's1'
-        """
+        WHERE repo_id = ? AND test_version = 'beta' AND endpoint_version = 's1'
+        """,
+        (repo_id,),
     )
     evidence = json.dumps(
         {
@@ -219,15 +223,16 @@ def seed_api_version_compatibility(
     conn.execute(
         """
         INSERT INTO api_version_compatibility(
-            test_version, endpoint_version, status, rationale, evidence
+            repo_id, test_version, endpoint_version, status, rationale, evidence
         )
-        VALUES(?, ?, 'active', ?, ?)
-        ON CONFLICT(test_version, endpoint_version) DO UPDATE SET
+        VALUES(?, ?, ?, 'active', ?, ?)
+        ON CONFLICT(repo_id, test_version, endpoint_version) DO UPDATE SET
             status=excluded.status,
             rationale=excluded.rationale,
             evidence=excluded.evidence
         """,
         (
+            repo_id,
             "v1-beta2",
             "s1",
             "REST automation coverage standardizes v1-beta2 requests onto s1 endpoints",
@@ -591,6 +596,7 @@ def _file_id(
 def _endpoint_matches(
     conn: sqlite3.Connection,
     production_repo_id: int,
+    compatibility_repo_id: int,
     method: str,
     path: str,
     test_versions: tuple[str, ...],
@@ -608,10 +614,10 @@ def _endpoint_matches(
             continue
         compatibility = (
             conn.execute(
-                "SELECT id FROM api_version_compatibility WHERE test_version IN ({}) AND endpoint_version=? AND status='active'".format(
+                "SELECT id FROM api_version_compatibility WHERE repo_id=? AND test_version IN ({}) AND endpoint_version=? AND status='active'".format(
                     ",".join("?" * len(test_versions))
                 ),
-                (*test_versions, row["source_version"]),
+                (compatibility_repo_id, *test_versions, row["source_version"]),
             ).fetchall()
             if test_versions
             else []
@@ -627,21 +633,14 @@ def build(
     object_mapping_path: Path,
     features_root: Path | None = None,
 ) -> dict[str, int]:
-    repo = conn.execute(
-        "SELECT id FROM repos WHERE repo_key=? AND enabled=1", (repo_key,)
-    ).fetchone()
-    if not repo:
-        raise ValueError(
-            f"No enabled repos record for REST automation repository '{repo_key}'"
-        )
-    production_repo = conn.execute(
-        "SELECT id FROM repos WHERE repo_key=? AND enabled=1",
-        (PRODUCTION_REST_REPO_KEY,),
-    ).fetchone()
-    if not production_repo:
-        raise ValueError(
-            f"No enabled repos record for production REST repository {PRODUCTION_REST_REPO_KEY!r}"
-        )
+    from catalog.repository_lifecycle import require_repository_extractable
+
+    repo = require_repository_extractable(conn, repo_key)
+    production_repo = require_repository_extractable(conn, PRODUCTION_REST_REPO_KEY)
+    if not repo["enabled"]:
+        raise ValueError(f"REST automation repository is disabled: {repo_key}")
+    if not production_repo["enabled"]:
+        raise ValueError(f"production REST repository is disabled: {PRODUCTION_REST_REPO_KEY}")
     suite_root = suite_root.resolve()
     features_root = (
         features_root or suite_root / "src/test/resources/features/rest-api"
@@ -651,7 +650,9 @@ def build(
     repo_id = int(repo[0])
     production_repo_id = int(production_repo[0])
     mapping, mapping_diagnostics = load_object_mapping(object_mapping_path)
-    compatibility_rows = seed_api_version_compatibility(conn, suite_root, features_root)
+    compatibility_rows = seed_api_version_compatibility(
+        conn, repo_id, suite_root, features_root
+    )
     mapping_file_id = (
         _file_id(conn, repo_id, suite_root, object_mapping_path)
         if object_mapping_path.is_relative_to(suite_root)
@@ -835,6 +836,7 @@ def build(
                     for endpoint, compatibility_id, kind in _endpoint_matches(
                         conn,
                         production_repo_id,
+                        repo_id,
                         request.method,
                         request.normalized_path,
                         versions,

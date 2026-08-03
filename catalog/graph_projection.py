@@ -14,7 +14,9 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, Literal
 
-GRAPH_PROJECTION_VERSION = 2
+# v3 excludes archived repository nodes.  An archive generation must therefore
+# be materialized through a new full graph before graph traversal resumes.
+GRAPH_PROJECTION_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -112,7 +114,7 @@ NODE_PROJECTIONS: tuple[Projection, ...] = (
     _node(
         "Repository",
         "repos",
-        source_query="SELECT id,repo_key,tracked_branch,indexed_commit_sha,COALESCE(last_built_at,last_scanned_at),index_status FROM repos ORDER BY id",
+        source_query="SELECT id,repo_key,tracked_branch,indexed_commit_sha,COALESCE(last_built_at,last_scanned_at),index_status FROM repos WHERE lifecycle_state='active' ORDER BY id",
         graph_query="MATCH (n:Repository) RETURN n.repo_id,n.repo_key,n.tracked_branch,n.indexed_commit_sha,n.last_indexed_at,n.index_status ORDER BY n.repo_id",
         property_keys=(
             "repo_id",

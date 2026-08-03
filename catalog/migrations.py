@@ -23,6 +23,7 @@ REFRESH_CONTRACTS_MIGRATION = "024_refresh_contracts"
 DELTA_REFRESH_HARDENING_MIGRATION = "025_delta_refresh_hardening"
 UI_CATALOG_MIGRATION = "026_ui_catalog"
 UI_NEGATIVE_EVENT_CALL_MIGRATION = "027_ui_negative_event_calls"
+REPOSITORY_ARCHIVAL_MIGRATION = "029_repository_archival"
 LEGACY_REPO_KEY = "ia-main"
 
 
@@ -1217,13 +1218,9 @@ def _seed_baseline_catalog_build(conn: sqlite3.Connection) -> None:
         return
     from catalog.content_fingerprint import logical_content_fingerprint
     from catalog.delta import DELTA_CONTRACT_VERSION
+    from catalog.source_revisions import active_source_revisions
 
-    revisions = {
-        str(row[0]): row[1]
-        for row in conn.execute(
-            "SELECT repo_key,indexed_commit_sha FROM repos ORDER BY repo_key"
-        )
-    }
+    revisions = active_source_revisions(conn)
     database_path = next(
         (
             str(row[2])
@@ -1427,8 +1424,133 @@ def _apply_ui_negative_event_call_migration(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE ui_event_calls_legacy_027")
 
 
+def _rebuild_catalog_builds_for_archive_mode(conn: sqlite3.Connection) -> None:
+    """Permit archive generations while retaining generation IDs and children."""
+
+    if "archive" in str(
+        conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='catalog_builds'"
+        ).fetchone()[0]
+    ):
+        return
+    conn.execute("DROP INDEX IF EXISTS uq_catalog_builds_active")
+    conn.execute("DROP INDEX IF EXISTS idx_catalog_builds_status_started")
+    prior_legacy = int(conn.execute("PRAGMA legacy_alter_table").fetchone()[0])
+    conn.execute("PRAGMA legacy_alter_table=ON")
+    try:
+        conn.execute("ALTER TABLE catalog_builds RENAME TO catalog_builds_legacy_029")
+        _canonical_schema_objects(conn, ("catalog_builds",))
+        legacy_columns = _columns(conn, "catalog_builds_legacy_029")
+        columns = ",".join(
+            row[1]
+            for row in conn.execute("PRAGMA table_info(catalog_builds)")
+            if row[1] in legacy_columns
+        )
+        conn.execute(
+            f"INSERT INTO catalog_builds({columns}) "
+            f"SELECT {columns} FROM catalog_builds_legacy_029"
+        )
+        conn.execute("DROP TABLE catalog_builds_legacy_029")
+    finally:
+        conn.execute(f"PRAGMA legacy_alter_table={prior_legacy}")
+
+
+def _rebuild_api_version_compatibility_for_repository_scope(
+    conn: sqlite3.Connection,
+) -> None:
+    """Attach each legacy compatibility fact to its one proven suite owner."""
+
+    columns = _columns(conn, "api_version_compatibility")
+    if "repo_id" in columns:
+        return
+    required = {
+        "id",
+        "test_version",
+        "endpoint_version",
+        "status",
+        "rationale",
+        "evidence",
+        "created_at",
+    }
+    missing = sorted(required - columns)
+    if missing:
+        raise RuntimeError(
+            "api_version_compatibility migration requires columns: " + ", ".join(missing)
+        )
+    unresolved = conn.execute(
+        """
+        SELECT av.id
+        FROM api_version_compatibility av
+        LEFT JOIN test_endpoint_links tel ON tel.compatibility_id=av.id
+        LEFT JOIN test_requests tr ON tr.id=tel.test_request_id
+        LEFT JOIN test_cases tc ON tc.id=tr.test_case_id
+        GROUP BY av.id
+        HAVING COUNT(DISTINCT tc.repo_id) <> 1
+        ORDER BY av.id
+        """
+    ).fetchall()
+    if unresolved:
+        raise RuntimeError(
+            "api_version_compatibility migration requires exactly one proven "
+            "repository owner per row; unresolved ids: "
+            + ", ".join(str(row[0]) for row in unresolved[:10])
+        )
+    owners = {
+        int(row[0]): int(row[1])
+        for row in conn.execute(
+            """
+            SELECT av.id, MIN(tc.repo_id)
+            FROM api_version_compatibility av
+            JOIN test_endpoint_links tel ON tel.compatibility_id=av.id
+            JOIN test_requests tr ON tr.id=tel.test_request_id
+            JOIN test_cases tc ON tc.id=tr.test_case_id
+            GROUP BY av.id
+            ORDER BY av.id
+            """
+        )
+    }
+    prior_legacy = int(conn.execute("PRAGMA legacy_alter_table").fetchone()[0])
+    conn.execute("PRAGMA legacy_alter_table=ON")
+    try:
+        conn.execute(
+            "ALTER TABLE api_version_compatibility "
+            "RENAME TO api_version_compatibility_legacy_029"
+        )
+        _canonical_schema_objects(conn, ("api_version_compatibility",))
+        conn.executemany(
+            """
+            INSERT INTO api_version_compatibility(
+                id,repo_id,test_version,endpoint_version,status,rationale,evidence,created_at
+            )
+            SELECT id,?,test_version,endpoint_version,status,rationale,evidence,created_at
+            FROM api_version_compatibility_legacy_029 WHERE id=?
+            """,
+            [(repo_id, compatibility_id) for compatibility_id, repo_id in owners.items()],
+        )
+        conn.execute("DROP TABLE api_version_compatibility_legacy_029")
+    finally:
+        conn.execute(f"PRAGMA legacy_alter_table={prior_legacy}")
+
+
+def _apply_repository_archival_migration(conn: sqlite3.Connection) -> None:
+    """Install lifecycle evidence and archive-generation schema contracts."""
+
+    _add_columns(
+        conn,
+        "repos",
+        (
+            "lifecycle_state TEXT NOT NULL DEFAULT 'active' CHECK(lifecycle_state IN ('active', 'archived'))",
+            "archive_source TEXT CHECK(archive_source IN ('manual', 'github') OR archive_source IS NULL)",
+            "archive_reason TEXT",
+            "archived_at TEXT",
+        ),
+    )
+    _rebuild_api_version_compatibility_for_repository_scope(conn)
+    _rebuild_catalog_builds_for_archive_mode(conn)
+
+
 def apply_delta_refresh_migration(conn: sqlite3.Connection) -> None:
-    """Apply refresh migrations 023 through 027 to a repository-scoped catalog."""
+    """Apply refresh migrations 023 through 029 to a repository-scoped catalog."""
 
     if conn.in_transaction:
         raise RuntimeError(
@@ -1489,6 +1611,16 @@ def apply_delta_refresh_migration(conn: sqlite3.Connection) -> None:
             conn.execute(
                 "INSERT INTO schema_migrations(name) VALUES (?)",
                 (UI_NEGATIVE_EVENT_CALL_MIGRATION,),
+            )
+        archival_applied = conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name=?",
+            (REPOSITORY_ARCHIVAL_MIGRATION,),
+        ).fetchone()
+        if archival_applied is None:
+            _apply_repository_archival_migration(conn)
+            conn.execute(
+                "INSERT INTO schema_migrations(name) VALUES (?)",
+                (REPOSITORY_ARCHIVAL_MIGRATION,),
             )
         violations = conn.execute("PRAGMA foreign_key_check").fetchall()
         if violations:
@@ -1628,6 +1760,16 @@ def apply_multi_repo_migration(
             conn.execute(
                 "INSERT INTO schema_migrations(name) VALUES (?)",
                 (UI_NEGATIVE_EVENT_CALL_MIGRATION,),
+            )
+        archival_applied = conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name=?",
+            (REPOSITORY_ARCHIVAL_MIGRATION,),
+        ).fetchone()
+        if archival_applied is None:
+            _apply_repository_archival_migration(conn)
+            conn.execute(
+                "INSERT INTO schema_migrations(name) VALUES (?)",
+                (REPOSITORY_ARCHIVAL_MIGRATION,),
             )
         # FK enforcement is necessarily off while legacy parent tables are
         # rebuilt, but foreign_key_check still validates the candidate before

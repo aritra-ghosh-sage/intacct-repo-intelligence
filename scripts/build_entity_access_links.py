@@ -568,8 +568,10 @@ def build(
     diagnostics: list[dict] = []
 
     try:
+        from catalog.repository_lifecycle import require_repository_extractable
+
+        repo_id = int(require_repository_extractable(conn, repo_key)["id"])
         ensure_entity_access_table(conn)
-        repo_id = int(get_repository(conn, repo_key)["id"])
         ensure_dbschema_file_id_column(conn, repo_id)
         if reset:
             conn.execute(
