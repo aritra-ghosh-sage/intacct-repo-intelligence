@@ -33,7 +33,7 @@ the catalog and historical validation issue reports are not backlog items.
 
 ## Catalog Semantics
 
-- [ ] Add an explicit archived-repository handling policy. Reading an archived
+- [x] Add an explicit archived-repository handling policy. Reading an archived
       repository, extracting its code structure, or querying its SQLite or
       graph representation can create accuracy and correctness risks; detect
       and surface that state, and fail closed or clearly mark the affected

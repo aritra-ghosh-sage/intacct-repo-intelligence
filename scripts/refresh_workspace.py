@@ -7,7 +7,6 @@ the checked-out source revision is still the one that was validated.
 from __future__ import annotations
 
 import argparse
-import fcntl
 import hashlib
 import json
 import os
@@ -16,7 +15,7 @@ import subprocess
 import tempfile
 import uuid
 from contextlib import ExitStack, contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -52,7 +51,20 @@ from catalog.repositories import (
     register_manifest,
     rest_automation_paths,
 )
+from catalog.repository_lifecycle import (
+    require_repository_extractable,
+    verify_github_repository_active,
+)
+from catalog.refresh_transaction import (
+    ParentDescriptor as TransactionParentDescriptor,
+    assert_parent_unchanged as transaction_assert_parent_unchanged,
+    backup_database as transaction_backup_database,
+    parent_descriptor as transaction_parent_descriptor,
+    promote_catalog_candidate as transaction_promote_catalog_candidate,
+    refresh_lock as transaction_refresh_lock,
+)
 from catalog.source_snapshot import SourceSnapshot, materialize_source_snapshot
+from catalog.source_revisions import active_source_revisions
 from scripts.builder_outcome import BuilderDiagnostic, BuilderOutcome
 from scripts.builder_registry import (
     build_plan,
@@ -149,82 +161,27 @@ def _repository_plan_hash(plan: list[str], runtime_hash: str | None = None) -> s
 
 
 def _backup_database(source: Path, target: Path) -> None:
-    source_conn = sqlite3.connect(source)
-    source_conn.execute("PRAGMA foreign_keys = ON")
-    try:
-        target_conn = sqlite3.connect(target)
-        target_conn.execute("PRAGMA foreign_keys = ON")
-        try:
-            source_conn.backup(target_conn)
-        finally:
-            target_conn.close()
-    finally:
-        source_conn.close()
+    transaction_backup_database(source, target)
 
 
-@dataclass(frozen=True)
-class ParentDescriptor:
-    catalog_build_id: int
-    build_token: str
-    content_fingerprint: str | None
-    source_revisions_json: str
-    device: int | None
-    inode: int | None
+ParentDescriptor = TransactionParentDescriptor
 
 
 def _parent_descriptor(active: Path) -> ParentDescriptor:
-    stat = active.stat()
-    conn = sqlite3.connect(f"file:{active}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
-    try:
-        row = conn.execute(
-            """SELECT id,build_token,content_fingerprint,source_revisions_json
-               FROM catalog_builds WHERE status='active' ORDER BY id DESC LIMIT 1"""
-        ).fetchone()
-        if row is None:
-            return ParentDescriptor(
-                catalog_build_id=0,
-                build_token="",
-                content_fingerprint=None,
-                source_revisions_json="{}",
-                device=getattr(stat, "st_dev", None),
-                inode=getattr(stat, "st_ino", None),
-            )
-        return ParentDescriptor(
-            catalog_build_id=int(row["id"]),
-            build_token=str(row["build_token"]),
-            content_fingerprint=(
-                str(row["content_fingerprint"])
-                if row["content_fingerprint"] is not None
-                else None
-            ),
-            source_revisions_json=str(row["source_revisions_json"]),
-            device=getattr(stat, "st_dev", None),
-            inode=getattr(stat, "st_ino", None),
-        )
-    finally:
-        conn.close()
+    return transaction_parent_descriptor(active)
 
 
 def _assert_parent_unchanged(active: Path, expected: ParentDescriptor) -> None:
-    actual = _parent_descriptor(active)
-    if actual != expected:
-        raise RefreshError(
-            "parent-generation compare-and-swap failed: active catalog changed during refresh"
-        )
+    try:
+        transaction_assert_parent_unchanged(active, expected)
+    except Exception as exc:
+        raise RefreshError(str(exc)) from exc
 
 
 @contextmanager
 def _refresh_lock(active: Path):
-    lock_path = active.with_name(active.name + ".refresh.lock")
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
-    try:
-        fcntl.flock(descriptor, fcntl.LOCK_EX)
+    with transaction_refresh_lock(active) as lock_path:
         yield lock_path
-    finally:
-        fcntl.flock(descriptor, fcntl.LOCK_UN)
-        os.close(descriptor)
 
 
 def _manifest_repository(manifest: dict, repo_key: str) -> dict:
@@ -441,6 +398,12 @@ def _run_builder(
     execution_mode: str = "full",
     delta_context: dict[str, object] | None = None,
 ) -> BuilderOutcome:
+    admission_conn = sqlite3.connect(candidate_db)
+    admission_conn.row_factory = sqlite3.Row
+    try:
+        require_repository_extractable(admission_conn, repo_key)
+    finally:
+        admission_conn.close()
     delta_context = delta_context if delta_context is not None else {}
     if builder == "scan":
         if execution_mode == "delta":
@@ -551,7 +514,7 @@ def _run_builder(
             f"{Path(candidate_db).name}.{repo_key}.entities.jsonl"
         )
         try:
-            scan_ent_files.scan(
+            scan_ent_files._scan_repo_root(
                 root,
                 entities_path,
                 missing_metadata_log=output_root / "entity_missing_metadata.jsonl",
@@ -1137,12 +1100,7 @@ def _record_failed_refresh(
                 parent = conn.execute(
                     "SELECT id FROM catalog_builds WHERE status='active' ORDER BY id DESC LIMIT 1"
                 ).fetchone()
-                revisions = {
-                    str(row[0]): row[1]
-                    for row in conn.execute(
-                        "SELECT repo_key,indexed_commit_sha FROM repos ORDER BY repo_key"
-                    )
-                }
+                revisions = active_source_revisions(conn)
                 conn.execute(
                     """INSERT INTO catalog_builds(
                            build_token,parent_catalog_build_id,catalog_path,
@@ -1208,23 +1166,43 @@ def _resolve_refresh_order(manifest: dict, repo_key: str) -> list[str]:
 
 
 def _validate_refresh_preconditions(
-    manifest: dict, refresh_order: list[str]
+    manifest: dict, refresh_order: list[str], active_db: Path | None = None
 ) -> dict[str, str]:
-    """Validate every checkout before any repository candidate is built."""
+    """Validate lifecycle and every checkout before candidate/snapshot work."""
     revisions: dict[str, str] = {}
-    for repo_key in refresh_order:
-        entry = _manifest_repository(manifest, repo_key)
-        root = Path(entry["local_root"]).expanduser()
-        if not root.is_dir():
-            raise RefreshError(
-                f"repository {repo_key} checkout root does not exist: {root}"
+    conn = sqlite3.connect(active_db) if active_db is not None else None
+    if conn is not None:
+        conn.row_factory = sqlite3.Row
+    try:
+        for repo_key in refresh_order:
+            entry = _manifest_repository(manifest, repo_key)
+            if conn is not None:
+                # A first refresh has no persisted row yet; otherwise stored
+                # manual archival wins without touching its checkout.
+                exists = conn.execute(
+                    "SELECT 1 FROM repos WHERE repo_key=?", (repo_key,)
+                ).fetchone()
+                if exists is not None:
+                    require_repository_extractable(conn, repo_key)
+            root = Path(entry["local_root"]).expanduser()
+            if not root.is_dir():
+                raise RefreshError(
+                    f"repository {repo_key} checkout root does not exist: {root}"
+                )
+            resolved_root = root.resolve()
+            verify_github_repository_active(
+                remote_url=entry.get("remote_url"),
+                root=resolved_root,
+                branch=entry.get("tracked_branch"),
             )
-        resolved_root = root.resolve()
-        revisions[repo_key] = source_revision(
-            resolved_root, str(entry["tracked_branch"])
-        )
-        if entry.get("profile") == "rest_automation":
-            rest_automation_paths(entry, resolved_root)
+            revisions[repo_key] = source_revision(
+                resolved_root, str(entry["tracked_branch"])
+            )
+            if entry.get("profile") == "rest_automation":
+                rest_automation_paths(entry, resolved_root)
+    finally:
+        if conn is not None:
+            conn.close()
     return revisions
 
 
@@ -1371,12 +1349,7 @@ def _indexed_revisions(active: Path) -> dict[str, str | None]:
     conn = sqlite3.connect(active)
     conn.row_factory = sqlite3.Row
     try:
-        return {
-            str(row[0]): row[1]
-            for row in conn.execute(
-                "SELECT repo_key,indexed_commit_sha FROM repos ORDER BY repo_key"
-            )
-        }
+        return active_source_revisions(conn)
     finally:
         conn.close()
 
@@ -1388,12 +1361,7 @@ def _active_catalog_contract(
     conn = sqlite3.connect(active)
     conn.row_factory = sqlite3.Row
     try:
-        indexed_revisions = {
-            str(row[0]): row[1]
-            for row in conn.execute(
-                "SELECT repo_key,indexed_commit_sha FROM repos ORDER BY repo_key"
-            )
-        }
+        indexed_revisions = active_source_revisions(conn)
         build = conn.execute(
             "SELECT * FROM catalog_builds WHERE status='active' ORDER BY id DESC LIMIT 1"
         ).fetchone()
@@ -1616,29 +1584,7 @@ def _record_change_set(
 def _promote_catalog_candidate(
     active: Path, candidate: Path, previous: Path, token: str
 ) -> None:
-    """Promote both retained generations, rolling back either-path failures."""
-
-    previous_stage = previous.with_name(f"{previous.name}.stage.{token}")
-    previous_backup = previous.with_name(f"{previous.name}.backup.{token}")
-    previous_stage.unlink(missing_ok=True)
-    previous_backup.unlink(missing_ok=True)
-    promoted = False
-    try:
-        _backup_database(active, previous_stage)
-        if previous.exists():
-            _backup_database(previous, previous_backup)
-        os.replace(candidate, active)
-        promoted = True
-        os.replace(previous_stage, previous)
-    except Exception:
-        if promoted and previous_stage.exists():
-            os.replace(previous_stage, active)
-        if previous_backup.exists():
-            os.replace(previous_backup, previous)
-        raise
-    finally:
-        previous_stage.unlink(missing_ok=True)
-        previous_backup.unlink(missing_ok=True)
+    transaction_promote_catalog_candidate(active, candidate, previous, token)
 
 
 def _record_noop_attempts(
@@ -1765,7 +1711,7 @@ def _refresh_repository_closure(
     runtime_hash = runtime_fingerprint()
     parent = _parent_descriptor(active_db)
     start_revisions = start_revisions or _validate_refresh_preconditions(
-        manifest, refresh_order
+        manifest, refresh_order, active_db
     )
     plans: dict[str, list[str]] = {}
     for repo_key in refresh_order:
@@ -1967,12 +1913,7 @@ def _refresh_repository_closure(
             parent_row = conn.execute(
                 "SELECT id FROM catalog_builds WHERE status='active' ORDER BY id DESC LIMIT 1"
             ).fetchone()
-            source_revisions = {
-                str(row[0]): row[1]
-                for row in conn.execute(
-                    "SELECT repo_key,indexed_commit_sha FROM repos ORDER BY repo_key"
-                )
-            }
+            source_revisions = active_source_revisions(conn)
             source_revisions.update(start_revisions)
             build_id = int(
                 conn.execute(
@@ -2429,7 +2370,7 @@ def refresh_repository(
             manifest = load_workspace_manifest(manifest_file)
             failed_step = "dependency_preflight"
             refresh_order = _resolve_refresh_order(manifest, repo_key)
-            start_revisions = _validate_refresh_preconditions(manifest, refresh_order)
+            start_revisions = _validate_refresh_preconditions(manifest, refresh_order, active)
         except Exception as exc:
             if prepare_path is None:
                 _record_failed_refresh(

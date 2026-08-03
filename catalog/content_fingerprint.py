@@ -34,6 +34,7 @@ _TIMESTAMP_COLUMNS = frozenset(
         "last_built_at",
         "last_attempted_at",
         "validated_at",
+        "archived_at",
     }
 )
 

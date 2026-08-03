@@ -476,6 +476,44 @@ def require_snapshot_integrity(conn: sqlite3.Connection, *, context: str) -> Non
             f"foreign-key violation(s); sample={sample}"
         )
 
+    repo_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(repos)")}
+    if "lifecycle_state" not in repo_columns:
+        return
+    archived_ids = [
+        int(row[0])
+        for row in conn.execute(
+            "SELECT id FROM repos WHERE lifecycle_state='archived' ORDER BY id"
+        )
+    ]
+    if not archived_ids:
+        return
+    # Direct repo ownership is the universal archive boundary.  The archive
+    # candidate service owns the complete static purge registry; this narrow
+    # projection-time assertion is a second line of defense that rejects any
+    # target evidence left behind before Ladybug can cache it.
+    direct_repo_tables = []
+    for (table_name,) in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+    ):
+        table = str(table_name)
+        if table in {"repos", "catalog_builds", "graph_builds", "schema_migrations"}:
+            continue
+        columns = {str(row[1]) for row in conn.execute(f'PRAGMA table_info("{table}")')}
+        if "repo_id" not in columns:
+            continue
+        placeholders = ",".join("?" for _ in archived_ids)
+        count = conn.execute(
+            f'SELECT COUNT(*) FROM "{table}" WHERE repo_id IN ({placeholders})',
+            archived_ids,
+        ).fetchone()[0]
+        if count:
+            direct_repo_tables.append(f"{table}={count}")
+    if direct_repo_tables:
+        raise RuntimeError(
+            "archived repository evidence remains before graph projection: "
+            + ", ".join(direct_repo_tables)
+        )
+
 
 def build_graph(sqlite_path: str, graph_path: str) -> None:
     sql = db = g = None

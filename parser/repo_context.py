@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from config import REPO_PATH
+from catalog.repository_lifecycle import require_repository_extractable
 
 
 @dataclass(frozen=True)
@@ -55,7 +56,8 @@ def resolve_repo(conn: sqlite3.Connection, repo_key: str | None = None) -> RepoC
             "--repo is required unless exactly one repository is registered"
         )
 
-    row = rows[0]
+    # Resolve through the shared lifecycle boundary before touching the checkout.
+    row = require_repository_extractable(conn, str(rows[0]["repo_key"]))
     root = Path(row["local_root"] or REPO_PATH).expanduser().resolve()
     if not root.is_dir():
         raise RuntimeError(f"Repository checkout does not exist: {root}")

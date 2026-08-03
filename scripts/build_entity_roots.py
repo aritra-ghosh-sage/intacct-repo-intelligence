@@ -67,6 +67,9 @@ def ensure_entity_roots_columns(conn: Any) -> None:
 
 
 def build_entity_roots(conn: Any, reset: bool, repo_id: int) -> int:
+    from catalog.repository_lifecycle import require_repository_id_extractable
+
+    require_repository_id_extractable(conn, repo_id)
     ensure_entity_roots_columns(conn)
 
     if reset:
@@ -473,9 +476,9 @@ def cli() -> None:
 def build_command(db: str, reset: bool, repo_key: str) -> None:
     conn = get_connection(db)
     try:
-        from catalog.repositories import get_repository
+        from catalog.repository_lifecycle import require_repository_extractable
 
-        repo_id = int(get_repository(conn, repo_key)["id"])
+        repo_id = int(require_repository_extractable(conn, repo_key)["id"])
         raise SystemExit(build_entity_roots(conn, reset=reset, repo_id=repo_id))
     finally:
         conn.close()

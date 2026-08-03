@@ -24,10 +24,12 @@ import click
 import ladybug as lb
 
 try:
-    from catalog.db import get_connection
+    from catalog.graph_projection import GRAPH_PROJECTION_VERSION
+    from catalog.graph_state import require_fresh_graph
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from catalog.db import get_connection
+    from catalog.graph_projection import GRAPH_PROJECTION_VERSION
+    from catalog.graph_state import require_fresh_graph
 
 try:
     from ._query_json import emit_json, error_response, success_response
@@ -51,11 +53,57 @@ class EntityAmbiguityError(ValueError):
         )
 
 
+class GraphFreshnessError(RuntimeError):
+    """Raised before a CLI command opens a stale derived graph."""
+
+
+class RepositoryArchivedQueryError(RuntimeError):
+    """Raised for an explicit archived repository query."""
+
+
 def graph_error_boundary(func):
     @wraps(func)
     def wrapped(*args, **kwargs):
         try:
             return func(*args, **kwargs)
+        except GraphFreshnessError as exc:
+            ctx = click.get_current_context()
+            command = ctx.command.name or func.__name__
+            params = {
+                k: v
+                for k, v in ctx.params.items()
+                if k not in {"db", "graph", "json_output"}
+            }
+            if bool(ctx.params.get("json_output", False)):
+                emit_json(
+                    error_response(
+                        command=command,
+                        args=params,
+                        code="graph_stale",
+                        message=str(exc),
+                    )
+                )
+                return
+            raise click.ClickException(str(exc)) from exc
+        except RepositoryArchivedQueryError as exc:
+            ctx = click.get_current_context()
+            command = ctx.command.name or func.__name__
+            params = {
+                k: v
+                for k, v in ctx.params.items()
+                if k not in {"db", "graph", "json_output"}
+            }
+            if bool(ctx.params.get("json_output", False)):
+                emit_json(
+                    error_response(
+                        command=command,
+                        args=params,
+                        code="repository_archived",
+                        message=str(exc),
+                    )
+                )
+                return
+            raise click.ClickException(str(exc)) from exc
         except click.ClickException:
             raise
         except Exception as exc:
@@ -66,7 +114,7 @@ def graph_error_boundary(func):
                 for k, v in ctx.params.items()
                 if k not in {"db", "graph", "json_output"}
             }
-            if kwargs.get("json_output", False):
+            if bool(ctx.params.get("json_output", False)):
                 emit_json(
                     error_response(
                         command=command,
@@ -90,6 +138,52 @@ def get_graph_connection(graph_db_path: str) -> tuple[lb.Database, lb.Connection
     """
     db = lb.Database(graph_db_path, read_only=True)
     return db, lb.Connection(db)
+
+
+def get_sqlite_snapshot(db_path: str) -> sqlite3.Connection:
+    """Open a read-only SQLite snapshot without creating or mutating a file."""
+
+    path = Path(db_path).expanduser().resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"catalog database is unavailable: {path}")
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA query_only=ON")
+    conn.execute("BEGIN")
+    return conn
+
+
+def require_query_graph_freshness(
+    conn: sqlite3.Connection, *, db_path: str, graph_path: str
+) -> None:
+    """Fail before Ladybug opens unless this graph represents this catalog."""
+
+    try:
+        require_fresh_graph(
+            conn,
+            catalog_path=db_path,
+            graph_path=graph_path,
+            projection_version=GRAPH_PROJECTION_VERSION,
+        )
+    except RuntimeError as exc:
+        raise GraphFreshnessError(str(exc)) from exc
+
+
+def require_repository_queryable(
+    conn: sqlite3.Connection, repo_key: str | None
+) -> None:
+    """Return a precise lifecycle error for an explicit archived repository."""
+
+    if repo_key is None:
+        return
+    columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(repos)")}
+    if "lifecycle_state" not in columns:
+        return
+    row = conn.execute(
+        "SELECT lifecycle_state FROM repos WHERE repo_key=?", (repo_key,)
+    ).fetchone()
+    if row is not None and row["lifecycle_state"] == "archived":
+        raise RepositoryArchivedQueryError(f"Repository is archived: {repo_key}")
 
 
 def enrich_symbols_from_sql(
@@ -462,7 +556,9 @@ def file_impact(
     graph_db = None
 
     try:
-        sql_conn = get_connection(db)
+        sql_conn = get_sqlite_snapshot(db)
+        require_repository_queryable(sql_conn, repo_key)
+        require_query_graph_freshness(sql_conn, db_path=db, graph_path=graph)
         graph_db, graph_conn = get_graph_connection(graph)
 
         # Verify file exists
@@ -723,7 +819,9 @@ def entity_context(
     graph_db = None
 
     try:
-        sql_conn = get_connection(db)
+        sql_conn = get_sqlite_snapshot(db)
+        require_repository_queryable(sql_conn, repo_key)
+        require_query_graph_freshness(sql_conn, db_path=db, graph_path=graph)
         graph_db, graph_conn = get_graph_connection(graph)
 
         try:
@@ -919,7 +1017,8 @@ def who_uses(
     graph_db = None
 
     try:
-        sql_conn = get_connection(db)
+        sql_conn = get_sqlite_snapshot(db)
+        require_query_graph_freshness(sql_conn, db_path=db, graph_path=graph)
         graph_db, graph_conn = get_graph_connection(graph)
 
         if symbol_id is None and not symbol_name:
@@ -1137,7 +1236,9 @@ def security_surface(
     graph_db = None
 
     try:
-        sql_conn = get_connection(db)
+        sql_conn = get_sqlite_snapshot(db)
+        require_repository_queryable(sql_conn, repo_key)
+        require_query_graph_freshness(sql_conn, db_path=db, graph_path=graph)
         graph_db, graph_conn = get_graph_connection(graph)
 
         try:

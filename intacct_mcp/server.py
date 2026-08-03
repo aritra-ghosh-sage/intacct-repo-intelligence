@@ -7,10 +7,12 @@ decorator-based tool registration, and type-safe request/response structures.
 from __future__ import annotations
 
 import base64
+import inspect
 import json
 import os
 import sqlite3
 from dataclasses import dataclass
+from functools import wraps
 from pathlib import Path
 from typing import Annotated, Any, Literal, Required, TypedDict
 
@@ -19,6 +21,7 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from catalog.graph_projection import GRAPH_PROJECTION_VERSION
+from catalog.graph_state import graph_freshness
 from catalog.rest_coverage import REQUIRED_TABLES, coverage_rows, coverage_summary
 from config import CATALOG_DB, GRAPH_DB
 from scripts.query_api_registry import (
@@ -422,27 +425,40 @@ class CatalogState:
                     (canonical_graph_path,),
                 ).fetchone()
 
-        graph_fresh = bool(
-            catalog_build
-            and build
-            and "catalog_build_id" in build.keys()
-            and self.graph_path.is_file()
-            and int(build["catalog_build_id"] or -1) == int(catalog_build["id"])
-            and build["source_fingerprint"] == catalog_build["content_fingerprint"]
-            and int(build["projection_version"] or -1) == GRAPH_PROJECTION_VERSION
+        freshness = graph_freshness(
+            c,
+            catalog_path=self.db_path,
+            graph_path=self.graph_path,
+            projection_version=GRAPH_PROJECTION_VERSION,
         )
+        graph_fresh = freshness.fresh
 
         repositories: list[dict[str, Any]] = []
         if self.table_exists(c, "repos"):
+            repo_columns = {
+                str(row[1]) for row in c.execute("PRAGMA table_info(repos)")
+            }
+            lifecycle_fields = (
+                ",lifecycle_state,archive_source,archive_reason,archived_at"
+                if {"lifecycle_state", "archive_source", "archive_reason", "archived_at"}
+                .issubset(repo_columns)
+                else ""
+            )
             repositories = [
                 dict(row)
                 for row in c.execute(
                     "SELECT repo_key,tracked_branch,indexed_commit_sha,"
                     "last_scanned_at,last_built_at,index_status,diagnostic_error,"
-                    "last_attempt_status,last_attempted_at,last_attempt_error "
-                    "FROM repos ORDER BY repo_key"
+                    "last_attempt_status,last_attempted_at,last_attempt_error"
+                    + lifecycle_fields
+                    + " FROM repos ORDER BY repo_key"
                 )
             ]
+            for repository in repositories:
+                repository.setdefault("lifecycle_state", "active")
+                repository.setdefault("archive_source", None)
+                repository.setdefault("archive_reason", None)
+                repository.setdefault("archived_at", None)
 
         return {
             "sqlite_snapshot": "read_transaction",
@@ -455,24 +471,12 @@ class CatalogState:
 
     def graph_active(self, c: sqlite3.Connection) -> bool:
         """Check if there's an active graph matching current catalog."""
-        if not self.table_exists(c, "graph_builds") or not self.table_exists(
-            c, "catalog_builds"
-        ):
-            return False
-        row = c.execute(
-            """SELECT gb.id FROM graph_builds gb
-               JOIN catalog_builds cb ON cb.id=gb.catalog_build_id
-               WHERE gb.status='active' AND cb.status='active'
-                 AND gb.graph_path=?
-                 AND gb.source_fingerprint=cb.content_fingerprint
-                 AND gb.projection_version=?
-               ORDER BY gb.id DESC LIMIT 1""",
-            (
-                str(self.graph_path.expanduser().resolve()),
-                GRAPH_PROJECTION_VERSION,
-            ),
-        ).fetchone()
-        return bool(self.graph_path.is_file() and row)
+        return graph_freshness(
+            c,
+            catalog_path=self.db_path,
+            graph_path=self.graph_path,
+            projection_version=GRAPH_PROJECTION_VERSION,
+        ).fresh
 
 
 # ============================================================================
@@ -533,6 +537,59 @@ def make_error_response(
     return make_response(state, operation, {}, c, status="error", error=error)
 
 
+def _repository_archived_response(
+    state: CatalogState,
+    operation: str,
+    c: sqlite3.Connection,
+    repo_key: str,
+) -> CatalogResponse | None:
+    """Return the explicit lifecycle result for a repository-qualified query."""
+
+    columns = {str(row[1]) for row in c.execute("PRAGMA table_info(repos)")}
+    if "lifecycle_state" not in columns:
+        return None
+    repo = c.execute(
+        """SELECT repo_key,lifecycle_state,archive_source,archive_reason,archived_at
+           FROM repos WHERE repo_key=?""",
+        (repo_key,),
+    ).fetchone()
+    if repo is None or repo["lifecycle_state"] != "archived":
+        return None
+    return make_error_response(
+        state,
+        operation,
+        "repository_archived",
+        f"Repository is archived: {repo_key}",
+        c,
+        details={
+            "repository": row_to_dict(repo),
+            "message": "Archived repository evidence is unavailable by contract",
+        },
+    )
+
+
+def repository_lifecycle_guard(func):
+    """Make every explicit ``repo_key`` query report archive state consistently."""
+
+    signature = inspect.signature(func)
+
+    @wraps(func)
+    def wrapped(*args, **kwargs):
+        bound = signature.bind(*args, **kwargs)
+        bound.apply_defaults()
+        repo_key = bound.arguments.get("repo_key")
+        state = bound.arguments.get("state")
+        if not repo_key or not isinstance(state, CatalogState):
+            return func(*args, **kwargs)
+        with state.conn() as c:
+            response = _repository_archived_response(
+                state, func.__name__.removesuffix("_impl"), c, str(repo_key)
+            )
+        return response if response is not None else func(*args, **kwargs)
+
+    return wrapped
+
+
 # ============================================================================
 # Pagination & Validation
 # ============================================================================
@@ -584,6 +641,7 @@ def paginate(
 # ============================================================================
 
 
+@repository_lifecycle_guard
 def workflow_structure_impl(
     state: CatalogState,
     entity_name: str,
@@ -655,6 +713,7 @@ def workflow_structure_impl(
         )
 
 
+@repository_lifecycle_guard
 def entity_access_detail_impl(
     state: CatalogState,
     entity_name: str,
@@ -714,6 +773,7 @@ def entity_access_detail_impl(
         )
 
 
+@repository_lifecycle_guard
 def security_dependency_chain_impl(
     state: CatalogState,
     op_key: str,
@@ -801,6 +861,7 @@ def security_dependency_chain_impl(
         )
 
 
+@repository_lifecycle_guard
 def openapi_file_dependencies_impl(
     state: CatalogState,
     file_path: str,
@@ -1057,6 +1118,7 @@ def catalog_risk_summary_impl(state: CatalogState) -> CatalogResponse:
         )
 
 
+@repository_lifecycle_guard
 def risk_detail_impl(
     state: CatalogState,
     category: str,
@@ -1193,6 +1255,7 @@ def risk_detail_impl(
         )
 
 
+@repository_lifecycle_guard
 def confidence_band_query_impl(
     state: CatalogState,
     category: str,
@@ -1277,6 +1340,7 @@ def confidence_band_query_impl(
         )
 
 
+@repository_lifecycle_guard
 def catalog_search_impl(
     state: CatalogState,
     query: str,
@@ -1394,6 +1458,7 @@ def catalog_search_impl(
         )
 
 
+@repository_lifecycle_guard
 def entity_context_impl(
     state: CatalogState,
     name: str,
@@ -1738,6 +1803,7 @@ def entity_test_coverage_impl(
         )
 
 
+@repository_lifecycle_guard
 def relationship_query_impl(
     state: CatalogState,
     name: str,
@@ -1799,6 +1865,7 @@ def relationship_query_impl(
         )
 
 
+@repository_lifecycle_guard
 def api_surface_impl(
     state: CatalogState,
     entity_name: str | None = None,
@@ -1847,6 +1914,7 @@ def api_surface_impl(
         )
 
 
+@repository_lifecycle_guard
 def workflow_context_impl(
     state: CatalogState,
     entity_name: str,
@@ -1876,6 +1944,7 @@ def workflow_context_impl(
         return make_response(state, "workflow_context", {"workflows": data}, c)
 
 
+@repository_lifecycle_guard
 def security_surface_impl(
     state: CatalogState,
     key_fragment: str,
@@ -1915,6 +1984,7 @@ def security_surface_impl(
         )
 
 
+@repository_lifecycle_guard
 def symbol_references_impl(
     state: CatalogState,
     symbol_name: str | None = None,
@@ -1996,6 +2066,7 @@ def symbol_references_impl(
             db.close()
 
 
+@repository_lifecycle_guard
 def file_impact_impl(
     state: CatalogState,
     file_path: str,
@@ -2182,19 +2253,35 @@ def provenance_impl(
 def repository_list_impl(state: CatalogState) -> CatalogResponse:
     """List all tracked repositories and their branch/revision status."""
     with state.conn() as c:
+        repo_columns = {str(row[1]) for row in c.execute("PRAGMA table_info(repos)")}
+        lifecycle_fields = (
+            ",lifecycle_state,archive_source,archive_reason,archived_at"
+            if {"lifecycle_state", "archive_source", "archive_reason", "archived_at"}
+            .issubset(repo_columns)
+            else ""
+        )
         rows = c.execute(
             "SELECT repo_key,tracked_branch,indexed_commit_sha,last_scanned_at,"
             "last_built_at,index_status,diagnostic_error,last_attempt_status,"
-            "last_attempted_at,last_attempt_error FROM repos ORDER BY repo_key"
+            "last_attempted_at,last_attempt_error"
+            + lifecycle_fields
+            + " FROM repos ORDER BY repo_key"
         ).fetchall()
+        repositories = [row_to_dict(row) for row in rows]
+        for repository in repositories:
+            repository.setdefault("lifecycle_state", "active")
+            repository.setdefault("archive_source", None)
+            repository.setdefault("archive_reason", None)
+            repository.setdefault("archived_at", None)
         return make_response(
             state,
             "repository_list",
-            {"repositories": [row_to_dict(r) for r in rows]},
+            {"repositories": repositories},
             c,
         )
 
 
+@repository_lifecycle_guard
 def ui_impact_impl(
     state: CatalogState,
     entity_name: str,
@@ -2230,6 +2317,7 @@ def ui_impact_impl(
         )
 
 
+@repository_lifecycle_guard
 def ui_surface_detail_impl(
     state: CatalogState,
     surface_key: str,
@@ -2424,6 +2512,7 @@ def _semantic_capability_error(
     )
 
 
+@repository_lifecycle_guard
 def object_relationships_impl(
     state: CatalogState,
     object_name: str,
@@ -2693,6 +2782,7 @@ def object_relationships_impl(
         )
 
 
+@repository_lifecycle_guard
 def qa_impact_impl(
     state: CatalogState,
     changes: list[dict[str, Any]],

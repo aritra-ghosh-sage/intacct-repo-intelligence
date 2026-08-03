@@ -242,6 +242,9 @@ def _infer_kind(filename: str) -> str:
 def scan_openapispec(
     conn: sqlite3.Connection, repo_root: Path, repo_id: int
 ) -> ScanStats:
+    from catalog.repository_lifecycle import require_repository_id_extractable
+
+    require_repository_id_extractable(conn, repo_id)
     if yaml is None:
         raise click.ClickException(
             "Missing dependency 'pyyaml'. Install project dependencies and rerun."
@@ -356,7 +359,8 @@ def cli() -> None:
 def scan_command(db: str, repo: str, repo_root: Path | None) -> None:
     conn = get_connection(db)
     try:
-        repository = get_repository(conn, repo)
+        from catalog.repository_lifecycle import require_repository_extractable
+        repository = require_repository_extractable(conn, repo)
         resolved_root = (
             repo_root.resolve()
             if repo_root is not None

@@ -463,6 +463,9 @@ def build(
 
     conn = get_connection(db)
     try:
+        from catalog.repository_lifecycle import require_repository_id_extractable
+
+        require_repository_id_extractable(conn, repo_id)
         conn.execute("BEGIN IMMEDIATE")
         if reset:
             conn.execute("DELETE FROM rest_endpoints WHERE repo_id = ?", (repo_id,))
@@ -641,7 +644,8 @@ def build_command(
     """Build REST endpoints from OpenAPI specification files."""
     conn = get_connection(db)
     try:
-        repository = get_repository(conn, repo)
+        from catalog.repository_lifecycle import require_repository_extractable
+        repository = require_repository_extractable(conn, repo)
         resolved_root = (
             repo_root.resolve()
             if repo_root is not None

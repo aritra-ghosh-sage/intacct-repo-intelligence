@@ -652,13 +652,16 @@ def build(
     missing_symbols_path: Path | None | object = _DEFAULT_MISSING_SYMBOLS_PATH,
 ) -> BuildStats:
     """Build entity nodes and mappings idempotently using INSERT...WHERE NOT EXISTS."""
-    rows = _read_entities_jsonl(entities)
     missing_symbols: list[dict[str, str]] = []
     stats = BuildStats()
 
     conn = get_connection(db)
     try:
+        from catalog.repository_lifecycle import require_repository_extractable
+
+        require_repository_extractable(conn, repo_key)
         ensure_entity_occurrences_table(conn)
+        rows = _read_entities_jsonl(entities)
         repo_id = _resolve_repo_id(conn, repo_key)
         conn.execute("BEGIN IMMEDIATE")
 

@@ -860,11 +860,8 @@ def build(
     root = Path(repo_root)
     conn = get_connection(db)
     try:
-        repo = conn.execute(
-            "SELECT id FROM repos WHERE repo_key=?", (repo_key,)
-        ).fetchone()
-        if repo is None:
-            raise click.ClickException(f"Unknown repository key: {repo_key}")
+        from catalog.repository_lifecycle import require_repository_extractable
+        repo = require_repository_extractable(conn, repo_key)
         repo_id = int(repo[0])
         conn.execute("BEGIN IMMEDIATE")
         if reset:

@@ -19,7 +19,14 @@ CREATE TABLE IF NOT EXISTS repos (
     -- replace the active catalog status when a candidate fails.
     last_attempt_status TEXT NOT NULL DEFAULT 'never_attempted',
     last_attempted_at TEXT,
-    last_attempt_error TEXT
+    last_attempt_error TEXT,
+    -- Lifecycle controls whether this repository may contribute evidence.
+    -- ``enabled`` remains an operator scheduling setting.
+    lifecycle_state TEXT NOT NULL DEFAULT 'active'
+        CHECK(lifecycle_state IN ('active', 'archived')),
+    archive_source TEXT CHECK(archive_source IN ('manual', 'github') OR archive_source IS NULL),
+    archive_reason TEXT,
+    archived_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS files (
@@ -401,6 +408,7 @@ CREATE INDEX IF NOT EXISTS idx_openapispec_file_id ON openapispec_index(file_id)
 
 CREATE TABLE IF NOT EXISTS api_version_compatibility (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
     test_version TEXT NOT NULL,
     endpoint_version TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active'
@@ -408,8 +416,11 @@ CREATE TABLE IF NOT EXISTS api_version_compatibility (
     rationale TEXT NOT NULL,
     evidence TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(test_version, endpoint_version)
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    UNIQUE(repo_id, test_version, endpoint_version)
 );
+CREATE INDEX IF NOT EXISTS idx_api_version_compatibility_repo
+    ON api_version_compatibility(repo_id);
 CREATE INDEX IF NOT EXISTS idx_openapispec_module ON openapispec_index(module);
 CREATE INDEX IF NOT EXISTS idx_openapispec_slug ON openapispec_index(slug);
 
@@ -1404,8 +1415,8 @@ CREATE TABLE IF NOT EXISTS catalog_builds (
     build_token TEXT NOT NULL UNIQUE,
     parent_catalog_build_id INTEGER,
     catalog_path TEXT NOT NULL,
-    requested_mode TEXT NOT NULL CHECK(requested_mode IN ('full', 'auto', 'delta')),
-    effective_mode TEXT NOT NULL CHECK(effective_mode IN ('not_started', 'full', 'delta', 'hybrid')),
+    requested_mode TEXT NOT NULL CHECK(requested_mode IN ('full', 'auto', 'delta', 'archive')),
+    effective_mode TEXT NOT NULL CHECK(effective_mode IN ('not_started', 'full', 'delta', 'hybrid', 'archive')),
     status TEXT NOT NULL CHECK(status IN ('building', 'validated', 'active', 'previous', 'failed')),
     source_revisions_json TEXT NOT NULL,
     manifest_hash TEXT,
@@ -1511,4 +1522,5 @@ INSERT OR IGNORE INTO schema_migrations(name) VALUES
     ('025_delta_refresh_hardening'),
     ('026_ui_catalog'),
     ('027_ui_negative_event_calls'),
-    ('028_api_registry');
+    ('028_api_registry'),
+    ('029_repository_archival');

@@ -1335,8 +1335,10 @@ def build(
     stats = BuildStats()
 
     try:
+        from catalog.repository_lifecycle import require_repository_extractable
+
+        repo = require_repository_extractable(conn, repo_key)
         ensure_security_tables(conn)
-        repo = get_repository(conn, repo_key)
         repo_id = int(repo["id"])
         repo_root = resolve_repository_root(conn, repo_key)
         if reset:

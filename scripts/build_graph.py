@@ -95,6 +95,15 @@ def graph_delta_eligibility(sqlite_path: str, graph_path: str) -> GraphDeltaElig
             return GraphDeltaEligibility(
                 False, "active catalog build metadata is unavailable"
             )
+        generation_modes = {
+            str(current_build[column])
+            for column in ("requested_mode", "effective_mode")
+            if column in current_build.keys() and current_build[column] is not None
+        }
+        if "archive" in generation_modes:
+            return GraphDeltaEligibility(
+                False, "archive catalog generations require a full graph build"
+            )
         parent_id = current_build["parent_catalog_build_id"]
         if parent_id is None:
             return GraphDeltaEligibility(

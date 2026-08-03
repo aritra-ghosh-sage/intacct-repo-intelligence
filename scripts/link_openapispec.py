@@ -537,6 +537,9 @@ def _link_openapispec(
     reconcile_jsonl_path: Path | None,
     missing_metadata_log: Path | None = MISSING_METADATA_LOG_PATH,
 ) -> LinkStats:
+    from catalog.repository_lifecycle import require_repository_id_extractable
+
+    require_repository_id_extractable(conn, repo_id)
     if not _table_exists(conn, "openapispec_index"):
         raise click.ClickException(
             "Required table openapispec_index is missing. Run scan_openapispec.py first."
@@ -736,7 +739,8 @@ def link_command(
 ) -> None:
     conn = get_connection(db)
     try:
-        repository = get_repository(conn, repo)
+        from catalog.repository_lifecycle import require_repository_extractable
+        repository = require_repository_extractable(conn, repo)
         resolved_root = (
             repo_root.resolve()
             if repo_root is not None

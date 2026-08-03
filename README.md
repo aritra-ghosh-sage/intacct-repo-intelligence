@@ -442,6 +442,30 @@ preflights every checkout in the dependency closure, including its root,
 configured branch, clean state, and any REST automation evidence paths, before
 building the first candidate.
 
+#### Archiving a repository
+
+An archived repository remains in `repos` as lifecycle metadata, but it is not
+an evidence source. Its scan, extract, inference, refresh, and
+repository-qualified query paths reject the request. Archiving is a
+candidate-only SQLite operation: it removes evidence owned by the requested
+repository, preserves active-repository evidence or aborts, and leaves the
+Ladybug projection stale until an operator runs a full graph rebuild and graph
+validation.
+
+For an operator-confirmed archive, use the manual source (no provider or
+checkout access is required):
+
+```bash
+./.venv/bin/python scripts/archive_repository.py --db catalog/catalog.db \
+  archive <repo-key> --source manual --reason "repository archived"
+```
+
+For a GitHub-confirmed archive, use `--source github`. The command verifies the
+configured GitHub origin, performs a targeted fetch, and requires GitHub to
+return the literal archived state before it changes the catalog. `status
+<repo-key>` is read-only and reports lifecycle state and target-owned evidence
+counts.
+
 `scripts/refresh.sh` remains as a compatibility entry point. It initializes a
 missing catalog, applies the workspace migration, and refreshes `ia-main` by
 default; it does not delete the active catalog or build a graph:
