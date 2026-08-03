@@ -10,6 +10,7 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
+from catalog.mapping_ownership import OPENAPI_MAPPING_TYPES
 from scripts import build_entities
 
 
@@ -133,6 +134,68 @@ class RepoScopedEntityBuilderTests(unittest.TestCase):
                 conn.execute("SELECT COUNT(*) FROM entity_occurrences").fetchone()[0],
                 2,
             )
+        finally:
+            conn.close()
+
+    def test_reset_preserves_openapi_owned_mappings_in_selected_repository(self) -> None:
+        build_entities.build(str(self.db), self.entities, reset=False, repo_key="one")
+        conn = sqlite3.connect(self.db)
+        try:
+            entity_id = conn.execute(
+                "SELECT id FROM entity_nodes WHERE name = 'Customer'"
+            ).fetchone()[0]
+            conn.execute(
+                """
+                INSERT INTO entity_mappings(
+                    repo_id, entity_id, file_id, mapping_type, confidence, source_text
+                ) VALUES (1, ?, 10, ?, 1.0, 'openapi-source')
+                """,
+                (entity_id, OPENAPI_MAPPING_TYPES[0]),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        build_entities.build(str(self.db), self.entities, reset=True, repo_key="one")
+
+        conn = sqlite3.connect(self.db)
+        try:
+            self.assertEqual(
+                conn.execute(
+                    "SELECT COUNT(*) FROM entity_mappings "
+                    "WHERE repo_id = 1 AND mapping_type = ?",
+                    (OPENAPI_MAPPING_TYPES[0],),
+                ).fetchone()[0],
+                1,
+            )
+        finally:
+            conn.close()
+
+    def test_openapi_related_yaml_is_kept_as_entity_owned_yaml(self) -> None:
+        self.entities.write_text(
+            json.dumps(
+                {
+                    "entity_name": "Customer",
+                    "ent_file": "app/source/one/Customer.ent",
+                    "module": "ar",
+                    "table": "ARCUSTOMER",
+                    "related_files": {
+                        "yaml": "app/source/openapispec/ar/models/customer.s1.schema.yaml"
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        build_entities.build(str(self.db), self.entities, reset=False, repo_key="one")
+
+        conn = sqlite3.connect(self.db)
+        try:
+            mappings = conn.execute(
+                "SELECT mapping_type FROM entity_mappings WHERE repo_id = 1 ORDER BY id"
+            ).fetchall()
+            self.assertEqual([row[0] for row in mappings], ["yaml"])
         finally:
             conn.close()
 

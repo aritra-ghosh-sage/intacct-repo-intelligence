@@ -43,6 +43,12 @@ CREATE INDEX IF NOT EXISTS idx_files_repo_path
 CREATE INDEX IF NOT EXISTS idx_files_repo_language
     ON files(repo_id, language);
 
+-- Composite UI ownership FKs reference a file and its repository together.
+-- ``id`` is globally allocated, but this explicit parent key lets SQLite
+-- reject a file from another repository at write time.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_files_id_repo
+    ON files(id, repo_id);
+
 CREATE TABLE IF NOT EXISTS symbols (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     file_id INTEGER NOT NULL,
@@ -942,6 +948,319 @@ CREATE TABLE IF NOT EXISTS entity_semantic_conflicts (
 CREATE INDEX IF NOT EXISTS idx_entity_semantic_conflicts_fact_key
     ON entity_semantic_conflicts(repo_id, fact_key, status);
 
+-- Authoritative UI evidence.  A surface is a user-visible actionUI form or a
+-- NextGen family.  Its source files, entity links, parsed controls, events,
+-- script dependencies, and resolution diagnostics are retained separately so
+-- callers can distinguish direct evidence from unresolved behavior.
+CREATE TABLE IF NOT EXISTS ui_surfaces (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
+    surface_key TEXT NOT NULL,
+    surface_kind TEXT NOT NULL CHECK(surface_kind IN ('actionui_form', 'nextgen')),
+    display_name TEXT,
+    source_file_id INTEGER,
+    source_path TEXT,
+    extractor TEXT NOT NULL,
+    extractor_version TEXT NOT NULL,
+    source_hash TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    FOREIGN KEY(source_file_id, repo_id) REFERENCES files(id, repo_id) ON DELETE CASCADE,
+    UNIQUE(repo_id, surface_key)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ui_surfaces_id_repo
+    ON ui_surfaces(id, repo_id);
+CREATE INDEX IF NOT EXISTS idx_ui_surfaces_repo_kind
+    ON ui_surfaces(repo_id, surface_kind, surface_key);
+
+CREATE TABLE IF NOT EXISTS ui_artifacts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
+    surface_id INTEGER NOT NULL,
+    artifact_key TEXT NOT NULL,
+    artifact_kind TEXT NOT NULL,
+    file_id INTEGER NOT NULL,
+    source_path TEXT NOT NULL,
+    start_line INTEGER,
+    end_line INTEGER,
+    evidence_text TEXT,
+    source_hash TEXT,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    FOREIGN KEY(surface_id, repo_id) REFERENCES ui_surfaces(id, repo_id) ON DELETE CASCADE,
+    FOREIGN KEY(file_id, repo_id) REFERENCES files(id, repo_id) ON DELETE CASCADE,
+    UNIQUE(repo_id, surface_id, artifact_key)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ui_artifacts_id_repo
+    ON ui_artifacts(id, repo_id);
+CREATE INDEX IF NOT EXISTS idx_ui_artifacts_surface_kind
+    ON ui_artifacts(repo_id, surface_id, artifact_kind);
+CREATE INDEX IF NOT EXISTS idx_ui_artifacts_file
+    ON ui_artifacts(repo_id, file_id);
+
+CREATE TABLE IF NOT EXISTS ui_entity_references (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
+    surface_id INTEGER NOT NULL,
+    entity_id INTEGER NOT NULL,
+    entity_occurrence_id INTEGER NOT NULL,
+    evidence_artifact_id INTEGER NOT NULL,
+    reference_kind TEXT NOT NULL,
+    confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
+    evidence_text TEXT NOT NULL,
+    source_line INTEGER,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    FOREIGN KEY(surface_id, repo_id) REFERENCES ui_surfaces(id, repo_id) ON DELETE CASCADE,
+    FOREIGN KEY(entity_id) REFERENCES entity_nodes(id) ON DELETE CASCADE,
+    FOREIGN KEY(entity_occurrence_id, repo_id)
+        REFERENCES entity_occurrences(id, repo_id) ON DELETE CASCADE,
+    FOREIGN KEY(evidence_artifact_id, repo_id)
+        REFERENCES ui_artifacts(id, repo_id) ON DELETE CASCADE,
+    UNIQUE(repo_id, surface_id, entity_occurrence_id, evidence_artifact_id, reference_kind)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ui_entity_references_id_repo
+    ON ui_entity_references(id, repo_id);
+CREATE INDEX IF NOT EXISTS idx_ui_entity_references_entity
+    ON ui_entity_references(repo_id, entity_id, reference_kind);
+CREATE INDEX IF NOT EXISTS idx_ui_entity_references_surface
+    ON ui_entity_references(repo_id, surface_id);
+
+CREATE TABLE IF NOT EXISTS ui_artifact_includes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
+    source_artifact_id INTEGER NOT NULL,
+    target_artifact_id INTEGER,
+    include_key TEXT NOT NULL,
+    raw_include_path TEXT NOT NULL,
+    resolved_path TEXT,
+    resolution_status TEXT NOT NULL CHECK(resolution_status IN
+        ('resolved', 'unresolved', 'invalid')),
+    source_line INTEGER,
+    evidence_text TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    FOREIGN KEY(source_artifact_id, repo_id)
+        REFERENCES ui_artifacts(id, repo_id) ON DELETE CASCADE,
+    FOREIGN KEY(target_artifact_id, repo_id)
+        REFERENCES ui_artifacts(id, repo_id) ON DELETE CASCADE,
+    UNIQUE(repo_id, source_artifact_id, include_key)
+);
+CREATE INDEX IF NOT EXISTS idx_ui_artifact_includes_target
+    ON ui_artifact_includes(repo_id, target_artifact_id);
+
+CREATE TABLE IF NOT EXISTS ui_fields (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
+    artifact_id INTEGER NOT NULL,
+    field_key TEXT NOT NULL,
+    field_name TEXT,
+    field_path TEXT,
+    label TEXT,
+    field_type TEXT,
+    ordinal INTEGER,
+    source_line INTEGER,
+    evidence_text TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    FOREIGN KEY(artifact_id, repo_id) REFERENCES ui_artifacts(id, repo_id) ON DELETE CASCADE,
+    UNIQUE(repo_id, artifact_id, field_key)
+);
+CREATE INDEX IF NOT EXISTS idx_ui_fields_artifact
+    ON ui_fields(repo_id, artifact_id, ordinal);
+CREATE INDEX IF NOT EXISTS idx_ui_fields_name
+    ON ui_fields(repo_id, field_name);
+
+CREATE TABLE IF NOT EXISTS ui_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
+    artifact_id INTEGER NOT NULL,
+    event_key TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    handler_name TEXT,
+    handler_expression TEXT,
+    source_line INTEGER,
+    evidence_text TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    FOREIGN KEY(artifact_id, repo_id) REFERENCES ui_artifacts(id, repo_id) ON DELETE CASCADE,
+    UNIQUE(repo_id, artifact_id, event_key)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ui_events_id_repo
+    ON ui_events(id, repo_id);
+CREATE INDEX IF NOT EXISTS idx_ui_events_artifact_type
+    ON ui_events(repo_id, artifact_id, event_type);
+
+CREATE TABLE IF NOT EXISTS ui_script_dependencies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
+    surface_id INTEGER NOT NULL,
+    source_artifact_id INTEGER NOT NULL,
+    dependency_key TEXT NOT NULL,
+    script_path TEXT,
+    target_file_id INTEGER,
+    load_scope TEXT NOT NULL CHECK(load_scope IN ('active', 'conditional', 'unresolved')),
+    resolution_status TEXT NOT NULL CHECK(resolution_status IN
+        ('resolved', 'unresolved', 'invalid')),
+    evidence_text TEXT NOT NULL,
+    source_line INTEGER,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    FOREIGN KEY(surface_id, repo_id) REFERENCES ui_surfaces(id, repo_id) ON DELETE CASCADE,
+    FOREIGN KEY(source_artifact_id, repo_id)
+        REFERENCES ui_artifacts(id, repo_id) ON DELETE CASCADE,
+    FOREIGN KEY(target_file_id, repo_id) REFERENCES files(id, repo_id) ON DELETE CASCADE,
+    UNIQUE(repo_id, surface_id, source_artifact_id, dependency_key)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ui_script_dependencies_id_repo
+    ON ui_script_dependencies(id, repo_id);
+CREATE INDEX IF NOT EXISTS idx_ui_script_dependencies_surface
+    ON ui_script_dependencies(repo_id, surface_id, load_scope);
+CREATE INDEX IF NOT EXISTS idx_ui_script_dependencies_target
+    ON ui_script_dependencies(repo_id, target_file_id);
+
+CREATE TABLE IF NOT EXISTS ui_event_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
+    event_id INTEGER NOT NULL,
+    -- A negative handler-resolution outcome has an XML event but no single
+    -- proving dependency. Retain that evidence rather than manufacturing one.
+    dependency_id INTEGER,
+    call_key TEXT NOT NULL,
+    handler_name TEXT NOT NULL,
+    handler_symbol_id INTEGER,
+    resolution_status TEXT NOT NULL CHECK(resolution_status IN
+        ('resolved', 'unresolved', 'ambiguous', 'conditional', 'unsupported')),
+    resolution_reason TEXT NOT NULL,
+    evidence_text TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    FOREIGN KEY(event_id, repo_id) REFERENCES ui_events(id, repo_id) ON DELETE CASCADE,
+    FOREIGN KEY(dependency_id, repo_id)
+        REFERENCES ui_script_dependencies(id, repo_id) ON DELETE CASCADE,
+    FOREIGN KEY(handler_symbol_id) REFERENCES symbols(id) ON DELETE CASCADE,
+    UNIQUE(repo_id, event_id, dependency_id, call_key)
+);
+CREATE INDEX IF NOT EXISTS idx_ui_event_calls_event
+    ON ui_event_calls(repo_id, event_id, resolution_status);
+CREATE INDEX IF NOT EXISTS idx_ui_event_calls_handler
+    ON ui_event_calls(handler_symbol_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ui_event_calls_without_dependency
+    ON ui_event_calls(repo_id, event_id, call_key)
+    WHERE dependency_id IS NULL;
+
+CREATE TABLE IF NOT EXISTS ui_resolution_issues (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
+    surface_id INTEGER NOT NULL,
+    artifact_id INTEGER,
+    event_id INTEGER,
+    dependency_id INTEGER,
+    issue_key TEXT NOT NULL,
+    severity TEXT NOT NULL CHECK(severity IN ('warning', 'error')),
+    issue_code TEXT NOT NULL,
+    message TEXT NOT NULL,
+    evidence_text TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    FOREIGN KEY(surface_id, repo_id) REFERENCES ui_surfaces(id, repo_id) ON DELETE CASCADE,
+    FOREIGN KEY(artifact_id, repo_id) REFERENCES ui_artifacts(id, repo_id) ON DELETE CASCADE,
+    FOREIGN KEY(event_id, repo_id) REFERENCES ui_events(id, repo_id) ON DELETE CASCADE,
+    FOREIGN KEY(dependency_id, repo_id)
+        REFERENCES ui_script_dependencies(id, repo_id) ON DELETE CASCADE,
+    UNIQUE(repo_id, surface_id, issue_key)
+);
+CREATE INDEX IF NOT EXISTS idx_ui_resolution_issues_surface
+    ON ui_resolution_issues(repo_id, surface_id, severity);
+
+-- SQLite cannot derive a symbol's repository through ``symbols.file_id`` in a
+-- declarative FK.  These triggers make that ownership check explicit.
+CREATE TRIGGER IF NOT EXISTS trg_ui_entity_references_entity_occurrence_insert
+BEFORE INSERT ON ui_entity_references
+FOR EACH ROW
+WHEN NOT EXISTS (
+    SELECT 1 FROM entity_occurrences
+    WHERE id = NEW.entity_occurrence_id
+      AND repo_id = NEW.repo_id
+      AND entity_id = NEW.entity_id
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ui entity reference must use an occurrence for the same repository and entity');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_ui_entity_references_entity_occurrence_update
+BEFORE UPDATE OF repo_id, entity_id, entity_occurrence_id ON ui_entity_references
+FOR EACH ROW
+WHEN NOT EXISTS (
+    SELECT 1 FROM entity_occurrences
+    WHERE id = NEW.entity_occurrence_id
+      AND repo_id = NEW.repo_id
+      AND entity_id = NEW.entity_id
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ui entity reference must use an occurrence for the same repository and entity');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_ui_event_calls_symbol_repo_insert
+BEFORE INSERT ON ui_event_calls
+FOR EACH ROW
+WHEN NEW.handler_symbol_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM symbols
+    JOIN files ON files.id = symbols.file_id
+    WHERE symbols.id = NEW.handler_symbol_id AND files.repo_id = NEW.repo_id
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ui event call handler symbol belongs to another repository');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_ui_event_calls_symbol_repo_update
+BEFORE UPDATE OF repo_id, handler_symbol_id ON ui_event_calls
+FOR EACH ROW
+WHEN NEW.handler_symbol_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM symbols
+    JOIN files ON files.id = symbols.file_id
+    WHERE symbols.id = NEW.handler_symbol_id AND files.repo_id = NEW.repo_id
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ui event call handler symbol belongs to another repository');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_ui_event_calls_surface_match_insert
+BEFORE INSERT ON ui_event_calls
+FOR EACH ROW
+WHEN NEW.dependency_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1
+    FROM ui_events event
+    JOIN ui_artifacts artifact ON artifact.id = event.artifact_id
+    JOIN ui_script_dependencies dependency ON dependency.id = NEW.dependency_id
+    WHERE event.id = NEW.event_id
+      AND artifact.surface_id = dependency.surface_id
+      AND event.repo_id = NEW.repo_id
+      AND dependency.repo_id = NEW.repo_id
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ui event call event and dependency must belong to one surface');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_ui_event_calls_surface_match_update
+BEFORE UPDATE OF repo_id, event_id, dependency_id ON ui_event_calls
+FOR EACH ROW
+WHEN NEW.dependency_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1
+    FROM ui_events event
+    JOIN ui_artifacts artifact ON artifact.id = event.artifact_id
+    JOIN ui_script_dependencies dependency ON dependency.id = NEW.dependency_id
+    WHERE event.id = NEW.event_id
+      AND artifact.surface_id = dependency.surface_id
+      AND event.repo_id = NEW.repo_id
+      AND dependency.repo_id = NEW.repo_id
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ui event call event and dependency must belong to one surface');
+END;
+
 
 -- Advisory quality/triage view only. It intentionally excludes entities without
 -- roots at or above the confidence threshold and must not filter authoritative
@@ -1086,4 +1405,5 @@ INSERT OR IGNORE INTO schema_migrations(name) VALUES
     ('022_entity_semantics_repo_scope'),
     ('023_delta_refresh'),
     ('024_refresh_contracts'),
-    ('025_delta_refresh_hardening');
+    ('025_delta_refresh_hardening'),
+    ('026_ui_catalog');

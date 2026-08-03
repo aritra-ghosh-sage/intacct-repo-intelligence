@@ -7,6 +7,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from catalog.mapping_ownership import (
+    BUILD_ENTITIES_MAPPING_TYPES,
+    OPENAPI_MAPPING_TYPES,
+)
 from scripts import (
     build_rest_endpoints,
     build_workflows,
@@ -101,6 +105,37 @@ class RepoScopedOpenApiTests(unittest.TestCase):
         )
         self.assertEqual(
             self.conn.execute("SELECT COUNT(*) FROM rest_endpoints").fetchone()[0], 2
+        )
+
+    def test_openapi_mapping_types_are_disjoint_from_entity_builder_types(self) -> None:
+        self.assertFalse(set(BUILD_ENTITIES_MAPPING_TYPES) & set(OPENAPI_MAPPING_TYPES))
+
+    def test_openapi_delete_preserves_entity_builder_mapping_types(self) -> None:
+        self.conn.execute("INSERT INTO entity_nodes(name) VALUES ('Bill')")
+        entity_id = self.conn.execute(
+            "SELECT id FROM entity_nodes WHERE name = 'Bill'"
+        ).fetchone()[0]
+        self.conn.executemany(
+            """
+            INSERT INTO entity_mappings(
+                repo_id, entity_id, file_id, mapping_type, confidence, source_text
+            ) VALUES (1, ?, 11, ?, 1.0, ?)
+            """,
+            [
+                (entity_id, BUILD_ENTITIES_MAPPING_TYPES[0], "entity-source"),
+                (entity_id, OPENAPI_MAPPING_TYPES[0], "openapi-source"),
+            ],
+        )
+
+        deleted = link_openapispec.delete_openapi_mappings(self.conn, repo_id=1)
+
+        self.assertEqual(deleted, 1)
+        remaining = self.conn.execute(
+            "SELECT mapping_type FROM entity_mappings WHERE repo_id = 1"
+        ).fetchall()
+        self.assertEqual(
+            [row["mapping_type"] for row in remaining],
+            [BUILD_ENTITIES_MAPPING_TYPES[0]],
         )
 
 

@@ -21,6 +21,8 @@ ENTITY_SEMANTICS_REPO_SCOPE_MIGRATION = "022_entity_semantics_repo_scope"
 DELTA_REFRESH_MIGRATION = "023_delta_refresh"
 REFRESH_CONTRACTS_MIGRATION = "024_refresh_contracts"
 DELTA_REFRESH_HARDENING_MIGRATION = "025_delta_refresh_hardening"
+UI_CATALOG_MIGRATION = "026_ui_catalog"
+UI_NEGATIVE_EVENT_CALL_MIGRATION = "027_ui_negative_event_calls"
 LEGACY_REPO_KEY = "ia-main"
 
 
@@ -1095,26 +1097,41 @@ def symbol_stable_key(
 def _canonical_schema_objects(
     conn: sqlite3.Connection, tables: tuple[str, ...]
 ) -> None:
-    """Install selected tables and their explicit indexes from schema.sql."""
+    """Install selected tables, indexes, and triggers from ``schema.sql``."""
 
     template = sqlite3.connect(":memory:")
     try:
         template.executescript((Path(__file__).with_name("schema.sql")).read_text())
         for table in tables:
-            if _table_exists(conn, table):
-                continue
             ddl = template.execute(
                 "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)
             ).fetchone()
             if ddl is None:
                 raise RuntimeError(f"canonical schema is missing {table}")
-            conn.execute(str(ddl[0]))
-            for (index_ddl,) in template.execute(
-                "SELECT sql FROM sqlite_master "
+            if not _table_exists(conn, table):
+                conn.execute(str(ddl[0]))
+            for index_name, index_ddl in template.execute(
+                "SELECT name, sql FROM sqlite_master "
                 "WHERE type='index' AND tbl_name=? AND sql IS NOT NULL",
                 (table,),
             ):
-                conn.execute(str(index_ddl))
+                if not conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?",
+                    (index_name,),
+                ).fetchone():
+                    conn.execute(str(index_ddl))
+            # Triggers are separate SQLite objects and must be restored even
+            # when their table already exists in a migrated catalog.
+            for trigger_name, trigger_ddl in template.execute(
+                "SELECT name, sql FROM sqlite_master "
+                "WHERE type='trigger' AND tbl_name=? AND sql IS NOT NULL",
+                (table,),
+            ):
+                if not conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='trigger' AND name=?",
+                    (trigger_name,),
+                ).fetchone():
+                    conn.execute(str(trigger_ddl))
     finally:
         template.close()
 
@@ -1329,8 +1346,89 @@ def _apply_delta_refresh_hardening_migration(conn: sqlite3.Connection) -> None:
         conn.execute("DELETE FROM integration_links")
 
 
+def _apply_ui_catalog_migration(conn: sqlite3.Connection) -> None:
+    """Install additive repository-scoped UI evidence tables and triggers."""
+
+    # A pre-entity legacy catalog can be valid after migration 019.  UI facts
+    # still need the canonical entity identity/occurrence parents, so create
+    # their empty current definitions before checking the remaining parents.
+    _canonical_schema_objects(conn, ("entity_nodes", "entity_occurrences"))
+    required_parents = ("repos", "files", "entity_nodes", "entity_occurrences", "symbols")
+    missing = [table for table in required_parents if not _table_exists(conn, table)]
+    if missing:
+        raise RuntimeError(
+            "ui catalog migration requires repository-scoped parent tables: "
+            + ", ".join(missing)
+        )
+    # Composite FKs need exact parent uniqueness.  IDs are already globally
+    # unique, so this additive index preserves all existing data and IDs.
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_files_id_repo ON files(id, repo_id)")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_entity_occurrences_id_repo "
+        "ON entity_occurrences(id, repo_id)"
+    )
+    _canonical_schema_objects(
+        conn,
+        (
+            "ui_surfaces",
+            "ui_artifacts",
+            "ui_entity_references",
+            "ui_artifact_includes",
+            "ui_fields",
+            "ui_events",
+            "ui_script_dependencies",
+            "ui_event_calls",
+            "ui_resolution_issues",
+        ),
+    )
+
+
+def _apply_ui_negative_event_call_migration(conn: sqlite3.Connection) -> None:
+    """Allow event-call evidence that has no single proving script dependency."""
+
+    if not _table_exists(conn, "ui_event_calls"):
+        _canonical_schema_objects(conn, ("ui_event_calls",))
+        return
+    columns = {
+        str(row[1]): int(row[3])
+        for row in conn.execute("PRAGMA table_info(ui_event_calls)")
+    }
+    if columns.get("dependency_id") == 0:
+        _canonical_schema_objects(conn, ("ui_event_calls",))
+        return
+
+    # SQLite cannot drop NOT NULL from an existing column. Preserve IDs and
+    # payload while replacing only this UI child table and its dependent DDL.
+    for trigger in (
+        "trg_ui_event_calls_symbol_repo_insert",
+        "trg_ui_event_calls_symbol_repo_update",
+        "trg_ui_event_calls_surface_match_insert",
+        "trg_ui_event_calls_surface_match_update",
+    ):
+        conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+    for index in (
+        "idx_ui_event_calls_event",
+        "idx_ui_event_calls_handler",
+        "uq_ui_event_calls_without_dependency",
+    ):
+        conn.execute(f"DROP INDEX IF EXISTS {index}")
+    conn.execute("ALTER TABLE ui_event_calls RENAME TO ui_event_calls_legacy_027")
+    _canonical_schema_objects(conn, ("ui_event_calls",))
+    conn.execute(
+        """INSERT INTO ui_event_calls(
+               id,repo_id,event_id,dependency_id,call_key,handler_name,
+               handler_symbol_id,resolution_status,resolution_reason,evidence_text,
+               created_at
+           ) SELECT id,repo_id,event_id,dependency_id,call_key,handler_name,
+                    handler_symbol_id,resolution_status,resolution_reason,evidence_text,
+                    created_at
+             FROM ui_event_calls_legacy_027"""
+    )
+    conn.execute("DROP TABLE ui_event_calls_legacy_027")
+
+
 def apply_delta_refresh_migration(conn: sqlite3.Connection) -> None:
-    """Apply refresh migrations 023 and 024 to a repository-scoped catalog."""
+    """Apply refresh migrations 023 through 027 to a repository-scoped catalog."""
 
     if conn.in_transaction:
         raise RuntimeError(
@@ -1371,6 +1469,26 @@ def apply_delta_refresh_migration(conn: sqlite3.Connection) -> None:
             conn.execute(
                 "INSERT INTO schema_migrations(name) VALUES (?)",
                 (DELTA_REFRESH_HARDENING_MIGRATION,),
+            )
+        ui_catalog_applied = conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name=?",
+            (UI_CATALOG_MIGRATION,),
+        ).fetchone()
+        _apply_ui_catalog_migration(conn)
+        if ui_catalog_applied is None:
+            conn.execute(
+                "INSERT INTO schema_migrations(name) VALUES (?)",
+                (UI_CATALOG_MIGRATION,),
+            )
+        negative_event_calls_applied = conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name=?",
+            (UI_NEGATIVE_EVENT_CALL_MIGRATION,),
+        ).fetchone()
+        _apply_ui_negative_event_call_migration(conn)
+        if negative_event_calls_applied is None:
+            conn.execute(
+                "INSERT INTO schema_migrations(name) VALUES (?)",
+                (UI_NEGATIVE_EVENT_CALL_MIGRATION,),
             )
         violations = conn.execute("PRAGMA foreign_key_check").fetchall()
         if violations:
@@ -1490,6 +1608,26 @@ def apply_multi_repo_migration(
             conn.execute(
                 "INSERT INTO schema_migrations(name) VALUES (?)",
                 (DELTA_REFRESH_HARDENING_MIGRATION,),
+            )
+        ui_catalog_applied = conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name = ?",
+            (UI_CATALOG_MIGRATION,),
+        ).fetchone()
+        _apply_ui_catalog_migration(conn)
+        if ui_catalog_applied is None:
+            conn.execute(
+                "INSERT INTO schema_migrations(name) VALUES (?)",
+                (UI_CATALOG_MIGRATION,),
+            )
+        negative_event_calls_applied = conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name=?",
+            (UI_NEGATIVE_EVENT_CALL_MIGRATION,),
+        ).fetchone()
+        _apply_ui_negative_event_call_migration(conn)
+        if negative_event_calls_applied is None:
+            conn.execute(
+                "INSERT INTO schema_migrations(name) VALUES (?)",
+                (UI_NEGATIVE_EVENT_CALL_MIGRATION,),
             )
         # FK enforcement is necessarily off while legacy parent tables are
         # rebuilt, but foreign_key_check still validates the candidate before

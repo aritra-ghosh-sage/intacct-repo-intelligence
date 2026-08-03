@@ -16,9 +16,11 @@ from tqdm import tqdm
 
 try:
     from catalog.db import get_connection, require_foreign_key_integrity
+    from catalog.mapping_ownership import BUILD_ENTITIES_MAPPING_TYPES, placeholders
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from catalog.db import get_connection, require_foreign_key_integrity
+    from catalog.mapping_ownership import BUILD_ENTITIES_MAPPING_TYPES, placeholders
 
 DEFAULT_DB = "catalog/catalog.db"
 DEFAULT_ENTITIES = "config/entity_definitions.jsonl"
@@ -49,10 +51,6 @@ WORKFLOW_FILE_ROLES: list[str] = [
 
 RELATED_FILE_ROLES: list[str] = ["yaml", "xslt", "inc", "xml", "sql", "rpt"]
 
-OPENAPI_SCHEMA_MAPPING_TYPE = "openapispec_schema"
-OPENAPI_OPERATIONS_MAPPING_TYPE = "openapispec_operations"
-OPENAPI_HISTORY_MAPPING_TYPE = "openapispec_history"
-
 MODULE_ALIASES: dict[str, str] = {
     "inventory": "inv",
     "company": "co",
@@ -70,9 +68,6 @@ class BuildStats:
     entities_upserted: int = 0
     mappings_inserted: int = 0
     missing_symbols: int = 0
-    openapispec_mappings_inserted: int = 0
-
-
 def _role_to_suffix(role: str) -> str:
     return "".join(part.capitalize() for part in role.split("_"))
 
@@ -124,19 +119,6 @@ def _build_yaml_slug_candidates(entity: dict[str, Any]) -> list[str]:
             add(table[len(module_prefix) :].replace("_", "-"))
 
     return candidates
-
-
-def classify_yaml_mapping_type(path: str) -> str:
-    lowered = path.lower()
-    if "/openapispec/" not in lowered:
-        return "yaml"
-    if "/models/" in lowered and lowered.endswith(".schema.yaml"):
-        return OPENAPI_SCHEMA_MAPPING_TYPE
-    if "/paths/" in lowered and lowered.endswith(".api.yaml"):
-        return OPENAPI_OPERATIONS_MAPPING_TYPE
-    if "/history/" in lowered and lowered.endswith(".schema.history.yaml"):
-        return OPENAPI_HISTORY_MAPPING_TYPE
-    return "yaml"
 
 
 def classify_sql_mapping_type(path: str) -> str | None:
@@ -209,9 +191,7 @@ def _collect_related_file_mappings(entity: dict[str, Any]) -> list[tuple[str, st
     for role in RELATED_FILE_ROLES:
         for related_path in role_to_paths.get(role, []):
             mapping_type = role
-            if role == "yaml":
-                mapping_type = classify_yaml_mapping_type(related_path)
-            elif role == "sql":
+            if role == "sql":
                 mapping_type = classify_sql_mapping_type(related_path)
                 if mapping_type is None:
                     continue
@@ -515,6 +495,11 @@ def insert_mapping(
     confidence: float,
     source_text: str,
 ) -> bool:
+    if mapping_type not in BUILD_ENTITIES_MAPPING_TYPES:
+        raise ValueError(
+            f"build_entities does not own mapping type: {mapping_type}"
+        )
+
     file_id: int | None = None
     key_file_id = f"file_id::{repo_id}::{source_text.lower()}"
     key_symbol_id = (
@@ -681,18 +666,19 @@ def build(
             # Roots are a projection of mappings, not independent evidence.
             # Clear them before their source family so no stale root survives.
             conn.execute("DELETE FROM entity_roots WHERE repo_id = ?", (repo_id,))
-            conn.execute("DELETE FROM entity_mappings WHERE repo_id = ?", (repo_id,))
+            conn.execute(
+                f"DELETE FROM entity_mappings WHERE repo_id = ? "
+                f"AND mapping_type IN ({placeholders(BUILD_ENTITIES_MAPPING_TYPES)})",
+                (repo_id, *BUILD_ENTITIES_MAPPING_TYPES),
+            )
             # An occurrence is a snapshot of declarations from this repository.
             # Canonical entity_nodes intentionally remain shared and are not deleted.
             conn.execute("DELETE FROM entity_occurrences WHERE repo_id = ?", (repo_id,))
             require_foreign_key_integrity(conn, context="entity mapping reset")
 
-        openapispec_mappings = [
+        workflow_mappings = [
             ("workflow_schema_file", WORKFLOW_FILE_ROLES[0]),
             ("workflow_history_file", WORKFLOW_FILE_ROLES[1]),
-            ("openapi_schema_file", OPENAPI_SCHEMA_MAPPING_TYPE),
-            ("openapi_api_file", OPENAPI_OPERATIONS_MAPPING_TYPE),
-            ("openapi_history_file", OPENAPI_HISTORY_MAPPING_TYPE),
         ]
 
         for entity in tqdm(rows, desc="Building entity mappings", unit="entity"):
@@ -753,10 +739,10 @@ def build(
                 if inserted:
                     stats.mappings_inserted += 1
 
-            # Ingest workflow and OpenAPI files from top-level fields in entity_definitions.jsonl.
+            # Ingest workflow files from top-level fields in entity_definitions.jsonl.
             # These are file-backed mappings, not companion class symbols.
 
-            for field_name, mapping_type in openapispec_mappings:
+            for field_name, mapping_type in workflow_mappings:
                 file_path = entity.get(field_name)
                 if isinstance(file_path, str) and file_path.strip():
                     inserted = insert_mapping(
@@ -769,7 +755,7 @@ def build(
                         source_text=file_path.strip(),
                     )
                     if inserted:
-                        stats.openapispec_mappings_inserted += 1
+                        stats.mappings_inserted += 1
 
             workflow_api_files = entity.get("workflow_api_files")
             if isinstance(workflow_api_files, list):
@@ -789,7 +775,7 @@ def build(
                         source_text=workflow_api_path.strip(),
                     )
                     if inserted:
-                        stats.openapispec_mappings_inserted += 1
+                        stats.mappings_inserted += 1
 
             # Ingest related files (yaml, xslt, inc, xml, sql, rpt) as file-backed mappings.
             # Accept both legacy related_files and flattened top-level fields.
@@ -856,7 +842,6 @@ def build_command(db: str, entities: Path, reset: bool, repo_key: str) -> None:
     click.echo(f"Entities upserted:   {stats.entities_upserted}")
     click.echo(f"Mappings inserted:   {stats.mappings_inserted}")
     click.echo(f"Missing symbols:     {stats.missing_symbols}")
-    click.echo(f"OpenAPI mappings inserted: {stats.openapispec_mappings_inserted}")
 
 
 if __name__ == "__main__":

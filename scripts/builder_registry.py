@@ -43,6 +43,26 @@ def _or(*matchers: SourceMatcher) -> SourceMatcher:
     return lambda path: any(matcher(path) for matcher in matchers)
 
 
+def _ui_surface_input(path: str) -> bool:
+    """Match only source changes that can alter persisted UI evidence."""
+    normalized = PurePosixPath(path).as_posix().lower()
+    source_path = normalized.startswith("app/source/")
+    resource_path = normalized.startswith("app/resources/")
+    name = PurePosixPath(normalized).name
+    suffix = PurePosixPath(normalized).suffix
+    if source_path and name.endswith("_form.xml"):
+        return True
+    if source_path and suffix in {".php", ".cls", ".inc", ".ent"}:
+        return True
+    if resource_path and suffix == ".js":
+        return True
+    return normalized.startswith("app/source/openapispec/") and suffix in {
+        ".yaml",
+        ".yml",
+        ".json",
+    }
+
+
 @dataclass(frozen=True)
 class Builder:
     name: str
@@ -120,6 +140,13 @@ BUILDERS: dict[str, Builder] = {
             "entity_access_links",
         ),
     ),
+    "ui_surfaces": Builder(
+        "ui_surfaces",
+        ("relationships", "entities", "openapi_link"),
+        frozenset({"intacct_app"}),
+        delta_capability="scoped_full",
+        source_matcher=_ui_surface_input,
+    ),
     "workflows": Builder(
         "workflows",
         ("entity_roots", "openapi_scan"),
@@ -192,6 +219,7 @@ PROFILE_DEFAULTS: dict[str, tuple[str, ...]] = {
         "entity_roots",
         "openapi_scan",
         "openapi_link",
+        "ui_surfaces",
         "workflows",
         "security",
         "rest_endpoints",

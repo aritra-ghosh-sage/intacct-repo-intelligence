@@ -21,6 +21,11 @@ from pydantic import Field
 from catalog.graph_projection import GRAPH_PROJECTION_VERSION
 from catalog.rest_coverage import REQUIRED_TABLES, coverage_rows, coverage_summary
 from config import CATALOG_DB, GRAPH_DB
+from scripts.query_ui import (
+    UiQueryError,
+    query_ui_impact,
+    query_ui_surface_detail,
+)
 
 # ============================================================================
 # Type Definitions
@@ -123,6 +128,38 @@ PaginationCursor = Annotated[
             "Opaque next_cursor returned in the previous response page. Do not "
             "construct or modify it."
         ),
+    ),
+]
+UiSurfaceKey = Annotated[
+    str,
+    Field(
+        min_length=1,
+        description=(
+            "Exact UI surface key returned by ui_impact. actionUI keys begin with "
+            "'actionui:' and NextGen keys begin with 'nextgen:'."
+        ),
+        examples=[
+            "actionui:app/source/gl/glbatch_form.xml",
+            "nextgen:general-ledger/journal-entry",
+        ],
+    ),
+]
+UiDetailRecordKind = Annotated[
+    Literal[
+        "artifacts",
+        "fields",
+        "events",
+        "scripts",
+        "includes",
+        "references",
+        "issues",
+    ],
+    Field(
+        description=(
+            "Evidence family to return for the UI surface. Events include at most "
+            "100 nested handler-call records per event."
+        ),
+        examples=["events"],
     ),
 ]
 ConfidenceScore = Annotated[
@@ -2095,6 +2132,78 @@ def repository_list_impl(state: CatalogState) -> CatalogResponse:
         )
 
 
+def ui_impact_impl(
+    state: CatalogState,
+    entity_name: str,
+    repo_key: str,
+    limit: int = DEFAULT_LIMIT,
+    cursor: str | None = None,
+) -> CatalogResponse:
+    """Return actionUI and NextGen surfaces linked to one entity."""
+    with state.conn() as c:
+        try:
+            data = query_ui_impact(
+                c,
+                entity_name=entity_name,
+                repo_key=repo_key,
+                limit=limit,
+                cursor=cursor,
+            )
+        except UiQueryError as error:
+            return make_error_response(
+                state,
+                "ui_impact",
+                error.code,
+                str(error),
+                c,
+                details=dict(error.details),
+            )
+        return make_response(
+            state,
+            "ui_impact",
+            data,
+            c,
+            next_cursor=data["page"]["next_cursor"],
+        )
+
+
+def ui_surface_detail_impl(
+    state: CatalogState,
+    surface_key: str,
+    repo_key: str,
+    record_kind: str,
+    limit: int = DEFAULT_LIMIT,
+    cursor: str | None = None,
+) -> CatalogResponse:
+    """Return one evidence family for an exact actionUI or NextGen surface."""
+    with state.conn() as c:
+        try:
+            data = query_ui_surface_detail(
+                c,
+                surface_key=surface_key,
+                repo_key=repo_key,
+                record_kind=record_kind,
+                limit=limit,
+                cursor=cursor,
+            )
+        except UiQueryError as error:
+            return make_error_response(
+                state,
+                "ui_surface_detail",
+                error.code,
+                str(error),
+                c,
+                details=dict(error.details),
+            )
+        return make_response(
+            state,
+            "ui_surface_detail",
+            data,
+            c,
+            next_cursor=data["page"]["next_cursor"],
+        )
+
+
 def catalog_status_impl(state: CatalogState) -> CatalogResponse:
     """Get catalog statistics (row counts per table)."""
     with state.conn() as c:
@@ -2919,6 +3028,29 @@ def create_server(
     ) -> CatalogResponse:
         """Return an entity's repository occurrences, code mappings, root symbols, workflows, and REST endpoints."""
         return entity_context_impl(state, entity_name, repo_key)
+
+    @mcp.tool(annotations=READ_ONLY_TOOL_ANNOTATIONS)
+    def ui_impact(
+        entity_name: EntityName,
+        repo_key: RepositoryKey,
+        limit: ResultLimit = DEFAULT_LIMIT,
+        cursor: PaginationCursor | None = None,
+    ) -> CatalogResponse:
+        """Return actionUI and NextGen screens linked by direct or supported UI roles."""
+        return ui_impact_impl(state, entity_name, repo_key, limit, cursor)
+
+    @mcp.tool(annotations=READ_ONLY_TOOL_ANNOTATIONS)
+    def ui_surface_detail(
+        surface_key: UiSurfaceKey,
+        repo_key: RepositoryKey,
+        record_kind: UiDetailRecordKind,
+        limit: ResultLimit = DEFAULT_LIMIT,
+        cursor: PaginationCursor | None = None,
+    ) -> CatalogResponse:
+        """Return one paged evidence family for an exact actionUI or NextGen surface."""
+        return ui_surface_detail_impl(
+            state, surface_key, repo_key, record_kind, limit, cursor
+        )
 
     @mcp.tool(annotations=READ_ONLY_TOOL_ANNOTATIONS)
     def object_relationships(

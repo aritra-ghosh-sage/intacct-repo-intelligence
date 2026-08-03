@@ -10,7 +10,7 @@ from pathlib import Path, PurePosixPath
 
 from config import EXCLUDE_DIRS, INCLUDE_EXTENSIONS
 
-DELTA_CONTRACT_VERSION = 3
+DELTA_CONTRACT_VERSION = 4
 
 
 class ChangeType(str, Enum):

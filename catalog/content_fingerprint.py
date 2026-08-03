@@ -14,7 +14,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any
 
-CATALOG_CONTENT_VERSION = 1
+CATALOG_CONTENT_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -79,6 +79,15 @@ _EVIDENCE_TABLE_NAMES = (
     "entity_operation_facts",
     "entity_extraction_coverage",
     "entity_semantic_conflicts",
+    "ui_surfaces",
+    "ui_artifacts",
+    "ui_entity_references",
+    "ui_artifact_includes",
+    "ui_fields",
+    "ui_events",
+    "ui_script_dependencies",
+    "ui_event_calls",
+    "ui_resolution_issues",
 )
 AUTHORITATIVE_EVIDENCE_TABLES: tuple[EvidenceTable, ...] = tuple(
     EvidenceTable(

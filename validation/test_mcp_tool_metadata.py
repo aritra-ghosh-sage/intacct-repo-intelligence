@@ -27,6 +27,8 @@ EXPECTED_TOOL_NAMES = {
     "security_dependency_chain",
     "security_surface",
     "symbol_references",
+    "ui_impact",
+    "ui_surface_detail",
     "workflow_context",
     "workflow_structure",
 }
@@ -135,6 +137,27 @@ class McpToolMetadataTests(unittest.TestCase):
             {"active", "known_issue", "ci_only", "conditional"},
             set(eligibility["enum"]),
         )
+
+    def test_ui_tools_publish_pagination_and_detail_contracts(self) -> None:
+        self.assertEqual(24, len(self.tools))
+
+        impact = self.tools["ui_impact"]["inputSchema"]
+        self.assertEqual(["entity_name", "repo_key"], impact["required"])
+        self.assertEqual(1, impact["properties"]["limit"]["minimum"])
+        self.assertEqual(100, impact["properties"]["limit"]["maximum"])
+        self.assertIn("repository_list", impact["properties"]["repo_key"]["description"])
+
+        detail = self.tools["ui_surface_detail"]["inputSchema"]
+        self.assertEqual(
+            ["surface_key", "repo_key", "record_kind"], detail["required"]
+        )
+        self.assertEqual(
+            {"artifacts", "fields", "events", "scripts", "includes", "references", "issues"},
+            set(detail["properties"]["record_kind"]["enum"]),
+        )
+        self.assertIn("actionui:", detail["properties"]["surface_key"]["description"])
+        self.assertEqual(1, detail["properties"]["limit"]["minimum"])
+        self.assertEqual(100, detail["properties"]["limit"]["maximum"])
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ from catalog.db import get_connection, require_foreign_key_integrity
 from catalog.migrations import symbol_stable_key
 from parser.extractors import (
     java_extractor,
+    javascript_extractor,
     php_extractor,
     sql_extractor,
     xslt_extractor,
@@ -18,6 +19,7 @@ from parser.repo_context import require_repo_scoped_files, resolve_repo
 
 EXTRACTORS = {
     "java": java_extractor,
+    "javascript": javascript_extractor,
     "php": php_extractor,
     "sql": sql_extractor,
     "yaml": yaml_extractor,
@@ -26,6 +28,7 @@ EXTRACTORS = {
 
 OUTPUT_DIR = Path("outputs")
 YAML_PARSE_FAILURES_LOG = OUTPUT_DIR / "yaml_parse_failures.jsonl"
+JAVASCRIPT_PARSE_FAILURES_LOG = OUTPUT_DIR / "javascript_parse_failures.jsonl"
 
 
 @dataclass(frozen=True)
@@ -42,7 +45,7 @@ class SymbolChangeSummary:
         return len(self.added_ids) + len(self.changed_ids) + len(self.deleted_ids)
 
 
-def write_jsonl(path: Path, rows: list[dict[str, str]]) -> None:
+def write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
         for row in rows:
@@ -129,6 +132,8 @@ def extract_all(
 
     if "yaml" in selected_languages and hasattr(yaml_extractor, "reset_stats"):
         yaml_extractor.reset_stats()
+    if "javascript" in selected_languages and hasattr(javascript_extractor, "reset_stats"):
+        javascript_extractor.reset_stats()
 
     for row in tqdm(rows, desc="Extracting"):
         file_id = row["id"]
@@ -282,6 +287,21 @@ def extract_all(
         if write_logs:
             write_jsonl(YAML_PARSE_FAILURES_LOG, parse_failures)
             print(f"   YAML parse fail log: {YAML_PARSE_FAILURES_LOG.as_posix()}")
+
+    if "javascript" in selected_languages and hasattr(javascript_extractor, "get_stats"):
+        javascript_stats = javascript_extractor.get_stats()
+        print(f"   JavaScript files seen: {javascript_stats.get('files_seen', 0)}")
+        print(f"   JavaScript parse fail: {javascript_stats.get('parse_failures', 0)}")
+        print(f"   JavaScript emitted: {javascript_stats.get('symbols_emitted', 0)}")
+        parse_failures: list[dict[str, object]] = []
+        if hasattr(javascript_extractor, "get_parse_failures"):
+            parse_failures = javascript_extractor.get_parse_failures()
+        if write_logs:
+            write_jsonl(JAVASCRIPT_PARSE_FAILURES_LOG, parse_failures)
+            print(
+                "   JavaScript parse fail log: "
+                f"{JAVASCRIPT_PARSE_FAILURES_LOG.as_posix()}"
+            )
 
     if error_messages:
         raise RuntimeError(

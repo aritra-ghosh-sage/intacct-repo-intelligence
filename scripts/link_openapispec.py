@@ -14,32 +14,18 @@ import click
 
 try:
     from catalog.db import get_connection
+    from catalog.mapping_ownership import OPENAPI_MAPPING_TYPES, placeholders
     from catalog.repositories import get_repository, resolve_repository_root
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from catalog.db import get_connection
+    from catalog.mapping_ownership import OPENAPI_MAPPING_TYPES, placeholders
     from catalog.repositories import get_repository, resolve_repository_root
 
 DEFAULT_DB = "catalog/catalog.db"
 MISSING_METADATA_LOG_PATH = (
     Path(__file__).resolve().parents[1] / "outputs" / "missing_metadata.jsonl"
 )
-OPENAPI_MAPPING_TYPES = [
-    "openapispec_schema",
-    "openapispec_operations",
-    "openapispec_history",
-    "openapispec_view",
-    "openapispec_uimeta",
-    "openapispec_viewmeta",
-    "openapispec_paths",
-    "openapispec_actions",
-    "openapispec_events",
-    "openapispec_resource",
-    "openapispec_components",
-    "openapispec_security",
-    "openapispec_unknown",
-]
-
 LOW_SIGNAL_CANONICAL_SUFFIXES = {
     "ref",
     "reference",
@@ -91,6 +77,16 @@ class LinkStats:
     heuristic_suppressed_expected_missing_mapped_to: int = 0
     heuristic_logged: int = 0
     heuristic_suppressed_by_class: dict[str, int] = field(default_factory=dict)
+
+
+def delete_openapi_mappings(conn: sqlite3.Connection, repo_id: int) -> int:
+    """Delete only mappings materialized from ``openapispec_index``."""
+    cursor = conn.execute(
+        f"DELETE FROM entity_mappings WHERE repo_id = ? "
+        f"AND mapping_type IN ({placeholders(OPENAPI_MAPPING_TYPES)})",
+        (repo_id, *OPENAPI_MAPPING_TYPES),
+    )
+    return cursor.rowcount
 
 
 def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
@@ -749,11 +745,7 @@ def link_command(
         # OpenAPI mappings are a materialized projection of the current index.
         # Rebuild them on every run so stale mappings cannot survive metadata
         # changes when callers omit the compatibility --reset flag.
-        placeholders = ", ".join(["?"] * len(OPENAPI_MAPPING_TYPES))
-        conn.execute(
-            f"DELETE FROM entity_mappings WHERE repo_id = ? AND mapping_type IN ({placeholders})",
-            (int(repository["id"]), *OPENAPI_MAPPING_TYPES),
-        )
+        delete_openapi_mappings(conn, int(repository["id"]))
 
         stats = _link_openapispec(
             conn=conn,

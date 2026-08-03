@@ -569,7 +569,6 @@ def _run_builder(
                     "entities_upserted": result.entities_upserted,
                     "mappings_inserted": result.mappings_inserted,
                     "missing_symbols": result.missing_symbols,
-                    "openapispec_mappings_inserted": result.openapispec_mappings_inserted,
                 },
             )
             diagnostics = [
@@ -674,6 +673,31 @@ def _run_builder(
                 )
             ]
             return _outcome_with_diagnostics(outcome, diagnostics)
+        finally:
+            conn.close()
+    elif builder == "ui_surfaces":
+        from catalog.db import get_connection
+        from catalog.ui_sync import assemble_ui_snapshot, synchronize_ui_snapshot
+
+        conn = get_connection(candidate_db)
+        try:
+            snapshot = assemble_ui_snapshot(conn, repo_id=repo_id, repo_root=root)
+            synchronize_ui_snapshot(conn, repo_id=repo_id, snapshot=snapshot)
+            metrics = {
+                table: len(snapshot.rows.get(table, ()))
+                for table in (
+                    "ui_surfaces",
+                    "ui_artifacts",
+                    "ui_entity_references",
+                    "ui_artifact_includes",
+                    "ui_fields",
+                    "ui_events",
+                    "ui_script_dependencies",
+                    "ui_event_calls",
+                    "ui_resolution_issues",
+                )
+            }
+            return BuilderOutcome(sum(metrics.values()), metrics)
         finally:
             conn.close()
     elif builder == "workflows":
