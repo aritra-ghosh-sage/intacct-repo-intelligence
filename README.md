@@ -591,6 +591,12 @@ PYTHONPATH=. ./.venv/bin/python -m scripts.refresh_workspace \
   --prepare-quality-baseline catalog/backups/quality-baseline-v3.json
 ```
 
+Extract the approval SHA from the prepared report:
+
+```bash
+jq -r '.approval_sha256' catalog/backups/quality-baseline-v3.json
+```
+
 After reviewing the report, rebuild from the same parent and accept its exact
 `approval_sha256`:
 
