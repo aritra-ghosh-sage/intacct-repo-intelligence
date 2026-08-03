@@ -45,7 +45,8 @@ def _conn() -> sqlite3.Connection:
             (2, 1, 'app/source/api/registries/RegistryBeta.json'),
             (3, 1, 'app/source/openapispec/ap/bill.s1.yaml'),
             (4, 1, 'app/source/openapispec/ap/bill.s2.yaml'),
-            (5, 2, 'app/source/api/registries/RegistryV1.json');
+            (5, 2, 'app/source/api/registries/RegistryV1.json'),
+            (6, 1, 'app/source/other/non-registry.json');
         INSERT INTO api_registry_entries VALUES
             (10, 1, 'V1', 1, '/accounts-payable/objects/bill', 'accounts-payable', 'objects', 'bill',
              's1', 'abc', 'rootObject', 'php', 'ui1', 0, '{"type":"rootObject"}'),
@@ -61,7 +62,8 @@ def _conn() -> sqlite3.Connection:
             (102, 1, 11, 3, '/components/schemas/BillLine', 'openapi_component', 'def', '{}');
         INSERT INTO api_registry_issues VALUES
             (200, 1, 10, 1, '/accounts-payable/objects/bill', 'v1-bill-warning', 'warning', 'hash_mismatch', 'Hash differs', '{"expected":"abc"}'),
-            (201, 1, NULL, 2, '/accounts-payable/objects/unknown', 'beta-unknown', 'error', 'invalid_entry', 'Bad entry', '{}');
+            (201, 1, NULL, 2, '/accounts-payable/objects/unknown', 'beta-unknown', 'error', 'invalid_entry', 'Bad entry', '{}'),
+            (202, 1, NULL, 6, '/unknown', 'unknown-source', 'error', 'invalid_entry', 'Bad non-Registry entry', '{}');
         """
     )
     return conn
@@ -130,6 +132,7 @@ def test_file_and_issues_keep_exact_provenance_and_release_scope() -> None:
         {
             "issue_id": 200, "issue_key": "v1-bill-warning", "severity": "warning",
             "code": "hash_mismatch", "message": "Hash differs", "details": {"expected": "abc"},
+            "release": "V1",
             "source_provenance": {"file_path": "app/source/api/registries/RegistryV1.json", "json_pointer": "/accounts-payable/objects/bill"},
             "entry": {
                 "release": "V1", "module": "accounts-payable", "resource_kind": "objects", "resource_path": "bill",
@@ -137,6 +140,19 @@ def test_file_and_issues_keep_exact_provenance_and_release_scope() -> None:
             },
         }
     ]
+
+
+def test_source_only_issues_use_authoritative_registry_source_release_for_filtering() -> None:
+    beta = query_api_registry_issues(_conn(), repo_key="ia-main", release="Beta")
+    assert [(issue["issue_id"], issue["release"], issue["entry"]) for issue in beta["issues"]] == [
+        (201, "Beta", None)
+    ]
+
+    v1 = query_api_registry_issues(_conn(), repo_key="ia-main", release="V1")
+    assert [issue["issue_id"] for issue in v1["issues"]] == [200]
+
+    v2i = query_api_registry_issues(_conn(), repo_key="ia-main", release="V2i")
+    assert v2i["issues"] == []
 
 
 def test_cli_uses_json_v1_envelope_and_error_contract(tmp_path) -> None:

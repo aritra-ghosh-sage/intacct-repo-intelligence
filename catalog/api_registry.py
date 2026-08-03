@@ -22,8 +22,62 @@ REGISTRY_SOURCES: tuple[tuple[str, str], ...] = (
 )
 
 
+@dataclass(frozen=True)
+class RegistryDiagnostic:
+    """A source-only failure record that is safe to persist without an entry.
+
+    Registry parsing deliberately stops before it can manufacture a partial
+    entry.  These records retain the real Registry file and RFC 6901 pointer
+    which caused that stop, so a standalone build can leave actionable
+    evidence without publishing partial Registry entries or links.
+    """
+
+    registry_release: str
+    registry_path: str
+    source_pointer: str
+    issue_code: str
+    message: str
+    details: dict[str, object]
+
+    @property
+    def issue_key(self) -> str:
+        """Return a stable identity for exactly one source-visible failure."""
+        return (
+            f"api_registry:{self.registry_release}:{self.registry_path}:"
+            f"{self.source_pointer}:{self.issue_code}"
+        )
+
+
 class RegistryExtractionError(RuntimeError):
     """Raised when Registry source cannot be represented without weak evidence."""
+
+    def __init__(
+        self, message: str, *, diagnostics: Iterable[RegistryDiagnostic] = ()
+    ) -> None:
+        super().__init__(message)
+        self.diagnostics = tuple(diagnostics)
+        # The standalone command uses this only after ``build_api_registry``
+        # has replaced Registry diagnostics with these source-only facts.
+        self.diagnostics_persisted = False
+
+
+def _registry_diagnostic(
+    *,
+    registry_release: str,
+    registry_path: str,
+    source_pointer: str,
+    issue_code: str,
+    message: str,
+    details: dict[str, object],
+) -> RegistryDiagnostic:
+    return RegistryDiagnostic(
+        registry_release=registry_release,
+        registry_path=registry_path,
+        source_pointer=source_pointer,
+        issue_code=issue_code,
+        message=message,
+        details=details,
+    )
 
 
 @dataclass(frozen=True)
@@ -45,9 +99,8 @@ class RegistryEntry:
 
 def _json_pointer(parts: Iterable[str]) -> str:
     """Encode a RFC 6901 pointer without relying on JSON object order."""
-    return "/" + "/".join(
-        part.replace("~", "~0").replace("/", "~1") for part in parts
-    )
+    encoded = "/".join(part.replace("~", "~0").replace("/", "~1") for part in parts)
+    return f"/{encoded}" if encoded else ""
 
 
 def _optional_text(payload: dict[str, Any], field: str) -> str | None:
@@ -82,8 +135,19 @@ def extract_registry_entries(
     the whole payload avoids manufacturing that absent classification.
     """
     if not isinstance(document, dict):
+        message = f"{registry_path} must contain a top-level JSON object"
         raise RegistryExtractionError(
-            f"{registry_path} must contain a top-level JSON object"
+            message,
+            diagnostics=(
+                _registry_diagnostic(
+                    registry_release=registry_release,
+                    registry_path=registry_path,
+                    source_pointer="",
+                    issue_code="invalid_registry_document",
+                    message=message,
+                    details={"expected": "object", "actual_type": type(document).__name__},
+                ),
+            ),
         )
 
     entries: list[RegistryEntry] = []
@@ -106,14 +170,45 @@ def extract_registry_entries(
                         *(f"missing required field {field!r}" for field in missing_fields),
                         *(f"field {field!r} must be a string" for field in invalid_fields),
                     ]
-                    raise RegistryExtractionError(
-                        f"{registry_path}{_json_pointer(path)} has an invalid Registry leaf: "
+                    source_pointer = _json_pointer(path)
+                    message = (
+                        f"{registry_path}{source_pointer} has an invalid Registry leaf: "
                         + "; ".join(problems)
+                    )
+                    raise RegistryExtractionError(
+                        message,
+                        diagnostics=(
+                            _registry_diagnostic(
+                                registry_release=registry_release,
+                                registry_path=registry_path,
+                                source_pointer=source_pointer,
+                                issue_code="invalid_registry_leaf",
+                                message=message,
+                                details={
+                                    "missing_fields": list(missing_fields),
+                                    "invalid_fields": list(invalid_fields),
+                                },
+                            ),
+                        ),
                     )
         if _is_registry_leaf(value):
             if len(path) < 3:
+                source_pointer = _json_pointer(path)
+                message = (
+                    f"{registry_path}{source_pointer} has no module/resource identity"
+                )
                 raise RegistryExtractionError(
-                    f"{registry_path}{_json_pointer(path)} has no module/resource identity"
+                    message,
+                    diagnostics=(
+                        _registry_diagnostic(
+                            registry_release=registry_release,
+                            registry_path=registry_path,
+                            source_pointer=source_pointer,
+                            issue_code="missing_registry_resource_identity",
+                            message=message,
+                            details={"path_depth": len(path)},
+                        ),
+                    ),
                 )
             assert isinstance(value, dict)
             entries.append(
@@ -141,8 +236,20 @@ def extract_registry_entries(
         for key in sorted(value):
             child = value[key]
             if not isinstance(key, str):
+                source_pointer = _json_pointer(path)
+                message = f"{registry_path}{source_pointer} has a non-string object key"
                 raise RegistryExtractionError(
-                    f"{registry_path}{_json_pointer(path)} has a non-string object key"
+                    message,
+                    diagnostics=(
+                        _registry_diagnostic(
+                            registry_release=registry_release,
+                            registry_path=registry_path,
+                            source_pointer=source_pointer,
+                            issue_code="non_string_registry_key",
+                            message=message,
+                            details={"key_type": type(key).__name__},
+                        ),
+                    ),
                 )
             walk(child, (*path, key))
 
@@ -159,12 +266,38 @@ def read_registry_entries(repo_root: PathLike) -> list[RegistryEntry]:
         try:
             document = json.loads(source_path.read_text(encoding="utf-8"))
         except OSError as exc:
+            message = f"unable to read Registry source {relative_path}: {exc}"
             raise RegistryExtractionError(
-                f"unable to read Registry source {relative_path}: {exc}"
+                message,
+                diagnostics=(
+                    _registry_diagnostic(
+                        registry_release=release,
+                        registry_path=relative_path,
+                        source_pointer="",
+                        issue_code="registry_source_unreadable",
+                        message=message,
+                        details={"error_type": type(exc).__name__},
+                    ),
+                ),
             ) from exc
         except json.JSONDecodeError as exc:
+            message = f"invalid JSON in Registry source {relative_path}: {exc.msg}"
             raise RegistryExtractionError(
-                f"invalid JSON in Registry source {relative_path}: {exc.msg}"
+                message,
+                diagnostics=(
+                    _registry_diagnostic(
+                        registry_release=release,
+                        registry_path=relative_path,
+                        source_pointer="",
+                        issue_code="invalid_registry_json",
+                        message=message,
+                        details={
+                            "line": exc.lineno,
+                            "column": exc.colno,
+                            "json_message": exc.msg,
+                        },
+                    ),
+                ),
             ) from exc
         entries.extend(extract_registry_entries(release, relative_path, document))
     return entries
@@ -262,11 +395,68 @@ class RegistryBuildStats:
         return self.links_written
 
 
+def _clear_registry_facts(conn: sqlite3.Connection, *, repo_id: int) -> None:
+    """Remove one repository's Registry family in FK-safe order."""
+    conn.execute("DELETE FROM api_registry_issues WHERE repo_id=?", (repo_id,))
+    conn.execute("DELETE FROM api_registry_entry_links WHERE repo_id=?", (repo_id,))
+    conn.execute("DELETE FROM api_registry_entries WHERE repo_id=?", (repo_id,))
+
+
+def _replace_with_source_issues(
+    conn: sqlite3.Connection,
+    *,
+    repo_id: int,
+    registry_file_rows: dict[str, int],
+    diagnostics: Iterable[RegistryDiagnostic],
+) -> int:
+    """Replace only Registry diagnostics with source-only failure evidence.
+
+    This is called only after every declared Registry source has a proven
+    ``files`` identity.  It intentionally never creates an entry or a link.
+    Existing successful entries and links are left intact until a future
+    successful replacement build; a failed standalone invocation must not
+    erase previously published evidence merely to retain its failure record.
+    """
+    diagnostics = tuple(diagnostics)
+    if not diagnostics:
+        return 0
+    unknown_paths = sorted(
+        {record.registry_path for record in diagnostics} - registry_file_rows.keys()
+    )
+    if unknown_paths:
+        raise RuntimeError(
+            "Registry diagnostic source is absent from files evidence: "
+            + ", ".join(unknown_paths)
+        )
+    conn.execute("DELETE FROM api_registry_issues WHERE repo_id=?", (repo_id,))
+    for record in diagnostics:
+        conn.execute(
+            """INSERT INTO api_registry_issues(
+                   repo_id, entry_id, source_file_id, source_pointer, issue_key,
+                   severity, issue_code, message, details_json
+               ) VALUES (?, NULL, ?, ?, ?, 'error', ?, ?, ?)""",
+            (
+                repo_id,
+                registry_file_rows[record.registry_path],
+                record.source_pointer,
+                record.issue_key,
+                record.issue_code,
+                record.message,
+                json.dumps(
+                    {"registry_release": record.registry_release, **record.details},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=True,
+                ),
+            ),
+        )
+    return len(diagnostics)
+
+
 def build_api_registry(
     conn: sqlite3.Connection, *, repo_id: int, repo_root: PathLike
 ) -> RegistryBuildStats:
     """Replace one repository's Registry evidence inside the caller transaction."""
-    entries = read_registry_entries(repo_root)
     file_rows = conn.execute(
         """SELECT id, path, sha1 FROM files
            WHERE repo_id=? AND path LIKE 'app/source/openapispec/%'
@@ -291,26 +481,61 @@ def build_api_registry(
             + ", ".join(missing_registry_files)
         )
 
-    resolved: list[tuple[RegistryEntry, list[tuple[int, str, str, str | None]]]] = []
-    unresolved: list[RegistryEntry] = []
-    for entry in entries:
-        components = resolve_source_components(entry, file_rows)
-        if not entry.source_optional and not components:
-            unresolved.append(entry)
-        resolved.append((entry, components))
-    if unresolved:
-        sample = ", ".join(
-            f"{entry.registry_release}{entry.json_pointer}" for entry in unresolved[:5]
-        )
-        raise RegistryExtractionError(
-            f"Registry entries have no exact source component ({len(unresolved)}): {sample}"
-        )
+    try:
+        entries = read_registry_entries(repo_root)
+        resolved: list[
+            tuple[RegistryEntry, list[tuple[int, str, str, str | None]]]
+        ] = []
+        unresolved: list[RegistryEntry] = []
+        for entry in entries:
+            components = resolve_source_components(entry, file_rows)
+            if not entry.source_optional and not components:
+                unresolved.append(entry)
+            resolved.append((entry, components))
+        if unresolved:
+            sample = ", ".join(
+                f"{entry.registry_release}{entry.json_pointer}" for entry in unresolved[:5]
+            )
+            message = (
+                "Registry entries have no exact source component "
+                f"({len(unresolved)}): {sample}"
+            )
+            raise RegistryExtractionError(
+                message,
+                diagnostics=tuple(
+                    _registry_diagnostic(
+                        registry_release=entry.registry_release,
+                        registry_path=entry.registry_path,
+                        source_pointer=entry.json_pointer,
+                        issue_code="unresolved_registry_component",
+                        message=(
+                            f"{entry.registry_path}{entry.json_pointer} has no exact "
+                            "source component"
+                        ),
+                        details={
+                            "module": entry.module,
+                            "resource_kind": entry.resource_kind,
+                            "resource_path": entry.resource_path,
+                            "revision": entry.revision,
+                        },
+                    )
+                    for entry in unresolved
+                ),
+            )
+    except RegistryExtractionError as error:
+        if error.diagnostics:
+            _replace_with_source_issues(
+                conn,
+                repo_id=repo_id,
+                registry_file_rows=registry_file_rows,
+                diagnostics=error.diagnostics,
+            )
+            error.diagnostics_persisted = True
+        raise
 
     # Registry data has no parent outside its own three tables.  Do not touch
     # OpenAPI index, entity, REST, compatibility, UI, or graph evidence here.
-    conn.execute("DELETE FROM api_registry_issues WHERE repo_id=?", (repo_id,))
-    conn.execute("DELETE FROM api_registry_entry_links WHERE repo_id=?", (repo_id,))
-    conn.execute("DELETE FROM api_registry_entries WHERE repo_id=?", (repo_id,))
+    _clear_registry_facts(conn, repo_id=repo_id)
 
     source_links = 0
     source_optional = 0

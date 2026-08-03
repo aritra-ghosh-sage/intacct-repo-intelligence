@@ -37,6 +37,22 @@ def build(db: str, repo_root: Path, repo_key: str) -> dict[str, int]:
             "source_links": stats.source_links,
             "source_optional": stats.source_optional,
         }
+    except RegistryExtractionError as error:
+        # ``build_registry`` persists only source-only diagnostics before
+        # re-raising.  Keep those actionable facts for this standalone command
+        # while still reporting the build failure and never committing partial
+        # entries or links. Existing successful entries/links are preserved.
+        # Candidate refresh callers discard their candidate database instead,
+        # so their active catalog remains unchanged.
+        if conn.in_transaction:
+            if error.diagnostics_persisted:
+                require_foreign_key_integrity(
+                    conn, context="API Registry diagnostic persistence"
+                )
+                conn.commit()
+            else:
+                conn.rollback()
+        raise
     except Exception:
         if conn.in_transaction:
             conn.rollback()

@@ -17,6 +17,8 @@ except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from catalog.db import get_connection
 
+from catalog.api_registry import REGISTRY_SOURCES
+
 try:
     from ._query_json import emit_json, error_response, success_response
 except ImportError:
@@ -342,15 +344,27 @@ def query_api_registry_issues(
     limit, offset, release = validate_limit(limit), decode_cursor(cursor), _validate_release(release)
     _require_tables(conn)
     repo_id = _repo_id(conn, repo_key)
+    # Source-only issues have no entry row from which to obtain a release.  The
+    # Registry source list is the authoritative, deterministic mapping for
+    # those diagnostics; do not infer a release from a path pattern.
+    source_release_values = ", ".join("(?, ?)" for _ in REGISTRY_SOURCES)
+    source_release_params = tuple(
+        value for registry_release, source_path in REGISTRY_SOURCES for value in (source_path, registry_release)
+    )
+    issue_release_sql = "COALESCE(entry.registry_release, source_release.registry_release)"
     conditions, params = ["1 = 1"], []
     if release is not None:
-        conditions.append("entry.registry_release = ?")
+        conditions.append(f"{issue_release_sql} = ?")
         params.append(release)
     rows = conn.execute(
         f"""
+        WITH source_release(source_file_path, registry_release) AS (
+            VALUES {source_release_values}
+        )
         SELECT issue.id AS issue_id, issue.issue_key, issue.severity, issue.issue_code,
                issue.message, issue.details_json, issue.source_pointer,
                source_file.path AS source_file_path,
+               {issue_release_sql} AS issue_release,
                entry.registry_release, entry.json_pointer AS entry_pointer,
                registry_file.path AS registry_file_path, entry.module, entry.resource_kind,
                entry.resource_path
@@ -358,11 +372,12 @@ def query_api_registry_issues(
         JOIN files source_file ON source_file.id = issue.source_file_id AND source_file.repo_id = issue.repo_id
         LEFT JOIN api_registry_entries entry ON entry.id = issue.entry_id AND entry.repo_id = issue.repo_id
         LEFT JOIN files registry_file ON registry_file.id = entry.registry_file_id AND registry_file.repo_id = entry.repo_id
+        LEFT JOIN source_release ON source_release.source_file_path = source_file.path
         WHERE issue.repo_id = ? AND ({' AND '.join(conditions)})
         ORDER BY issue.severity DESC, source_file.path, issue.source_pointer, issue.issue_code, issue.issue_key, issue.id
         LIMIT ? OFFSET ?
         """,
-        (repo_id, *params, limit + 1, offset),
+        (*source_release_params, repo_id, *params, limit + 1, offset),
     ).fetchall()
     page_rows, next_cursor = _page(rows, limit, offset)
     issues = [
@@ -373,6 +388,7 @@ def query_api_registry_issues(
             "code": row["issue_code"],
             "message": row["message"],
             "details": _json_value(row["details_json"]),
+            "release": row["issue_release"],
             "source_provenance": {"file_path": row["source_file_path"], "json_pointer": row["source_pointer"]},
             "entry": None if row["registry_release"] is None else {
                 "release": row["registry_release"], "module": row["module"],
