@@ -141,6 +141,7 @@ class RepositoryArchivalMigrationTests(unittest.TestCase):
                 "025_delta_refresh_hardening",
                 "026_ui_catalog",
                 "027_ui_negative_event_calls",
+                "028_api_registry",
                 "029_repository_archival",
             ],
             markers,

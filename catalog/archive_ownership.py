@@ -19,6 +19,9 @@ class ArchiveOwnershipError(RuntimeError):
 # rooted in these tables.  Keep the list ordered so it doubles as the deletion
 # plan and code-review inventory.
 ARCHIVE_OWNED_REPO_TABLES: tuple[str, ...] = (
+    "api_registry_entries",
+    "api_registry_entry_links",
+    "api_registry_issues",
     "api_version_compatibility",
     "dbschema_tables",
     "entity_access_links",
@@ -51,6 +54,7 @@ ARCHIVE_OWNED_REPO_TABLES: tuple[str, ...] = (
     "ui_resolution_issues",
     "ui_script_dependencies",
     "ui_surfaces",
+    "ui_source_diagnostics",
     "workflows",
 )
 
@@ -133,4 +137,3 @@ def target_entity_ids(conn: sqlite3.Connection, repo_id: int) -> set[int]:
             "SELECT DISTINCT entity_id FROM entity_occurrences WHERE repo_id=?", (repo_id,)
         )
     }
-

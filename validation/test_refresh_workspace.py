@@ -237,6 +237,13 @@ class WorkspaceRefreshTests(unittest.TestCase):
     def test_api_registry_builder_dispatches_connection_level_builder(self) -> None:
         directory, checkout, database, _manifest = self._fixture()
         self.addCleanup(directory.cleanup)
+        conn = sqlite3.connect(database)
+        conn.execute(
+            "INSERT INTO repos(id,repo_key,local_root,tracked_branch) VALUES(17,?,?,?)",
+            ("intacct_app", str(checkout), "main"),
+        )
+        conn.commit()
+        conn.close()
         expected = RegistryBuildStats(
             entries_written=3,
             links_written=4,
