@@ -33,6 +33,11 @@ the catalog and historical validation issue reports are not backlog items.
 
 ## Catalog Semantics
 
+- [ ] Add an explicit archived-repository handling policy. Reading an archived
+      repository, extracting its code structure, or querying its SQLite or
+      graph representation can create accuracy and correctness risks; detect
+      and surface that state, and fail closed or clearly mark the affected
+      evidence until it is revalidated.
 - [ ] Complete OpenAPI, configuration, and override extraction for entity
       semantics. See `scripts/build_entity_semantics.py`.
 - [ ] Decide whether to implement the deferred partial-tree snapshot
