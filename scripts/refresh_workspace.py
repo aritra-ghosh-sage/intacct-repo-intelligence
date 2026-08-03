@@ -2227,7 +2227,9 @@ def _refresh_repository_closure(
                 "UPDATE graph_builds SET status='previous' WHERE status='active'"
             )
             validation_summary = validate_catalog_connection(
-                conn, expected_catalog_build_id=build_id
+                conn,
+                expected_catalog_build_id=build_id,
+                required_quality_run_ids=set(candidate_run_ids),
             )
             validation_summary["quality_gate"] = {
                 "schema": "catalog-quality-build",

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from catalog.content_fingerprint import logical_content_fingerprint
+from catalog.delta import DELTA_CONTRACT_VERSION
 from catalog.refresh_quality import (
     RefreshQualityError,
     resolve_reference_quality_run,
@@ -127,15 +128,52 @@ def _logical_orphan_checks(conn: sqlite3.Connection) -> dict[str, int]:
     return results
 
 
-def _invalid_active_quality_runs(conn: sqlite3.Connection) -> int:
+def _active_contract_quality_run_ids(conn: sqlite3.Connection) -> set[int]:
+    """Return runs linked to the active generation of the current contract."""
+    required_tables = ("catalog_builds", "repo_change_sets", "repo_index_runs")
+    if not all(_table_exists(conn, table) for table in required_tables):
+        return set()
+    build = conn.execute(
+        """SELECT id FROM catalog_builds
+           WHERE status='active' AND delta_contract_version=?
+           ORDER BY id DESC LIMIT 1""",
+        (DELTA_CONTRACT_VERSION,),
+    ).fetchone()
+    if build is None:
+        return set()
+    return {
+        int(row[0])
+        for row in conn.execute(
+            """SELECT DISTINCT rcs.repo_index_run_id
+               FROM repo_change_sets rcs
+               JOIN repo_index_runs rir ON rir.id=rcs.repo_index_run_id
+               WHERE rcs.catalog_build_id=? AND rir.status='active'""",
+            (int(build[0]),),
+        )
+    }
+
+
+def _invalid_active_quality_runs(
+    conn: sqlite3.Connection,
+    required_quality_run_ids: set[int] | None = None,
+) -> int:
     if not _table_exists(conn, "repo_index_runs"):
         return 0
+    required_ids = (
+        _active_contract_quality_run_ids(conn)
+        if required_quality_run_ids is None
+        else set(required_quality_run_ids)
+    )
     invalid = 0
     rows = conn.execute(
         """SELECT id,repo_id,validation_summary FROM repo_index_runs
            WHERE status='active' ORDER BY id"""
     ).fetchall()
+    active_ids = {int(row[0]) for row in rows}
+    invalid = len(required_ids - active_ids)
     for run_id, repo_id, raw_summary in rows:
+        if int(run_id) not in required_ids:
+            continue
         if raw_summary is None:
             invalid += 1
             continue
@@ -153,6 +191,7 @@ def validate_catalog_connection(
     conn: sqlite3.Connection,
     *,
     expected_catalog_build_id: int | None = None,
+    required_quality_run_ids: set[int] | None = None,
 ) -> dict[str, Any]:
     integrity = str(conn.execute("PRAGMA integrity_check").fetchone()[0])
     fk_rows = [tuple(row) for row in conn.execute("PRAGMA foreign_key_check")]
@@ -179,7 +218,9 @@ def validate_catalog_connection(
         if _table_exists(conn, "integration_links")
         else 0
     )
-    invalid_active_quality_runs = _invalid_active_quality_runs(conn)
+    invalid_active_quality_runs = _invalid_active_quality_runs(
+        conn, required_quality_run_ids
+    )
     active_rows = (
         conn.execute(
             "SELECT id,content_fingerprint,source_revisions_json,completed_at,diagnostic_error "

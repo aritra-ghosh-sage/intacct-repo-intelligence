@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from catalog.content_fingerprint import logical_content_fingerprint
+from catalog.delta import DELTA_CONTRACT_VERSION
 from catalog.migrations import apply_delta_refresh_migration
 from validation.validate_catalog_integrity import (
     CatalogIntegrityError,
@@ -30,10 +31,14 @@ class CatalogIntegrityTests(unittest.TestCase):
         conn.execute(
             """INSERT INTO catalog_builds(
                    build_token,catalog_path,requested_mode,effective_mode,status,
-                   source_revisions_json,delta_contract_version,content_fingerprint,
-                   completed_at
-               ) VALUES ('active','catalog.db','full','full','active',?,1,?,CURRENT_TIMESTAMP)""",
-            (json.dumps({"service": "abc"}, sort_keys=True), fingerprint),
+               source_revisions_json,delta_contract_version,content_fingerprint,
+               completed_at
+               ) VALUES ('active','catalog.db','full','full','active',?,?,?,CURRENT_TIMESTAMP)""",
+            (
+                json.dumps({"service": "abc"}, sort_keys=True),
+                DELTA_CONTRACT_VERSION,
+                fingerprint,
+            ),
         )
         conn.commit()
         return directory, conn
@@ -117,18 +122,70 @@ class CatalogIntegrityTests(unittest.TestCase):
         with self.assertRaisesRegex(CatalogIntegrityError, "integration_links"):
             validate_catalog_connection(conn)
 
-    def test_malformed_active_quality_run_fails_integrity(self) -> None:
+    def test_legacy_active_quality_run_without_summary_is_ignored(self) -> None:
         directory, conn = self._catalog()
         self.addCleanup(directory.cleanup)
         self.addCleanup(conn.close)
         conn.execute(
             """INSERT INTO repo_index_runs(
                    repo_id,tracked_branch,commit_sha,status,completed_at,validation_summary
-               ) VALUES (1,'main','abc','active',CURRENT_TIMESTAMP,'{}')"""
+               ) VALUES (1,'main','abc','active',CURRENT_TIMESTAMP,NULL)"""
+        )
+        conn.commit()
+        self.assertTrue(validate_catalog_connection(conn)["ok"])
+
+    def test_required_active_quality_run_without_summary_fails_integrity(self) -> None:
+        directory, conn = self._catalog()
+        self.addCleanup(directory.cleanup)
+        self.addCleanup(conn.close)
+        run_id = conn.execute(
+            """INSERT INTO repo_index_runs(
+                   repo_id,tracked_branch,commit_sha,status,completed_at,validation_summary
+               ) VALUES (1,'main','abc','active',CURRENT_TIMESTAMP,NULL)"""
+        ).lastrowid
+        conn.commit()
+        with self.assertRaisesRegex(CatalogIntegrityError, "quality_runs"):
+            validate_catalog_connection(conn, required_quality_run_ids={int(run_id)})
+
+    def test_active_contract_run_ids_are_derived_from_change_sets(self) -> None:
+        directory, conn = self._catalog()
+        self.addCleanup(directory.cleanup)
+        self.addCleanup(conn.close)
+        run_id = conn.execute(
+            """INSERT INTO repo_index_runs(
+                   repo_id,tracked_branch,commit_sha,status,completed_at,validation_summary
+               ) VALUES (1,'main','abc','active',CURRENT_TIMESTAMP,NULL)"""
+        ).lastrowid
+        conn.execute(
+            """INSERT INTO repo_change_sets(
+                   catalog_build_id,repo_index_run_id,repo_id,target_commit_sha,
+                   requested_mode,effective_mode,status,completed_at
+               ) VALUES (1,?,?,?,?,?,?,CURRENT_TIMESTAMP)""",
+            (int(run_id), 1, "abc", "full", "full", "succeeded"),
         )
         conn.commit()
         with self.assertRaisesRegex(CatalogIntegrityError, "quality_runs"):
             validate_catalog_connection(conn)
+
+    def test_malformed_required_active_quality_run_fails_integrity(self) -> None:
+        directory, conn = self._catalog()
+        self.addCleanup(directory.cleanup)
+        self.addCleanup(conn.close)
+        run_id = conn.execute(
+            """INSERT INTO repo_index_runs(
+                   repo_id,tracked_branch,commit_sha,status,completed_at,validation_summary
+               ) VALUES (1,'main','abc','active',CURRENT_TIMESTAMP,'{}')"""
+        ).lastrowid
+        conn.commit()
+        with self.assertRaisesRegex(CatalogIntegrityError, "quality_runs"):
+            validate_catalog_connection(conn, required_quality_run_ids={int(run_id)})
+
+    def test_missing_required_quality_run_fails_integrity(self) -> None:
+        directory, conn = self._catalog()
+        self.addCleanup(directory.cleanup)
+        self.addCleanup(conn.close)
+        with self.assertRaisesRegex(CatalogIntegrityError, "quality_runs"):
+            validate_catalog_connection(conn, required_quality_run_ids={999})
 
 
 if __name__ == "__main__":
