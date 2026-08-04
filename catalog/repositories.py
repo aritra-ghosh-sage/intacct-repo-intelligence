@@ -156,10 +156,11 @@ def _normalize_rest_automation(
             "must be the integer 0 or 1"
         )
     config: dict[str, Any] = {"coverage_contract_version": raw_version}
-    required_paths = (
-        ("features_root", "object_mapping")
-        if raw_version == CONTRACT_V0
-        else CONTRACT_V1_PATH_FIELDS
+    # A V1 manifest with the former target-owned files remains a supported
+    # compatibility contract.  V1 without them selects the catalog-owned map.
+    legacy_v1 = raw_version == CONTRACT_V1 and "object_mapping" in raw_config
+    required_paths = ("features_root", "object_mapping") if raw_version == CONTRACT_V0 else (
+        CONTRACT_V1_PATH_FIELDS if legacy_v1 else ("features_root",)
     )
     forbidden_paths = set(_REST_AUTOMATION_KEYS) - {
         "coverage_contract_version",
@@ -193,13 +194,11 @@ def _normalize_rest_automation(
                 f"repository {repo_key} rest_automation.{field} must stay inside local_root"
             )
         config[field] = normalized
-    if raw_version == CONTRACT_V1:
+    if legacy_v1:
         try:
             resolve_contract_v1_paths(config, Path(local_root))
         except RestAutomationContractError as exc:
-            raise RepositoryError(
-                f"repository {repo_key} Contract-V1 input invalid: {exc}"
-            ) from exc
+            raise RepositoryError(f"repository {repo_key} legacy Contract-V1 input invalid: {exc}") from exc
     return config
 
 
@@ -211,13 +210,24 @@ def rest_automation_paths(entry: dict[str, Any], root: Path) -> tuple[Path, Path
             f"repository {entry.get('repo_key')} requires a rest_automation mapping"
         )
     if config.get("coverage_contract_version", CONTRACT_V0) == CONTRACT_V1:
-        try:
-            paths = resolve_contract_v1_paths(config, root)
-        except RestAutomationContractError as exc:
-            raise RepositoryError(
-                f"repository {entry.get('repo_key')} Contract-V1 input invalid: {exc}"
-            ) from exc
-        return paths.features_root, paths.object_mapping
+        # An existing target-owned V1 contract is a supported compatibility
+        # path.  Do not silently reinterpret it as the catalog-owned map.
+        if "object_mapping" in config:
+            try:
+                paths = resolve_contract_v1_paths(config, root)
+            except RestAutomationContractError as exc:
+                raise RepositoryError(
+                    f"repository {entry.get('repo_key')} legacy Contract-V1 input invalid: {exc}"
+                ) from exc
+            return paths.features_root, paths.object_mapping
+        value = config.get("features_root")
+        if not isinstance(value, str) or not value.strip():
+            raise RepositoryError(f"repository {entry.get('repo_key')} requires rest_automation.features_root")
+        resolved = (root / value).resolve()
+        if not resolved.is_relative_to(root) or not resolved.is_dir():
+            raise RepositoryError(f"repository {entry.get('repo_key')} rest_automation.features_root directory does not exist: {resolved}")
+        # V1 does not use this placeholder; build() selects the static map.
+        return resolved, resolved
 
     values: list[Path] = []
     for key, expected_kind in (

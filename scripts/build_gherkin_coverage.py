@@ -27,6 +27,11 @@ except ModuleNotFoundError:
 
 from catalog.rest_automation_contract import (
     ContractV1Paths,
+    STATIC_MAP_PATH,
+    StaticMapEntry,
+    audit_static_entry,
+    load_static_map,
+    static_map_hashes,
     load_non_request_inventory_contract,
     load_object_mapping_contract,
     load_version_compatibility_contract,
@@ -62,6 +67,11 @@ CONTRACT_QUOTED_REQUEST = re.compile(
     r'(?:\s+and\s+file\s+"[^"]*")?$',
     re.IGNORECASE,
 )
+STATIC_QUOTED_REQUEST = re.compile(
+    r'^"(?P<method>[A-Za-z]+)"\s+to\s+"(?P<token>[^"]+)"'
+    r'(?:\s+with\s+key\s+"[^"]*")?'
+    r'(?:\s+and\s+file\s+"[^"]*")?'
+    r'(?:\s+get\s+variable\s+"[^"]*")?$', re.IGNORECASE)
 CONTRACT_SIMPLE_REQUEST = re.compile(
     r'^I\s+(?P<verb>read|create|update|delete|patch|post|put)'
     r'\s+(?:object\s+)?"(?P<token>[^"]+)"'
@@ -693,6 +703,59 @@ def parse_feature_contract_v1(
     return out
 
 
+def parse_feature_static_v1(path: Path) -> list[CaseEvidence]:
+    """Parse V1 requests without treating ordinary steps as executable evidence.
+
+    Static V1 deliberately records diagnostics rather than rejecting an entire
+    feature for an unsupported method, malformed request, or version gap.
+    """
+    if Parser is None:
+        raise RuntimeError("gherkin-official is required; run uv sync")
+    text = path.read_text(encoding="utf-8").lstrip("\ufeff")
+    feature = Parser().parse(text).get("feature")
+    if not feature:
+        raise ContractV1ExtractionError("Feature file has no parseable Feature declaration")
+    metadata, property_lines, property_diagnostics = _read_properties_metadata_with_lines(path.with_suffix(".properties"))
+    feature_tags = _tags(feature.get("tags", []))
+    cases: list[CaseEvidence] = []
+    for child in feature.get("children", []):
+        if child.get("background"):
+            for step in child["background"].get("steps", []):
+                if _contract_request_shaped(step.get("text", "")):
+                    raise ContractV1ExtractionError(f"line {_line(step)}: Background cannot contain request-shaped steps")
+        scenario = child.get("scenario")
+        if not scenario:
+            continue
+        tags = feature_tags + _tags(scenario.get("tags", []))
+        versions, sources = _contract_versions(feature, scenario, metadata.get("version"), property_lines.get("version"))
+        for example_row, values in _example_rows(scenario):
+            requests: list[RequestEvidence] = []
+            diagnostics = list(property_diagnostics)
+            for step in scenario.get("steps", []):
+                step_text = _substitute(step.get("text", ""), values)
+                match = STATIC_QUOTED_REQUEST.fullmatch(step_text)
+                if not match:
+                    if _contract_request_shaped(step_text):
+                        diagnostics.append(Diagnostic("malformed_request", "Malformed or unsupported request-shaped step", _line(step)))
+                    continue
+                method = match.group("method")
+                token = match.group("token")
+                if not method.isascii() or method.upper() not in CONTRACT_HTTP_METHODS:
+                    diagnostics.append(Diagnostic("unsupported_method", f"Unsupported HTTP method '{method}'", _line(step)))
+                    continue
+                if "<" in token or ">" in token:
+                    diagnostics.append(Diagnostic("unresolved_token", f"Unresolved request token '{token}'", _line(step)))
+                    continue
+                requests.append(RequestEvidence(len(requests)+1, _line(step), method.upper(), token, None, None,
+                                                next(iter(versions)) if len(versions) == 1 else None,
+                                                None, "collection", None, False))
+            cases.append(CaseEvidence(feature.get("name", ""), _substitute(scenario.get("name", ""), values),
+                values.get("testCaseID") or _substitute(scenario.get("name", ""), values), example_row,
+                _line(feature), _line(scenario), tags, tuple(tag[1:] for tag in tags if JIRA_TAG.match(tag)),
+                _eligible(tags), len(versions) != 1, versions, sources, tuple(requests), tuple(diagnostics)))
+    return cases
+
+
 def parse_feature(path: Path, mapping: dict[str, str]) -> list[CaseEvidence]:
     if Parser is None:
         raise RuntimeError("gherkin-official is required; run uv sync")
@@ -996,6 +1059,7 @@ def build(
     features_root: Path | None = None,
     *,
     contract_v1_paths: ContractV1Paths | None = None,
+    static_contract_v1: bool = False,
     candidate_build_token: str | None = None,
     indexed_suite_target_sha: str | None = None,
     dependency_revisions: dict[str, str] | None = None,
@@ -1021,7 +1085,17 @@ def build(
         raise ValueError("features_root must be located inside suite_root")
     repo_id = int(repo[0])
     production_repo_id = int(production_repo[0])
-    if contract_v1_paths is None:
+    if static_contract_v1:
+        static_entries = load_static_map(STATIC_MAP_PATH)
+        mapping = {}
+        mapping_diagnostics = []
+        compatibility_rows = 0
+        contract_mapping_entries = None
+        contract_bridges = []
+        contract_inventory = []
+        contract_input_hashes = static_map_hashes(STATIC_MAP_PATH)
+        object_mapping_path = STATIC_MAP_PATH
+    elif contract_v1_paths is None:
         mapping, mapping_diagnostics = load_object_mapping(object_mapping_path)
         compatibility_rows = seed_api_version_compatibility(
             conn, repo_id, suite_root, features_root
@@ -1060,7 +1134,7 @@ def build(
         if mapping_relative is not None
         else []
     )
-    if candidate_build_token is not None:
+    if candidate_build_token is not None and not static_contract_v1:
         if len(mapping_rows) != 1 or mapping_rows[0]["sha1"] != mapping_sha1:
             raise ValueError(
                 "manifest object_mapping must have exactly one candidate files row with matching sha1"
@@ -1175,6 +1249,8 @@ def build(
                     feature_path, contract_mapping_entries, contract_inventory
                 )
                 if contract_mapping_entries is not None
+                else parse_feature_static_v1(feature_path)
+                if static_contract_v1
                 else parse_feature(feature_path, mapping)
             )
         except Exception as exc:
@@ -1240,12 +1316,32 @@ def build(
                     ),
                 )
             for request in case.requests:
+                static_entry: StaticMapEntry | None = None
+                if static_contract_v1 and request.version:
+                    candidates = [entry for entry in static_entries if entry.target_repo == PRODUCTION_REST_REPO_KEY
+                                  and entry.token == request.object_token and entry.revision == request.version
+                                  and entry.method == request.method]
+                    if len(candidates) == 1:
+                        static_entry = candidates[0]
+                        request = RequestEvidence(**{**request.__dict__, "raw_path": static_entry.route,
+                                                      "normalized_path": static_entry.route})
+                    else:
+                        conn.execute("INSERT INTO test_diagnostics(repo_id,file_id,test_case_id,kind,message,source_line) VALUES(?,?,?,?,?,?)",
+                                     (repo_id, file_id, case_id, "static_map_unresolved",
+                                      f"No unique static map entry for token '{request.object_token}'", request.line))
+                        stats["diagnostics"] += 1
                 coverage_scope = (
+                    "endpoint" if static_entry is not None else "unknown"
+                    if static_contract_v1
+                    else
                     _contract_coverage_scope(request, contract_mapping_entries)
                     if contract_mapping_entries is not None
                     else "unknown"
                 )
                 mapping_provenance = (
+                    json.dumps(static_entry.provenance(), sort_keys=True, separators=(",", ":"))
+                    if static_entry is not None
+                    else
                     _stable_mapping_provenance(request, contract_mapping_entries)
                     if contract_mapping_entries is not None
                     else None
@@ -1283,6 +1379,31 @@ def build(
                         ),
                     )
                 if request.normalized_path and not case.version_conflicted:
+                    if static_contract_v1:
+                        if static_entry is None:
+                            continue
+                        try:
+                            entity_id, endpoint_id, cited = audit_static_entry(
+                                conn, static_entry, production_repo_id=production_repo_id
+                            )
+                        except Exception as exc:
+                            raise ContractV1ExtractionError(f"Contract-V1 static map audit failed: {exc}") from exc
+                        for item in cited:
+                            if item not in contract_input_hashes:
+                                # The indexed SHA-1 remains authoritative.  When the
+                                # immutable builder snapshot exposes the same blob we
+                                # retain SHA-256 as an additional drift witness.
+                                source = Path(str(production_repo["local_root"])) / item["path"]
+                                source_bytes = source.read_bytes() if source.is_file() else b""
+                                sha256 = hashlib.sha256(source_bytes).hexdigest() if source_bytes and hashlib.sha1(source_bytes).hexdigest() == item["sha1"] else ""
+                                contract_input_hashes.append({**item, "sha256": sha256})
+                        conn.execute("INSERT INTO test_endpoint_links(test_request_id,rest_endpoint_id,compatibility_id,resolution_kind) VALUES(?,?,?,?)",
+                                     (request_id, endpoint_id, None, "exact_version"))
+                        if entity_id is not None:
+                            conn.execute("INSERT INTO test_entity_links(test_request_id,entity_id,rest_endpoint_id) VALUES(?,?,?)",
+                                         (request_id, entity_id, endpoint_id))
+                        stats["links"] += 1
+                        continue
                     if contract_v1_paths is not None:
                         if coverage_scope != "endpoint" or not request.version:
                             continue
@@ -1356,7 +1477,7 @@ def build(
             "dependency_revisions": revisions,
             "entity_mapping_sha1": mapping_sha1,
         }
-        if contract_v1_paths is not None:
+        if contract_v1_paths is not None or static_contract_v1:
             fingerprint_payload.update(
                 {
                     "coverage_contract_version": 1,
@@ -1389,7 +1510,7 @@ def build(
                 indexed_suite_target_sha,
                 json.dumps(revisions, sort_keys=True, separators=(",", ":")),
                 mapping_sha1,
-                1 if contract_v1_paths is not None else 0,
+                1 if (contract_v1_paths is not None or static_contract_v1) else 0,
                 json.dumps(contract_input_hashes, separators=(",", ":")),
                 dependency_fingerprint,
             ),

@@ -969,11 +969,19 @@ def _run_builder(
         from scripts.build_gherkin_coverage import build
 
         features_root, object_mapping = rest_automation_paths(manifest_entry, root)
+        # Contract-V1 evidence is catalog-owned; target checkouts contribute
+        # only feature text and allowlisted properties metadata.
+        settings = manifest_entry["rest_automation"]
+        legacy_contract_v1 = (
+            settings.get("coverage_contract_version") == CONTRACT_V1
+            and "object_mapping" in settings
+        )
         contract_v1_paths = (
-            resolve_contract_v1_paths(manifest_entry["rest_automation"], root)
-            if manifest_entry["rest_automation"].get("coverage_contract_version")
-            == CONTRACT_V1
-            else None
+            resolve_contract_v1_paths(settings, root) if legacy_contract_v1 else None
+        )
+        static_contract_v1 = (
+            settings.get("coverage_contract_version") == CONTRACT_V1
+            and not legacy_contract_v1
         )
         conn = get_connection(candidate_db)
         try:
@@ -996,6 +1004,7 @@ def _run_builder(
                 object_mapping_path=object_mapping,
                 features_root=features_root,
                 contract_v1_paths=contract_v1_paths,
+                static_contract_v1=static_contract_v1,
                 candidate_build_token=(coverage_build_context or {}).get("build_token"),
                 indexed_suite_target_sha=(coverage_build_context or {}).get("target_sha"),
                 dependency_revisions=(coverage_build_context or {}).get("dependency_revisions"),

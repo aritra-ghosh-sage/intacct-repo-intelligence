@@ -25,6 +25,7 @@ from pydantic import Field
 from catalog.graph_projection import GRAPH_PROJECTION_VERSION
 from catalog.graph_state import graph_freshness
 from catalog.rest_coverage import REQUIRED_TABLES, coverage_rows, coverage_summary
+from catalog.rest_automation_contract import STATIC_MAP_PATH
 from config import CATALOG_DB, GRAPH_DB
 from scripts.query_api_registry import (
     ApiRegistryQueryError,
@@ -1666,18 +1667,52 @@ def _contract_v1_coverage_freshness(
                     {"repo_key": contributor["repo_key"], "reason": "contract_version"}
                 )
             continue
+        if contributor["repo_key"] == "ia-restapi-automation":
+            unavailable.append({"repo_key": contributor["repo_key"], "reason": "obsolete_target_owned_contract"})
+            continue
         try:
             inputs = json.loads(state["contract_input_hashes_json"])
         except (TypeError, json.JSONDecodeError):
             inputs = None
-        if not isinstance(inputs, list) or len(inputs) != 3:
+        if not isinstance(inputs, list) or not inputs:
             unavailable.append({"repo_key": contributor["repo_key"], "reason": "contract_inputs"})
             continue
-        expected_fields = (
-            "object_mapping",
-            "version_compatibility",
-            "non_request_inventory",
-        )
+        # Static-map V1 is catalog-owned.  Its first item binds local bytes;
+        # cited source rows belong to ia-main and are verified from SQLite.
+        if isinstance(inputs[0], dict) and inputs[0].get("field") == "static_map":
+            current = STATIC_MAP_PATH.read_bytes() if STATIC_MAP_PATH.is_file() else b""
+            if (inputs[0].get("sha1") != hashlib.sha1(current).hexdigest()
+                    or inputs[0].get("sha256") != hashlib.sha256(current).hexdigest()
+                    or state["entity_mapping_sha1"] != inputs[0].get("sha1")):
+                unavailable.append({"repo_key": contributor["repo_key"], "reason": "static_map_sha"})
+                continue
+            main = conn.execute("SELECT id,local_root FROM repos WHERE repo_key='ia-main'").fetchone()
+            valid = main is not None
+            for item in inputs[1:]:
+                if not isinstance(item, dict) or not isinstance(item.get("path"), str) or not re.fullmatch(r"[0-9a-f]{40}", str(item.get("sha1", ""))):
+                    valid = False
+                    break
+                rows = conn.execute("SELECT sha1 FROM files WHERE repo_id=? AND path=?", (main[0], item["path"])).fetchall()
+                if len(rows) != 1 or rows[0]["sha1"] != item["sha1"]:
+                    valid = False
+                    break
+                if item.get("sha256"):
+                    candidate = Path(str(main["local_root"])) / item["path"]
+                    if (not candidate.is_file()
+                            or hashlib.sha256(candidate.read_bytes()).hexdigest() != item["sha256"]):
+                        valid = False
+                        break
+            if not valid:
+                unavailable.append({"repo_key": contributor["repo_key"], "reason": "static_source_sha"})
+                continue
+            # The remaining shared fingerprint/revision checks apply below.
+            expected_fields = ()
+        else:
+            expected_fields = (
+                "object_mapping",
+                "version_compatibility",
+                "non_request_inventory",
+            )
         valid = True
         for expected_field, item in zip(expected_fields, inputs, strict=True):
             if (
