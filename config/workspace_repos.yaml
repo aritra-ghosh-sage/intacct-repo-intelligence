@@ -49,7 +49,7 @@ repositories:
     remote_url: git@github.com:intacct/ia-gwdata-gl.git
     local_root: ~/projects/ia-gwdata-gl
     tracked_branch: main
-    enabled: false
+    enabled: true
     profile: xml_gateway_automation
     storage: sidecar
     depends_on:
