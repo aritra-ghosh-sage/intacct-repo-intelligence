@@ -7,6 +7,7 @@ from scripts.builder_registry import (
     BUILDERS,
     BuilderPlanError,
     build_plan,
+    repository_matcher_overrides,
     stage_execution_modes,
 )
 
@@ -67,6 +68,34 @@ class BuilderRegistryTests(unittest.TestCase):
                 "gherkin_coverage",
             ],
         )
+
+    def test_contract_v1_artifacts_each_invalidate_gherkin_coverage(self) -> None:
+        entry = {
+            "profile": "rest_automation",
+            "rest_automation": {
+                "coverage_contract_version": 1,
+                "features_root": "features",
+                "object_mapping": "contract/mapping.json",
+                "version_compatibility": "contract/compatibility.json",
+                "non_request_inventory": "contract/inventory.json",
+            },
+        }
+        plan = build_plan("rest_automation")
+        matchers = repository_matcher_overrides(entry)
+        for artifact in (
+            "contract/mapping.json",
+            "contract/compatibility.json",
+            "contract/inventory.json",
+        ):
+            with self.subTest(artifact=artifact):
+                modes = stage_execution_modes(
+                    plan,
+                    repository_mode="delta",
+                    changed_paths=(artifact,),
+                    matcher_overrides=matchers,
+                )
+                self.assertEqual(modes["gherkin_coverage"][0], "full")
+                self.assertIn(artifact, modes["gherkin_coverage"][1])
 
     def test_explicit_unsupported_integration_builder_is_rejected(self) -> None:
         with self.assertRaisesRegex(BuilderPlanError, "unsupported"):

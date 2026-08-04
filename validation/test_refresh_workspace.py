@@ -662,6 +662,102 @@ Feature: Account
         finally:
             conn.close()
 
+    def test_contract_v1_unresolved_endpoint_aborts_before_quality_baseline(self) -> None:
+        directory, checkout, database, manifest = self._fixture()
+        self.addCleanup(directory.cleanup)
+        features = checkout / "features"
+        features.mkdir()
+        (features / "account.feature").write_text(
+            """@version:v1
+Feature: Account
+  Scenario: Create account
+    When "POST" to "account"
+""",
+            encoding="utf-8",
+        )
+        (checkout / "mapping.json").write_text(
+            '{"contract_version":1,"mappings":[{"coverage_scope":"endpoint",'
+            '"path":"/objects/accounts-payable/account","token":"account"}]}',
+            encoding="utf-8",
+        )
+        (checkout / "compatibility.json").write_text(
+            '{"bridges":[],"contract_version":1}', encoding="utf-8"
+        )
+        (checkout / "inventory.json").write_text(
+            '{"contract_version":1,"entries":[]}', encoding="utf-8"
+        )
+        self._git(
+            checkout,
+            "add",
+            "features/account.feature",
+            "mapping.json",
+            "compatibility.json",
+            "inventory.json",
+        )
+        self._git(
+            checkout,
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-m",
+            "add contract v1 coverage",
+        )
+        manifest.write_text(
+            "version: 1\nrepositories:\n"
+            "  - repo_key: service\n"
+            f"    local_root: {checkout}\n"
+            "    tracked_branch: main\n"
+            "    profile: rest_automation\n"
+            "    rest_automation:\n"
+            "      coverage_contract_version: 1\n"
+            "      features_root: features\n"
+            "      object_mapping: mapping.json\n"
+            "      version_compatibility: compatibility.json\n"
+            "      non_request_inventory: inventory.json\n",
+            encoding="utf-8",
+        )
+        conn = sqlite3.connect(database)
+        try:
+            production_repo_id = conn.execute(
+                "INSERT INTO repos(repo_key,local_root,tracked_branch) VALUES ('ia-main','/tmp/main','main')"
+            ).lastrowid
+            endpoint_file_id = conn.execute(
+                "INSERT INTO files(repo_id,path,language) VALUES (?, 'openapi/account.yaml', 'yaml')",
+                (production_repo_id,),
+            ).lastrowid
+            entity_id = conn.execute(
+                "INSERT INTO entity_nodes(name) VALUES ('Account')"
+            ).lastrowid
+            conn.execute(
+                """INSERT INTO rest_endpoints(repo_id,method,path,source_version,entity_id,file_id)
+                   VALUES (?, 'POST', '/objects/accounts-payable/account', 's1', ?, ?)""",
+                (production_repo_id, entity_id, endpoint_file_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        with self.assertRaisesRegex(Exception, "endpoint_match_unresolved"):
+            refresh_repository(
+                database,
+                manifest,
+                "service",
+                mode="full",
+                accept_quality_baseline="cannot-override-hard-diagnostic",
+            )
+        conn = sqlite3.connect(database)
+        try:
+            stage = conn.execute(
+                "SELECT status,diagnostic_error FROM repo_index_stages "
+                "WHERE builder_name='gherkin_coverage' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            self.assertEqual("failed", stage[0])
+            self.assertIn("endpoint_match_unresolved", stage[1])
+        finally:
+            conn.close()
+
     def test_compatibility_refresh_script_uses_workspace_runner(self) -> None:
         directory, _checkout, database, manifest = self._fixture()
         self.addCleanup(directory.cleanup)

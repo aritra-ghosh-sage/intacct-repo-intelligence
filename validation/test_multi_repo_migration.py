@@ -345,6 +345,27 @@ class MultiRepoMigrationTests(unittest.TestCase):
             ).fetchone()[0],
             1,
         )
+        self.assertEqual(
+            conn.execute(
+                "SELECT COUNT(*) FROM schema_migrations "
+                "WHERE name='031_rest_automation_contract'"
+            ).fetchone()[0],
+            1,
+        )
+        request_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(test_requests)")
+        }
+        state_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(test_coverage_build_state)")
+        }
+        self.assertTrue(
+            {"coverage_scope", "mapping_provenance_json"}.issubset(request_columns)
+        )
+        self.assertTrue(
+            {"coverage_contract_version", "contract_input_hashes_json"}.issubset(
+                state_columns
+            )
+        )
         conn.execute(
             """INSERT INTO catalog_builds(
                    build_token,catalog_path,requested_mode,effective_mode,status,

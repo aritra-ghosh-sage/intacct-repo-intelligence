@@ -733,6 +733,11 @@ CREATE TABLE IF NOT EXISTS test_requests (
     expected_status INTEGER,
     operation_kind TEXT NOT NULL DEFAULT 'unknown'
         CHECK(operation_kind IN ('collection', 'item', 'child', 'workflow', 'custom', 'unknown')),
+    -- Contract-V1 distinguishes linkable object evidence from explicitly
+    -- non-endpoint evidence; legacy rows remain deliberately unknown.
+    coverage_scope TEXT NOT NULL DEFAULT 'unknown'
+        CHECK(coverage_scope IN ('endpoint', 'non_endpoint', 'unknown')),
+    mapping_provenance_json TEXT,
     -- Set only for the canonical /workflows/<module>/<object>/<action> form.
     -- It is deliberately nullable: ordinary REST evidence must not be guessed
     -- into workflow evidence.
@@ -782,6 +787,9 @@ CREATE TABLE IF NOT EXISTS test_coverage_build_state (
     indexed_suite_target_sha TEXT NOT NULL,
     dependency_revisions_json TEXT NOT NULL,
     entity_mapping_sha1 TEXT NOT NULL,
+    coverage_contract_version INTEGER NOT NULL DEFAULT 0
+        CHECK(coverage_contract_version IN (0, 1)),
+    contract_input_hashes_json TEXT NOT NULL DEFAULT '[]',
     coverage_dependency_fingerprint TEXT NOT NULL,
     built_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE
@@ -1546,4 +1554,5 @@ INSERT OR IGNORE INTO schema_migrations(name) VALUES
     ('027_ui_negative_event_calls'),
     ('028_api_registry'),
     ('029_repository_archival'),
-    ('030_workflow_action');
+    ('030_workflow_action'),
+    ('031_rest_automation_contract');

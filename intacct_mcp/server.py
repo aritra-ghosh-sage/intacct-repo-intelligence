@@ -11,6 +11,7 @@ import hashlib
 import inspect
 import json
 import os
+import re
 import sqlite3
 from dataclasses import dataclass
 from functools import wraps
@@ -1587,6 +1588,16 @@ def rest_coverage_impl(
             )
 
         entity_id = int(entity["id"])
+        contract_v1_unavailable = _contract_v1_coverage_freshness(c, entity_id)
+        if contract_v1_unavailable:
+            return make_error_response(
+                state,
+                "rest_coverage",
+                "contract_v1_coverage_stale",
+                "Contract-V1 REST coverage inputs are missing or stale",
+                c,
+                {"repositories": contract_v1_unavailable},
+            )
         endpoints, diagnostics = coverage_rows(c, entity_id, version, lim)
 
         version_predicate = (
@@ -1611,6 +1622,136 @@ def rest_coverage_impl(
         }
 
         return make_response(state, "rest_coverage", data, c)
+
+
+def _contract_v1_coverage_freshness(
+    conn: sqlite3.Connection, entity_id: int
+) -> list[dict[str, str]]:
+    """Validate only Contract-V1 contributor inputs; Contract-V0 stays compatible."""
+    columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(test_coverage_build_state)")
+    }
+    required = {"coverage_contract_version", "contract_input_hashes_json"}
+    if not required.issubset(columns):
+        return []
+    contributors = conn.execute(
+        """SELECT DISTINCT r.id,r.repo_key,r.indexed_commit_sha,
+                  MAX(CASE WHEN tr.coverage_scope != 'unknown' THEN 1 ELSE 0 END) AS has_contract_v1
+           FROM test_entity_links tel
+           JOIN test_requests tr ON tr.id=tel.test_request_id
+           JOIN test_cases tc ON tc.id=tr.test_case_id
+           JOIN repos r ON r.id=tc.repo_id
+           WHERE tel.entity_id=? GROUP BY r.id,r.repo_key,r.indexed_commit_sha
+           ORDER BY r.repo_key""",
+        (entity_id,),
+    ).fetchall()
+    unavailable: list[dict[str, str]] = []
+    for contributor in contributors:
+        state = conn.execute(
+            """SELECT coverage_contract_version,contract_input_hashes_json,
+                      entity_mapping_sha1,dependency_revisions_json,
+                      coverage_dependency_fingerprint
+               FROM test_coverage_build_state WHERE repo_id=?""",
+            (contributor["id"],),
+        ).fetchone()
+        if state is None:
+            if contributor["has_contract_v1"]:
+                unavailable.append(
+                    {"repo_key": contributor["repo_key"], "reason": "missing_build_state"}
+                )
+            continue
+        if state["coverage_contract_version"] != 1:
+            if contributor["has_contract_v1"]:
+                unavailable.append(
+                    {"repo_key": contributor["repo_key"], "reason": "contract_version"}
+                )
+            continue
+        try:
+            inputs = json.loads(state["contract_input_hashes_json"])
+        except (TypeError, json.JSONDecodeError):
+            inputs = None
+        if not isinstance(inputs, list) or len(inputs) != 3:
+            unavailable.append({"repo_key": contributor["repo_key"], "reason": "contract_inputs"})
+            continue
+        expected_fields = (
+            "object_mapping",
+            "version_compatibility",
+            "non_request_inventory",
+        )
+        valid = True
+        for expected_field, item in zip(expected_fields, inputs, strict=True):
+            if (
+                not isinstance(item, dict)
+                or set(item) != {"field", "path", "sha1", "sha256"}
+                or item["field"] != expected_field
+                or not isinstance(item["path"], str)
+                or not isinstance(item["sha1"], str)
+                or not isinstance(item["sha256"], str)
+                or not item["path"]
+                or item["path"].startswith("/")
+                or any(part in {"", ".", ".."} for part in item["path"].split("/"))
+                or not re.fullmatch(r"[0-9a-f]{40}", item["sha1"])
+                or not re.fullmatch(r"[0-9a-f]{64}", item["sha256"])
+            ):
+                valid = False
+                break
+            rows = conn.execute(
+                "SELECT sha1 FROM files WHERE repo_id=? AND path=?",
+                (contributor["id"], item["path"]),
+            ).fetchall()
+            if len(rows) != 1:
+                valid = False
+                break
+            if rows[0]["sha1"] != item["sha1"]:
+                valid = False
+                break
+        if not valid:
+            unavailable.append({"repo_key": contributor["repo_key"], "reason": "contract_input_sha"})
+            continue
+        if inputs[0]["sha1"] != state["entity_mapping_sha1"]:
+            unavailable.append({"repo_key": contributor["repo_key"], "reason": "mapping_sha"})
+            continue
+        try:
+            revisions = json.loads(state["dependency_revisions_json"])
+        except (TypeError, json.JSONDecodeError):
+            revisions = None
+        if not isinstance(revisions, dict) or any(
+            not isinstance(key, str) or not isinstance(value, str)
+            for key, value in revisions.items()
+        ):
+            unavailable.append({"repo_key": contributor["repo_key"], "reason": "dependency_revisions"})
+            continue
+        expected_fingerprint = hashlib.sha256(
+            json.dumps(
+                {
+                    "extractor_version": "gherkin-coverage-v2-workflow-action",
+                    "dependency_revisions": dict(sorted(revisions.items())),
+                    "entity_mapping_sha1": state["entity_mapping_sha1"],
+                    "coverage_contract_version": 1,
+                    "contract_input_hashes": inputs,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+        stored = state["coverage_dependency_fingerprint"]
+        if stored != expected_fingerprint:
+            unavailable.append({"repo_key": contributor["repo_key"], "reason": "dependency_fingerprint"})
+            continue
+        if (
+            revisions.get(contributor["repo_key"])
+            != contributor["indexed_commit_sha"]
+            or any(
+                (row := conn.execute(
+                    "SELECT indexed_commit_sha FROM repos WHERE repo_key=?", (repo_key,)
+                ).fetchone())
+                is None
+                or row["indexed_commit_sha"] != revision
+                for repo_key, revision in revisions.items()
+            )
+        ):
+            unavailable.append({"repo_key": contributor["repo_key"], "reason": "dependency_revision"})
+    return unavailable
 
 
 def entity_test_coverage_impl(
@@ -1691,6 +1832,28 @@ def entity_test_coverage_impl(
         entity_id = int(entity["id"])
 
         if workflow_action:
+            contract_v1_unavailable = _contract_v1_coverage_freshness(c, entity_id)
+            if contract_v1_unavailable:
+                return make_response(
+                    state,
+                    "entity_test_coverage",
+                    {},
+                    c,
+                    status="capability_unavailable",
+                    error={
+                        "code": "contract_v1_coverage_stale",
+                        "message": "Contract-V1 REST coverage inputs are missing or stale",
+                        "details": {"repositories": contract_v1_unavailable},
+                    },
+                )
+            state_columns = {
+                str(row[1])
+                for row in c.execute("PRAGMA table_info(test_coverage_build_state)")
+            }
+            has_contract_v1_state = {
+                "coverage_contract_version",
+                "contract_input_hashes_json",
+            }.issubset(state_columns)
             # Only suites that actually contribute this entity's links are a
             # freshness dependency.  The mapping path is manifest authority;
             # it is intentionally not inferred from other JSON files.
@@ -1705,6 +1868,20 @@ def entity_test_coverage_impl(
             ).fetchall()
             unavailable: list[dict[str, Any]] = []
             for contributor in contributors:
+                if has_contract_v1_state:
+                    contract_state = c.execute(
+                        "SELECT coverage_contract_version FROM test_coverage_build_state WHERE repo_id=?",
+                        (contributor["id"],),
+                    ).fetchone()
+                    # The shared Contract-V1 helper above has already
+                    # validated source artifacts and its extended fingerprint.
+                    # Do not recompute the legacy fingerprint or infer its
+                    # historical object-mapping path for these contributors.
+                    if (
+                        contract_state is not None
+                        and contract_state["coverage_contract_version"] == 1
+                    ):
+                        continue
                 build_state = c.execute(
                     """SELECT extractor_version,indexed_suite_target_sha,
                               dependency_revisions_json,entity_mapping_sha1

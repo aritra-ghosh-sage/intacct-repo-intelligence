@@ -46,8 +46,11 @@ class WorkflowActionCoverageTests(unittest.TestCase):
         revisions = {"ia-main": "main-sha", "suite": "suite-sha"}
         fingerprint = hashlib.sha256(json.dumps({"extractor_version": EXTRACTOR, "dependency_revisions": revisions, "entity_mapping_sha1": "mapping-sha"}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         self.conn.execute(
-            "INSERT INTO test_coverage_build_state VALUES(2,?,?,?,?,?,?,CURRENT_TIMESTAMP)",
-            (EXTRACTOR, "token", "suite-sha", json.dumps(revisions, sort_keys=True, separators=(",", ":")), "mapping-sha", fingerprint),
+            """INSERT INTO test_coverage_build_state(
+                   repo_id,extractor_version,candidate_build_token,indexed_suite_target_sha,
+                   dependency_revisions_json,entity_mapping_sha1,coverage_dependency_fingerprint
+               ) VALUES(?,?,?,?,?,?,?)""",
+            (2, EXTRACTOR, "token", "suite-sha", json.dumps(revisions, sort_keys=True, separators=(",", ":")), "mapping-sha", fingerprint),
         )
         self.conn.commit()
         self.conn.close()
@@ -71,6 +74,93 @@ class WorkflowActionCoverageTests(unittest.TestCase):
         response = entity_test_coverage_impl(self.state, "GLBatch", workflow_action="approve")
         self.assertEqual("capability_unavailable", response["status"])
         self.assertEqual("workflow_action_filter_unavailable", response["error"]["code"])
+
+    def _enable_contract_v1_state(self) -> None:
+        inputs = [
+            {
+                "field": "object_mapping",
+                "path": "contract/mapping.json",
+                "sha1": "a" * 40,
+                "sha256": "a" * 64,
+            },
+            {
+                "field": "version_compatibility",
+                "path": "contract/compatibility.json",
+                "sha1": "b" * 40,
+                "sha256": "b" * 64,
+            },
+            {
+                "field": "non_request_inventory",
+                "path": "contract/inventory.json",
+                "sha1": "c" * 40,
+                "sha256": "c" * 64,
+            },
+        ]
+        revisions = {"ia-main": "main-sha", "suite": "suite-sha"}
+        fingerprint = hashlib.sha256(
+            json.dumps(
+                {
+                    "extractor_version": EXTRACTOR,
+                    "dependency_revisions": revisions,
+                    "entity_mapping_sha1": "a" * 40,
+                    "coverage_contract_version": 1,
+                    "contract_input_hashes": inputs,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+        conn = sqlite3.connect(self.db)
+        conn.execute("UPDATE test_requests SET coverage_scope='endpoint'")
+        conn.execute(
+            "UPDATE files SET path=?,sha1=? WHERE id=2",
+            ("contract/mapping.json", "a" * 40),
+        )
+        conn.executemany(
+            "INSERT INTO files(id,repo_id,path,sha1) VALUES(?,?,?,?)",
+            [
+                (4, 2, "contract/compatibility.json", "b" * 40),
+                (5, 2, "contract/inventory.json", "c" * 40),
+            ],
+        )
+        conn.execute(
+            """UPDATE test_coverage_build_state SET
+                   entity_mapping_sha1=?,coverage_contract_version=?,
+                   contract_input_hashes_json=?,coverage_dependency_fingerprint=?
+               WHERE repo_id=2""",
+            ("a" * 40, 1, json.dumps(inputs, separators=(",", ":")), fingerprint),
+        )
+        conn.commit()
+        conn.close()
+
+    def test_contract_v1_workflow_action_uses_v1_freshness_and_rejects_drift(self) -> None:
+        self._enable_contract_v1_state()
+        fresh = entity_test_coverage_impl(
+            self.state, "GLBatch", workflow_action="approve"
+        )
+        self.assertEqual("ok", fresh["status"])
+
+        conn = sqlite3.connect(self.db)
+        conn.execute("UPDATE files SET sha1=? WHERE id=4", ("0" * 40,))
+        conn.commit()
+        conn.close()
+        stale = entity_test_coverage_impl(
+            self.state, "GLBatch", workflow_action="approve"
+        )
+        self.assertEqual("capability_unavailable", stale["status"])
+        self.assertEqual("contract_v1_coverage_stale", stale["error"]["code"])
+
+    def test_contract_v1_workflow_action_rejects_missing_build_state(self) -> None:
+        self._enable_contract_v1_state()
+        conn = sqlite3.connect(self.db)
+        conn.execute("DELETE FROM test_coverage_build_state WHERE repo_id=2")
+        conn.commit()
+        conn.close()
+        response = entity_test_coverage_impl(
+            self.state, "GLBatch", workflow_action="approve"
+        )
+        self.assertEqual("capability_unavailable", response["status"])
+        self.assertEqual("contract_v1_coverage_stale", response["error"]["code"])
 
 
 if __name__ == "__main__":

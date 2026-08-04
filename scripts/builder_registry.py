@@ -363,14 +363,18 @@ def repository_matcher_overrides(manifest_entry: dict) -> dict[str, SourceMatche
     features_root = (
         PurePosixPath(str(settings.get("features_root", ""))).as_posix().rstrip("/")
     )
-    object_mapping = PurePosixPath(str(settings.get("object_mapping", ""))).as_posix()
+    contract_inputs = frozenset(
+        PurePosixPath(str(settings.get(field, ""))).as_posix()
+        for field in ("object_mapping", "version_compatibility", "non_request_inventory")
+        if settings.get(field)
+    )
 
     def gherkin(path: str) -> bool:
         normalized = PurePosixPath(path).as_posix()
         under_features = bool(features_root) and normalized.startswith(
             features_root + "/"
         )
-        return normalized == object_mapping or (
+        return normalized in contract_inputs or (
             under_features
             and PurePosixPath(normalized).suffix.lower() in {".feature", ".properties"}
         )

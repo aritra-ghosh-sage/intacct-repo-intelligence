@@ -63,6 +63,7 @@ from catalog.refresh_transaction import (
     promote_catalog_candidate as transaction_promote_catalog_candidate,
     refresh_lock as transaction_refresh_lock,
 )
+from catalog.rest_automation_contract import CONTRACT_V1, resolve_contract_v1_paths
 from catalog.source_snapshot import SourceSnapshot, materialize_source_snapshot
 from catalog.source_revisions import active_source_revisions
 from scripts.builder_outcome import BuilderDiagnostic, BuilderOutcome
@@ -968,6 +969,12 @@ def _run_builder(
         from scripts.build_gherkin_coverage import build
 
         features_root, object_mapping = rest_automation_paths(manifest_entry, root)
+        contract_v1_paths = (
+            resolve_contract_v1_paths(manifest_entry["rest_automation"], root)
+            if manifest_entry["rest_automation"].get("coverage_contract_version")
+            == CONTRACT_V1
+            else None
+        )
         conn = get_connection(candidate_db)
         try:
             production_endpoints = conn.execute(
@@ -988,6 +995,7 @@ def _run_builder(
                 suite_root=root,
                 object_mapping_path=object_mapping,
                 features_root=features_root,
+                contract_v1_paths=contract_v1_paths,
                 candidate_build_token=(coverage_build_context or {}).get("build_token"),
                 indexed_suite_target_sha=(coverage_build_context or {}).get("target_sha"),
                 dependency_revisions=(coverage_build_context or {}).get("dependency_revisions"),

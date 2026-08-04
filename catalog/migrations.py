@@ -26,6 +26,7 @@ UI_NEGATIVE_EVENT_CALL_MIGRATION = "027_ui_negative_event_calls"
 API_REGISTRY_MIGRATION = "028_api_registry"
 REPOSITORY_ARCHIVAL_MIGRATION = "029_repository_archival"
 WORKFLOW_ACTION_MIGRATION = "030_workflow_action"
+REST_AUTOMATION_CONTRACT_MIGRATION = "031_rest_automation_contract"
 LEGACY_REPO_KEY = "ia-main"
 
 
@@ -1588,6 +1589,23 @@ def _apply_workflow_action_migration(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_test_requests_workflow_action "
         "ON test_requests(workflow_action) WHERE workflow_action IS NOT NULL"
     )
+
+
+def _apply_rest_automation_contract_migration(conn: sqlite3.Connection) -> None:
+    """Add Contract-V1 provenance and freshness inputs without rewriting evidence."""
+
+    if _table_exists(conn, "test_requests"):
+        _add_columns(
+            conn,
+            "test_requests",
+            (
+                (
+                    "coverage_scope TEXT NOT NULL DEFAULT 'unknown' "
+                    "CHECK(coverage_scope IN ('endpoint', 'non_endpoint', 'unknown'))"
+                ),
+                "mapping_provenance_json TEXT",
+            ),
+        )
     conn.execute(
         """CREATE TABLE IF NOT EXISTS test_coverage_build_state (
                repo_id INTEGER PRIMARY KEY,
@@ -1601,10 +1619,21 @@ def _apply_workflow_action_migration(conn: sqlite3.Connection) -> None:
                FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE
            )"""
     )
+    _add_columns(
+        conn,
+        "test_coverage_build_state",
+        (
+            (
+                "coverage_contract_version INTEGER NOT NULL DEFAULT 0 "
+                "CHECK(coverage_contract_version IN (0, 1))"
+            ),
+            "contract_input_hashes_json TEXT NOT NULL DEFAULT '[]'",
+        ),
+    )
 
 
 def apply_delta_refresh_migration(conn: sqlite3.Connection) -> None:
-    """Apply refresh migrations 023 through 030 to a repository-scoped catalog."""
+    """Apply refresh migrations 023 through 031 to a repository-scoped catalog."""
 
     if conn.in_transaction:
         raise RuntimeError(
@@ -1695,6 +1724,16 @@ def apply_delta_refresh_migration(conn: sqlite3.Connection) -> None:
             conn.execute(
                 "INSERT INTO schema_migrations(name) VALUES (?)",
                 (WORKFLOW_ACTION_MIGRATION,),
+            )
+        contract_applied = conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name=?",
+            (REST_AUTOMATION_CONTRACT_MIGRATION,),
+        ).fetchone()
+        _apply_rest_automation_contract_migration(conn)
+        if contract_applied is None:
+            conn.execute(
+                "INSERT INTO schema_migrations(name) VALUES (?)",
+                (REST_AUTOMATION_CONTRACT_MIGRATION,),
             )
         violations = conn.execute("PRAGMA foreign_key_check").fetchall()
         if violations:
@@ -1864,6 +1903,16 @@ def apply_multi_repo_migration(
             conn.execute(
                 "INSERT INTO schema_migrations(name) VALUES (?)",
                 (WORKFLOW_ACTION_MIGRATION,),
+            )
+        contract_applied = conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name=?",
+            (REST_AUTOMATION_CONTRACT_MIGRATION,),
+        ).fetchone()
+        _apply_rest_automation_contract_migration(conn)
+        if contract_applied is None:
+            conn.execute(
+                "INSERT INTO schema_migrations(name) VALUES (?)",
+                (REST_AUTOMATION_CONTRACT_MIGRATION,),
             )
         # FK enforcement is necessarily off while legacy parent tables are
         # rebuilt, but foreign_key_check still validates the candidate before

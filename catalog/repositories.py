@@ -14,6 +14,14 @@ from typing import Any
 
 import yaml
 
+from catalog.rest_automation_contract import (
+    CONTRACT_V0,
+    CONTRACT_V1,
+    CONTRACT_V1_PATH_FIELDS,
+    RestAutomationContractError,
+    resolve_contract_v1_paths,
+)
+
 
 class RepositoryError(ValueError):
     """Raised when workspace repository configuration is invalid."""
@@ -37,7 +45,15 @@ _REPOSITORY_KEYS = frozenset(
         "storage",
     }
 )
-_REST_AUTOMATION_KEYS = frozenset({"features_root", "object_mapping"})
+_REST_AUTOMATION_KEYS = frozenset(
+    {
+        "coverage_contract_version",
+        "features_root",
+        "object_mapping",
+        "version_compatibility",
+        "non_request_inventory",
+    }
+)
 _OPTIONAL_TEXT_FIELDS = ("name", "kind", "language", "remote_url")
 
 
@@ -116,8 +132,8 @@ def _normalize_profile_and_validate_builders(
 
 
 def _normalize_rest_automation(
-    repo_key: str, profile: str | None, raw_config: Any
-) -> dict[str, str] | None:
+    repo_key: str, profile: str | None, local_root: str, raw_config: Any
+) -> dict[str, Any] | None:
     if profile != "rest_automation":
         if raw_config is not None:
             raise RepositoryError(
@@ -133,8 +149,30 @@ def _normalize_rest_automation(
         _REST_AUTOMATION_KEYS,
         f"repository {repo_key} rest_automation",
     )
-    config: dict[str, str] = {}
-    for field in ("features_root", "object_mapping"):
+    raw_version = raw_config.get("coverage_contract_version", CONTRACT_V0)
+    if type(raw_version) is not int or raw_version not in {CONTRACT_V0, CONTRACT_V1}:
+        raise RepositoryError(
+            f"repository {repo_key} rest_automation.coverage_contract_version "
+            "must be the integer 0 or 1"
+        )
+    config: dict[str, Any] = {"coverage_contract_version": raw_version}
+    required_paths = (
+        ("features_root", "object_mapping")
+        if raw_version == CONTRACT_V0
+        else CONTRACT_V1_PATH_FIELDS
+    )
+    forbidden_paths = set(_REST_AUTOMATION_KEYS) - {
+        "coverage_contract_version",
+        *required_paths,
+    }
+    present_forbidden = sorted(field for field in forbidden_paths if field in raw_config)
+    if present_forbidden:
+        raise RepositoryError(
+            f"repository {repo_key} rest_automation contract-v0 contains unsupported "
+            f"field{'s' if len(present_forbidden) > 1 else ''}: "
+            + ", ".join(present_forbidden)
+        )
+    for field in required_paths:
         if field not in raw_config:
             raise RepositoryError(
                 f"repository {repo_key} requires rest_automation.{field}"
@@ -155,6 +193,13 @@ def _normalize_rest_automation(
                 f"repository {repo_key} rest_automation.{field} must stay inside local_root"
             )
         config[field] = normalized
+    if raw_version == CONTRACT_V1:
+        try:
+            resolve_contract_v1_paths(config, Path(local_root))
+        except RestAutomationContractError as exc:
+            raise RepositoryError(
+                f"repository {repo_key} Contract-V1 input invalid: {exc}"
+            ) from exc
     return config
 
 
@@ -165,6 +210,15 @@ def rest_automation_paths(entry: dict[str, Any], root: Path) -> tuple[Path, Path
         raise RepositoryError(
             f"repository {entry.get('repo_key')} requires a rest_automation mapping"
         )
+    if config.get("coverage_contract_version", CONTRACT_V0) == CONTRACT_V1:
+        try:
+            paths = resolve_contract_v1_paths(config, root)
+        except RestAutomationContractError as exc:
+            raise RepositoryError(
+                f"repository {entry.get('repo_key')} Contract-V1 input invalid: {exc}"
+            ) from exc
+        return paths.features_root, paths.object_mapping
+
     values: list[Path] = []
     for key, expected_kind in (
         ("features_root", "directory"),
@@ -253,8 +307,9 @@ def _validate_dependency_cycles(dependencies: dict[str, list[str] | None]) -> No
 def load_workspace_manifest(path: str | Path) -> dict[str, Any]:
     """Load and validate a version 1 workspace repository manifest.
 
-    The returned mapping is suitable for registration.  It intentionally does
-    not resolve or inspect checkout paths; that is an indexing-time concern.
+    The returned mapping is suitable for registration.  Contract-V1 REST
+    automation inputs are the exception: their target-owned paths and closed
+    JSON documents are validated here before the manifest can be accepted.
     """
 
     manifest_path = Path(path)
@@ -335,7 +390,7 @@ def load_workspace_manifest(path: str | Path) -> dict[str, Any]:
         entry["depends_on"] = dependencies[repo_key]
 
         rest_config = _normalize_rest_automation(
-            repo_key, profile, entry.get("rest_automation")
+            repo_key, profile, entry["local_root"], entry.get("rest_automation")
         )
         if rest_config is not None:
             entry["rest_automation"] = rest_config
