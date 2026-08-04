@@ -5,6 +5,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from catalog.content_fingerprint import logical_content_fingerprint
 from catalog.delta import DELTA_CONTRACT_VERSION
@@ -53,6 +54,21 @@ class CatalogIntegrityTests(unittest.TestCase):
         self.assertTrue(summary["content_fingerprint_matches"])
         self.assertTrue(
             all(value == 0 for value in summary["logical_orphans"].values())
+        )
+
+    def test_ui_validator_operational_error_blocks_integrity(self) -> None:
+        directory, conn = self._catalog()
+        self.addCleanup(directory.cleanup)
+        self.addCleanup(conn.close)
+        with mock.patch(
+            "validation.validate_ui_catalog.validate_ui_catalog_connection",
+            side_effect=sqlite3.OperationalError("damaged ui schema"),
+        ), self.assertRaises(CatalogIntegrityError) as raised:
+            validate_catalog_connection(conn)
+        summary = json.loads(str(raised.exception))
+        self.assertIn("ui_catalog", summary["failures"])
+        self.assertEqual(
+            summary["ui_catalog"]["failures"], ["ui_catalog_operational_error"]
         )
 
     def test_foreign_key_violation_fails(self) -> None:

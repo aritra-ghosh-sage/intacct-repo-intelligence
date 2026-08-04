@@ -45,6 +45,41 @@ def test_parent_loader_uses_explicit_inherits_evidence_for_formeditor_convention
     assert result.diagnostics == ()
 
 
+def test_identical_literal_appends_keep_distinct_source_provenance() -> None:
+    source = b'''<?php
+class DuplicateAppendEditor extends FormEditor {
+    function getJavaScriptFileNames() {
+        $scripts = [];
+        $scripts[] = '../resources/js/shared.js';
+        $scripts[] = '../resources/js/shared.js';
+        return $scripts;
+    }
+}
+'''
+    extracted = extract_php_loader_facts(
+        source, "app/source/gl/DuplicateAppendEditor.cls"
+    )
+
+    resolved = resolve_inherited_loader_facts(
+        extracted.loaders,
+        (),
+        form_editor_source_file="app/source/core/FormEditor.cls",
+        method_facts=extracted.methods,
+        concrete_editor_classes=("DuplicateAppendEditor",),
+    )
+
+    appends = [
+        fact
+        for fact in resolved.resolved
+        if fact.source_fact.value_kind == "array_append"
+    ]
+    assert [fact.source_fact.start_line for fact in appends] == [5, 6]
+    assert [fact.source_fact.value for fact in appends] == [
+        "../resources/js/shared.js",
+        "../resources/js/shared.js",
+    ]
+
+
 def test_common_includes_keep_branch_specific_scripts_conditional(tmp_path: Path) -> None:
     repo_root = tmp_path
     (repo_root / "app/resources/js").mkdir(parents=True)

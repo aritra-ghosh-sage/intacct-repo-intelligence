@@ -238,10 +238,16 @@ def extract_php_loader_facts(source: bytes, source_file: str) -> PhpLoaderExtrac
                                 lhs, rhs = assignment_parts
                                 if lhs.type == "subscript_expression":
                                     lhs_parts = _named_children(lhs)
-                                    if len(lhs_parts) == 1 and lhs_parts[0].type == "variable_name":
+                                    if lhs_parts and lhs_parts[0].type == "variable_name":
                                         name = _text(lhs_parts[0], source)
                                         value = _literal_string(rhs, source)
-                                        if accumulator is not None and name == accumulator and value is not None:
+                                        if (
+                                            accumulator is not None
+                                            and name == accumulator
+                                            and value is not None
+                                            and accumulator_complete
+                                            and len(lhs_parts) == 1
+                                        ):
                                             emit(class_name, method_name, loader_kind, "array_append", value, statement)
                                             continue
                                         diagnostic("actionui.php.dynamic_assignment", "Loader accumulator append is not a static unkeyed literal.", statement)
@@ -250,14 +256,42 @@ def extract_php_loader_facts(source: bytes, source_file: str) -> PhpLoaderExtrac
                                 if lhs.type == "variable_name":
                                     name = _text(lhs, source)
                                     call = _direct_call(rhs, source)
+                                    delegated = (
+                                        call is not None
+                                        and call.startswith("parent::")
+                                        and _parent_method_name_text(call) == method_name
+                                    )
+                                    # Once an established accumulator is assigned a
+                                    # non-proven value, no later append can safely be
+                                    # treated as part of the returned static list.
+                                    if (
+                                        accumulator is not None
+                                        and name == accumulator
+                                        and not delegated
+                                    ):
+                                        accumulator_complete = False
+                                        diagnostic(
+                                            "actionui.php.dynamic_assignment",
+                                            "Loader accumulator reassignment is not a static proven list.",
+                                            statement,
+                                        )
+                                        assignments.pop(name, None)
+                                        continue
                                     if call is not None and name.startswith("$") and loader_kind == "script":
                                         # A parent delegation can seed a proven accumulator.
                                         accumulator = name
-                                        accumulator_delegated = call.startswith("parent::") and (_parent_method_name_text(call) == method_name)
+                                        accumulator_delegated = delegated
                                         accumulator_complete = accumulator_delegated
                                         if accumulator_delegated:
                                             emit(class_name, method_name, loader_kind, "direct_call", call, statement)
                                             continue
+                                        diagnostic(
+                                            "actionui.php.dynamic_assignment",
+                                            "Loader delegation is not the same parent loader method.",
+                                            statement,
+                                        )
+                                        assignments.pop(name, None)
+                                        continue
                                     if name.startswith("$") and rhs.type == "array_creation_expression" and loader_kind == "script":
                                         accumulator = name
                                         accumulator_complete = True
@@ -285,6 +319,10 @@ def extract_php_loader_facts(source: bytes, source_file: str) -> PhpLoaderExtrac
                                     "Loader control flow is not evaluated.",
                                     statement,
                                 )
+                                # The extractor has no control-flow model.  A
+                                # conditional or loop can alter the accumulator
+                                # before a later append or return, so fail closed.
+                                accumulator_complete = False
                             continue
                         expressions = _named_children(statement)
                         expression = expressions[0] if expressions else None

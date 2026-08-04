@@ -115,6 +115,36 @@ class GLBatchEditor extends FormEditor {
     ]
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "$scripts['legacy'] = '../resources/js/legacy.js';",
+        "$scripts = makeScripts();",
+        "if ($legacy) { $scripts[] = '../resources/js/legacy.js'; }",
+    ),
+)
+def test_script_accumulator_stops_emitting_after_unproven_mutation(mutation: str) -> None:
+    source = f'''<?php
+class StorageOptionsEditor extends FormEditor {{
+    protected function getJavaScriptFileNames() {{
+        $scripts = parent::getJavaScriptFileNames();
+        {mutation}
+        $scripts[] = '../resources/js/storageoptions.js';
+        return $scripts;
+    }}
+}}
+'''.encode()
+
+    result = extract_php_loader_facts(source, "app/source/company/StorageOptionsEditor.cls")
+
+    assert [(fact.value_kind, fact.value) for fact in result.loaders] == [
+        ("direct_call", "parent::getJavaScriptFileNames()"),
+    ]
+    assert "actionui.php.dynamic_assignment" in {
+        diagnostic.code for diagnostic in result.diagnostics
+    }
+
+
 def test_parse_error_prevents_loader_fact_emission() -> None:
     source = b'''<?php
 class GLBatchEditor extends FormEditor {

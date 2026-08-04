@@ -321,19 +321,46 @@ def assemble_ui_snapshot(conn: sqlite3.Connection, *, repo_id: int, repo_root: P
            WHERE entity_mappings.repo_id=? AND entity_mappings.mapping_type='editor'""",
         (repo_id,),
     ).fetchall()
+    edges = tuple(InheritanceEdge(str(row["source_name"]), str(row["target_name"]), str(row["file_path"]), str(row["evidence"] or "")) for row in conn.execute("SELECT source_name,target_name,file_path,evidence FROM relationships WHERE repo_id=? AND relationship_type='INHERITS'", (repo_id,)))
+
+    # Only follow the explicit inheritance closure of mapped editors.  Each
+    # edge carries the indexed source that proves its child declaration, so
+    # this reaches unmapped base editors without scanning arbitrary PHP files.
+    edges_by_child: dict[str, tuple[InheritanceEdge, ...]] = defaultdict(tuple)
+    for edge in edges:
+        edges_by_child[edge.child_class] = tuple(
+            sorted((*edges_by_child[edge.child_class], edge), key=lambda item: (item.parent_class, item.source_file, item.evidence))
+        )
+    concrete_editor_classes = tuple(
+        PurePosixPath(str(row["path"])).stem for row in editor_rows
+    )
+    loader_paths = {str(row["path"]) for row in editor_rows}
+    pending_classes = list(concrete_editor_classes)
+    visited_classes: set[str] = set()
+    while pending_classes:
+        child_class = pending_classes.pop()
+        if child_class in visited_classes:
+            continue
+        visited_classes.add(child_class)
+        for edge in edges_by_child.get(child_class, ()):
+            if edge.source_file in files:
+                loader_paths.add(edge.source_file)
+            pending_classes.append(edge.parent_class)
+    form_editor_path = "app/source/core/FormEditor.cls"
+    if form_editor_path in files:
+        loader_paths.add(form_editor_path)
+
     loaders = []
     loader_methods = []
     loader_diagnostics_by_file: dict[str, list[Any]] = defaultdict(list)
-    for row in editor_rows:
-        path = str(row["path"])
+    for path in sorted(loader_paths):
         source = repo_root / path
         if source.is_file():
             extraction = extract_php_loader_facts(source.read_bytes(), path)
             loaders.extend(extraction.loaders)
             loader_methods.extend(extraction.methods)
             loader_diagnostics_by_file[path].extend(extraction.diagnostics)
-    edges = tuple(InheritanceEdge(str(row["source_name"]), str(row["target_name"]), str(row["file_path"]), str(row["evidence"] or "")) for row in conn.execute("SELECT source_name,target_name,file_path,evidence FROM relationships WHERE repo_id=? AND relationship_type='INHERITS'", (repo_id,)))
-    resolved = resolve_inherited_loader_facts(tuple(loaders), edges, form_editor_source_file="app/source/core/FormEditor.cls", method_facts=tuple(loader_methods), concrete_editor_classes=tuple(PurePosixPath(str(row["path"])).stem for row in editor_rows))
+    resolved = resolve_inherited_loader_facts(tuple(loaders), edges, form_editor_source_file=form_editor_path, method_facts=tuple(loader_methods), concrete_editor_classes=concrete_editor_classes)
     by_class: dict[str, list[Any]] = defaultdict(list)
     for item in resolved.resolved:
         by_class[item.effective_class].append(item.source_fact)
@@ -346,12 +373,6 @@ def assemble_ui_snapshot(conn: sqlite3.Connection, *, repo_id: int, repo_root: P
         candidates = {_form_path(fact.value, editor_path) for fact in by_class.get(class_name, [])}
         candidates.discard(None)
         inherits_form_convention = any(
-            fact.class_name == class_name
-            and fact.loader_kind == "form"
-            and fact.value_kind == "direct_call"
-            and fact.value.startswith("parent::getMetadataKeyName")
-            for fact in loaders
-        ) and any(
             item.effective_class == class_name
             and item.source_fact.value_kind == "form_editor_convention"
             for item in resolved.resolved

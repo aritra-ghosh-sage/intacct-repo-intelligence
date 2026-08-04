@@ -343,8 +343,14 @@ def validate_catalog_connection(
             ui_catalog = json.loads(str(exc))
         except json.JSONDecodeError:
             ui_catalog = {"ok": False, "failures": ["ui_catalog"]}
-    except (ImportError, sqlite3.OperationalError):
-        ui_catalog = {"ok": True, "skipped": True}
+    except (ImportError, sqlite3.OperationalError) as exc:
+        # A missing validator or an SQL failure is not evidence that the UI
+        # catalog is valid.  Candidate promotion must fail closed.
+        ui_catalog = {
+            "ok": False,
+            "failures": ["ui_catalog_operational_error"],
+            "error": str(exc),
+        }
 
     summary: dict[str, Any] = {
         "integrity_check": integrity,
@@ -416,7 +422,7 @@ def validate_catalog_connection(
         failures.append("in_progress_state")
     if any(value != 0 for value in orphan_counts.values()):
         failures.append("logical_orphans")
-    if not ui_catalog.get("ok", False) and not ui_catalog.get("skipped", False):
+    if not ui_catalog.get("ok", False):
         failures.append("ui_catalog")
     summary["ok"] = not failures
     summary["failures"] = failures

@@ -253,7 +253,11 @@ def resolve_inherited_loader_facts(
         if edge.parent_class == _FORM_EDITOR and method_name.lower() == "getmetadatakeyname":
             fact = LoaderFact(form_editor_source_file, _FORM_EDITOR, method_name, "form", "form_editor_convention", "{entity}_form.pxml", anchor.start_line if anchor else 1, anchor.end_line if anchor else 1, "FormEditor::getMetadataKeyName returns {entity}_form.pxml; " + edge.evidence)
             return [ResolvedLoaderFact(cls, fact, next_path)]
-        if (edge.parent_class, method_name.lower()) not in declared and not by_class_method.get((edge.parent_class, method_name.lower())):
+        if (
+            method_name.lower() != "getmetadatakeyname"
+            and (edge.parent_class, method_name.lower()) not in declared
+            and not by_class_method.get((edge.parent_class, method_name.lower()))
+        ):
             if anchor is not None:
                 issue("actionui.loader.parent_method_missing", "Inherited loader method has no static evidence.", anchor)
             return []
@@ -287,12 +291,29 @@ def resolve_inherited_loader_facts(
         methods = set(methods_by_class.get(cls, ()))
         for ancestor in ancestor_classes(cls):
             methods.update(methods_by_class.get(ancestor, ()))
+        # FormEditor metadata naming is the sole documented loader convention.
+        # It applies to a concrete editor even when neither it nor an
+        # intermediate base declares an override.
+        methods.add("getmetadatakeyname")
         for method in sorted(methods):
             output.extend(visit(cls, method, (cls,), ()))
-    unique: dict[tuple[str, str, str, str, str], ResolvedLoaderFact] = {}
+    unique: dict[tuple[str, str, str, str, str, int, int], ResolvedLoaderFact] = {}
     for item in output:
         f = item.source_fact
-        unique.setdefault((item.effective_class, f.loader_kind, f.value_kind, f.value, f.source_file), item)
+        # Values may intentionally repeat in one loader.  Their source range
+        # is provenance, so only exact same-location facts may coalesce.
+        unique.setdefault(
+            (
+                item.effective_class,
+                f.loader_kind,
+                f.value_kind,
+                f.value,
+                f.source_file,
+                f.start_line,
+                f.end_line,
+            ),
+            item,
+        )
     final = tuple(unique.values())
     return LoaderResolutionResult(tuple(item.source_fact for item in final), tuple(diagnostics), final)
 

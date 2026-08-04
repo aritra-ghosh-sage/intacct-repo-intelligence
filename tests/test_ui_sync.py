@@ -196,6 +196,104 @@ def test_formeditor_surface_uses_common_static_script_dependency(tmp_path) -> No
     assert conn.execute("SELECT artifact_kind FROM ui_artifacts JOIN ui_script_dependencies ON ui_script_dependencies.source_artifact_id=ui_artifacts.id").fetchone()[0] == "common_include"
 
 
+def test_unmapped_base_editor_inheritance_binds_med_mapping_forms(tmp_path) -> None:
+    repo_root = tmp_path / "repo"
+    base = "app/source/med/MEDSubsidiaryMappingHeaderEditor.cls"
+    account = "app/source/med/MEDAccountMappingHeaderEditor.cls"
+    department = "app/source/med/MEDDepartmentMappingHeaderEditor.cls"
+    form_editor = "app/source/core/FormEditor.cls"
+    account_form = "app/source/med/medaccountmappingheader_form.xml"
+    department_form = "app/source/med/meddepartmentmappingheader_form.xml"
+    base_script = "app/resources/js/medsubsidiarymappingheader.js"
+    account_script = "app/resources/js/medaccountmappingheader.js"
+    department_script = "app/resources/js/meddepartmentmappingheader.js"
+    _write(repo_root, form_editor, "<?php class FormEditor {}")
+    _write(
+        repo_root,
+        base,
+        """<?php
+class MEDSubsidiaryMappingHeaderEditor extends FormEditor {
+  function getJavaScriptFileNames() {
+    $scripts = parent::getJavaScriptFileNames();
+    $scripts[] = '../resources/js/medsubsidiarymappingheader.js';
+    return $scripts;
+  }
+}
+""",
+    )
+    _write(
+        repo_root,
+        account,
+        """<?php
+class MEDAccountMappingHeaderEditor extends MEDSubsidiaryMappingHeaderEditor {
+  function getJavaScriptFileNames() {
+    $scripts = parent::getJavaScriptFileNames();
+    $scripts[] = '../resources/js/medaccountmappingheader.js';
+    return $scripts;
+  }
+}
+""",
+    )
+    _write(
+        repo_root,
+        department,
+        """<?php
+class MEDDepartmentMappingHeaderEditor extends MEDSubsidiaryMappingHeaderEditor {
+  function getJavaScriptFileNames() {
+    $scripts = parent::getJavaScriptFileNames();
+    $scripts[] = '../resources/js/meddepartmentmappingheader.js';
+    return $scripts;
+  }
+}
+""",
+    )
+    _write(repo_root, account_form, "<form><events><onload>baseHandler(); accountHandler();</onload></events></form>")
+    _write(repo_root, department_form, "<form><events><onload>baseHandler(); departmentHandler();</onload></events></form>")
+    _write(repo_root, base_script, "function baseHandler() {}\n")
+    _write(repo_root, account_script, "function accountHandler() {}\n")
+    _write(repo_root, department_script, "function departmentHandler() {}\n")
+    conn, repo_id = _conn()
+    paths = (base, account, department, form_editor, account_form, department_form, base_script, account_script, department_script)
+    for path in paths:
+        conn.execute("INSERT INTO files(repo_id,path) VALUES (?,?)", (repo_id, path))
+    entities: dict[str, int] = {}
+    for name, editor_path in (
+        ("MEDAccountMappingHeader", account),
+        ("MEDDepartmentMappingHeader", department),
+    ):
+        entity_id = int(conn.execute("INSERT INTO entity_nodes(name) VALUES (?)", (name,)).lastrowid)
+        entities[name] = entity_id
+        conn.execute("INSERT INTO entity_occurrences(repo_id,entity_id) VALUES (?,?)", (repo_id, entity_id))
+        editor_id = int(conn.execute("SELECT id FROM files WHERE path=?", (editor_path,)).fetchone()[0])
+        conn.execute("INSERT INTO entity_mappings(repo_id,entity_id,file_id,mapping_type) VALUES (?,?,?,'editor')", (repo_id, entity_id, editor_id))
+    for child, parent, source_file in (
+        ("MEDAccountMappingHeaderEditor", "MEDSubsidiaryMappingHeaderEditor", account),
+        ("MEDDepartmentMappingHeaderEditor", "MEDSubsidiaryMappingHeaderEditor", department),
+        ("MEDSubsidiaryMappingHeaderEditor", "FormEditor", base),
+    ):
+        conn.execute("INSERT INTO relationships(repo_id,source_name,target_name,relationship_type,file_path,evidence) VALUES (?,?,?,'INHERITS',?,'fixture')", (repo_id, child, parent, source_file))
+    for script_path, symbol in ((base_script, "baseHandler"), (account_script, "accountHandler"), (department_script, "departmentHandler")):
+        file_id = int(conn.execute("SELECT id FROM files WHERE path=?", (script_path,)).fetchone()[0])
+        conn.execute("INSERT INTO symbols(file_id,name,kind,start_line,stable_key) VALUES (?,?,'function',1,?)", (file_id, symbol, f"{script_path}:{symbol}"))
+    conn.commit()
+
+    synchronize_ui_snapshot(conn, repo_id=repo_id, snapshot=assemble_ui_snapshot(conn, repo_id=repo_id, repo_root=repo_root))
+
+    assert conn.execute("SELECT COUNT(*) FROM ui_entity_references WHERE reference_kind='editor'").fetchone()[0] == 2
+    assert conn.execute("SELECT COUNT(*) FROM ui_event_calls WHERE resolution_status='resolved'").fetchone()[0] == 4
+    dependencies = {
+        tuple(row)
+        for row in conn.execute(
+            "SELECT surface.source_path,dependency.script_path FROM ui_script_dependencies dependency JOIN ui_surfaces surface ON surface.id=dependency.surface_id"
+        )
+    }
+    assert dependencies == {
+        (account_form, base_script), (account_form, account_script),
+        (department_form, base_script), (department_form, department_script),
+    }
+    assert conn.execute("SELECT COUNT(*) FROM ui_script_dependencies dependency JOIN ui_artifacts artifact ON artifact.id=dependency.source_artifact_id WHERE artifact.source_path=?", (base,)).fetchone()[0] == 2
+
+
 def test_multiline_negative_handler_calls_and_stage_diagnostics_are_persisted(tmp_path) -> None:
     repo_root = tmp_path / "repo"
     form_path = "app/source/gl/foo_form.xml"
