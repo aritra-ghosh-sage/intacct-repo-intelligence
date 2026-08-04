@@ -13,6 +13,8 @@ from .model import (
     JavascriptExtractionResult,
     JavascriptSymbolFact,
     LoaderFact,
+    LoaderMethodFact,
+    ResolvedLoaderFact,
     ScriptDependencyFact,
 )
 from .xml_extractor import ActionUiXmlExtractionResult, extract_actionui_xml_facts
@@ -31,6 +33,8 @@ __all__ = [
     "JavascriptExtractionResult",
     "JavascriptSymbolFact",
     "LoaderFact",
+    "LoaderMethodFact",
+    "ResolvedLoaderFact",
     "ScriptDependencyFact",
     "extract_actionui_xml_facts",
 ]

@@ -43,6 +43,7 @@ def extract_javascript_callables(
                 start_line=symbol.start_line,
                 end_line=symbol.end_line,
                 evidence=_text_for_symbol(symbol, source),
+                parent_symbol=symbol.parent_symbol,
             )
             for symbol in symbols
         ),

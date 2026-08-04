@@ -213,6 +213,21 @@ def _validate_snapshot(snapshot: UiSnapshot) -> None:
                 )
 
 
+def _canonicalize_snapshot(snapshot: UiSnapshot) -> None:
+    """Normalize agreeing duplicate facts before synchronization preflight."""
+    for table, rows in list(snapshot.rows.items()):
+        by_key: dict[tuple[str, ...], UiRow] = {}
+        for row in rows:
+            prior = by_key.get(row.key)
+            if prior is None:
+                by_key[row.key] = row
+            elif _payload(prior.values) != _payload(row.values):
+                raise UiSnapshotError(
+                    f"duplicate desired {table} natural key has different payload: {row.key}"
+                )
+        snapshot.rows[table] = sorted(by_key.values(), key=lambda row: row.key)
+
+
 def _entity_occurrences(conn: sqlite3.Connection, repo_id: int) -> dict[str, tuple[int, int]]:
     return {
         str(row["name"]): (int(row["entity_id"]), int(row["occurrence_id"]))
@@ -307,6 +322,7 @@ def assemble_ui_snapshot(conn: sqlite3.Connection, *, repo_id: int, repo_root: P
         (repo_id,),
     ).fetchall()
     loaders = []
+    loader_methods = []
     loader_diagnostics_by_file: dict[str, list[Any]] = defaultdict(list)
     for row in editor_rows:
         path = str(row["path"])
@@ -314,12 +330,13 @@ def assemble_ui_snapshot(conn: sqlite3.Connection, *, repo_id: int, repo_root: P
         if source.is_file():
             extraction = extract_php_loader_facts(source.read_bytes(), path)
             loaders.extend(extraction.loaders)
+            loader_methods.extend(extraction.methods)
             loader_diagnostics_by_file[path].extend(extraction.diagnostics)
     edges = tuple(InheritanceEdge(str(row["source_name"]), str(row["target_name"]), str(row["file_path"]), str(row["evidence"] or "")) for row in conn.execute("SELECT source_name,target_name,file_path,evidence FROM relationships WHERE repo_id=? AND relationship_type='INHERITS'", (repo_id,)))
-    resolved = resolve_inherited_loader_facts(tuple(loaders), edges, form_editor_source_file="app/source/core/FormEditor.cls")
+    resolved = resolve_inherited_loader_facts(tuple(loaders), edges, form_editor_source_file="app/source/core/FormEditor.cls", method_facts=tuple(loader_methods), concrete_editor_classes=tuple(PurePosixPath(str(row["path"])).stem for row in editor_rows))
     by_class: dict[str, list[Any]] = defaultdict(list)
-    for fact in resolved.loaders:
-        by_class[fact.class_name].append(fact)
+    for item in resolved.resolved:
+        by_class[item.effective_class].append(item.source_fact)
     editor_by_path = {str(row["path"]): str(row["entity_name"]) for row in editor_rows}
     for editor_path, entity_name in sorted(editor_by_path.items()):
         entity = occurrences.get(entity_name)
@@ -334,7 +351,11 @@ def assemble_ui_snapshot(conn: sqlite3.Connection, *, repo_id: int, repo_root: P
             and fact.value_kind == "direct_call"
             and fact.value.startswith("parent::getMetadataKeyName")
             for fact in loaders
-        ) and any(fact.value_kind == "form_editor_convention" for fact in resolved.loaders)
+        ) and any(
+            item.effective_class == class_name
+            and item.source_fact.value_kind == "form_editor_convention"
+            for item in resolved.resolved
+        )
         if inherits_form_convention:
             directory = str(PurePosixPath(editor_path).parent)
             candidates.update({f"{directory}/{entity_name.lower()}_form.xml", f"{directory}/{entity_name.lower()}_2012_form.xml"})
@@ -387,7 +408,7 @@ def assemble_ui_snapshot(conn: sqlite3.Connection, *, repo_id: int, repo_root: P
                 for diagnostic in common_scripts.diagnostics:
                     _add_diagnostic_issue(snapshot, surface_key=surface_key, artifact_key=common_artifact, diagnostic=diagnostic)
             dependencies: list[tuple[Any, str]] = [
-                (dependency, editor_artifact) for dependency in editor_scripts.dependencies
+                (dependency, _artifact_key(dependency.source_file, "editor_loader")) for dependency in editor_scripts.dependencies
             ]
             if common_scripts is not None and common_artifact is not None:
                 dependencies.extend((dependency, common_artifact) for dependency in common_scripts.dependencies)
@@ -397,6 +418,11 @@ def assemble_ui_snapshot(conn: sqlite3.Connection, *, repo_id: int, repo_root: P
             js_results = []
             resolved_dependencies = []
             for dep, provenance_artifact in deduped.values():
+                if provenance_artifact != common_artifact:
+                    dep_source_file = files.get(dep.source_file)
+                    dep_source = repo_root / dep.source_file
+                    if dep_source_file is not None and dep_source.is_file():
+                        snapshot.add("ui_artifacts", _key(surface_key, provenance_artifact), surface_key=surface_key, artifact_key=provenance_artifact, artifact_kind="php_loader", file_id=int(dep_source_file["id"]), source_path=dep.source_file, start_line=None, end_line=None, evidence_text="editor loader source", source_hash=_hash(dep_source), payload_json="{}")
                 script_file = files.get(dep.script_path)
                 dependency_key = f"{dep.source_file}:{dep.start_line}:{dep.script_path}:{dep.activation_state}"
                 script = repo_root / dep.script_path
@@ -418,9 +444,26 @@ def assemble_ui_snapshot(conn: sqlite3.Connection, *, repo_id: int, repo_root: P
                         discriminator=dependency_key,
                     )
             calls = xml_results[form_path].event_calls
-            for ordinal, outcome in enumerate(
-                resolve_event_handlers(calls, tuple(resolved_dependencies), tuple(js_results))
-            ):
+            outcomes = resolve_event_handlers(calls, tuple(resolved_dependencies), tuple(js_results))
+            # A form is one UI surface.  Equivalent editor contexts are
+            # canonicalized once; genuinely divergent contexts are an
+            # explicit evidence boundary and must not be unioned.
+            context_projection = tuple(
+                (o.event_call.event_name, o.event_call.callable_name,
+                 (o.dependency.source_file, o.dependency.script_path, o.dependency.activation_state) if o.dependency else None,
+                 (o.handler_symbol.source_file, o.handler_symbol.symbol_name, o.handler_symbol.start_line) if o.handler_symbol else None,
+                 o.resolution_status, o.resolution_reason)
+                for o in outcomes
+            )
+            prior_context = getattr(snapshot, "_form_contexts", {}).get(form_path) if hasattr(snapshot, "_form_contexts") else None
+            if not hasattr(snapshot, "_form_contexts"):
+                snapshot._form_contexts = {}  # type: ignore[attr-defined]
+            if prior_context is not None and prior_context[0] != context_projection:
+                raise UiSnapshotError(f"shared actionUI form has divergent editor outcomes: {form_path} ({prior_context[1]}, {editor_path})")
+            snapshot._form_contexts.setdefault(form_path, (context_projection, editor_path))  # type: ignore[attr-defined]
+            if prior_context is not None:
+                continue
+            for ordinal, outcome in enumerate(outcomes):
                 event_key = _event_key_for_call(
                     xml_results[form_path], event_keys_by_form[form_path], outcome.event_call
                 )
@@ -505,6 +548,7 @@ def assemble_ui_snapshot(conn: sqlite3.Connection, *, repo_id: int, repo_root: P
             artifact_key=_artifact_key(artifact.source_file, artifact.artifact_kind),
             diagnostic=diagnostic,
         )
+    _canonicalize_snapshot(snapshot)
     return snapshot
 
 
@@ -530,6 +574,7 @@ def synchronize_ui_snapshot(conn: sqlite3.Connection, *, repo_id: int, snapshot:
     from catalog.repository_lifecycle import require_repository_id_extractable
 
     require_repository_id_extractable(conn, repo_id)
+    _canonicalize_snapshot(snapshot)
     _validate_snapshot(snapshot)
     if conn.in_transaction:
         raise UiSnapshotError("UI synchronization requires a connection without an active transaction")

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from tree_sitter_languages import get_parser
 
-from .model import Diagnostic, LoaderFact
+from .model import Diagnostic, LoaderFact, LoaderMethodFact
 
 _PARSER = get_parser("php")
 
@@ -23,6 +23,7 @@ _SCRIPT_METHODS = {"getJavaScriptFileNames", "getJavascriptFileNames"}
 class PhpLoaderExtractionResult:
     loaders: tuple[LoaderFact, ...] = ()
     diagnostics: tuple[Diagnostic, ...] = ()
+    methods: tuple[LoaderMethodFact, ...] = ()
 
 
 def _text(node, source: bytes) -> str:
@@ -139,6 +140,10 @@ def _loader_kind(method_name: str) -> str | None:
         return "form"
     if method_name in _SCRIPT_METHODS:
         return "script"
+    if method_name.lower() in {name.lower() for name in _FORM_METHODS}:
+        return "form"
+    if method_name.lower() in {name.lower() for name in _SCRIPT_METHODS}:
+        return "script"
     return None
 
 
@@ -152,6 +157,7 @@ def extract_php_loader_facts(source: bytes, source_file: str) -> PhpLoaderExtrac
     root = _PARSER.parse(source).root_node
     loaders: list[LoaderFact] = []
     diagnostics: list[Diagnostic] = []
+    methods: list[LoaderMethodFact] = []
 
     def diagnostic(code: str, message: str, node) -> None:
         start_line, end_line = _line(node)
@@ -198,6 +204,16 @@ def extract_php_loader_facts(source: bytes, source_file: str) -> PhpLoaderExtrac
                     loader_kind = _loader_kind(method_name or "")
                     if loader_kind is None:
                         continue
+                    method_start, method_end = _line(member)
+                    methods.append(LoaderMethodFact(
+                        source_file=source_file,
+                        class_name=class_name,
+                        method_name=method_name or "",
+                        loader_kind=loader_kind,
+                        start_line=method_start,
+                        end_line=method_end,
+                        evidence=_text(member, source),
+                    ))
                     if _contains_parse_error(member):
                         diagnostic(
                             "actionui.php.parse_error",
@@ -210,8 +226,41 @@ def extract_php_loader_facts(source: bytes, source_file: str) -> PhpLoaderExtrac
                         diagnostic("actionui.php.loader_body_missing", "Loader method has no compound statement.", member)
                         continue
                     assignments: dict[str, tuple[str, ...]] = {}
+                    accumulator: str | None = None
+                    accumulator_complete = False
+                    accumulator_delegated = False
                     for statement in body.children:
                         if statement.type == "expression_statement":
+                            expression_nodes = _named_children(statement)
+                            assignment_node = expression_nodes[0] if expression_nodes else None
+                            assignment_parts = _named_children(assignment_node) if assignment_node is not None and assignment_node.type == "assignment_expression" else ()
+                            if assignment_node is not None and assignment_node.type == "assignment_expression" and len(assignment_parts) == 2:
+                                lhs, rhs = assignment_parts
+                                if lhs.type == "subscript_expression":
+                                    lhs_parts = _named_children(lhs)
+                                    if len(lhs_parts) == 1 and lhs_parts[0].type == "variable_name":
+                                        name = _text(lhs_parts[0], source)
+                                        value = _literal_string(rhs, source)
+                                        if accumulator is not None and name == accumulator and value is not None:
+                                            emit(class_name, method_name, loader_kind, "array_append", value, statement)
+                                            continue
+                                        diagnostic("actionui.php.dynamic_assignment", "Loader accumulator append is not a static unkeyed literal.", statement)
+                                        accumulator_complete = False
+                                        continue
+                                if lhs.type == "variable_name":
+                                    name = _text(lhs, source)
+                                    call = _direct_call(rhs, source)
+                                    if call is not None and name.startswith("$") and loader_kind == "script":
+                                        # A parent delegation can seed a proven accumulator.
+                                        accumulator = name
+                                        accumulator_delegated = call.startswith("parent::") and (_parent_method_name_text(call) == method_name)
+                                        accumulator_complete = accumulator_delegated
+                                        if accumulator_delegated:
+                                            emit(class_name, method_name, loader_kind, "direct_call", call, statement)
+                                            continue
+                                    if name.startswith("$") and rhs.type == "array_creation_expression" and loader_kind == "script":
+                                        accumulator = name
+                                        accumulator_complete = True
                             assigned = _assignment(statement, source, assignments)
                             if assigned is None:
                                 call = _assignment_call(statement, source)
@@ -242,6 +291,8 @@ def extract_php_loader_facts(source: bytes, source_file: str) -> PhpLoaderExtrac
                         if expression is None:
                             diagnostic("actionui.php.empty_return", "Loader method returns without a value.", statement)
                             continue
+                        if expression.type == "variable_name" and accumulator is not None and _text(expression, source) == accumulator and accumulator_complete:
+                            continue
                         static_value = _expression_values(expression, source, assignments)
                         if static_value is not None:
                             source_kind, values = static_value
@@ -258,4 +309,10 @@ def extract_php_loader_facts(source: bytes, source_file: str) -> PhpLoaderExtrac
             visit(child)
 
     visit(root)
-    return PhpLoaderExtractionResult(tuple(loaders), tuple(diagnostics))
+    return PhpLoaderExtractionResult(tuple(loaders), tuple(diagnostics), tuple(methods))
+
+
+def _parent_method_name_text(value: str) -> str | None:
+    import re
+    match = re.match(r"parent::([A-Za-z_][A-Za-z0-9_]*)\s*\(", value)
+    return match.group(1) if match else None

@@ -89,6 +89,26 @@ class LoaderFact:
 
 
 @dataclass(frozen=True)
+class LoaderMethodFact:
+    """Evidence that a class declares (and therefore overrides) a loader."""
+
+    source_file: str
+    class_name: str
+    method_name: str
+    loader_kind: str
+    start_line: int
+    end_line: int
+    evidence: str
+
+
+@dataclass(frozen=True)
+class ResolvedLoaderFact:
+    effective_class: str
+    source_fact: LoaderFact
+    inheritance_path: tuple[object, ...] = ()
+
+
+@dataclass(frozen=True)
 class ScriptDependencyFact:
     source_file: str
     script_path: str
@@ -107,6 +127,7 @@ class JavascriptSymbolFact:
     start_line: int
     end_line: int
     evidence: str
+    parent_symbol: str | None = None
 
 
 @dataclass(frozen=True)

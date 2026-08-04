@@ -14,7 +14,7 @@ from pathlib import Path
 
 from tree_sitter_languages import get_parser
 
-from .model import Diagnostic, LoaderFact, ScriptDependencyFact
+from .model import Diagnostic, LoaderFact, LoaderMethodFact, ResolvedLoaderFact, ScriptDependencyFact
 
 _PARSER = get_parser("php")
 _SCRIPT_SUFFIX = ".js"
@@ -52,6 +52,7 @@ class InheritanceEdge:
 class LoaderResolutionResult:
     loaders: tuple[LoaderFact, ...] = ()
     diagnostics: tuple[Diagnostic, ...] = ()
+    resolved: tuple[ResolvedLoaderFact, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -187,6 +188,8 @@ def resolve_inherited_loader_facts(
     inheritance_edges: tuple[InheritanceEdge, ...],
     *,
     form_editor_source_file: str,
+    method_facts: tuple[LoaderMethodFact, ...] = (),
+    concrete_editor_classes: tuple[str, ...] = (),
 ) -> LoaderResolutionResult:
     """Resolve only literal base loaders and the explicit FormEditor convention.
 
@@ -196,64 +199,102 @@ def resolve_inherited_loader_facts(
     """
 
     by_class_method: dict[tuple[str, str], list[LoaderFact]] = {}
+    declared: dict[tuple[str, str], LoaderMethodFact] = {}
     parents: dict[str, list[InheritanceEdge]] = {}
     for fact in loader_facts:
-        by_class_method.setdefault((fact.class_name, fact.method_name), []).append(fact)
+        by_class_method.setdefault((fact.class_name, fact.method_name.lower()), []).append(fact)
+    for method in method_facts:
+        declared[(method.class_name, method.method_name.lower())] = method
     for edge in inheritance_edges:
         parents.setdefault(edge.child_class, []).append(edge)
 
-    resolved: list[LoaderFact] = []
+    resolved: list[ResolvedLoaderFact] = []
     diagnostics: list[Diagnostic] = []
 
-    def issue(code: str, message: str, fact: LoaderFact) -> None:
+    def issue(code: str, message: str, fact: LoaderFact | LoaderMethodFact) -> None:
         diagnostics.append(
             Diagnostic(code, message, fact.source_file, fact.start_line, fact.end_line, evidence=fact.evidence)
         )
 
-    def follow(fact: LoaderFact, current_class: str, method_name: str, seen: frozenset[str]) -> None:
-        edges = sorted(parents.get(current_class, ()), key=lambda item: (item.parent_class, item.source_file))
-        if len(edges) != 1:
-            issue(
-                "actionui.loader.inheritance_ambiguous" if edges else "actionui.loader.inheritance_missing",
-                "Parent loader cannot be resolved from exactly one INHERITS relationship.",
-                fact,
-            )
-            return
-        parent = edges[0].parent_class
-        if parent in seen:
-            issue("actionui.loader.inheritance_cycle", "Parent loader resolution found an inheritance cycle.", fact)
-            return
-        if parent == _FORM_EDITOR and method_name == "getMetadataKeyName":
-            resolved.append(
-                LoaderFact(
-                    source_file=form_editor_source_file,
-                    class_name=_FORM_EDITOR,
-                    method_name=method_name,
-                    loader_kind="form",
-                    value_kind="form_editor_convention",
-                    value="{entity}_form.pxml",
-                    start_line=fact.start_line,
-                    end_line=fact.end_line,
-                    evidence="FormEditor::getMetadataKeyName returns {entity}_form.pxml; " + edges[0].evidence,
-                )
-            )
-            return
-        candidates = sorted(by_class_method.get((parent, method_name), ()), key=lambda item: (item.source_file, item.start_line, item.value))
-        if not candidates:
-            issue("actionui.loader.parent_method_missing", "Inherited loader method has no static evidence.", fact)
-            return
-        for candidate in candidates:
-            if _is_parent_loader_call(candidate):
-                follow(candidate, parent, _parent_method_name(candidate) or method_name, seen | {parent})
-            elif candidate.value_kind != "direct_call":
-                resolved.append(candidate)
+    def edges_for(cls: str) -> list[InheritanceEdge]:
+        unique = {(e.child_class, e.parent_class, e.source_file, e.evidence): e for e in parents.get(cls, ())}
+        return sorted(unique.values(), key=lambda e: (e.parent_class, e.source_file, e.evidence))
 
-    for fact in sorted(loader_facts, key=lambda item: (item.source_file, item.start_line, item.class_name, item.method_name, item.value)):
-        if _is_parent_loader_call(fact):
-            follow(fact, fact.class_name, _parent_method_name(fact) or fact.method_name, frozenset({fact.class_name}))
-        elif fact.value_kind != "direct_call":
-            resolved.append(fact)
-    return LoaderResolutionResult(tuple(resolved), tuple(diagnostics))
+    def visit(cls: str, method_name: str, seen: tuple[str, ...], path: tuple[InheritanceEdge, ...]) -> list[ResolvedLoaderFact]:
+        slot = (cls, method_name.lower())
+        method = declared.get(slot)
+        own = sorted(by_class_method.get(slot, ()), key=lambda f: (f.source_file, f.start_line, f.value))
+        if method is not None:
+            # A declaration is an override even when extraction produced no values.
+            if not own:
+                return []
+            output: list[ResolvedLoaderFact] = []
+            for fact in own:
+                if _is_parent_loader_call(fact):
+                    output.extend(visit_parent(cls, _parent_method_name(fact) or method_name, seen, path, fact))
+                elif fact.value_kind != "direct_call":
+                    output.append(ResolvedLoaderFact(cls, fact, path))
+            return output
+        return visit_parent(cls, method_name, seen, path, None)
+
+    def visit_parent(cls: str, method_name: str, seen: tuple[str, ...], path: tuple[InheritanceEdge, ...], evidence_fact: LoaderFact | None) -> list[ResolvedLoaderFact]:
+        edges = edges_for(cls)
+        anchor = evidence_fact or (own_first(cls, method_name) or declared.get((cls, method_name.lower())))
+        if len(edges) != 1:
+            if anchor is not None:
+                issue("actionui.loader.inheritance_ambiguous" if edges else "actionui.loader.inheritance_missing", "Parent loader cannot be resolved from exactly one INHERITS relationship.", anchor)
+            return []
+        edge = edges[0]
+        if edge.parent_class in seen:
+            if anchor is not None:
+                issue("actionui.loader.inheritance_cycle", "Parent loader resolution found an inheritance cycle.", anchor)
+            return []
+        next_path = path + (edge,)
+        if edge.parent_class == _FORM_EDITOR and method_name.lower() == "getmetadatakeyname":
+            fact = LoaderFact(form_editor_source_file, _FORM_EDITOR, method_name, "form", "form_editor_convention", "{entity}_form.pxml", anchor.start_line if anchor else 1, anchor.end_line if anchor else 1, "FormEditor::getMetadataKeyName returns {entity}_form.pxml; " + edge.evidence)
+            return [ResolvedLoaderFact(cls, fact, next_path)]
+        if (edge.parent_class, method_name.lower()) not in declared and not by_class_method.get((edge.parent_class, method_name.lower())):
+            if anchor is not None:
+                issue("actionui.loader.parent_method_missing", "Inherited loader method has no static evidence.", anchor)
+            return []
+        return [
+            ResolvedLoaderFact(cls, item.source_fact, item.inheritance_path)
+            for item in visit(edge.parent_class, method_name, seen + (edge.parent_class,), next_path)
+        ]
+
+    def own_first(cls: str, method_name: str) -> LoaderFact | None:
+        facts = by_class_method.get((cls, method_name.lower()), ())
+        return facts[0] if facts else None
+
+    classes = set(concrete_editor_classes) or {f.class_name for f in loader_facts} | {m.class_name for m in method_facts}
+    output: list[ResolvedLoaderFact] = []
+    methods_by_class: dict[str, set[str]] = {}
+    for f in loader_facts:
+        methods_by_class.setdefault(f.class_name, set()).add(f.method_name.lower())
+    for m in method_facts:
+        methods_by_class.setdefault(m.class_name, set()).add(m.method_name.lower())
+
+    def ancestor_classes(cls: str, seen: frozenset[str] = frozenset()) -> set[str]:
+        if cls in seen:
+            return set()
+        result: set[str] = set()
+        for edge in edges_for(cls):
+            result.add(edge.parent_class)
+            result.update(ancestor_classes(edge.parent_class, seen | {cls}))
+        return result
+
+    for cls in sorted(classes):
+        methods = set(methods_by_class.get(cls, ()))
+        for ancestor in ancestor_classes(cls):
+            methods.update(methods_by_class.get(ancestor, ()))
+        for method in sorted(methods):
+            output.extend(visit(cls, method, (cls,), ()))
+    unique: dict[tuple[str, str, str, str, str], ResolvedLoaderFact] = {}
+    for item in output:
+        f = item.source_fact
+        unique.setdefault((item.effective_class, f.loader_kind, f.value_kind, f.value, f.source_file), item)
+    final = tuple(unique.values())
+    return LoaderResolutionResult(tuple(item.source_fact for item in final), tuple(diagnostics), final)
 
 
 def _normalize_script_path(raw_path: str, repo_root: Path) -> tuple[str | None, str | None]:

@@ -73,7 +73,10 @@ def resolve_event_handlers(
             )
             continue
 
-        candidates = [pair for pair in linked if pair[1].symbol_name == name]
+        candidates = [
+            pair for pair in linked
+            if pair[1].symbol_name == name and pair[1].parent_symbol is None
+        ]
         blocked_candidates = [
             dependency
             for dependency in dependencies

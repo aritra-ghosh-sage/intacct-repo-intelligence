@@ -331,6 +331,21 @@ def validate_catalog_connection(
             "AND (rcs.status<>'succeeded' OR rir.status<>'active')",
         )
 
+    ui_catalog: dict[str, Any]
+    try:
+        from validation.validate_ui_catalog import (
+            UiCatalogValidationError,
+            validate_ui_catalog_connection,
+        )
+        ui_catalog = validate_ui_catalog_connection(conn)
+    except UiCatalogValidationError as exc:
+        try:
+            ui_catalog = json.loads(str(exc))
+        except json.JSONDecodeError:
+            ui_catalog = {"ok": False, "failures": ["ui_catalog"]}
+    except (ImportError, sqlite3.OperationalError):
+        ui_catalog = {"ok": True, "skipped": True}
+
     summary: dict[str, Any] = {
         "integrity_check": integrity,
         "foreign_key_violations": len(fk_rows),
@@ -356,6 +371,7 @@ def validate_catalog_connection(
         "stable_key_duplicates": stable_key_duplicates,
         "in_progress": in_progress,
         "logical_orphans": orphan_counts,
+        "ui_catalog": ui_catalog,
     }
     failures = []
     if integrity != "ok":
@@ -400,6 +416,8 @@ def validate_catalog_connection(
         failures.append("in_progress_state")
     if any(value != 0 for value in orphan_counts.values()):
         failures.append("logical_orphans")
+    if not ui_catalog.get("ok", False) and not ui_catalog.get("skipped", False):
+        failures.append("ui_catalog")
     summary["ok"] = not failures
     summary["failures"] = failures
     if failures:
