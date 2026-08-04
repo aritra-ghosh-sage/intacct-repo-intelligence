@@ -20,6 +20,7 @@ repositories:
       - workflows
       - security
       - openapi_scan
+      - api_registry
       - openapi_link
       - rest_endpoints
       - entity_access_links
