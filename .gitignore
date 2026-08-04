@@ -1,6 +1,8 @@
 # Python-generated files
 __pycache__/
 *.py[oc]
+*.db
+*.lbug
 build/
 dist/
 wheels/
@@ -38,3 +40,4 @@ catalog/backups/quality-baseline-*.json
 catalog/*.refresh.lock
 evals/runs/
 .DS_Store
+catalog/sidecars/*.db
