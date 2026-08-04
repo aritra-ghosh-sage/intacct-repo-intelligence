@@ -30,7 +30,7 @@ repositories:
     remote_url: git@github.com:intacct/ia-restapi-automation.git
     local_root: ~/projects/ia-restapi-automation
     tracked_branch: main
-    enabled: true
+    enabled: false
     profile: rest_automation
     depends_on:
       - ia-main
