@@ -1831,21 +1831,22 @@ def entity_test_coverage_impl(
             )
         entity_id = int(entity["id"])
 
+        contract_v1_unavailable = _contract_v1_coverage_freshness(c, entity_id)
+        if contract_v1_unavailable:
+            return make_response(
+                state,
+                "entity_test_coverage",
+                {},
+                c,
+                status="capability_unavailable",
+                error={
+                    "code": "contract_v1_coverage_stale",
+                    "message": "Contract-V1 REST coverage inputs are missing or stale",
+                    "details": {"repositories": contract_v1_unavailable},
+                },
+            )
+
         if workflow_action:
-            contract_v1_unavailable = _contract_v1_coverage_freshness(c, entity_id)
-            if contract_v1_unavailable:
-                return make_response(
-                    state,
-                    "entity_test_coverage",
-                    {},
-                    c,
-                    status="capability_unavailable",
-                    error={
-                        "code": "contract_v1_coverage_stale",
-                        "message": "Contract-V1 REST coverage inputs are missing or stale",
-                        "details": {"repositories": contract_v1_unavailable},
-                    },
-                )
             state_columns = {
                 str(row[1])
                 for row in c.execute("PRAGMA table_info(test_coverage_build_state)")

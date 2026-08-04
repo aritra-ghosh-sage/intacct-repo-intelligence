@@ -9,7 +9,11 @@ from pathlib import Path
 
 from catalog.migrations import _apply_rest_automation_contract_migration
 from catalog.rest_automation_contract import resolve_contract_v1_paths
-from intacct_mcp.server import CatalogState, rest_coverage_impl
+from intacct_mcp.server import (
+    CatalogState,
+    entity_test_coverage_impl,
+    rest_coverage_impl,
+)
 from scripts.build_gherkin_coverage import build
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -93,11 +97,25 @@ class RestAutomationContractStateTests(unittest.TestCase):
         self.assertEqual("error", stale["status"])
         self.assertEqual("contract_v1_coverage_stale", stale["error"]["code"])
 
+        stale_entity = entity_test_coverage_impl(state, "Account")
+        self.assertEqual("capability_unavailable", stale_entity["status"])
+        self.assertEqual("contract_v1_coverage_stale", stale_entity["error"]["code"])
+
+        state, conn = self._coverage_db(1, "[]")
+        conn.execute("DELETE FROM test_coverage_build_state WHERE repo_id=2")
+        conn.commit()
+        conn.close()
+        missing_entity = entity_test_coverage_impl(state, "Account")
+        self.assertEqual("capability_unavailable", missing_entity["status"])
+        self.assertEqual("contract_v1_coverage_stale", missing_entity["error"]["code"])
+
         legacy_state, conn = self._coverage_db(0, "[]")
         conn.close()
         legacy = rest_coverage_impl(legacy_state, "Account")
         self.assertEqual("ok", legacy["status"])
         self.assertIn("endpoint_coverage", legacy["data"])
+        legacy_entity = entity_test_coverage_impl(legacy_state, "Account")
+        self.assertEqual("ok", legacy_entity["status"])
 
     def test_candidate_build_persists_v1_input_hashes_and_mapping_provenance(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -159,6 +177,7 @@ class RestAutomationContractStateTests(unittest.TestCase):
             )
             state = CatalogState(db_path, root / "graph.lbug")
             self.assertEqual("ok", rest_coverage_impl(state, "Account")["status"])
+            self.assertEqual("ok", entity_test_coverage_impl(state, "Account")["status"])
             conn.execute(
                 "UPDATE files SET sha1=? WHERE repo_id=? AND path='mapping.json'",
                 ("0" * 40, suite_id),
