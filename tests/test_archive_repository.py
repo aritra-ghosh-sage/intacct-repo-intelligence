@@ -128,6 +128,27 @@ class ArchiveRepositoryTests(unittest.TestCase):
             conn.close()
             self.assertTrue(db.with_name("catalog.db.previous").is_file())
 
+    def test_archive_batches_large_target_id_sets(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db, _active, target = self._database(Path(directory))
+            conn = sqlite3.connect(db)
+            conn.executemany(
+                "INSERT INTO files(repo_id,path,language) VALUES (?,?,?)",
+                [(target, f"target-{index}.cls", "java") for index in range(1200)],
+            )
+            conn.commit()
+            conn.close()
+
+            result = archive_repository(db, "archived-target", source="manual", reason="fixture")
+
+            self.assertTrue(result.promoted)
+            conn = sqlite3.connect(db)
+            self.assertEqual(
+                0,
+                conn.execute("SELECT COUNT(*) FROM files WHERE repo_id=?", (target,)).fetchone()[0],
+            )
+            conn.close()
+
     def test_active_inbound_reference_aborts_without_promoting(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             db, active, _target = self._database(Path(directory))

@@ -90,10 +90,26 @@ def _target_ids(conn: sqlite3.Connection, repo_id: int) -> dict[str, set[int]]:
     return ids
 
 
-def _ids_clause(ids: set[int]) -> tuple[str, tuple[int, ...]]:
-    if not ids:
-        return "(SELECT NULL WHERE 0)", ()
-    return "(" + ",".join("?" for _ in ids) + ")", tuple(sorted(ids))
+_SQLITE_ID_BATCH_SIZE = 900
+
+
+def _count_for_ids(
+    conn: sqlite3.Connection,
+    query: str,
+    ids: set[int],
+    fixed_params: tuple[int, ...] = (),
+) -> int:
+    """Count rows matching IDs without exceeding SQLite's bind limit."""
+
+    total = 0
+    ordered = sorted(ids)
+    for start in range(0, len(ordered), _SQLITE_ID_BATCH_SIZE):
+        batch = ordered[start : start + _SQLITE_ID_BATCH_SIZE]
+        clause = "(" + ",".join("?" for _ in batch) + ")"
+        total += int(
+            conn.execute(query.format(clause=clause), (*fixed_params, *batch)).fetchone()[0]
+        )
+    return total
 
 
 def _assert_no_active_inbound_references(
@@ -117,13 +133,12 @@ def _assert_no_active_inbound_references(
             parent_ids = ids.get(parent)
             if not parent_ids:
                 continue
-            clause, params = _ids_clause(parent_ids)
-            count = int(
-                conn.execute(
-                    f"SELECT COUNT(*) FROM {child} WHERE repo_id<>? "
-                    f"AND {from_column} IN {clause}",
-                    (repo_id, *params),
-                ).fetchone()[0]
+            count = _count_for_ids(
+                conn,
+                f"SELECT COUNT(*) FROM {child} WHERE repo_id<>? "
+                f"AND {from_column} IN {{clause}}",
+                parent_ids,
+                (repo_id,),
             )
             if count:
                 failures.append(f"{child}.{from_column}->{parent}={count}")
@@ -146,13 +161,12 @@ def _assert_no_active_inbound_references(
         target_ids = ids.get(target_table, set())
         if not target_ids:
             continue
-        clause, params = _ids_clause(target_ids)
-        count = int(
-            conn.execute(
-                f"SELECT COUNT(*) FROM {child} c {owner_join} WHERE owner.repo_id<>? "
-                f"AND c.{foreign_column} IN {clause}",
-                (repo_id, *params),
-            ).fetchone()[0]
+        count = _count_for_ids(
+            conn,
+            f"SELECT COUNT(*) FROM {child} c {owner_join} WHERE owner.repo_id<>? "
+            f"AND c.{foreign_column} IN {{clause}}",
+            target_ids,
+            (repo_id,),
         )
         if count:
             failures.append(f"{child}.{foreign_column}->{target_table}={count}")
@@ -166,20 +180,18 @@ def _assert_no_active_inbound_references(
     if integration:
         failures.append(f"integration_links={integration}")
     if entity_ids:
-        clause, params = _ids_clause(entity_ids)
-        count = int(
-            conn.execute(
-                f"SELECT COUNT(*) FROM knowledge_items WHERE entity_id IN {clause}", params
-            ).fetchone()[0]
+        count = _count_for_ids(
+            conn,
+            "SELECT COUNT(*) FROM knowledge_items WHERE entity_id IN {clause}",
+            entity_ids,
         )
         if count:
             failures.append(f"knowledge_items.entity_id={count}")
     if workflow_ids:
-        clause, params = _ids_clause(workflow_ids)
-        count = int(
-            conn.execute(
-                f"SELECT COUNT(*) FROM knowledge_items WHERE workflow_id IN {clause}", params
-            ).fetchone()[0]
+        count = _count_for_ids(
+            conn,
+            "SELECT COUNT(*) FROM knowledge_items WHERE workflow_id IN {clause}",
+            workflow_ids,
         )
         if count:
             failures.append(f"knowledge_items.workflow_id={count}")

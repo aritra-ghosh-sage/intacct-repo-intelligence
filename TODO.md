@@ -38,6 +38,9 @@ the catalog and historical validation issue reports are not backlog items.
       graph representation can create accuracy and correctness risks; detect
       and surface that state, and fail closed or clearly mark the affected
       evidence until it is revalidated.
+- [ ] Add a `tqdm`/progress indicator for the repository archival workflow so
+      long-running ownership checks and evidence removal expose operator
+      progress.
 - [ ] Complete OpenAPI, configuration, and override extraction for entity
       semantics. See `scripts/build_entity_semantics.py`.
 - [ ] Decide whether to implement the deferred partial-tree snapshot
