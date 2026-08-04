@@ -34,6 +34,7 @@ _REPOSITORY_KEYS = frozenset(
         "builders",
         "depends_on",
         "rest_automation",
+        "storage",
     }
 )
 _REST_AUTOMATION_KEYS = frozenset({"features_root", "object_mapping"})
@@ -310,11 +311,22 @@ def load_workspace_manifest(path: str | Path) -> dict[str, Any]:
             )
         entry["enabled"] = enabled
 
+        storage = entry.get("storage", "central")
+        if storage not in {"central", "sidecar"}:
+            raise RepositoryError(
+                f"repository {repo_key} storage must be 'central' or 'sidecar'"
+            )
+        entry["storage"] = storage
+
         builders = _normalize_builder_list(repo_key, entry.get("builders", []))
         entry["builders"] = builders
         profile = _normalize_profile_and_validate_builders(
             repo_key, entry.get("profile"), builders
         )
+        if storage == "sidecar" and profile != "xml_gateway_automation":
+            raise RepositoryError(
+                f"repository {repo_key} sidecar storage requires profile xml_gateway_automation"
+            )
         if "profile" in entry:
             entry["profile"] = profile
 
@@ -372,6 +384,10 @@ def register_manifest(
 
     rows: list[sqlite3.Row] = []
     for entry in manifest["repositories"]:
+        if entry.get("storage", "central") == "sidecar":
+            raise RepositoryError(
+                f"repository {entry['repo_key']} is sidecar storage and cannot be registered in central SQLite"
+            )
         builders = entry.get("builders", [])
         conn.execute(
             """

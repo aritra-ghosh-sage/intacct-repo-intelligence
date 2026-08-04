@@ -7,6 +7,7 @@ decorator-based tool registration, and type-safe request/response structures.
 from __future__ import annotations
 
 import base64
+import hashlib
 import inspect
 import json
 import os
@@ -1619,13 +1620,15 @@ def entity_test_coverage_impl(
     eligibility: str | None = None,
     limit: int = DEFAULT_LIMIT,
     cursor: str | None = None,
+    workflow_action: str | None = None,
 ) -> CatalogResponse:
     """Retrieve Gherkin test cases (scenarios and their HTTP requests) covering an entity or its workflows.
 
     Returns test cases organized by feature/scenario with full request steps,
     Jira references, eligibility status, and a summary by eligibility tier.
-    If workflow_name is provided, only test cases containing at least one
-    operation_kind='workflow' request step for that entity are returned.
+    ``workflow_name`` is retained only for informational workflow context.
+    ``workflow_action`` is the evidence-backed filter: action and entity must
+    occur on the same canonical workflow request.
     """
     lim = validate_limit(limit)
     off = decode_cursor(cursor)
@@ -1650,6 +1653,28 @@ def entity_test_coverage_impl(
                 {"missing_tables": missing},
             )
 
+        if workflow_action:
+            action_tables = ("test_coverage_build_state",)
+            missing_action_tables = [
+                table for table in action_tables if not state.table_exists(c, table)
+            ]
+            request_columns = {
+                str(row[1]) for row in c.execute("PRAGMA table_info(test_requests)")
+            }
+            if missing_action_tables or "workflow_action" not in request_columns:
+                return make_response(
+                    state,
+                    "entity_test_coverage",
+                    {},
+                    c,
+                    status="capability_unavailable",
+                    error={
+                        "code": "workflow_action_filter_unavailable",
+                        "message": "Workflow-action coverage requires migration 030 and current build state",
+                        "details": {"missing_tables": missing_action_tables},
+                    },
+                )
+
         # Resolve entity
         entity = c.execute(
             "SELECT id, name, entity_type FROM entity_nodes WHERE name = ? COLLATE NOCASE",
@@ -1664,6 +1689,87 @@ def entity_test_coverage_impl(
                 c,
             )
         entity_id = int(entity["id"])
+
+        if workflow_action:
+            # Only suites that actually contribute this entity's links are a
+            # freshness dependency.  The mapping path is manifest authority;
+            # it is intentionally not inferred from other JSON files.
+            contributors = c.execute(
+                """SELECT DISTINCT r.id,r.repo_key,r.indexed_commit_sha
+                   FROM test_entity_links tel
+                   JOIN test_requests tr ON tr.id=tel.test_request_id
+                   JOIN test_cases tc ON tc.id=tr.test_case_id
+                   JOIN repos r ON r.id=tc.repo_id
+                   WHERE tel.entity_id=? ORDER BY r.repo_key""",
+                (entity_id,),
+            ).fetchall()
+            unavailable: list[dict[str, Any]] = []
+            for contributor in contributors:
+                build_state = c.execute(
+                    """SELECT extractor_version,indexed_suite_target_sha,
+                              dependency_revisions_json,entity_mapping_sha1
+                       FROM test_coverage_build_state WHERE repo_id=?""",
+                    (contributor["id"],),
+                ).fetchone()
+                if build_state is None:
+                    unavailable.append({"repo_key": contributor["repo_key"], "reason": "missing_build_state"})
+                    continue
+                if build_state["extractor_version"] != "gherkin-coverage-v2-workflow-action":
+                    unavailable.append({"repo_key": contributor["repo_key"], "reason": "extractor_version"})
+                    continue
+                try:
+                    revisions = json.loads(build_state["dependency_revisions_json"])
+                except (TypeError, json.JSONDecodeError):
+                    revisions = None
+                if not isinstance(revisions, dict) or not isinstance(revisions.get("ia-main"), str):
+                    unavailable.append({"repo_key": contributor["repo_key"], "reason": "dependency_revisions"})
+                    continue
+                expected_fingerprint = hashlib.sha256(
+                    json.dumps(
+                        {
+                            "extractor_version": "gherkin-coverage-v2-workflow-action",
+                            "dependency_revisions": dict(sorted(revisions.items())),
+                            "entity_mapping_sha1": build_state["entity_mapping_sha1"],
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode()
+                ).hexdigest()
+                stored_fingerprint = c.execute(
+                    "SELECT coverage_dependency_fingerprint FROM test_coverage_build_state WHERE repo_id=?",
+                    (contributor["id"],),
+                ).fetchone()[0]
+                if stored_fingerprint != expected_fingerprint:
+                    unavailable.append({"repo_key": contributor["repo_key"], "reason": "dependency_fingerprint"})
+                    continue
+                if revisions.get(contributor["repo_key"]) != build_state["indexed_suite_target_sha"] or contributor["indexed_commit_sha"] != build_state["indexed_suite_target_sha"]:
+                    unavailable.append({"repo_key": contributor["repo_key"], "reason": "suite_revision"})
+                    continue
+                stale_revision = any(
+                    (row := c.execute("SELECT indexed_commit_sha FROM repos WHERE repo_key=?", (key,)).fetchone()) is None
+                    or row["indexed_commit_sha"] != value
+                    for key, value in revisions.items()
+                )
+                mapping_rows = c.execute(
+                    """SELECT sha1 FROM files WHERE repo_id=?
+                       AND path='src/test/resources/object-mapping.json'""",
+                    (contributor["id"],),
+                ).fetchall()
+                if stale_revision or len(mapping_rows) != 1 or mapping_rows[0]["sha1"] != build_state["entity_mapping_sha1"]:
+                    unavailable.append({"repo_key": contributor["repo_key"], "reason": "dependency_or_mapping_sha"})
+            if unavailable:
+                return make_response(
+                    state,
+                    "entity_test_coverage",
+                    {},
+                    c,
+                    status="capability_unavailable",
+                    error={
+                        "code": "workflow_action_filter_unavailable",
+                        "message": "Workflow-action evidence is missing or stale",
+                        "details": {"repositories": unavailable},
+                    },
+                )
 
         # Gather workflow context for the entity (informational)
         workflows: list[dict[str, Any]] = []
@@ -1680,7 +1786,8 @@ def entity_test_coverage_impl(
             wf_sql += " ORDER BY w.name"
             workflows = [row_to_dict(r) for r in c.execute(wf_sql, wf_args)]
 
-        # Build optional filter clauses (no extra params needed for workflow_filter)
+        # Build optional filter clauses.  Deprecated workflow_name never
+        # affects test-case or summary selection.
         eligibility_clause = ""
         query_args: list[Any] = [entity_id]
         if eligibility:
@@ -1699,9 +1806,12 @@ def entity_test_coverage_impl(
         workflow_clause = (
             " AND EXISTS ("
             "SELECT 1 FROM test_requests tr2 "
-            "WHERE tr2.test_case_id = tc.id AND tr2.operation_kind = 'workflow'"
+            "JOIN test_entity_links tel2 ON tel2.test_request_id=tr2.id "
+            "WHERE tr2.test_case_id = tc.id AND tel2.entity_id=? "
+            "AND tr2.operation_kind = 'workflow' "
+            "AND tr2.workflow_action = ? COLLATE NOCASE"
             ")"
-            if workflow_name
+            if workflow_action
             else ""
         )
 
@@ -1723,7 +1833,7 @@ def entity_test_coverage_impl(
             GROUP BY tc.eligibility
             ORDER BY tc.eligibility
             """,
-            [entity_id],
+            [entity_id, *( [entity_id, workflow_action] if workflow_action else [] )],
         ).fetchall()
         summary = {row["eligibility"]: row["cnt"] for row in summary_rows}
         total = sum(summary.values())
@@ -1754,7 +1864,7 @@ def entity_test_coverage_impl(
                      tc.example_row, tc.id
             LIMIT ? OFFSET ?
             """,
-            (*query_args, lim + 1, off),
+            (*query_args, *( [entity_id, workflow_action] if workflow_action else [] ), lim + 1, off),
         ).fetchall()
 
         page_rows = rows[:lim]
@@ -1770,7 +1880,8 @@ def entity_test_coverage_impl(
                     """
                     SELECT tr.id, tr.ordinal, tr.step_line, tr.method,
                            tr.object_token, tr.raw_path, tr.normalized_path,
-                           tr.request_version, tr.expected_status, tr.operation_kind
+                           tr.request_version, tr.expected_status, tr.operation_kind,
+                           tr.workflow_action
                     FROM test_requests tr
                     WHERE tr.test_case_id = ?
                     ORDER BY tr.ordinal
@@ -1790,9 +1901,14 @@ def entity_test_coverage_impl(
             "test_cases": cases,
             "filter": {
                 "workflow_name": workflow_name,
+                "workflow_action": workflow_action,
                 "eligibility": eligibility,
             },
         }
+        if workflow_name:
+            data["filter_warnings"] = [
+                "workflow_name is deprecated and filters only data.workflows; use workflow_action for test evidence."
+            ]
 
         return make_response(
             state,
@@ -3457,8 +3573,9 @@ def create_server(
             Field(
                 min_length=1,
                 description=(
-                    "Exact workflow name, matched case-insensitively. When set, "
-                    "return scenarios containing a workflow request step."
+                    "Deprecated informational workflow-name filter, matched "
+                    "case-insensitively only in data.workflows. It never filters "
+                    "test scenarios; use workflow_action instead."
                 ),
                 examples=["approve"],
             ),
@@ -3467,10 +3584,23 @@ def create_server(
         eligibility: Eligibility | None = None,
         limit: ResultLimit = DEFAULT_LIMIT,
         cursor: PaginationCursor | None = None,
+        workflow_action: Annotated[
+            str,
+            Field(
+                min_length=1,
+                description=(
+                    "Exact, case-insensitive action from a canonical "
+                    "/workflows/<module>/<object>/<action> request. This "
+                    "fails closed when action evidence is stale."
+                ),
+                examples=["approve"],
+            ),
+        ]
+        | None = None,
     ) -> CatalogResponse:
         """Return linked Gherkin scenarios, Jira references, eligibility, feature paths, lines, and ordered HTTP steps."""
         return entity_test_coverage_impl(
-            state, entity_name, workflow_name, eligibility, limit, cursor
+            state, entity_name, workflow_name, eligibility, limit, cursor, workflow_action
         )
 
     @mcp.tool(annotations=READ_ONLY_TOOL_ANNOTATIONS)

@@ -25,6 +25,7 @@ UI_CATALOG_MIGRATION = "026_ui_catalog"
 UI_NEGATIVE_EVENT_CALL_MIGRATION = "027_ui_negative_event_calls"
 API_REGISTRY_MIGRATION = "028_api_registry"
 REPOSITORY_ARCHIVAL_MIGRATION = "029_repository_archival"
+WORKFLOW_ACTION_MIGRATION = "030_workflow_action"
 LEGACY_REPO_KEY = "ia-main"
 
 
@@ -1577,8 +1578,33 @@ def _apply_repository_archival_migration(conn: sqlite3.Connection) -> None:
     _rebuild_catalog_builds_for_archive_mode(conn)
 
 
+def _apply_workflow_action_migration(conn: sqlite3.Connection) -> None:
+    """Install action-scoped REST coverage evidence and its freshness state."""
+
+    if not _table_exists(conn, "test_requests"):
+        return
+    _add_columns(conn, "test_requests", ("workflow_action TEXT",))
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_test_requests_workflow_action "
+        "ON test_requests(workflow_action) WHERE workflow_action IS NOT NULL"
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS test_coverage_build_state (
+               repo_id INTEGER PRIMARY KEY,
+               extractor_version TEXT NOT NULL,
+               candidate_build_token TEXT NOT NULL,
+               indexed_suite_target_sha TEXT NOT NULL,
+               dependency_revisions_json TEXT NOT NULL,
+               entity_mapping_sha1 TEXT NOT NULL,
+               coverage_dependency_fingerprint TEXT NOT NULL,
+               built_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+               FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE
+           )"""
+    )
+
+
 def apply_delta_refresh_migration(conn: sqlite3.Connection) -> None:
-    """Apply refresh migrations 023 through 029 to a repository-scoped catalog."""
+    """Apply refresh migrations 023 through 030 to a repository-scoped catalog."""
 
     if conn.in_transaction:
         raise RuntimeError(
@@ -1659,6 +1685,16 @@ def apply_delta_refresh_migration(conn: sqlite3.Connection) -> None:
             conn.execute(
                 "INSERT INTO schema_migrations(name) VALUES (?)",
                 (REPOSITORY_ARCHIVAL_MIGRATION,),
+            )
+        workflow_action_applied = conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name=?",
+            (WORKFLOW_ACTION_MIGRATION,),
+        ).fetchone()
+        _apply_workflow_action_migration(conn)
+        if workflow_action_applied is None:
+            conn.execute(
+                "INSERT INTO schema_migrations(name) VALUES (?)",
+                (WORKFLOW_ACTION_MIGRATION,),
             )
         violations = conn.execute("PRAGMA foreign_key_check").fetchall()
         if violations:
@@ -1818,6 +1854,16 @@ def apply_multi_repo_migration(
             conn.execute(
                 "INSERT INTO schema_migrations(name) VALUES (?)",
                 (REPOSITORY_ARCHIVAL_MIGRATION,),
+            )
+        workflow_action_applied = conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name=?",
+            (WORKFLOW_ACTION_MIGRATION,),
+        ).fetchone()
+        _apply_workflow_action_migration(conn)
+        if workflow_action_applied is None:
+            conn.execute(
+                "INSERT INTO schema_migrations(name) VALUES (?)",
+                (WORKFLOW_ACTION_MIGRATION,),
             )
         # FK enforcement is necessarily off while legacy parent tables are
         # rebuilt, but foreign_key_check still validates the candidate before

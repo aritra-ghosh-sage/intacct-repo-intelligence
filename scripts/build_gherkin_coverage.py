@@ -33,6 +33,7 @@ except ModuleNotFoundError:  # helpful error for operators rather than fallback 
 
 DEFAULT_DB = "catalog/catalog.db"
 PRODUCTION_REST_REPO_KEY = "ia-main"
+EXTRACTOR_VERSION = "gherkin-coverage-v2-workflow-action"
 VERSION_TAG = re.compile(r"^@version:([^\s]+)$", re.IGNORECASE)
 JIRA_TAG = re.compile(r"^@([A-Z][A-Z0-9]+-\d+)$")
 STATUS = re.compile(
@@ -77,6 +78,7 @@ class RequestEvidence:
     version: str | None
     expected_status: int | None
     operation_kind: str
+    workflow_action: str | None = None
     explicit_version: bool = False
 
 
@@ -351,6 +353,19 @@ def canonicalize_path(path: str) -> str:
     return path.rstrip("/") or "/"
 
 
+def workflow_action_for_request(operation_kind: str, normalized_path: str | None) -> str | None:
+    """Return only a proven canonical Gateway workflow action.
+
+    This deliberately rejects aliases, extra segments, and ordinary object
+    routes.  A NULL is evidence of "not proven", not an extraction failure.
+    """
+
+    if operation_kind != "workflow" or not normalized_path:
+        return None
+    match = re.fullmatch(r"/workflows/[^/]+/[^/]+/([^/]+)", normalized_path)
+    return match.group(1) if match else None
+
+
 def _request_from_step(
     text: str,
     line: int,
@@ -391,6 +406,7 @@ def _request_from_step(
         effective_version,
         None,
         operation,
+        workflow_action_for_request(operation, path),
         bool(explicit),
     ), diagnostics
 
@@ -544,6 +560,7 @@ def parse_feature(path: Path, mapping: dict[str, str]) -> list[CaseEvidence]:
                     r.version,
                     expected.get(i),
                     r.operation_kind,
+                    r.workflow_action,
                     r.explicit_version,
                 )
                 for i, r in enumerate(requests)
@@ -632,6 +649,10 @@ def build(
     suite_root: Path,
     object_mapping_path: Path,
     features_root: Path | None = None,
+    *,
+    candidate_build_token: str | None = None,
+    indexed_suite_target_sha: str | None = None,
+    dependency_revisions: dict[str, str] | None = None,
 ) -> dict[str, int]:
     from catalog.repository_lifecycle import require_repository_extractable
 
@@ -642,6 +663,7 @@ def build(
     if not production_repo["enabled"]:
         raise ValueError(f"production REST repository is disabled: {PRODUCTION_REST_REPO_KEY}")
     suite_root = suite_root.resolve()
+    object_mapping_path = object_mapping_path.resolve()
     features_root = (
         features_root or suite_root / "src/test/resources/features/rest-api"
     ).resolve()
@@ -653,11 +675,36 @@ def build(
     compatibility_rows = seed_api_version_compatibility(
         conn, repo_id, suite_root, features_root
     )
-    mapping_file_id = (
-        _file_id(conn, repo_id, suite_root, object_mapping_path)
-        if object_mapping_path.is_relative_to(suite_root)
+    mapping_relative = (
+        object_mapping_path.resolve().relative_to(suite_root).as_posix()
+        if object_mapping_path.resolve().is_relative_to(suite_root)
         else None
     )
+    # A refresh candidate already contains scan evidence.  Verify that the
+    # manifest-owned mapping has exactly one matching source row and the blob
+    # hash agrees with the bytes parsed below.  Standalone legacy invocation
+    # retains the narrow upsert for operator compatibility.
+    mapping_sha1 = hashlib.sha1(object_mapping_path.read_bytes()).hexdigest()
+    mapping_rows = (
+        conn.execute(
+            "SELECT id,sha1 FROM files WHERE repo_id=? AND path=?",
+            (repo_id, mapping_relative),
+        ).fetchall()
+        if mapping_relative is not None
+        else []
+    )
+    if candidate_build_token is not None:
+        if len(mapping_rows) != 1 or mapping_rows[0]["sha1"] != mapping_sha1:
+            raise ValueError(
+                "manifest object_mapping must have exactly one candidate files row with matching sha1"
+            )
+        mapping_file_id = int(mapping_rows[0]["id"])
+    else:
+        mapping_file_id = (
+            _file_id(conn, repo_id, suite_root, object_mapping_path)
+            if mapping_relative is not None
+            else None
+        )
     stats = {
         "features": 0,
         "cases": 0,
@@ -803,7 +850,7 @@ def build(
                 )
             for request in case.requests:
                 cursor = conn.execute(
-                    "INSERT INTO test_requests(test_case_id,ordinal,step_line,method,object_token,raw_path,normalized_path,request_version,expected_status,operation_kind) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO test_requests(test_case_id,ordinal,step_line,method,object_token,raw_path,normalized_path,request_version,expected_status,operation_kind,workflow_action) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         case_id,
                         request.ordinal,
@@ -815,6 +862,7 @@ def build(
                         request.version,
                         request.expected_status,
                         request.operation_kind,
+                        request.workflow_action,
                     ),
                 )
                 request_id = int(cursor.lastrowid)
@@ -858,6 +906,43 @@ def build(
                                 (request_id, endpoint["entity_id"], endpoint["id"]),
                             )
                         stats["links"] += 1
+    if candidate_build_token is not None:
+        if not indexed_suite_target_sha or dependency_revisions is None:
+            raise ValueError("candidate coverage requires target SHA and dependency revisions")
+        revisions = dict(sorted(dependency_revisions.items()))
+        if revisions.get(repo_key) != indexed_suite_target_sha:
+            raise ValueError("candidate coverage target SHA must match dependency revisions")
+        fingerprint_payload = {
+            "extractor_version": EXTRACTOR_VERSION,
+            "dependency_revisions": revisions,
+            "entity_mapping_sha1": mapping_sha1,
+        }
+        dependency_fingerprint = hashlib.sha256(
+            json.dumps(fingerprint_payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        conn.execute(
+            """INSERT INTO test_coverage_build_state(
+                   repo_id,extractor_version,candidate_build_token,indexed_suite_target_sha,
+                   dependency_revisions_json,entity_mapping_sha1,coverage_dependency_fingerprint
+               ) VALUES(?,?,?,?,?,?,?)
+               ON CONFLICT(repo_id) DO UPDATE SET
+                   extractor_version=excluded.extractor_version,
+                   candidate_build_token=excluded.candidate_build_token,
+                   indexed_suite_target_sha=excluded.indexed_suite_target_sha,
+                   dependency_revisions_json=excluded.dependency_revisions_json,
+                   entity_mapping_sha1=excluded.entity_mapping_sha1,
+                   coverage_dependency_fingerprint=excluded.coverage_dependency_fingerprint,
+                   built_at=CURRENT_TIMESTAMP""",
+            (
+                repo_id,
+                EXTRACTOR_VERSION,
+                candidate_build_token,
+                indexed_suite_target_sha,
+                json.dumps(revisions, sort_keys=True, separators=(",", ":")),
+                mapping_sha1,
+                dependency_fingerprint,
+            ),
+        )
     conn.commit()
     return stats
 

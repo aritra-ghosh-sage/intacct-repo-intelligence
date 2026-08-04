@@ -14,6 +14,7 @@ from scripts.build_gherkin_coverage import (
     load_object_mapping,
     parse_feature,
     read_properties_metadata,
+    workflow_action_for_request,
 )
 from scripts.query_rest import _coverage_rows
 
@@ -36,6 +37,21 @@ Feature: Accounts
 
 
 class GherkinCoverageTests(unittest.TestCase):
+    def test_workflow_action_requires_exact_canonical_route(self) -> None:
+        self.assertEqual(
+            "approve",
+            workflow_action_for_request("workflow", "/workflows/general-ledger/batch/approve"),
+        )
+        self.assertIsNone(
+            workflow_action_for_request("workflow", "/objects/general-ledger/batch/approve")
+        )
+        self.assertIsNone(
+            workflow_action_for_request("workflow", "/workflows/gl/batch/approve/extra")
+        )
+        self.assertIsNone(
+            workflow_action_for_request("collection", "/workflows/gl/batch/approve")
+        )
+
     def _fixture(self) -> tuple[tempfile.TemporaryDirectory[str], Path, dict[str, str]]:
         tmp = tempfile.TemporaryDirectory()
         root = Path(tmp.name)

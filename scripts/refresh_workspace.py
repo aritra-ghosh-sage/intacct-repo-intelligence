@@ -146,6 +146,7 @@ def _repository_manifest_hash(entry: dict) -> str:
         "enabled": bool(entry.get("enabled", True)),
         "profile": entry.get("profile") or "generic",
         "builders": list(entry.get("builders") or []),
+        "storage": entry.get("storage", "central"),
         "depends_on": entry.get("depends_on"),
         "rest_automation": entry.get("rest_automation"),
     }
@@ -397,6 +398,7 @@ def _run_builder(
     output_root: Path,
     execution_mode: str = "full",
     delta_context: dict[str, object] | None = None,
+    coverage_build_context: dict[str, object] | None = None,
 ) -> BuilderOutcome:
     admission_conn = sqlite3.connect(candidate_db)
     admission_conn.row_factory = sqlite3.Row
@@ -986,6 +988,9 @@ def _run_builder(
                 suite_root=root,
                 object_mapping_path=object_mapping,
                 features_root=features_root,
+                candidate_build_token=(coverage_build_context or {}).get("build_token"),
+                indexed_suite_target_sha=(coverage_build_context or {}).get("target_sha"),
+                dependency_revisions=(coverage_build_context or {}).get("dependency_revisions"),
             )
             metrics = {
                 "features": result["features"],
@@ -1129,6 +1134,11 @@ def _record_failed_refresh(
 
 def _resolve_refresh_order(manifest: dict, repo_key: str) -> list[str]:
     """Return a validated, dependency-first refresh order."""
+    selected = _manifest_repository(manifest, repo_key)
+    if selected.get("storage", "central") == "sidecar":
+        raise RefreshError(
+            f"repository {repo_key} uses sidecar storage; run scripts/refresh_gateway_sidecar.py instead"
+        )
     ordered: list[str] = []
     completed: set[str] = set()
     visiting: list[str] = []
@@ -1904,7 +1914,7 @@ def _refresh_repository_closure(
             conn.row_factory = sqlite3.Row
             resources.callback(conn.close)
             failed_step = "register_manifest"
-            register_manifest(conn, manifest)
+            register_manifest(conn, _closure_manifest(manifest, set(refresh_order)))
             for repo_key, snapshot in snapshots.items():
                 conn.execute(
                     "UPDATE repos SET local_root=? WHERE repo_key=?",
@@ -2034,6 +2044,16 @@ def _refresh_repository_closure(
                             output_root=output_root / repo_key,
                             execution_mode=execution_mode,
                             delta_context=delta_context,
+                            coverage_build_context={
+                                "build_token": build_token,
+                                "target_sha": change_by_repo[repo_key].target_commit_sha,
+                                "dependency_revisions": {
+                                    key: change_by_repo[key].target_commit_sha
+                                    for key in sorted(change_by_repo)
+                                },
+                            }
+                            if builder == "gherkin_coverage"
+                            else None,
                         )
                     except Exception as exc:
                         _stage(

@@ -75,6 +75,17 @@ def _object_id_length(root: Path) -> int:
         raise SourceSnapshotError(f"unsupported Git object format: {value!r}") from exc
 
 
+def resolve_commit_sha(root: Path, target_sha: str) -> str:
+    """Resolve a Git revision to a validated, immutable commit object ID."""
+
+    resolved_root = root.expanduser().resolve()
+    if not resolved_root.is_dir():
+        raise SourceSnapshotError(f"Git root does not exist: {resolved_root}")
+    return _resolve_commit(
+        resolved_root, target_sha, _object_id_length(resolved_root)
+    )
+
+
 def _resolve_commit(root: Path, target_sha: str, object_id_length: int) -> str:
     commit = (
         _git_bytes(root, "rev-parse", "--verify", f"{target_sha}^{{commit}}")
@@ -253,7 +264,7 @@ def materialize_source_snapshot(
     if not resolved_git_root.is_dir():
         raise SourceSnapshotError(f"Git root does not exist: {resolved_git_root}")
     object_id_length = _object_id_length(resolved_git_root)
-    commit = _resolve_commit(resolved_git_root, target_sha, object_id_length)
+    commit = resolve_commit_sha(resolved_git_root, target_sha)
     entries = _read_tree(resolved_git_root, commit, object_id_length)
     parent = (temp_parent or Path(tempfile.gettempdir())).expanduser().resolve()
     parent.mkdir(parents=True, exist_ok=True)

@@ -48,6 +48,18 @@ the catalog and historical validation issue reports are not backlog items.
 - [ ] Create the follow-up migration for complete legacy parent/child family
       rebuilding, if still required. See `catalog/migrations.py`.
 
+## UI Catalog
+
+- [x] Implement the source-provenanced actionUI/NextGen UI catalog, including
+      XML extraction, bounded PHP loader resolution, JavaScript handler
+      resolution, SQLite synchronization, validation, query tooling, MCP
+      surfaces, and focused tests. See
+      `docs/design/ui-catalog-implementation-plan.md`.
+- [ ] Consider explicitly approved follow-up scope: Ladybug projection,
+      per-file UI delta mutation, compatibility mappings, runtime event
+      execution, broader JavaScript call-graph analysis, and semantic
+      UI-field-to-entity-field mapping.
+
 ## Review And Approval
 
 - [ ] Obtain stakeholder approval for the flat workflow model decision. See

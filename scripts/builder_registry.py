@@ -224,6 +224,9 @@ PROFILE_DEFAULTS: dict[str, tuple[str, ...]] = {
         "relationships",
         "gherkin_coverage",
     ),
+    # Gateway evidence is intentionally built in its own SQLite sidecar, not
+    # through the central builder dispatcher.
+    "xml_gateway_automation": (),
     "intacct_app": (
         "scan",
         "symbols",

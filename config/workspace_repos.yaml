@@ -42,3 +42,16 @@ repositories:
     rest_automation:
       features_root: src/test/resources/features/rest-api
       object_mapping: src/test/resources/object-mapping.json
+  - repo_key: ia-gwdata-gl
+    name: IA Gateway GL Automation
+    kind: automation
+    language: xml
+    remote_url: git@github.com:intacct/ia-gwdata-gl.git
+    local_root: ~/projects/ia-gwdata-gl
+    tracked_branch: main
+    enabled: false
+    profile: xml_gateway_automation
+    storage: sidecar
+    depends_on:
+      - ia-main
+    builders: []

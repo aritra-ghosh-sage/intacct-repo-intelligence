@@ -733,11 +733,18 @@ CREATE TABLE IF NOT EXISTS test_requests (
     expected_status INTEGER,
     operation_kind TEXT NOT NULL DEFAULT 'unknown'
         CHECK(operation_kind IN ('collection', 'item', 'child', 'workflow', 'custom', 'unknown')),
+    -- Set only for the canonical /workflows/<module>/<object>/<action> form.
+    -- It is deliberately nullable: ordinary REST evidence must not be guessed
+    -- into workflow evidence.
+    workflow_action TEXT,
     FOREIGN KEY(test_case_id) REFERENCES test_cases(id) ON DELETE CASCADE,
     UNIQUE(test_case_id, ordinal)
 );
 CREATE INDEX IF NOT EXISTS idx_test_requests_case ON test_requests(test_case_id);
 CREATE INDEX IF NOT EXISTS idx_test_requests_route ON test_requests(method, normalized_path, request_version);
+CREATE INDEX IF NOT EXISTS idx_test_requests_workflow_action
+    ON test_requests(workflow_action)
+    WHERE workflow_action IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS test_endpoint_links (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -764,6 +771,21 @@ CREATE TABLE IF NOT EXISTS test_entity_links (
     UNIQUE(test_request_id, entity_id, rest_endpoint_id)
 );
 CREATE INDEX IF NOT EXISTS idx_test_entity_links_entity ON test_entity_links(entity_id);
+
+-- A coverage build is valid only for the exact candidate evidence from which
+-- it was constructed.  This is intentionally independent of catalog_builds'
+-- final logical fingerprint so there is no self-reference during promotion.
+CREATE TABLE IF NOT EXISTS test_coverage_build_state (
+    repo_id INTEGER PRIMARY KEY,
+    extractor_version TEXT NOT NULL,
+    candidate_build_token TEXT NOT NULL,
+    indexed_suite_target_sha TEXT NOT NULL,
+    dependency_revisions_json TEXT NOT NULL,
+    entity_mapping_sha1 TEXT NOT NULL,
+    coverage_dependency_fingerprint TEXT NOT NULL,
+    built_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE
+);
 
 CREATE TABLE IF NOT EXISTS test_diagnostics (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1523,4 +1545,5 @@ INSERT OR IGNORE INTO schema_migrations(name) VALUES
     ('026_ui_catalog'),
     ('027_ui_negative_event_calls'),
     ('028_api_registry'),
-    ('029_repository_archival');
+    ('029_repository_archival'),
+    ('030_workflow_action');
