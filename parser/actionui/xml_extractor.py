@@ -328,7 +328,9 @@ def extract_actionui_xml_facts(
                     source_file=source_file,
                     start_line=line,
                     end_line=line,
-                    severity="error",
+                    # A malformed source file is retained as a diagnostic, but
+                    # parser coverage loss is not a catalog-integrity failure.
+                    severity="warning",
                 ),
             )
         )

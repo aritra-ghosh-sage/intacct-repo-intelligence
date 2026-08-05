@@ -113,7 +113,7 @@ def test_malformed_xml_returns_no_partial_facts() -> None:
     assert result.events == ()
     assert result.event_calls == ()
     assert [diagnostic.code for diagnostic in result.diagnostics] == ["actionui.xml.parse_error"]
-    assert result.diagnostics[0].severity == "error"
+    assert result.diagnostics[0].severity == "warning"
 
 
 def test_document_type_is_rejected_without_partial_facts() -> None:

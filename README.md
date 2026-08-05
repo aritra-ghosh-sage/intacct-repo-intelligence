@@ -604,6 +604,14 @@ PYTHONPATH=. ./.venv/bin/python validation/validate_catalog_integrity.py \
   --db catalog/catalog.db
 ```
 
+Parser failures are retained as source-backed UI diagnostics and do not by
+themselves block SQLite promotion. A malformed ActionUI form preserves its
+last-known-good UI evidence when available; parser coverage loss is reported as
+a warning. Refresh-time parser details are written to per-repository files in
+the candidate output root (`<repo>/ui_parser_failures.jsonl`, with
+corresponding JavaScript and YAML failure logs). Semantic resolution errors
+and catalog integrity failures remain promotion-blocking.
+
 Intentional quality changes use a two-step, full-mode approval. Preparation
 builds and validates a candidate, writes a deterministic report, then deletes
 the candidate without changing active history or `catalog.db.previous`:

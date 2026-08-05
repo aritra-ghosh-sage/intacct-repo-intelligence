@@ -94,6 +94,9 @@ def test_malformed_xml_retains_existing_evidence_and_persists_parse_issue(tmp_pa
     assert conn.execute(
         "SELECT COUNT(*) FROM ui_resolution_issues WHERE issue_code='actionui.xml.parse_error'"
     ).fetchone()[0] == 1
+    from validation.validate_ui_catalog import validate_ui_catalog_connection
+
+    assert validate_ui_catalog_connection(conn)["ok"]
 
     _write(repo_root, form_path, "<form><field name='SECOND'/></form>")
     synchronize_ui_snapshot(
@@ -355,6 +358,10 @@ class FooEditor extends FormEditor {
         "actionui.handler.unresolved",
         "nextgen.entity_mapping.unresolved",
     }.issubset(issue_codes)
+    assert conn.execute(
+        "SELECT severity FROM ui_resolution_issues "
+        "WHERE issue_code='actionui.javascript.parse_error'"
+    ).fetchone()[0] == "warning"
 
 
 def test_bare_uimeta_persists_only_one_source_diagnostic_and_removes_it_when_resolved(

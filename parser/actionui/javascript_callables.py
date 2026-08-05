@@ -26,7 +26,9 @@ def extract_javascript_callables(
             source_file=source_file,
             start_line=int(failure["start_line"]),
             end_line=int(failure["end_line"]),
-            severity="error",
+            # Parser coverage loss is source evidence, not a catalog-integrity
+            # failure.  The unresolved handler remains recorded separately.
+            severity="warning",
             evidence=(
                 f"{failure['node_type']} bytes {failure['start_byte']}-{failure['end_byte']}"
             ),

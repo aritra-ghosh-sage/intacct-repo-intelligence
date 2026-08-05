@@ -477,7 +477,9 @@ def _run_builder(
             only_changed=False,
             repo_key=repo_key,
             db_path=candidate_db,
-            write_logs=False,
+            write_logs=True,
+            yaml_parse_failures_log=output_root / "yaml_parse_failures.jsonl",
+            javascript_parse_failures_log=output_root / "javascript_parse_failures.jsonl",
             file_ids=file_ids,
         )
         delta_context["symbol_summary"] = summary
@@ -703,6 +705,41 @@ def _run_builder(
         conn = get_connection(candidate_db)
         try:
             snapshot = assemble_ui_snapshot(conn, repo_id=repo_id, repo_root=root)
+            parser_rows = []
+            for diagnostic in snapshot.diagnostics:
+                if "parse_error" not in diagnostic.code:
+                    continue
+                source = root / diagnostic.source_file
+                parser_rows.append(
+                    {
+                        "repo_key": repo_key,
+                        "builder": "ui_surfaces",
+                        "code": diagnostic.code,
+                        "severity": diagnostic.severity,
+                        "source_path": diagnostic.source_file,
+                        "start_line": diagnostic.start_line,
+                        "end_line": diagnostic.end_line,
+                        "message": diagnostic.message,
+                        "evidence": diagnostic.evidence,
+                        "source_sha256": (
+                            hashlib.sha256(source.read_bytes()).hexdigest()
+                            if source.is_file()
+                            else None
+                        ),
+                    }
+                )
+            parser_log = output_root / "ui_parser_failures.jsonl"
+            parser_log.parent.mkdir(parents=True, exist_ok=True)
+            with parser_log.open("w", encoding="utf-8") as handle:
+                for row in sorted(
+                    parser_rows,
+                    key=lambda item: (
+                        str(item["source_path"]),
+                        int(item["start_line"]),
+                        str(item["code"]),
+                    ),
+                ):
+                    handle.write(json.dumps(row, sort_keys=True) + "\n")
             synchronize_ui_snapshot(conn, repo_id=repo_id, snapshot=snapshot)
             metrics = {
                 table: len(snapshot.rows.get(table, ()))

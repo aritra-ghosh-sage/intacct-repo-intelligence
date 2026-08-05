@@ -53,6 +53,7 @@ class UiRow:
 @dataclass
 class UiSnapshot:
     rows: dict[str, list[UiRow]] = field(default_factory=lambda: defaultdict(list))
+    diagnostics: list[Diagnostic] = field(default_factory=list)
     # A malformed form must not erase its prior evidence.  Synchronization uses
     # these keys to exempt the entire surface from stale-row deletion.
     protected_surface_keys: set[str] = field(default_factory=set)
@@ -127,6 +128,7 @@ def _add_diagnostic_issue(
     """Persist bounded extractor diagnostics instead of silently dropping them."""
 
     source_file = str(diagnostic.source_file)
+    snapshot.diagnostics.append(diagnostic)
     start_line = int(diagnostic.start_line)
     end_line = int(diagnostic.end_line)
     evidence = diagnostic.evidence
@@ -163,6 +165,7 @@ def _add_source_diagnostic(
     """
 
     source_file = str(diagnostic.source_file)
+    snapshot.diagnostics.append(diagnostic)
     file_row = _need_file(files, source_file)
     start_line = int(diagnostic.start_line)
     end_line = int(diagnostic.end_line)
@@ -259,13 +262,12 @@ def assemble_ui_snapshot(conn: sqlite3.Connection, *, repo_id: int, repo_root: P
         result = extract_actionui_xml_facts(source.read_bytes(), path)
         surface_key = f"actionui:{path}"
         artifact_key = _artifact_key(path, "form")
-        fatal_diagnostics = [
+        parser_diagnostics = [
             diagnostic
             for diagnostic in result.diagnostics
-            if diagnostic.severity == "error"
-            and diagnostic.code == "actionui.xml.parse_error"
+            if diagnostic.code == "actionui.xml.parse_error"
         ]
-        if fatal_diagnostics:
+        if parser_diagnostics:
             # Retain a previously successful surface verbatim.  For a new
             # malformed source, retain only its source-backed shell and issue.
             snapshot.protected_surface_keys.add(surface_key)
@@ -276,7 +278,7 @@ def assemble_ui_snapshot(conn: sqlite3.Connection, *, repo_id: int, repo_root: P
             if existing is None:
                 snapshot.add("ui_surfaces", _key(surface_key), surface_key=surface_key, surface_kind="actionui_form", display_name=PurePosixPath(path).stem, source_path=path, source_file_id=int(files[path]["id"]), extractor="actionui_xml", extractor_version=EXTRACTOR_VERSION, source_hash=_hash(source))
                 snapshot.add("ui_artifacts", _key(surface_key, artifact_key), surface_key=surface_key, artifact_key=artifact_key, artifact_kind="actionui_form", file_id=int(files[path]["id"]), source_path=path, start_line=1, end_line=1, evidence_text="actionUI form", source_hash=_hash(source), payload_json="{}")
-            for diagnostic in fatal_diagnostics:
+            for diagnostic in parser_diagnostics:
                 _add_diagnostic_issue(
                     snapshot,
                     surface_key=surface_key,

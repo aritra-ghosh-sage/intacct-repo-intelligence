@@ -58,6 +58,8 @@ def extract_all(
     repo_key: str | None = None,
     db_path: str | None = None,
     write_logs: bool = True,
+    yaml_parse_failures_log: Path | None = None,
+    javascript_parse_failures_log: Path | None = None,
     file_ids: list[int] | tuple[int, ...] | set[int] | None = None,
 ) -> SymbolChangeSummary:
     conn = get_connection(db_path)
@@ -285,8 +287,9 @@ def extract_all(
         if hasattr(yaml_extractor, "get_parse_failures"):
             parse_failures = yaml_extractor.get_parse_failures()
         if write_logs:
-            write_jsonl(YAML_PARSE_FAILURES_LOG, parse_failures)
-            print(f"   YAML parse fail log: {YAML_PARSE_FAILURES_LOG.as_posix()}")
+            log_path = yaml_parse_failures_log or YAML_PARSE_FAILURES_LOG
+            write_jsonl(log_path, parse_failures)
+            print(f"   YAML parse fail log: {log_path.as_posix()}")
 
     if "javascript" in selected_languages and hasattr(javascript_extractor, "get_stats"):
         javascript_stats = javascript_extractor.get_stats()
@@ -297,10 +300,11 @@ def extract_all(
         if hasattr(javascript_extractor, "get_parse_failures"):
             parse_failures = javascript_extractor.get_parse_failures()
         if write_logs:
-            write_jsonl(JAVASCRIPT_PARSE_FAILURES_LOG, parse_failures)
+            log_path = javascript_parse_failures_log or JAVASCRIPT_PARSE_FAILURES_LOG
+            write_jsonl(log_path, parse_failures)
             print(
                 "   JavaScript parse fail log: "
-                f"{JAVASCRIPT_PARSE_FAILURES_LOG.as_posix()}"
+                f"{log_path.as_posix()}"
             )
 
     if error_messages:
