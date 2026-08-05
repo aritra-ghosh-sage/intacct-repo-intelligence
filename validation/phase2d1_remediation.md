@@ -42,25 +42,11 @@ authoritative when prose and data disagree.
   preserves both active and previous SQLite generations.
 - Ladybug graph construction and promotion are excluded.
 
-## Semantic quality boundary
+## Semantic diagnostic boundary
 
-Only metrics owned by reset-style builders that ran are compared. A parent
-nonzero count may not fall to zero. Endpoint links, entity links, and
-entity-access links may not decrease. New error or warning diagnostic keys are
-rejected, and any error attached to a changed path is rejected.
-
-Intentional changes require a deterministic two-step full refresh:
-
-1. `--prepare-quality-baseline <report>` builds and validates without promotion.
-2. An operator reviews `approval_sha256`.
-3. `--accept-quality-baseline <reviewed-sha256>` rebuilds from the current
-   parent and promotes only when the recomputed hash is identical.
-
-The accepted hash is bound to that exact parent generation and is single-use:
-promotion changes the parent build ID, token, and fingerprint. Omit
-`--accept-quality-baseline` for ordinary subsequent refreshes; the active
-approved baseline is enforced automatically. Prepare and accept a new report
-only when intentionally approving a changed baseline.
+Counts and structured diagnostics remain audit evidence. Parser diagnostics
+are non-blocking when their file provenance is exact; semantic-resolution and
+catalog-integrity diagnostics remain promotion-blocking.
 
 Do not repair incompatibility by editing stored fingerprints or migration
 markers. Use a supported full refresh, validate the candidate, and retain

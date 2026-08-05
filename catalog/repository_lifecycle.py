@@ -75,6 +75,39 @@ def normalized_github_identity(remote_url: str | None) -> tuple[str, str] | None
     return owner.lower(), repo.lower()
 
 
+def canonical_git_url(remote_url: str | None) -> str | None:
+    """Normalize transport variants into one immutable repository identity."""
+    if remote_url is None or not remote_url.strip():
+        return None
+    value = remote_url.strip()
+    scp = None if "://" in value else re.fullmatch(r"(?:[^@]+@)?([^:]+):(.+)", value)
+    if scp:
+        host, path = scp.groups()
+    else:
+        parsed = urlparse(value)
+        if not parsed.hostname or not parsed.path:
+            raise RepositoryAdmissionError(f"invalid Git remote URL: {remote_url!r}")
+        host, path = parsed.hostname, parsed.path
+    normalized_path = "/".join(part for part in path.split("/") if part)
+    normalized_path = normalized_path.removesuffix(".git").rstrip("/")
+    if not normalized_path:
+        raise RepositoryAdmissionError(f"invalid Git remote URL: {remote_url!r}")
+    return f"{host.lower()}/{normalized_path}"
+
+
+def require_checkout_remote_identity(root: Path, expected_remote_url: str | None) -> str | None:
+    """Verify origin exactly matches the manifest's canonical repository URL."""
+    expected = canonical_git_url(expected_remote_url)
+    if expected is None:
+        return None
+    actual = canonical_git_url(_run(["git", "-C", str(root), "remote", "get-url", "origin"]))
+    if actual != expected:
+        raise RepositoryAdmissionError(
+            f"origin remote does not match configured canonical Git URL: expected={expected!r} actual={actual!r}"
+        )
+    return expected
+
+
 def _run(argv: list[str], *, cwd: Path | None = None) -> str:
     try:
         result = subprocess.run(argv, cwd=cwd, text=True, capture_output=True, check=False)
@@ -117,7 +150,9 @@ def verify_github_repository_active(*, remote_url: str | None, root: Path, branc
         return True
     if response == "true":
         raise RepositoryArchivedError(
-            f"GitHub reports repository archived: {expected[0]}/{expected[1]}"
+            f"GitHub reports repository archived: {expected[0]}/{expected[1]}. "
+            "Manual manifest action required: set enabled: false for this repository; "
+            "the refresh process never edits the manifest."
         )
     raise RepositoryAdmissionError(
         f"GitHub archive response must be literal true or false, got {response!r}"

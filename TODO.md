@@ -43,6 +43,15 @@ the catalog and historical validation issue reports are not backlog items.
       progress.
 - [ ] Complete OpenAPI, configuration, and override extraction for entity
       semantics. See `scripts/build_entity_semantics.py`.
+- [ ] Add the missing static mapping for the `entity_rest` object. Require
+      reviewed source evidence and preserve the existing object-mapping
+      compatibility path.
+- [ ] Investigate the empty `integration_links` table. Define a deterministic,
+      source-provenanced cross-repository link contract and writer, or document
+      and retain its unsupported status; do not fabricate integration facts.
+- [ ] Investigate why `knowledge_items` is empty. Identify authoritative source
+      inputs and an evidence-backed extraction/linking contract before adding a
+      population path.
 - [ ] Decide whether to implement the deferred partial-tree snapshot
       optimization described in the refresh contract.
 - [ ] Create the follow-up migration for complete legacy parent/child family
@@ -59,6 +68,24 @@ the catalog and historical validation issue reports are not backlog items.
       per-file UI delta mutation, compatibility mappings, runtime event
       execution, broader JavaScript call-graph analysis, and semantic
       UI-field-to-entity-field mapping.
+- [ ] Diagnose why the `ui_*` tables are not populated in the active catalog.
+      Verify builder-plan inclusion, candidate refresh execution, and UI
+      snapshot diagnostics before deciding on a repair.
+
+## Gateway Sidecar
+
+- [ ] Investigate why `gateway_entity_links` is empty and define an
+      evidence-backed mapping path from Gateway definitions to catalog entities.
+- [ ] Audit `gateway_definitions.gateway_object` coverage. Determine why values
+      are missing and whether a populated Gateway object can support a
+      provenance-backed entity link.
+- [ ] Triage `gateway_diagnostics.code = 'xml_reference_absent'`: classify the
+      source shapes that omit XML references and decide their supported
+      evidence/disposition without fabricating references.
+- [ ] Triage `gateway_xml_artifacts.diagnostic_code =
+      'unsupported_gateway_object'` rows. Inventory the unsupported Gateway
+      object forms and add support only with reviewed, source-grounded parsing
+      and mapping rules.
 
 ## Review And Approval
 

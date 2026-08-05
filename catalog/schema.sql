@@ -617,6 +617,7 @@ CREATE TABLE IF NOT EXISTS repo_index_runs (
     commit_sha TEXT,
     manifest_hash TEXT,
     builder_plan_hash TEXT,
+    source_identity_json TEXT,
     catalog_fingerprint TEXT,
     status TEXT NOT NULL CHECK(status IN ('building', 'validated', 'active', 'failed')),
     started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -627,6 +628,46 @@ CREATE TABLE IF NOT EXISTS repo_index_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_repo_index_runs_repo_started
     ON repo_index_runs(repo_id, started_at DESC);
+
+CREATE TABLE IF NOT EXISTS repo_builder_hydrations (
+    repo_id INTEGER NOT NULL, builder_name TEXT NOT NULL,
+    catalog_build_id INTEGER NOT NULL, repo_index_run_id INTEGER NOT NULL,
+    coverage_status TEXT NOT NULL CHECK(coverage_status IN ('complete','incomplete')),
+    last_full_commit_sha TEXT, last_attempt_commit_sha TEXT,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(repo_id,builder_name),
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    FOREIGN KEY(catalog_build_id) REFERENCES catalog_builds(id) ON DELETE RESTRICT,
+    FOREIGN KEY(repo_index_run_id) REFERENCES repo_index_runs(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS repo_evidence_fingerprints (
+    repo_id INTEGER PRIMARY KEY, catalog_build_id INTEGER NOT NULL,
+    evidence_fingerprint TEXT NOT NULL, stale_state_json TEXT NOT NULL DEFAULT '[]',
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    FOREIGN KEY(catalog_build_id) REFERENCES catalog_builds(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS repo_error_bundles (
+    repo_id INTEGER PRIMARY KEY, target_commit_sha TEXT, errors_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS repo_error_bundle_carry_forwards (
+    repo_id INTEGER PRIMARY KEY, archive_error_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS repo_stale_evidence (
+    repo_id INTEGER NOT NULL, source_path TEXT NOT NULL, prior_source_path TEXT NOT NULL,
+    prior_source_blob_sha TEXT, target_commit_sha TEXT NOT NULL, diagnostic_json TEXT NOT NULL,
+    retained_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(repo_id, source_path),
+    FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE
+);
 
 CREATE TABLE IF NOT EXISTS repo_index_stages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

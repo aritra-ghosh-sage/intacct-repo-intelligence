@@ -41,6 +41,7 @@ from catalog.refresh_attempts import (
     record_attempt_event,
     record_attempt_failure,
 )
+from catalog.repository_evidence import repository_evidence_fingerprint
 from catalog.refresh_contract import (
     EVIDENCE_COMPARISON_VERSION,
     RUNTIME_CONTRACT_VERSION,
@@ -86,6 +87,9 @@ from catalog.repositories import (
     rest_automation_paths,
 )
 from catalog.repository_lifecycle import (
+    RepositoryArchivedError,
+    canonical_git_url,
+    require_checkout_remote_identity,
     require_repository_extractable,
     verify_github_repository_active,
 )
@@ -114,10 +118,13 @@ def _git(root: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
-def source_revision(root: Path, tracked_branch: str) -> str:
+def source_revision(
+    root: Path, tracked_branch: str, expected_remote_url: str | None = None
+) -> str:
     """Validate a clean checkout and return the configured branch revision."""
     if _git(root, "status", "--porcelain"):
         raise RefreshError(f"repository checkout is dirty: {root}")
+    require_checkout_remote_identity(root, expected_remote_url)
     head = _git(root, "rev-parse", "HEAD")
     try:
         current_branch = _git(root, "symbolic-ref", "--short", "HEAD")
@@ -250,18 +257,20 @@ def _record_run(
     manifest_hash: str | None = None,
     builder_plan_hash: str | None = None,
     stage_modes: dict[str, tuple[str, str]] | None = None,
+    source_identity: dict[str, str] | None = None,
     commit: bool = True,
 ) -> int:
     cursor = conn.execute(
         """
-        INSERT INTO repo_index_runs(repo_id, tracked_branch, commit_sha, builder_plan_hash, status)
-        VALUES (?, ?, ?, ?, 'building')
+        INSERT INTO repo_index_runs(repo_id, tracked_branch, commit_sha, builder_plan_hash, source_identity_json, status)
+        VALUES (?, ?, ?, ?, ?, 'building')
         """,
         (
             repo_id,
             branch,
             sha,
             builder_plan_hash or hashlib.sha256(json.dumps(plan).encode()).hexdigest(),
+            _stable_json(source_identity) if source_identity is not None else None,
         ),
     )
     run_id = int(cursor.lastrowid)
@@ -1176,6 +1185,15 @@ def _record_failed_refresh(
                        ) VALUES (?,?,'failed',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,?)""",
                     (run_id, failed_step, str(error)),
             )
+        bundles = getattr(error, "error_bundle_by_repo", {})
+        if repo_key in bundles:
+            _write_error_bundle(
+                conn,
+                int(repo["id"]),
+                getattr(error, "error_bundle_target_shas", {}).get(repo_key),
+                list(bundles[repo_key]),
+                output_root=getattr(error, "error_output_root", None),
+            )
         conn.execute(
                 """UPDATE repos SET
                        last_attempt_status='failed', last_attempted_at=CURRENT_TIMESTAMP,
@@ -1280,13 +1298,17 @@ def _validate_refresh_preconditions(
                     f"repository {repo_key} checkout root does not exist: {root}"
                 )
             resolved_root = root.resolve()
-            verify_github_repository_active(
-                remote_url=entry.get("remote_url"),
-                root=resolved_root,
-                branch=entry.get("tracked_branch"),
-            )
+            try:
+                verify_github_repository_active(
+                    remote_url=entry.get("remote_url"),
+                    root=resolved_root,
+                    branch=entry.get("tracked_branch"),
+                )
+            except RepositoryArchivedError as exc:
+                exc.repository_key = repo_key
+                raise
             revisions[repo_key] = source_revision(
-                resolved_root, str(entry["tracked_branch"])
+                resolved_root, str(entry["tracked_branch"]), entry.get("remote_url")
             )
             if entry.get("profile") == "rest_automation":
                 rest_automation_paths(entry, resolved_root)
@@ -1296,13 +1318,136 @@ def _validate_refresh_preconditions(
     return revisions
 
 
+def _persist_github_archive(active: Path, repo_key: str, detail: str) -> None:
+    """Retain provider-confirmed archival evidence without changing manifest."""
+    conn = sqlite3.connect(active)
+    try:
+        columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(repos)")}
+        if {"lifecycle_state", "archive_source", "archive_reason", "archived_at"}.issubset(columns):
+            conn.execute(
+                """UPDATE repos SET lifecycle_state='archived',archive_source='github',
+                   archive_reason=?,archived_at=CURRENT_TIMESTAMP WHERE repo_key=?""",
+                (detail, repo_key),
+            )
+            repo = conn.execute("SELECT id FROM repos WHERE repo_key=?", (repo_key,)).fetchone()
+            if repo is not None:
+                archive_error = {
+                    "builder": "repository_admission", "code": "github_repository_archived",
+                    "severity": "error", "source_path": None, "source_blob_sha": None,
+                    "identity": {"repo_key": repo_key}, "message": detail,
+                }
+                conn.execute(
+                    """INSERT INTO repo_error_bundles(repo_id,errors_json)
+                       VALUES (?,?) ON CONFLICT(repo_id) DO UPDATE SET
+                       errors_json=excluded.errors_json,updated_at=CURRENT_TIMESTAMP""",
+                    (int(repo[0]), _stable_json([archive_error])),
+                )
+                conn.execute(
+                    """INSERT INTO repo_error_bundle_carry_forwards(repo_id,archive_error_json)
+                       VALUES (?,?) ON CONFLICT(repo_id) DO UPDATE SET
+                       archive_error_json=excluded.archive_error_json,updated_at=CURRENT_TIMESTAMP""",
+                    (int(repo[0]), _stable_json(archive_error)),
+                )
+            conn.commit()
+    finally:
+        conn.close()
+
+
+def _semantic_blockers(outcomes: dict[str, BuilderOutcome]) -> list[dict[str, object]]:
+    """Only parser failures are explicitly tolerated during promotion."""
+    return [
+        diagnostic.to_dict()
+        for outcome in outcomes.values()
+        for diagnostic in outcome.diagnostics
+        if diagnostic.severity == "error" and "parse_error" not in diagnostic.code
+    ]
+
+
+def _write_error_bundle(
+    conn: sqlite3.Connection, repo_id: int, target_commit_sha: str | None,
+    errors: list[dict[str, object]], *, output_root: Path | None = None,
+) -> None:
+    carry_rows = conn.execute(
+        "SELECT archive_error_json FROM repo_error_bundle_carry_forwards WHERE repo_id=?",
+        (repo_id,),
+    ).fetchall()
+    carried = [json.loads(str(row[0])) for row in carry_rows]
+    payload = list(errors) + carried
+    if output_root is not None:
+        payload.append({
+            "builder": "refresh", "code": "raw_error_output",
+            "severity": "error", "source_path": None, "source_blob_sha": None,
+            "identity": {"output_root": str(output_root)},
+        })
+    conn.execute(
+        """INSERT INTO repo_error_bundles(repo_id,target_commit_sha,errors_json)
+           VALUES (?,?,?) ON CONFLICT(repo_id) DO UPDATE SET
+           target_commit_sha=excluded.target_commit_sha,errors_json=excluded.errors_json,
+           updated_at=CURRENT_TIMESTAMP""",
+        (repo_id, target_commit_sha, _stable_json(payload)),
+    )
+
+
+def _record_stale_parser_evidence(
+    candidate: sqlite3.Connection, active_db: Path, repo_id: int,
+    target_commit_sha: str, change: RepositoryChangeSet,
+    outcomes: dict[str, BuilderOutcome],
+) -> list[dict[str, object]]:
+    """Mark only parser-failed files with exact prior-file provenance stale."""
+    diagnostics = [
+        diagnostic.to_dict()
+        for outcome in outcomes.values()
+        for diagnostic in outcome.diagnostics
+        if diagnostic.severity == "error" and "parse_error" in diagnostic.code
+        and diagnostic.source_path is not None
+    ]
+    by_new_path = {
+        item.new_path: item.old_path for item in change.changed_paths
+        if item.new_path is not None and item.old_path is not None
+    }
+    active = sqlite3.connect(f"file:{active_db}?mode=ro", uri=True)
+    active.row_factory = sqlite3.Row
+    retained: list[dict[str, object]] = []
+    try:
+        for diagnostic in diagnostics:
+            path = str(diagnostic["source_path"])
+            prior_path = by_new_path.get(path, path)
+            prior = active.execute(
+                "SELECT sha1 FROM files WHERE repo_id=? AND path=?", (repo_id, prior_path)
+            ).fetchone()
+            if prior is None:
+                # There is no last-known-good source evidence to retain.
+                continue
+            candidate.execute(
+                """INSERT INTO repo_stale_evidence(
+                       repo_id,source_path,prior_source_path,prior_source_blob_sha,
+                       target_commit_sha,diagnostic_json)
+                   VALUES (?,?,?,?,?,?) ON CONFLICT(repo_id,source_path) DO UPDATE SET
+                       prior_source_path=excluded.prior_source_path,
+                       prior_source_blob_sha=excluded.prior_source_blob_sha,
+                       target_commit_sha=excluded.target_commit_sha,
+                       diagnostic_json=excluded.diagnostic_json,retained_at=CURRENT_TIMESTAMP""",
+                (repo_id, path, prior_path, prior["sha1"], target_commit_sha, _stable_json(diagnostic)),
+            )
+            retained.append({
+                "source_path": path, "prior_source_path": prior_path,
+                "prior_source_blob_sha": prior["sha1"], "diagnostic": diagnostic,
+            })
+        failed_paths = {str(item["source_path"]) for item in diagnostics}
+        if not failed_paths:
+            candidate.execute("DELETE FROM repo_stale_evidence WHERE repo_id=?", (repo_id,))
+    finally:
+        active.close()
+    return retained
+
+
 def _recheck_source_revisions(
     manifest: dict, expected_revisions: dict[str, str]
 ) -> None:
     for repo_key, expected in expected_revisions.items():
         entry = _manifest_repository(manifest, repo_key)
         root = Path(entry["local_root"]).expanduser().resolve()
-        actual = source_revision(root, str(entry["tracked_branch"]))
+        actual = source_revision(root, str(entry["tracked_branch"]), entry.get("remote_url"))
         if actual != expected:
             raise RefreshError(
                 f"repository revision changed while refresh was running: {repo_key} expected={expected} actual={actual}"
@@ -1435,6 +1580,32 @@ def _changed_input_paths(change: RepositoryChangeSet) -> tuple[str, ...]:
     )
 
 
+def _missing_builder_hydrations(
+    active: Path, repo_key: str, plan: list[str], target_commit_sha: str
+) -> set[str]:
+    """Return builders that cannot safely be skipped for this source identity."""
+    conn = sqlite3.connect(f"file:{active}?mode=ro", uri=True)
+    try:
+        row = conn.execute("SELECT id FROM repos WHERE repo_key=?", (repo_key,)).fetchone()
+        if row is None:
+            return set(plan)
+        state = {str(item[0]): (str(item[1]), item[2]) for item in conn.execute(
+            "SELECT builder_name,coverage_status,last_attempt_commit_sha "
+            "FROM repo_builder_hydrations WHERE repo_id=?", (int(row[0]),)
+        )}
+        return {
+            builder for builder in plan
+            if builder not in state or (
+                state[builder][0] != "complete" and state[builder][1] != target_commit_sha
+            )
+        }
+    except sqlite3.Error:
+        # Missing metadata is never inferred as hydrated.
+        return set(plan)
+    finally:
+        conn.close()
+
+
 def _indexed_revisions(active: Path) -> dict[str, str | None]:
     conn = sqlite3.connect(active)
     conn.row_factory = sqlite3.Row
@@ -1489,7 +1660,9 @@ def _plan_repository_changes(
     plans: dict[str, list[str]],
     runtime_hash: str | None = None,
 ) -> list[RepositoryChangeSet]:
-    runtime_hash = runtime_hash or runtime_fingerprint()
+    # Mode is source identity only. Runtime/project/manifest/plan hashes are
+    # audit metadata and must never turn an otherwise valid Git range into a
+    # full refresh.
     if requested_mode == "full":
         active_build = None
         indexed_revisions = _indexed_revisions(active)
@@ -1501,11 +1674,6 @@ def _plan_repository_changes(
             active_build, indexed_revisions, contracts = _active_catalog_contract(
                 active, refresh_order
             )
-            readiness_conn = sqlite3.connect(active)
-            try:
-                readiness = evaluate_active_readiness(readiness_conn)
-            finally:
-                readiness_conn.close()
         except (sqlite3.Error, KeyError, IndexError, TypeError, ValueError) as exc:
             active_build = None
             indexed_revisions = _indexed_revisions(active)
@@ -1515,33 +1683,13 @@ def _plan_repository_changes(
         else:
             global_reason: str | None = None
             source_revisions = {}
-            if not readiness.ready:
-                global_reason = "; ".join(readiness.reasons)
-            elif active_build is None:
+            if active_build is None:
                 global_reason = (
                     "compatibility metadata unavailable: no active catalog build"
                 )
             else:
                 if not active_build["content_fingerprint"]:
                     global_reason = "active content fingerprint unavailable"
-                try:
-                    contract_version = int(active_build["delta_contract_version"])
-                except (KeyError, IndexError, TypeError, ValueError) as exc:
-                    global_reason = f"compatibility metadata unavailable: {exc}"
-                else:
-                    if (
-                        global_reason is None
-                        and contract_version != DELTA_CONTRACT_VERSION
-                    ):
-                        global_reason = "delta-contract version mismatch"
-                if global_reason is None:
-                    if (
-                        "runtime_fingerprint" not in active_build.keys()  # noqa: SIM118
-                        or not active_build["runtime_fingerprint"]
-                    ):
-                        global_reason = "runtime fingerprint unavailable"
-                    elif str(active_build["runtime_fingerprint"]) != runtime_hash:
-                        global_reason = "runtime fingerprint mismatch"
                 if global_reason is None:
                     try:
                         parsed = json.loads(str(active_build["source_revisions_json"]))
@@ -1570,18 +1718,8 @@ def _plan_repository_changes(
                 )
             else:
                 contract = contracts.get(repo_key)
-                if (
-                    contract is None
-                    or not contract["manifest_hash"]
-                    or not contract["builder_plan_hash"]
-                ):
+                if contract is None:
                     compatibility_reason = "compatibility metadata unavailable"
-                elif contract["manifest_hash"] != _repository_manifest_hash(entry):
-                    compatibility_reason = "repository manifest incompatibility"
-                elif contract["builder_plan_hash"] != _repository_plan_hash(
-                    plans[repo_key], runtime_hash
-                ):
-                    compatibility_reason = "repository builder-plan incompatibility"
         if compatibility_reason is not None:
             if requested_mode == "delta":
                 raise DeltaUnavailable(f"{repo_key}: {compatibility_reason}")
@@ -1690,10 +1828,8 @@ def _record_noop_attempts(
     changes: list[RepositoryChangeSet],
     plans: dict[str, list[str]],
     *,
-    runtime_hash: str,
     parent: ParentDescriptor,
     start_revisions: dict[str, str],
-    baselines: dict[str, tuple[int, dict]],
 ) -> None:
     conn = sqlite3.connect(active)
     conn.execute("PRAGMA foreign_keys=ON")
@@ -1723,10 +1859,13 @@ def _record_noop_attempts(
                 change.target_commit_sha,
                 plans[change.repo_key],
                 manifest_hash=_repository_manifest_hash(entry),
-                builder_plan_hash=_repository_plan_hash(
-                    plans[change.repo_key], runtime_hash
-                ),
+                builder_plan_hash=_repository_plan_hash(plans[change.repo_key]),
                 stage_modes=modes,
+                source_identity={
+                    "canonical_git_url": canonical_git_url(entry.get("remote_url")) or "",
+                    "tracked_branch": str(repo["tracked_branch"]),
+                    "target_commit_sha": change.target_commit_sha,
+                },
                 commit=False,
             )
             change_id = _record_change_set(
@@ -1747,18 +1886,9 @@ def _record_noop_attempts(
                     outcome=BuilderOutcome(0, {}),
                     commit=False,
                 )
-            baseline = baselines.get(change.repo_key)
-            if baseline is None:
-                raise RefreshQualityError(
-                    f"no materialized quality baseline for no-op repository {change.repo_key}"
-                )
-            reference = reference_quality_run(
-                approval=str(baseline[1]["approval_sha256"]),
-                baseline_run_id=baseline[0],
-            )
             conn.execute(
                 "UPDATE repo_index_runs SET validation_summary=? WHERE id=?",
-                (_stable_json(reference), run_id),
+                (_stable_json({"kind": "audit", "mode": "noop"}), run_id),
             )
             conn.execute(
                 "UPDATE repo_change_sets SET status='succeeded',started_at=CURRENT_TIMESTAMP,completed_at=CURRENT_TIMESTAMP WHERE id=?",
@@ -1795,20 +1925,12 @@ def _refresh_repository_closure(
     *,
     start_revisions: dict[str, str] | None = None,
     manifest_path: Path | None = None,
-    prepare_quality_baseline: Path | None = None,
-    accept_quality_baseline: str | None = None,
     attempt_token: str | None = None,
 ) -> None:
     """Refresh one dependency closure through one candidate and one promotion."""
 
     if requested_mode not in {"auto", "full", "delta"}:
         raise RefreshError(f"unsupported refresh mode: {requested_mode}")
-    if prepare_quality_baseline is not None and accept_quality_baseline is not None:
-        raise RefreshError("quality prepare and accept options are mutually exclusive")
-    if (
-        prepare_quality_baseline is not None or accept_quality_baseline is not None
-    ) and requested_mode != "full":
-        raise RefreshError("quality prepare and accept options require --mode full")
     runtime_hash = runtime_fingerprint()
     parent = _parent_descriptor(active_db)
     start_revisions = start_revisions or _validate_refresh_preconditions(
@@ -1820,35 +1942,6 @@ def _refresh_repository_closure(
         plans[repo_key] = build_plan(
             str(entry.get("profile") or "generic"), entry.get("builders") or []
         )
-    parent_counts, parent_diagnostic_keys, parent_baselines = _quality_parent_state(
-        active_db, refresh_order
-    )
-    populated_without_baseline = (
-        isinstance(parent.catalog_build_id, int)
-        and parent.catalog_build_id > 0
-        and any(
-            any(value > 0 for value in parent_counts[repo_key].values())
-            and repo_key not in parent_baselines
-            for repo_key in refresh_order
-        )
-    )
-    if (
-        populated_without_baseline
-        and prepare_quality_baseline is None
-        and accept_quality_baseline is None
-    ):
-        error = RefreshQualityError(
-            "refresh blocked before candidate construction: no approved "
-            "quality baseline exists for the populated catalog under "
-            f"delta contract v{DELTA_CONTRACT_VERSION}, "
-            f"content contract v{CATALOG_CONTENT_VERSION}, and "
-            f"runtime contract v{RUNTIME_CONTRACT_VERSION}. "
-            "Run a full refresh with --prepare-quality-baseline <report>, "
-            "review approval_sha256, then rerun with "
-            "--accept-quality-baseline <sha>."
-        )
-        error.refresh_stage = "quality_preflight"
-        raise error
     try:
         changes = _plan_repository_changes(
             active_db,
@@ -1876,6 +1969,17 @@ def _refresh_repository_closure(
                 _manifest_repository(manifest, repo_key)
             ),
         )
+        # A builder introduced after the last successful run is hydrated in
+        # full even when the repository commit itself is unchanged. An
+        # incomplete first attempt remains skipped until source changes (or an
+        # explicit full), preventing automatic retry loops on bad evidence.
+        missing = _missing_builder_hydrations(
+            active_db, repo_key, plans[repo_key], change.target_commit_sha
+        )
+        if missing:
+            for builder in missing:
+                if builder in modes:
+                    modes[builder] = ("full", "builder hydration required")
         stage_modes[repo_key] = modes
         if modes.get("rest_endpoints", ("skipped", ""))[0] != "skipped":
             endpoint_invalidated = True
@@ -1922,7 +2026,6 @@ def _refresh_repository_closure(
                 f"--repo {dependent_key} --mode {requested_mode}"
             )
 
-    parent_global_counts = _quality_parent_global_state(active_db)
     if attempt_token is not None:
         effective = sorted({change.effective_mode for change in changes})
         fallback = sorted(
@@ -1948,7 +2051,10 @@ def _refresh_repository_closure(
                 "fallback_reason": "; ".join(fallback) if fallback else None,
             },
         )
-    if changes and all(change.is_noop for change in changes):
+    if changes and all(change.is_noop for change in changes) and all(
+        all(mode == "skipped" for mode, _reason in stage_modes[key].values())
+        for key in refresh_order
+    ):
         if attempt_token is not None:
             record_attempt_event(active_db, attempt_token, stage="no_op", detail="recording no-op metadata")
         try:
@@ -1957,10 +2063,8 @@ def _refresh_repository_closure(
                 manifest,
                 changes,
                 plans,
-                runtime_hash=runtime_hash,
                 parent=parent,
                 start_revisions=start_revisions,
-                baselines=parent_baselines,
             )
         except Exception as exc:
             exc.refresh_stage = (
@@ -1986,25 +2090,7 @@ def _refresh_repository_closure(
     outcomes_by_repo: dict[str, dict[str, BuilderOutcome]] = {}
     manifest_digest = _manifest_hash(manifest)
     plan_digest = _builder_plan_hash(plans, runtime_hash)
-    # A first catalog generation has no active parent row.  Bind its quality
-    # approval to the exact initialized SQLite evidence and all execution
-    # inputs, so a prepare token cannot be replayed after any drift.
-    bootstrap_contract: dict[str, object] | None = None
-    if parent.catalog_build_id == 0:
-        bootstrap_conn = sqlite3.connect(f"file:{active_db}?mode=ro", uri=True)
-        try:
-            empty_fingerprint = logical_content_fingerprint(bootstrap_conn)
-        finally:
-            bootstrap_conn.close()
-        bootstrap_contract = {
-            "empty_catalog_fingerprint": empty_fingerprint,
-            "manifest_hash": manifest_digest,
-            "source_revisions": dict(sorted(start_revisions.items())),
-            "runtime_fingerprint": runtime_hash,
-            "builder_plan_hash": plan_digest,
-        }
     failed_step = "backup_database"
-    prepare_only = prepare_quality_baseline is not None
     with ExitStack() as resources:
         snapshots: dict[str, SourceSnapshot] = {}
         git_roots: dict[str, Path] = {}
@@ -2028,19 +2114,15 @@ def _refresh_repository_closure(
                 except Exception as exc:
                     exc.refresh_stage = "snapshot"
                     raise
-        _outputs_base = active_db.parent.parent / "outputs"
-        _outputs_base.mkdir(parents=True, exist_ok=True)
-        output_root = Path(
-            resources.enter_context(
-                tempfile.TemporaryDirectory(
-                    prefix=f"{build_token}.", dir=_outputs_base
-                )
-            )
-        )
         try:
             if attempt_token is not None:
                 record_attempt_event(active_db, attempt_token, stage="candidate_build", detail="building candidate")
             _backup_database(active_db, candidate)
+            _outputs_base = active_db.parent.parent / "outputs"
+            _outputs_base.mkdir(parents=True, exist_ok=True)
+            # Retain candidate-local raw diagnostics. They are linked from the
+            # active error bundle if this candidate is rejected.
+            output_root = Path(tempfile.mkdtemp(prefix=f"{build_token}.", dir=_outputs_base))
             legacy_entry = next(
                 (
                     entry
@@ -2125,6 +2207,11 @@ def _refresh_repository_closure(
                         plans[repo_key], runtime_hash
                     ),
                     stage_modes=stage_modes[repo_key],
+                    source_identity={
+                        "canonical_git_url": canonical_git_url(entry.get("remote_url")) or "",
+                        "tracked_branch": str(repo["tracked_branch"]),
+                        "target_commit_sha": change.target_commit_sha,
+                    },
                 )
                 candidate_run_ids.append(run_id)
                 run_ids_by_repo[repo_key] = run_id
@@ -2308,28 +2395,14 @@ def _refresh_repository_closure(
                     + ", ".join(missing_registry_tables)
                 )
 
+            # Counts and structured diagnostics are durable audit output, not
+            # a promotion gate.  Source/provenance and SQLite integrity gates
+            # above remain mandatory.
             candidate_repositories: list[dict[str, object]] = []
-            quality_failures: list[str] = []
             for repo_key in refresh_order:
                 repo = get_repository(conn, repo_key)
                 counts = collect_repository_counts(conn, int(repo["id"]))
                 diagnostics = _quality_diagnostics(outcomes_by_repo[repo_key])
-                ran_reset_builders = [
-                    builder
-                    for builder, (mode, _reason) in stage_modes[repo_key].items()
-                    if mode == "full"
-                ]
-                quality_failures.extend(
-                    f"{repo_key}: {reason}"
-                    for reason in compare_repository_quality(
-                        parent_counts=parent_counts[repo_key],
-                        candidate_counts=counts,
-                        ran_builders=ran_reset_builders,
-                        parent_diagnostic_keys=parent_diagnostic_keys[repo_key],
-                        candidate_diagnostics=diagnostics,
-                        changed_paths=_changed_input_paths(change_by_repo[repo_key]),
-                    )
-                )
                 candidate_repositories.append(
                     {
                         "repo_key": repo_key,
@@ -2345,109 +2418,40 @@ def _refresh_repository_closure(
                     }
                 )
 
-            candidate_global_counts = collect_global_counts(conn)
-            if any(
-                stage_modes[repo_key].get("gherkin_coverage", ("skipped", ""))[0]
-                == "full"
-                for repo_key in refresh_order
-            ):
-                for metric, parent_value in sorted(parent_global_counts.items()):
-                    candidate_value = candidate_global_counts.get(metric)
-                    if candidate_value is None:
-                        raise RefreshQualityError(
-                            f"global quality metric missing: {metric}"
-                        )
-                    if parent_value > 0 and candidate_value == 0:
-                        quality_failures.append(
-                            f"global {metric}: parent={parent_value} candidate=0"
-                        )
-            if parent.catalog_build_id > 0 and parent.content_fingerprint:
-                payload = build_quality_payload(
-                    parent={
-                        "catalog_build_id": parent.catalog_build_id,
-                        "build_token": parent.build_token,
-                        "content_fingerprint": parent.content_fingerprint,
-                    },
-                    delta_contract_version=DELTA_CONTRACT_VERSION,
-                    runtime_fingerprint=runtime_hash,
-                    repositories=candidate_repositories,
-                    global_counts=candidate_global_counts,
-                )
-                report = quality_report(payload)
-                approval = str(report["approval_sha256"])
-            elif parent.catalog_build_id == 0:
-                if bootstrap_contract is None:
-                    raise RefreshQualityError(
-                        "first-generation quality baseline has no bootstrap contract"
-                    )
-                payload = build_quality_payload(
-                    parent={
-                        "catalog_build_id": 0,
-                        "build_token": "",
-                        "content_fingerprint": bootstrap_contract[
-                            "empty_catalog_fingerprint"
-                        ],
-                    },
-                    delta_contract_version=DELTA_CONTRACT_VERSION,
-                    runtime_fingerprint=runtime_hash,
-                    repositories=candidate_repositories,
-                    global_counts=candidate_global_counts,
-                    bootstrap=bootstrap_contract,
-                )
-                report = quality_report(payload)
-                approval = str(report["approval_sha256"])
-            else:
-                # A legacy active generation without a stored logical
-                # fingerprint must take the supported full-refresh recovery
-                # path.  It is not an empty catalog bootstrap.
-                report = None
-                approval = hashlib.sha256(
-                    _stable_json(candidate_repositories).encode()
-                ).hexdigest()
-
-            failed_step = "semantic_quality"
-            if prepare_only:
-                _recheck_source_revisions(manifest, start_revisions)
-                _assert_parent_unchanged(active_db, parent)
-                write_quality_report_atomic(prepare_quality_baseline, report)
-                return
-            if accept_quality_baseline is not None:
-                if report is None or approval != accept_quality_baseline:
-                    raise RefreshQualityError(
-                        f"quality baseline hash mismatch: expected={approval} accepted={accept_quality_baseline}"
-                    )
-                quality_status = "approved"
-            else:
-                if populated_without_baseline:
-                    raise RefreshQualityError(
-                        "refresh blocked: no approved quality baseline exists for the "
-                        "populated catalog under "
-                        f"delta contract v{DELTA_CONTRACT_VERSION}, "
-                        f"content contract v{CATALOG_CONTENT_VERSION}, and "
-                        f"runtime contract v{RUNTIME_CONTRACT_VERSION}. "
-                        "Prepare and accept a full-refresh baseline before retrying."
-                    )
-                if quality_failures:
-                    raise RefreshQualityError(
-                        "semantic quality gate rejected candidate: "
-                        + "; ".join(sorted(quality_failures))
-                    )
-                quality_status = "enforced"
-
             for repository in candidate_repositories:
                 repo_key = str(repository["repo_key"])
-                summary = materialized_quality_run(
-                    approval=approval,
-                    runtime_fingerprint=runtime_hash,
-                    source_commit_sha=str(repository["commit_sha"]),
-                    diagnostics=repository["diagnostics"],
-                    counts=repository["counts"],
-                    status=quality_status,
-                )
                 conn.execute(
                     "UPDATE repo_index_runs SET validation_summary=? WHERE id=?",
-                    (_stable_json(summary), run_ids_by_repo[repo_key]),
+                    (_stable_json({"kind": "audit", "counts": repository["counts"],
+                                   "diagnostics": repository["diagnostics"]}),
+                     run_ids_by_repo[repo_key]),
                 )
+
+            blockers_by_repo = {
+                repo_key: _semantic_blockers(outcomes_by_repo[repo_key])
+                for repo_key in refresh_order
+            }
+            blockers_by_repo = {
+                repo_key: diagnostics
+                for repo_key, diagnostics in blockers_by_repo.items() if diagnostics
+            }
+            if blockers_by_repo:
+                error = RefreshError(
+                    "semantic diagnostics rejected candidate: "
+                    + "; ".join(
+                        f"{repo_key}:{item['code']}"
+                        for repo_key, diagnostics in sorted(blockers_by_repo.items())
+                        for item in diagnostics
+                    )
+                )
+                error.refresh_stage = "semantic_validation"
+                error.error_bundle_by_repo = blockers_by_repo
+                error.error_bundle_target_shas = {
+                    repo_key: change_by_repo[repo_key].target_commit_sha
+                    for repo_key in blockers_by_repo
+                }
+                error.error_output_root = output_root
+                raise error
 
             failed_step = "restore_manifest_roots"
             register_manifest(conn, _closure_manifest(manifest, set(refresh_order)))
@@ -2478,26 +2482,63 @@ def _refresh_repository_closure(
             conn.execute(
                 "UPDATE graph_builds SET status='previous' WHERE status='active'"
             )
-            # A partial closure can still safely promote a full recovery
-            # generation.  Do not claim delta readiness unless every active
-            # repository retains current run/change-set/quality coverage.
-            candidate_readiness = evaluate_active_readiness(conn)
-            if not candidate_readiness.ready:
+            for repo_key in refresh_order:
+                repo = get_repository(conn, repo_key)
+                repo_id = int(repo["id"])
+                stale_records = _record_stale_parser_evidence(
+                    conn, active_db, repo_id, change_by_repo[repo_key].target_commit_sha,
+                    change_by_repo[repo_key], outcomes_by_repo[repo_key],
+                )
+                errors = [
+                    diagnostic.to_dict()
+                    for outcome in outcomes_by_repo[repo_key].values()
+                    for diagnostic in outcome.diagnostics
+                    if diagnostic.severity == "error"
+                ]
+                if errors:
+                    _write_error_bundle(
+                        conn, repo_id, change_by_repo[repo_key].target_commit_sha,
+                        errors, output_root=output_root,
+                    )
+                else:
+                    conn.execute("DELETE FROM repo_error_bundles WHERE repo_id=?", (repo_id,))
+                for builder, (execution_mode, _reason) in stage_modes[repo_key].items():
+                    outcome = outcomes_by_repo[repo_key].get(builder)
+                    if outcome is None:
+                        continue
+                    coverage = "incomplete" if any(
+                        d.severity == "error" for d in outcome.diagnostics
+                    ) else "complete"
+                    conn.execute(
+                        """INSERT INTO repo_builder_hydrations(
+                               repo_id,builder_name,catalog_build_id,repo_index_run_id,coverage_status,
+                               last_full_commit_sha,last_attempt_commit_sha)
+                           VALUES (?,?,?,?,?,?,?) ON CONFLICT(repo_id,builder_name) DO UPDATE SET
+                               catalog_build_id=excluded.catalog_build_id,repo_index_run_id=excluded.repo_index_run_id,
+                               coverage_status=excluded.coverage_status,
+                               last_full_commit_sha=CASE WHEN excluded.last_full_commit_sha IS NULL
+                                   THEN repo_builder_hydrations.last_full_commit_sha ELSE excluded.last_full_commit_sha END,
+                               last_attempt_commit_sha=excluded.last_attempt_commit_sha,updated_at=CURRENT_TIMESTAMP""",
+                        (repo_id, builder, build_id, run_ids_by_repo[repo_key], coverage,
+                         change_by_repo[repo_key].target_commit_sha if execution_mode == "full" else None,
+                         change_by_repo[repo_key].target_commit_sha),
+                    )
                 conn.execute(
-                    "UPDATE catalog_builds SET refresh_readiness='full_recovery_required' WHERE id=?",
-                    (build_id,),
+                    """INSERT INTO repo_evidence_fingerprints(
+                           repo_id,catalog_build_id,evidence_fingerprint,stale_state_json)
+                       VALUES (?,?,?,?) ON CONFLICT(repo_id) DO UPDATE SET
+                       catalog_build_id=excluded.catalog_build_id,evidence_fingerprint=excluded.evidence_fingerprint,
+                       stale_state_json=excluded.stale_state_json,
+                       updated_at=CURRENT_TIMESTAMP""",
+                    (repo_id, build_id, repository_evidence_fingerprint(conn, repo_id),
+                     _stable_json(stale_records)),
                 )
             validation_summary = validate_catalog_connection(
-                conn,
-                expected_catalog_build_id=build_id,
-                required_quality_run_ids=set(candidate_run_ids),
+                conn, expected_catalog_build_id=build_id,
             )
-            validation_summary["quality_gate"] = {
-                "schema": "catalog-quality-build",
-                "version": 1,
-                "status": quality_status,
-                "approval_sha256": approval,
-            }
+            validation_summary["source_verified"] = True
+            validation_summary["parent_cas"] = "verified"
+            validation_summary["diagnostics"] = candidate_repositories
             conn.execute(
                 "UPDATE catalog_builds SET validation_summary=? WHERE id=?",
                 (_stable_json(validation_summary), build_id),
@@ -2524,18 +2565,10 @@ def refresh_repository(
     manifest_path: str | Path,
     repo_key: str,
     mode: str = "auto",
-    *,
-    prepare_quality_baseline: str | Path | None = None,
-    accept_quality_baseline: str | None = None,
 ) -> None:
     active = Path(db_path).resolve()
     if not active.is_file():
         raise RefreshError(f"catalog database does not exist: {active}")
-    prepare_path = (
-        Path(prepare_quality_baseline).expanduser().resolve()
-        if prepare_quality_baseline is not None
-        else None
-    )
     manifest_file = Path(manifest_path).expanduser().resolve()
     with _refresh_lock(active):
         # The independent ledger is deliberately available before catalog
@@ -2576,11 +2609,14 @@ def refresh_repository(
                 },
             )
         except Exception as exc:
-            record_attempt_failure(active, attempt_token, stage=failed_step, error=exc)
-            if prepare_path is None:
-                _record_failed_refresh(
-                    active, manifest, repo_key, exc, failed_step, requested_mode=mode
+            if isinstance(exc, RepositoryArchivedError) and "GitHub reports" in str(exc):
+                _persist_github_archive(
+                    active, str(getattr(exc, "repository_key", repo_key)), str(exc)
                 )
+            record_attempt_failure(active, attempt_token, stage=failed_step, error=exc)
+            _record_failed_refresh(
+                active, manifest, repo_key, exc, failed_step, requested_mode=mode
+            )
             raise
         try:
             _refresh_repository_closure(
@@ -2590,8 +2626,6 @@ def refresh_repository(
                 mode,
                 start_revisions=start_revisions,
                 manifest_path=manifest_file,
-                prepare_quality_baseline=prepare_path,
-                accept_quality_baseline=accept_quality_baseline,
                 attempt_token=attempt_token,
             )
             readiness_conn = sqlite3.connect(active)
@@ -2608,7 +2642,7 @@ def refresh_repository(
                 attempt_token,
                 stage="terminal",
                 status="succeeded",
-                detail="quality baseline prepared" if prepare_path is not None else "refresh succeeded",
+                detail="refresh succeeded",
                 fields={"status": "succeeded", "readiness_after": readiness_after},
             )
         except Exception as exc:
@@ -2621,10 +2655,9 @@ def refresh_repository(
                 stage=stage,
                 error=exc,
             )
-            if prepare_path is None:
-                _record_failed_refresh(
-                    active, manifest, repo_key, exc, stage, requested_mode=mode
-                )
+            _record_failed_refresh(
+                active, manifest, repo_key, exc, stage, requested_mode=mode
+            )
             raise
 
 
@@ -2636,17 +2669,12 @@ def main() -> None:
     parser.add_argument("--manifest", default="config/workspace_repos.yaml")
     parser.add_argument("--repo", required=True)
     parser.add_argument("--mode", choices=("auto", "full", "delta"), default="auto")
-    quality = parser.add_mutually_exclusive_group()
-    quality.add_argument("--prepare-quality-baseline")
-    quality.add_argument("--accept-quality-baseline")
     args = parser.parse_args()
     refresh_repository(
         args.db,
         args.manifest,
         args.repo,
         mode=args.mode,
-        prepare_quality_baseline=args.prepare_quality_baseline,
-        accept_quality_baseline=args.accept_quality_baseline,
     )
 
 

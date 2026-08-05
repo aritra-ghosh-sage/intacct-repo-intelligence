@@ -1,0 +1,3 @@
+-- 034 is applied transactionally by catalog.migrations.  It introduces
+-- source-only builder hydration, repository evidence fingerprints, and the
+-- latest raw error bundle per repository.

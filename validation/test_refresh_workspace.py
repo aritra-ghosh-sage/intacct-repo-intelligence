@@ -662,7 +662,7 @@ Feature: Account
         finally:
             conn.close()
 
-    def test_contract_v1_unresolved_endpoint_aborts_before_quality_baseline(self) -> None:
+    def test_contract_v1_unresolved_endpoint_blocks_without_quality_override(self) -> None:
         directory, checkout, database, manifest = self._fixture()
         self.addCleanup(directory.cleanup)
         features = checkout / "features"
@@ -745,7 +745,6 @@ Feature: Account
                 manifest,
                 "service",
                 mode="full",
-                accept_quality_baseline="cannot-override-hard-diagnostic",
             )
         conn = sqlite3.connect(database)
         try:
@@ -794,72 +793,16 @@ Feature: Account
         finally:
             conn.close()
 
-    def test_quality_prepare_then_accept_is_parent_bound(self) -> None:
+    def test_full_refresh_promotes_without_quality_approval(self) -> None:
         directory, _checkout, database, manifest = self._fixture()
         self.addCleanup(directory.cleanup)
         refresh_repository(database, manifest, "service", mode="full")
-        report_path = Path(directory.name) / "quality.json"
-        previous = database.with_name(database.name + ".previous")
-        previous_bytes = previous.read_bytes()
         conn = sqlite3.connect(database)
         before_active = conn.execute(
             "SELECT id FROM catalog_builds WHERE status='active'"
         ).fetchone()[0]
-        before_build_count = conn.execute(
-            "SELECT COUNT(*) FROM catalog_builds"
-        ).fetchone()[0]
         conn.close()
-
-        refresh_repository(
-            database,
-            manifest,
-            "service",
-            mode="full",
-            prepare_quality_baseline=report_path,
-        )
-        report = load_quality_report(report_path)
-        conn = sqlite3.connect(database)
-        self.assertEqual(
-            conn.execute(
-                "SELECT id FROM catalog_builds WHERE status='active'"
-            ).fetchone()[0],
-            before_active,
-        )
-        self.assertEqual(
-            conn.execute("SELECT COUNT(*) FROM catalog_builds").fetchone()[0],
-            before_build_count,
-        )
-        conn.close()
-        self.assertEqual(previous.read_bytes(), previous_bytes)
-        self.assertFalse(list(database.parent.glob(f"{database.name}.candidate.*")))
-
-        with self.assertRaisesRegex(
-            RefreshQualityError, "quality baseline hash mismatch"
-        ):
-            refresh_repository(
-                database,
-                manifest,
-                "service",
-                mode="full",
-                accept_quality_baseline="0" * 64,
-            )
-        conn = sqlite3.connect(database)
-        self.assertEqual(
-            conn.execute(
-                "SELECT id FROM catalog_builds WHERE status='active'"
-            ).fetchone()[0],
-            before_active,
-        )
-        conn.close()
-        self.assertEqual(previous.read_bytes(), previous_bytes)
-
-        refresh_repository(
-            database,
-            manifest,
-            "service",
-            mode="full",
-            accept_quality_baseline=str(report["approval_sha256"]),
-        )
+        refresh_repository(database, manifest, "service", mode="full")
         conn = sqlite3.connect(database)
         try:
             self.assertGreater(
@@ -868,11 +811,6 @@ Feature: Account
                 ).fetchone()[0],
                 before_active,
             )
-            summary = conn.execute(
-                "SELECT validation_summary FROM repo_index_runs "
-                "WHERE status='active' ORDER BY id DESC LIMIT 1"
-            ).fetchone()[0]
-            self.assertIn('"status":"approved"', summary)
         finally:
             conn.close()
 

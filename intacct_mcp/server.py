@@ -457,6 +457,21 @@ class CatalogState:
                     + " FROM repos ORDER BY repo_key"
                 )
             ]
+            if self.table_exists(c, "repo_evidence_fingerprints"):
+                stale_by_key = {
+                    str(row[0]): json.loads(str(row[1]))
+                    for row in c.execute(
+                        """SELECT r.repo_key,ref.stale_state_json
+                           FROM repo_evidence_fingerprints ref JOIN repos r ON r.id=ref.repo_id"""
+                    )
+                }
+                for repository in repositories:
+                    repository["stale_evidence"] = stale_by_key.get(
+                        str(repository["repo_key"]), []
+                    )
+            else:
+                for repository in repositories:
+                    repository["stale_evidence"] = []
             for repository in repositories:
                 repository.setdefault("lifecycle_state", "active")
                 repository.setdefault("archive_source", None)

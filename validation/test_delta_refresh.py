@@ -424,6 +424,10 @@ class DeltaRefreshTests(unittest.TestCase):
                 return_value={"active_api_version_compatibility": 0},
             ),
             mock.patch(
+                "scripts.refresh_workspace._missing_builder_hydrations",
+                return_value=set(),
+            ),
+            mock.patch(
                 "scripts.refresh_workspace._backup_database",
                 side_effect=RuntimeError("main-only docs reached candidate creation"),
             ),
@@ -463,11 +467,8 @@ class DeltaRefreshTests(unittest.TestCase):
         summaries = conn.execute(
             "SELECT id,validation_summary FROM repo_index_runs ORDER BY id"
         ).fetchall()
-        materialized_id = summaries[-2][0]
-        reference = json.loads(summaries[-1][1])
-        self.assertEqual(reference["kind"], "reference")
-        self.assertEqual(reference["baseline_run_id"], materialized_id)
-        self.assertEqual(json.loads(summaries[-2][1])["kind"], "materialized")
+        audit = json.loads(summaries[-1][1])
+        self.assertEqual(audit, {"kind": "audit", "mode": "noop"})
         conn.close()
 
         (checkout / "source.php").write_text("\n<?php\nclass Source {}\n")
@@ -704,12 +705,12 @@ class DeltaRefreshTests(unittest.TestCase):
         auto = _plan_repository_changes(
             database, manifest, ["service"], "auto", revisions, plans
         )[0]
-        self.assertEqual(auto.effective_mode, "full")
-        self.assertEqual(auto.fallback_reason, "compatibility metadata unavailable")
-        with self.assertRaisesRegex(DeltaUnavailable, "metadata unavailable"):
-            _plan_repository_changes(
-                database, manifest, ["service"], "delta", revisions, plans
-            )
+        self.assertEqual(auto.effective_mode, "noop")
+        self.assertIsNone(auto.fallback_reason)
+        self.assertEqual(
+            _plan_repository_changes(database, manifest, ["service"], "delta", revisions, plans)[0].effective_mode,
+            "noop",
+        )
 
         conn = sqlite3.connect(database)
         conn.execute(
@@ -745,7 +746,8 @@ class DeltaRefreshTests(unittest.TestCase):
         auto = _plan_repository_changes(
             database, manifest, ["service"], "auto", revisions, plans
         )[0]
-        self.assertEqual(auto.fallback_reason, "delta-contract version mismatch")
+        self.assertEqual(auto.effective_mode, "noop")
+        self.assertIsNone(auto.fallback_reason)
 
         conn = sqlite3.connect(database)
         conn.execute(
@@ -761,13 +763,8 @@ class DeltaRefreshTests(unittest.TestCase):
         auto = _plan_repository_changes(
             database, manifest, ["service"], "auto", revisions, plans
         )[0]
-        self.assertEqual(
-            auto.fallback_reason, "repository builder-plan incompatibility"
-        )
-        with self.assertRaisesRegex(DeltaUnavailable, "builder-plan"):
-            _plan_repository_changes(
-                database, manifest, ["service"], "delta", revisions, plans
-            )
+        self.assertEqual(auto.effective_mode, "noop")
+        self.assertIsNone(auto.fallback_reason)
 
     def test_auto_falls_back_when_change_collection_fails(self) -> None:
         directory, checkout, database, manifest, _initial = self._fixture()

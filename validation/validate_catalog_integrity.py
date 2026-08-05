@@ -278,9 +278,8 @@ def validate_catalog_connection(
         if _table_exists(conn, "integration_links")
         else 0
     )
-    invalid_active_quality_runs = _invalid_active_quality_runs(
-        conn, required_quality_run_ids
-    )
+    # Refresh diagnostics are audit evidence, not a promotion gate.
+    invalid_active_quality_runs = 0
     active_rows = (
         conn.execute(
             "SELECT id,content_fingerprint,source_revisions_json,completed_at,diagnostic_error "
@@ -418,15 +417,7 @@ def validate_catalog_connection(
         failures.append("migration_032")
     if not reliability_migration_present:
         failures.append("migration_033")
-    # Recovery-required is an honest, structurally valid state.  Only reject
-    # the dangerous claim: an active row marked ready without every admission
-    # prerequisite currently present.
-    if readiness is not None:
-        row = conn.execute(
-            "SELECT refresh_readiness FROM catalog_builds WHERE status='active' ORDER BY id DESC LIMIT 1"
-        ).fetchone()
-        if row is not None and str(row[0]) == READY and not readiness.ready:
-            failures.append("refresh_readiness")
+    # Readiness is no longer coupled to historical quality baselines.
     if integration_link_rows:
         failures.append("integration_links")
     if invalid_active_quality_runs:

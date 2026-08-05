@@ -29,6 +29,7 @@ WORKFLOW_ACTION_MIGRATION = "030_workflow_action"
 REST_AUTOMATION_CONTRACT_MIGRATION = "031_rest_automation_contract"
 REFRESH_ATTEMPTS_AND_READINESS_MIGRATION = "032_refresh_attempts_and_readiness"
 REFRESH_RELIABILITY_GATES_MIGRATION = "033_refresh_reliability_gates"
+REFRESH_SIMPLIFICATION_MIGRATION = "034_refresh_simplification"
 LEGACY_REPO_KEY = "ia-main"
 
 
@@ -1742,6 +1743,66 @@ def _apply_refresh_reliability_gates_migration(conn: sqlite3.Connection) -> None
         raise RuntimeError(f"foreign key check failed rebuilding refresh ledger: {violations[:3]}")
 
 
+def _apply_refresh_simplification_migration(conn: sqlite3.Connection) -> None:
+    """Install source-only builder hydration and repository evidence state.
+
+    These facts intentionally do not participate in the global catalog
+    fingerprint: they are operational admission metadata, not source evidence.
+    """
+    _add_columns(conn, "repo_index_runs", ("source_identity_json TEXT",))
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS repo_builder_hydrations (
+            repo_id INTEGER NOT NULL,
+            builder_name TEXT NOT NULL,
+            catalog_build_id INTEGER NOT NULL,
+            repo_index_run_id INTEGER NOT NULL,
+            coverage_status TEXT NOT NULL CHECK(coverage_status IN ('complete','incomplete')),
+            last_full_commit_sha TEXT,
+            last_attempt_commit_sha TEXT,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY(repo_id,builder_name),
+            FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+            FOREIGN KEY(catalog_build_id) REFERENCES catalog_builds(id) ON DELETE RESTRICT,
+            FOREIGN KEY(repo_index_run_id) REFERENCES repo_index_runs(id) ON DELETE RESTRICT
+        );
+        CREATE TABLE IF NOT EXISTS repo_evidence_fingerprints (
+            repo_id INTEGER PRIMARY KEY,
+            catalog_build_id INTEGER NOT NULL,
+            evidence_fingerprint TEXT NOT NULL,
+            stale_state_json TEXT NOT NULL DEFAULT '[]',
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+            FOREIGN KEY(catalog_build_id) REFERENCES catalog_builds(id) ON DELETE RESTRICT
+        );
+        CREATE TABLE IF NOT EXISTS repo_error_bundles (
+            repo_id INTEGER PRIMARY KEY,
+            target_commit_sha TEXT,
+            errors_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS repo_error_bundle_carry_forwards (
+            repo_id INTEGER PRIMARY KEY,
+            archive_error_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS repo_stale_evidence (
+            repo_id INTEGER NOT NULL,
+            source_path TEXT NOT NULL,
+            prior_source_path TEXT NOT NULL,
+            prior_source_blob_sha TEXT,
+            target_commit_sha TEXT NOT NULL,
+            diagnostic_json TEXT NOT NULL,
+            retained_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY(repo_id,source_path),
+            FOREIGN KEY(repo_id) REFERENCES repos(id) ON DELETE CASCADE
+        );
+        """
+    )
+
+
 def apply_delta_refresh_migration(conn: sqlite3.Connection) -> None:
     """Apply refresh migrations 023 through 032 to a repository-scoped catalog."""
 
@@ -1865,14 +1926,26 @@ def apply_delta_refresh_migration(conn: sqlite3.Connection) -> None:
                 "INSERT INTO schema_migrations(name) VALUES (?)",
                 (REFRESH_RELIABILITY_GATES_MIGRATION,),
             )
+        simplification_applied = conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name=?",
+            (REFRESH_SIMPLIFICATION_MIGRATION,),
+        ).fetchone()
+        _apply_refresh_simplification_migration(conn)
+        if simplification_applied is None:
+            conn.execute(
+                "INSERT INTO schema_migrations(name) VALUES (?)",
+                (REFRESH_SIMPLIFICATION_MIGRATION,),
+            )
         violations = conn.execute("PRAGMA foreign_key_check").fetchall()
         if violations:
             raise RuntimeError(
                 f"foreign key check failed before {DELTA_REFRESH_MIGRATION} commit: {violations[:3]}"
             )
-        conn.execute("COMMIT")
+        if conn.in_transaction:
+            conn.execute("COMMIT")
     except Exception:
-        conn.execute("ROLLBACK")
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
         raise
     finally:
         conn.execute("PRAGMA foreign_keys = ON")

@@ -612,55 +612,13 @@ the candidate output root (`<repo>/ui_parser_failures.jsonl`, with
 corresponding JavaScript and YAML failure logs). Semantic resolution errors
 and catalog integrity failures remain promotion-blocking.
 
-Intentional quality changes use a two-step, full-mode approval. Preparation
-builds and validates a candidate, writes a deterministic report, then deletes
-the candidate without changing active history or `catalog.db.previous`:
+Refresh has no baseline approval phase. Structured counts and diagnostics are
+audit evidence; SQLite integrity, exact source/provenance validation, semantic
+resolution, final source checks, and parent CAS remain promotion gates.
 
-For the current workspace recovery path, use `ia-main`. The checked-in
-manifest disables `ia-restapi-automation`, and an archived repository is not an
-admissible refresh source. Do not use the automation example below unless that
-repository has been explicitly re-enabled and its lifecycle state is active.
-
-```bash
-PYTHONPATH=. ./.venv/bin/python -m scripts.refresh_workspace \
-  --db catalog/catalog.db \
-  --manifest config/workspace_repos.yaml \
-  --repo ia-main \
-  --mode full \
-  --prepare-quality-baseline catalog/backups/quality-baseline-v3.json
-```
-
-Extract the approval SHA from the prepared report:
-
-```bash
-jq -r '.approval_sha256' catalog/backups/quality-baseline-v3.json
-```
-
-After reviewing the report, rebuild from the same parent and accept its exact
-`approval_sha256`:
-
-```bash
-PYTHONPATH=. ./.venv/bin/python -m scripts.refresh_workspace \
-  --db catalog/catalog.db \
-  --manifest config/workspace_repos.yaml \
-  --repo ia-main \
-  --mode full \
-  --accept-quality-baseline <reviewed-sha256>
-```
-
-The accepted hash is bound to the exact parent generation used during
-preparation and is therefore single-use: after promotion, the parent build
-ID, token, and fingerprint change. Do not reuse the previous hash. For
-ordinary subsequent refreshes, omit `--accept-quality-baseline`; the active
-approved baseline is enforced automatically. Prepare and accept a new report
-only when intentionally approving a changed baseline.
-
-Any parent, source, runtime, manifest, builder-plan, count, or diagnostic change
-changes the approval hash. On failure, keep `catalog.db` and
-`catalog.db.previous`, inspect the first failing gate, and rerun prepare after
-repairing the evidence. The ignored `catalog/backups/catalog.db.build-<id>.db`
-files are recovery copies; restore one only through an operator-reviewed SQLite
-backup operation, never by editing generation metadata.
+For the current workspace recovery path, use `ia-main`. The checked-in manifest
+disables `ia-restapi-automation`, and an archived repository is not an
+admissible refresh source.
 
 REST automation coverage is a repository-scoped candidate builder. With the
 an enabled, active automation repository and its manifest dependency in place,
