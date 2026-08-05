@@ -381,6 +381,10 @@ class DeltaRefreshTests(unittest.TestCase):
                 "scripts.refresh_workspace._plan_repository_changes",
                 return_value=[full],
             ),
+            mock.patch(
+                "scripts.refresh_workspace._quality_parent_state",
+                return_value=({}, {}, {}),
+            ),
             mock.patch("scripts.refresh_workspace._parent_descriptor"),
             mock.patch("scripts.refresh_workspace._backup_database") as backup,
             self.assertRaisesRegex(

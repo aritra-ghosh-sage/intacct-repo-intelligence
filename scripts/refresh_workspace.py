@@ -1783,6 +1783,35 @@ def _refresh_repository_closure(
         plans[repo_key] = build_plan(
             str(entry.get("profile") or "generic"), entry.get("builders") or []
         )
+    parent_counts, parent_diagnostic_keys, parent_baselines = _quality_parent_state(
+        active_db, refresh_order
+    )
+    populated_without_baseline = (
+        isinstance(parent.catalog_build_id, int)
+        and parent.catalog_build_id > 0
+        and any(
+            any(value > 0 for value in parent_counts[repo_key].values())
+            and repo_key not in parent_baselines
+            for repo_key in refresh_order
+        )
+    )
+    if (
+        populated_without_baseline
+        and prepare_quality_baseline is None
+        and accept_quality_baseline is None
+    ):
+        error = RefreshQualityError(
+            "refresh blocked before candidate construction: no approved "
+            "quality baseline exists for the populated catalog under "
+            f"delta contract v{DELTA_CONTRACT_VERSION}, "
+            f"content contract v{CATALOG_CONTENT_VERSION}, and "
+            f"runtime contract v{RUNTIME_CONTRACT_VERSION}. "
+            "Run a full refresh with --prepare-quality-baseline <report>, "
+            "review approval_sha256, then rerun with "
+            "--accept-quality-baseline <sha>."
+        )
+        error.refresh_stage = "quality_preflight"
+        raise error
     try:
         changes = _plan_repository_changes(
             active_db,
@@ -1856,9 +1885,6 @@ def _refresh_repository_closure(
                 f"--repo {dependent_key} --mode {requested_mode}"
             )
 
-    parent_counts, parent_diagnostic_keys, parent_baselines = _quality_parent_state(
-        active_db, refresh_order
-    )
     parent_global_counts = _quality_parent_global_state(active_db)
     if attempt_token is not None:
         effective = sorted({change.effective_mode for change in changes})
@@ -2341,11 +2367,6 @@ def _refresh_repository_closure(
                 ).hexdigest()
 
             failed_step = "semantic_quality"
-            populated_without_baseline = parent.catalog_build_id > 0 and any(
-                any(value > 0 for value in parent_counts[repo_key].values())
-                and repo_key not in parent_baselines
-                for repo_key in refresh_order
-            )
             if prepare_only:
                 _recheck_source_revisions(manifest, start_revisions)
                 _assert_parent_unchanged(active_db, parent)
@@ -2360,7 +2381,12 @@ def _refresh_repository_closure(
             else:
                 if populated_without_baseline:
                     raise RefreshQualityError(
-                        "populated catalog has no contract-v3 quality baseline; use --prepare-quality-baseline and --accept-quality-baseline"
+                        "refresh blocked: no approved quality baseline exists for the "
+                        "populated catalog under "
+                        f"delta contract v{DELTA_CONTRACT_VERSION}, "
+                        f"content contract v{CATALOG_CONTENT_VERSION}, and "
+                        f"runtime contract v{RUNTIME_CONTRACT_VERSION}. "
+                        "Prepare and accept a full-refresh baseline before retrying."
                     )
                 if quality_failures:
                     raise RefreshQualityError(

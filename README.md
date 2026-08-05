@@ -479,8 +479,8 @@ command below. Migrate an existing single-repository catalog once, then
 register its manifest:
 
 ```bash
-python -c "from catalog.db import migrate_multi_repo; migrate_multi_repo(local_root='/path/to/main')"
-python scripts/catalog_repos.py --db catalog/catalog.db register --manifest config/workspace_repos.yaml
+./.venv/bin/python -c "from catalog.db import migrate_multi_repo; migrate_multi_repo(local_root='/path/to/main')"
+./.venv/bin/python scripts/catalog_repos.py --db catalog/catalog.db register --manifest config/workspace_repos.yaml
 ```
 
 Refresh one repository dependency closure with a clean, committed checkout.
@@ -560,7 +560,8 @@ the automation repository through its explicit `depends_on`. Reverse dependents
 are never inferred from Git ancestry, remotes, profiles, or manifest order. A
 main-only refresh is blocked before candidate creation when its REST endpoint
 stage would run while enabled automation coverage is out of scope. Use the
-explicit safe closure instead:
+explicit safe closure only when the automation repository is enabled, has an
+extractable lifecycle state, and its configured checkout passes preflight:
 
 ```bash
 PYTHONPATH=. ./.venv/bin/python -m scripts.refresh_workspace \
@@ -577,13 +578,14 @@ source revisions, and database identity. A lock or parent/source compare-and-swa
 failure cannot replace either active or previous catalog artifacts.
 
 `catalog_builds` retains the full logical SQLite generation history, while
-`graph_builds` records the separately projected Ladybug generations. Only the
-current and immediately previous physical artifacts are retained as
-`catalog.db`, `catalog.db.previous`, `graph.lbug`, and
-`graph.lbug.previous`; older metadata rows remain in SQLite. SQLite promotion
-marks the prior graph generation stale. Graph-backed queries remain explicitly
-unavailable/stale until a graph build linked to the active catalog fingerprint
-is promoted.
+`graph_builds` records the separately projected Ladybug generations. A
+successful promotion retains the current and immediately previous physical
+artifacts as `catalog.db`, `catalog.db.previous`, `graph.lbug`, and
+`graph.lbug.previous`; older metadata rows remain in SQLite. Failed candidate
+or recovery artifacts may remain separately and must not be treated as active
+generations. SQLite promotion marks the prior graph generation stale.
+Graph-backed queries remain explicitly unavailable/stale until a graph build
+linked to the active catalog fingerprint is promoted.
 
 Ladybug construction and promotion are deliberately excluded from this refresh
 workflow. A SQLite promotion may mark an older graph generation stale, but this
@@ -606,11 +608,16 @@ Intentional quality changes use a two-step, full-mode approval. Preparation
 builds and validates a candidate, writes a deterministic report, then deletes
 the candidate without changing active history or `catalog.db.previous`:
 
+For the current workspace recovery path, use `ia-main`. The checked-in
+manifest disables `ia-restapi-automation`, and an archived repository is not an
+admissible refresh source. Do not use the automation example below unless that
+repository has been explicitly re-enabled and its lifecycle state is active.
+
 ```bash
 PYTHONPATH=. ./.venv/bin/python -m scripts.refresh_workspace \
   --db catalog/catalog.db \
   --manifest config/workspace_repos.yaml \
-  --repo ia-restapi-automation \
+  --repo ia-main \
   --mode full \
   --prepare-quality-baseline catalog/backups/quality-baseline-v3.json
 ```
@@ -628,7 +635,7 @@ After reviewing the report, rebuild from the same parent and accept its exact
 PYTHONPATH=. ./.venv/bin/python -m scripts.refresh_workspace \
   --db catalog/catalog.db \
   --manifest config/workspace_repos.yaml \
-  --repo ia-restapi-automation \
+  --repo ia-main \
   --mode full \
   --accept-quality-baseline <reviewed-sha256>
 ```
@@ -648,11 +655,19 @@ files are recovery copies; restore one only through an operator-reviewed SQLite
 backup operation, never by editing generation metadata.
 
 REST automation coverage is a repository-scoped candidate builder. With the
-manifest dependency in place, refreshing `ia-restapi-automation` will refresh
-`ia-main` first so its versioned REST endpoint and entity evidence is present:
+an enabled, active automation repository and its manifest dependency in place,
+refreshing `ia-restapi-automation` will refresh `ia-main` first so its versioned
+REST endpoint and entity evidence is present. The checked-in workspace manifest
+currently disables `ia-restapi-automation`, and the catalog may retain it as an
+archived lifecycle record; such a repository cannot be refreshed until an
+operator explicitly reactivates it:
 
 ```bash
-python scripts/refresh_workspace.py --db catalog/catalog.db --manifest config/workspace_repos.yaml --repo ia-restapi-automation
+./.venv/bin/python -m scripts.refresh_workspace \
+  --db catalog/catalog.db \
+  --manifest config/workspace_repos.yaml \
+  --repo ia-restapi-automation \
+  --mode full
 ```
 
 The suite reads only `.feature`, same-stem `.properties`, and the manifest
@@ -665,7 +680,7 @@ Coverage evidence is stored and queried in SQLite, not projected into Ladybug.
 The CLI report is available with:
 
 ```bash
-python scripts/query_rest.py coverage GLAccount --json
+./.venv/bin/python scripts/query_rest.py coverage GLAccount --json
 ```
 
 The read-only MCP server exposes the same report through the `rest_coverage`
