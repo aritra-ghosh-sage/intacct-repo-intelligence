@@ -2028,10 +2028,12 @@ def _refresh_repository_closure(
                 except Exception as exc:
                     exc.refresh_stage = "snapshot"
                     raise
+        _outputs_base = active_db.parent.parent / "outputs"
+        _outputs_base.mkdir(parents=True, exist_ok=True)
         output_root = Path(
             resources.enter_context(
                 tempfile.TemporaryDirectory(
-                    prefix=f"{active_db.name}.outputs.", dir=active_db.parent
+                    prefix=f"{build_token}.", dir=_outputs_base
                 )
             )
         )
