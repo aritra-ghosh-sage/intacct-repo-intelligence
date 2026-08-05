@@ -138,7 +138,8 @@ def evaluate_active_readiness(conn: sqlite3.Connection) -> ActiveReadiness:
         }
         columns = {str(column[1]) for column in conn.execute("PRAGMA table_info(catalog_builds)")}
         if missing := required_catalog_columns - columns:
-            return result(FULL_RECOVERY_REQUIRED, ("compatibility columns unavailable",), None)
+            return result(FULL_RECOVERY_REQUIRED, (f"compatibility columns unavailable: {', '.join(sorted(missing))}",), 
+                          None)
         row = conn.execute(
             "SELECT * FROM catalog_builds WHERE status='active' ORDER BY id DESC LIMIT 1"
         ).fetchone()

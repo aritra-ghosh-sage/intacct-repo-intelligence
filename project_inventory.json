@@ -1,9 +1,9 @@
 {
   "project_name": "intacct-repo-intelligence",
-  "generated_at": "2026-07-15T10:44:07.851887+00:00",
+  "generated_at": "2026-08-05T05:45:46.782280+00:00",
   "generator": "scripts/generate_inventory.py",
   "verified_state": {
-    "generated_at": "2026-07-15T10:44:06.770526+00:00",
+    "generated_at": "2026-08-05T05:45:46.765825+00:00",
     "phases": {
       "phase2d": {
         "status": "verified",
@@ -12,33 +12,85 @@
     },
     "database": {
       "tables": {
+        "api_registry_entries": {
+          "status": "present",
+          "rows": 0
+        },
+        "api_registry_entry_links": {
+          "status": "present",
+          "rows": 0
+        },
+        "api_registry_issues": {
+          "status": "present",
+          "rows": 0
+        },
+        "api_version_compatibility": {
+          "status": "present",
+          "rows": 0
+        },
+        "catalog_builds": {
+          "status": "present",
+          "rows": 16
+        },
         "dbschema_fields": {
           "status": "present",
-          "rows": 16377
+          "rows": 16443
         },
         "dbschema_tables": {
           "status": "present",
-          "rows": 1148
+          "rows": 1152
         },
         "entity_access_links": {
           "status": "present",
-          "rows": 8843
+          "rows": 12714
+        },
+        "entity_extraction_coverage": {
+          "status": "present",
+          "rows": 12985
         },
         "entity_mappings": {
           "status": "present",
-          "rows": 6730
+          "rows": 5452
         },
         "entity_nodes": {
           "status": "present",
-          "rows": 1897
+          "rows": 1903
+        },
+        "entity_occurrences": {
+          "status": "present",
+          "rows": 1903
+        },
+        "entity_operation_facts": {
+          "status": "present",
+          "rows": 1830
+        },
+        "entity_relationship_facts": {
+          "status": "present",
+          "rows": 978
         },
         "entity_roots": {
           "status": "present",
-          "rows": 3760
+          "rows": 3770
+        },
+        "entity_schema_components": {
+          "status": "present",
+          "rows": 978
+        },
+        "entity_semantic_conflicts": {
+          "status": "present",
+          "rows": 0
         },
         "files": {
           "status": "present",
-          "rows": 46463
+          "rows": 43365
+        },
+        "graph_builds": {
+          "status": "present",
+          "rows": 6
+        },
+        "integration_links": {
+          "status": "present",
+          "rows": 0
         },
         "knowledge_items": {
           "status": "present",
@@ -46,31 +98,59 @@
         },
         "openapi_file_ref_edges": {
           "status": "present",
-          "rows": 13285
+          "rows": 13364
         },
         "openapispec_index": {
           "status": "present",
-          "rows": 3731
+          "rows": 3767
+        },
+        "refresh_attempt_events": {
+          "status": "present",
+          "rows": 15
+        },
+        "refresh_attempts": {
+          "status": "present",
+          "rows": 3
         },
         "relationships": {
           "status": "present",
-          "rows": 296385
+          "rows": 297441
+        },
+        "repo_change_sets": {
+          "status": "present",
+          "rows": 5
+        },
+        "repo_changed_paths": {
+          "status": "present",
+          "rows": 46
+        },
+        "repo_index_runs": {
+          "status": "present",
+          "rows": 16
+        },
+        "repo_index_stages": {
+          "status": "present",
+          "rows": 134
         },
         "repos": {
           "status": "present",
-          "rows": 0
+          "rows": 2
         },
         "rest_endpoints": {
           "status": "present",
-          "rows": 2804
+          "rows": 2710
+        },
+        "schema_migrations": {
+          "status": "present",
+          "rows": 15
         },
         "security_menu_items": {
           "status": "present",
-          "rows": 1499
+          "rows": 1488
         },
         "security_menu_op_links": {
           "status": "present",
-          "rows": 1497
+          "rows": 1486
         },
         "security_menus": {
           "status": "present",
@@ -78,11 +158,11 @@
         },
         "security_operation_allowops": {
           "status": "present",
-          "rows": 5279
+          "rows": 5290
         },
         "security_operations": {
           "status": "present",
-          "rows": 4797
+          "rows": 4823
         },
         "security_policies": {
           "status": "present",
@@ -90,7 +170,7 @@
         },
         "security_policy_eops": {
           "status": "present",
-          "rows": 2831
+          "rows": 2832
         },
         "security_policy_values": {
           "status": "present",
@@ -98,23 +178,91 @@
         },
         "sqlite_sequence": {
           "status": "present",
-          "rows": 22
+          "rows": 44
         },
         "symbols": {
           "status": "present",
-          "rows": 162590
+          "rows": 163577
+        },
+        "test_case_versions": {
+          "status": "present",
+          "rows": 0
+        },
+        "test_cases": {
+          "status": "present",
+          "rows": 0
+        },
+        "test_coverage_build_state": {
+          "status": "present",
+          "rows": 0
+        },
+        "test_diagnostics": {
+          "status": "present",
+          "rows": 0
+        },
+        "test_endpoint_links": {
+          "status": "present",
+          "rows": 0
+        },
+        "test_entity_links": {
+          "status": "present",
+          "rows": 0
+        },
+        "test_requests": {
+          "status": "present",
+          "rows": 0
+        },
+        "ui_artifact_includes": {
+          "status": "present",
+          "rows": 0
+        },
+        "ui_artifacts": {
+          "status": "present",
+          "rows": 0
+        },
+        "ui_entity_references": {
+          "status": "present",
+          "rows": 0
+        },
+        "ui_event_calls": {
+          "status": "present",
+          "rows": 0
+        },
+        "ui_events": {
+          "status": "present",
+          "rows": 0
+        },
+        "ui_fields": {
+          "status": "present",
+          "rows": 0
+        },
+        "ui_resolution_issues": {
+          "status": "present",
+          "rows": 0
+        },
+        "ui_script_dependencies": {
+          "status": "present",
+          "rows": 0
+        },
+        "ui_source_diagnostics": {
+          "status": "present",
+          "rows": 0
+        },
+        "ui_surfaces": {
+          "status": "present",
+          "rows": 0
         },
         "workflow_edges": {
           "status": "present",
-          "rows": 3100
+          "rows": 1542
         },
         "workflow_nodes": {
           "status": "present",
-          "rows": 2523
+          "rows": 1467
         },
         "workflows": {
           "status": "present",
-          "rows": 763
+          "rows": 523
         }
       },
       "total_rows_by_table": {},
@@ -207,11 +355,27 @@
         "013_openapispec_x_mapped_to.sql",
         "014_file_id_provenance.sql",
         "015_relationship_target_kind_normalization.sql",
-        "016_entity_access_links.sql"
+        "016_entity_access_links.sql",
+        "017_graph_builds.sql",
+        "018_graph_build_status_previous.sql",
+        "019_multi_repo.sql",
+        "019_versioned_rest_test_coverage.sql",
+        "023_delta_refresh.sql",
+        "024_refresh_contracts.sql",
+        "025_delta_refresh_hardening.sql",
+        "026_ui_catalog.sql",
+        "027_ui_negative_event_calls.sql",
+        "028_api_registry.sql",
+        "029_repository_archival.sql",
+        "030_workflow_action.sql",
+        "031_rest_automation_contract.sql",
+        "032_refresh_attempts_and_readiness.sql",
+        "033_refresh_reliability_gates.sql"
       ],
       "parsers": [
         "cqry_extractor.py",
         "java_extractor.py",
+        "javascript_extractor.py",
         "php_extractor.py",
         "sql_extractor.py",
         "xslt_extractor.py",
@@ -219,30 +383,52 @@
       ],
       "scripts": [
         "_query_json.py",
+        "archive_repository.py",
+        "audit_rest_automation_contract.py",
         "benchmark_score.py",
+        "build_api_registry.py",
         "build_entities.py",
         "build_entity_access_links.py",
         "build_entity_roots.py",
+        "build_entity_semantics.py",
+        "build_gherkin_coverage.py",
+        "build_graph.py",
         "build_rest_endpoints.py",
         "build_security_mappings.py",
         "build_workflows.py",
+        "builder_outcome.py",
+        "builder_registry.py",
+        "catalog_repos.py",
+        "eval_catalog_response.py",
         "generate_inventory.py",
         "link_openapispec.py",
         "merge_entities.py",
+        "query_api_registry.py",
         "query_catalog.py",
         "query_entity.py",
+        "query_gateway_sidecar.py",
+        "query_graph.py",
         "query_relationships.py",
         "query_rest.py",
         "query_security.py",
+        "query_ui.py",
         "query_workflow.py",
+        "refresh_gateway_sidecar.py",
+        "refresh_workspace.py",
+        "register_rest_automation_suite.py",
+        "render_mcp_tool_inventory.py",
         "scan_ent_files.py",
-        "scan_openapispec.py"
+        "scan_openapispec.py",
+        "verify_catalog_eval_dataset.py"
       ],
       "validators": [
+        "validate_catalog_integrity.py",
+        "validate_graph.py",
         "validate_phase2b.py",
         "validate_phase2c1.py",
         "validate_phase2d.py",
-        "validate_security_mappings.py"
+        "validate_security_mappings.py",
+        "validate_ui_catalog.py"
       ]
     }
   },
@@ -253,10 +439,12 @@
         "target_tables": [
           "rest_endpoints",
           "repos",
-          "knowledge_items",
           "workflow_nodes",
           "workflow_edges",
           "openapispec_index"
+        ],
+        "ignored_tables": [
+          "knowledge_items"
         ],
         "expected_mapping_types": [
           "allowed_operations_handler",
@@ -302,30 +490,38 @@
   },
   "drift": {
     "extra_tables": [
+      "api_registry_entries",
+      "api_registry_entry_links",
+      "api_registry_issues",
+      "api_version_compatibility",
+      "catalog_builds",
       "dbschema_fields",
       "dbschema_tables",
       "entity_access_links",
+      "entity_extraction_coverage",
       "entity_mappings",
       "entity_nodes",
+      "entity_occurrences",
+      "entity_operation_facts",
+      "entity_relationship_facts",
       "entity_roots",
+      "entity_schema_components",
+      "entity_semantic_conflicts",
       "files",
-      "openapi_file_ref_edges",
-      "relationships",
-      "security_menu_items",
-      "security_menu_op_links",
-      "security_menus",
-      "security_operation_allowops",
-      "security_operations",
-      "security_policies",
-      "security_policy_eops",
-      "security_policy_values",
-      "sqlite_sequence",
-      "symbols",
-      "workflows"
+      "graph_builds",
+      "integration_links"
     ],
     "extra_mapping_types": [
       "rpt",
       "xslt"
+    ],
+    "extra_extractors": [
+      "javascript_extractor.py"
+    ],
+    "extra_validators": [
+      "validate_catalog_integrity.py",
+      "validate_graph.py",
+      "validate_ui_catalog.py"
     ]
   }
 }

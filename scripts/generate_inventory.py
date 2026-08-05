@@ -8,7 +8,7 @@ Reads:
 
 Emits:
   - project_inventory.json with generated_at, verified_state, declared_state, drift
-"""
+"""  # noqa: EXE001
 
 import json
 import sqlite3
@@ -208,9 +208,9 @@ def compute_drift(verified, declared):
     ignored_tables = set(declared["phases"]["phase2d"].get("ignored_tables", []))
     verified_tables = set(verified["database"]["tables"].keys())
 
-    drift["missing_tables"] = sorted(list(declared_tables - verified_tables))
+    drift["missing_tables"] = sorted(declared_tables - verified_tables)
     drift["extra_tables"] = sorted(
-        list(verified_tables - declared_tables - ignored_tables)
+        verified_tables - declared_tables - ignored_tables
     )[:20]  # Show first 20
 
     # Check mapping types
@@ -220,10 +220,10 @@ def compute_drift(verified, declared):
     verified_mapping_types = set(verified["database"]["mapping_types"])
 
     drift["missing_mapping_types"] = sorted(
-        list(declared_mapping_types - verified_mapping_types)
+        declared_mapping_types - verified_mapping_types
     )
     drift["extra_mapping_types"] = sorted(
-        list(verified_mapping_types - declared_mapping_types)
+        verified_mapping_types - declared_mapping_types
     )[:20]
 
     # Check extractors
@@ -231,18 +231,18 @@ def compute_drift(verified, declared):
     verified_extractors = set(verified["filesystem"]["parsers"])
 
     drift["missing_extractors"] = sorted(
-        list(declared_extractors - verified_extractors)
+        declared_extractors - verified_extractors
     )
-    drift["extra_extractors"] = sorted(list(verified_extractors - declared_extractors))
+    drift["extra_extractors"] = sorted(verified_extractors - declared_extractors)
 
     # Check validators
     declared_validators = set(declared["phases"]["phase2d"]["required_validators"])
     verified_validators = set(verified["filesystem"]["validators"])
 
     drift["missing_validators"] = sorted(
-        list(declared_validators - verified_validators)
+        declared_validators - verified_validators
     )
-    drift["extra_validators"] = sorted(list(verified_validators - declared_validators))
+    drift["extra_validators"] = sorted(verified_validators - declared_validators)
 
     # Remove empty drift entries
     return {k: v for k, v in drift.items() if v}
@@ -274,7 +274,7 @@ def generate_inventory():
 
         return inventory
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"❌ Failed to generate inventory: {e}", file=sys.stderr)
         import traceback
 
@@ -330,7 +330,7 @@ def main():
 
         return 0
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"❌ Failed to write {output_path}: {e}", file=sys.stderr)
         return 1
 
