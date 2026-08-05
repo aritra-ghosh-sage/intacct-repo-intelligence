@@ -356,7 +356,7 @@ def prefer_symbol(candidates: list[SymbolRow]) -> SymbolRow:
         "method": 7,
     }
 
-    return sorted(candidates, key=lambda s: priority.get(str(s.kind).lower(), 99))[0]
+    return min(candidates, key=lambda s: priority.get(str(s.kind).lower(), 99))
 
 
 def pick_source_symbol(

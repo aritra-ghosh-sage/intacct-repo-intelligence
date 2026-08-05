@@ -22,6 +22,7 @@ extraction stages from accepting a looser, incompatible dialect.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import re
 from collections.abc import Callable
@@ -478,7 +479,7 @@ def audit_static_entry(
         if declared is not None and str(declared).strip() and str(declared).strip() != entry.entity:
             raise RestAutomationContractError("static map entity stem disagrees with evidence x-mappedTo")
         chain = entry.ref_chain
-        for source, target in zip(chain, chain[1:], strict=False):
+        for source, target in itertools.pairwise(chain):
             source_file, target_file = file_row(source), file_row(target)
             count = conn.execute(
                 "SELECT COUNT(*) FROM openapi_file_ref_edges WHERE repo_id=? AND source_file_id=? AND target_file_id=?",
