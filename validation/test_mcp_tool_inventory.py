@@ -7,7 +7,6 @@ from unittest import mock
 from intacct_mcp.server import CatalogState
 from scripts import render_mcp_tool_inventory
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 

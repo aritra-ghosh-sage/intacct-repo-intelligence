@@ -10,8 +10,8 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-from config import REPO_PATH
 from catalog.repository_lifecycle import require_repository_extractable
+from config import REPO_PATH
 
 
 @dataclass(frozen=True)

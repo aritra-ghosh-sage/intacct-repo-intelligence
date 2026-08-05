@@ -20,7 +20,7 @@ except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from catalog.db import get_connection
     from catalog.mapping_ownership import OPENAPI_MAPPING_TYPES, placeholders
-    from catalog.repositories import get_repository, resolve_repository_root
+    from catalog.repositories import resolve_repository_root
 
 DEFAULT_DB = "catalog/catalog.db"
 MISSING_METADATA_LOG_PATH = (

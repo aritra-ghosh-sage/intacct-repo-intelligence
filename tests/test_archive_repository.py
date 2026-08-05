@@ -5,11 +5,11 @@ import os
 import shutil
 import sqlite3
 import tempfile
-from pathlib import Path
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
-from catalog.archive_ownership import ARCHIVE_OWNED_REPO_TABLES, target_row_counts
+from catalog.archive_ownership import target_row_counts
 from catalog.archive_repository import (
     ArchiveRepositoryError,
     archive_repository,

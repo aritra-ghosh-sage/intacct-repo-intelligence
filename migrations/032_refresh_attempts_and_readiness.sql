@@ -1,0 +1,5 @@
+-- Applied by catalog.migrations because legacy catalog_builds needs additive
+-- compatibility columns and active generations must be classified without
+-- fabricating historical runtime or evidence-comparison metadata.
+--
+-- Marker: 032_refresh_attempts_and_readiness

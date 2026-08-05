@@ -10,6 +10,7 @@ from typing import Any
 
 from catalog.content_fingerprint import logical_content_fingerprint
 from catalog.delta import DELTA_CONTRACT_VERSION
+from catalog.refresh_contract import READY, evaluate_active_readiness
 from catalog.refresh_quality import (
     RefreshQualityError,
     resolve_reference_quality_run,
@@ -259,6 +260,19 @@ def validate_catalog_connection(
             "SELECT 1 FROM schema_migrations WHERE name='029_repository_archival'"
         ).fetchone()
     )
+    readiness_migration_present = bool(
+        _table_exists(conn, "schema_migrations")
+        and conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name='032_refresh_attempts_and_readiness'"
+        ).fetchone()
+    )
+    reliability_migration_present = bool(
+        _table_exists(conn, "schema_migrations")
+        and conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name='033_refresh_reliability_gates'"
+        ).fetchone()
+    )
+    readiness = evaluate_active_readiness(conn) if readiness_migration_present else None
     integration_link_rows = (
         _count(conn, "SELECT COUNT(*) FROM integration_links")
         if _table_exists(conn, "integration_links")
@@ -362,6 +376,10 @@ def validate_catalog_connection(
         "migration_028_present": api_registry_migration_present,
         "api_registry_tables_present": api_registry_tables_present,
         "migration_029_present": archival_migration_present,
+        "migration_032_present": readiness_migration_present,
+        "migration_033_present": reliability_migration_present,
+        "active_refresh_readiness": readiness.status if readiness is not None else None,
+        "active_refresh_readiness_reasons": list(readiness.reasons) if readiness is not None else [],
         "integration_link_rows": integration_link_rows,
         "invalid_active_quality_runs": invalid_active_quality_runs,
         "active_catalog_build_count": len(active_rows),
@@ -396,6 +414,19 @@ def validate_catalog_connection(
         failures.append("api_registry_tables")
     if not archival_migration_present:
         failures.append("migration_029")
+    if not readiness_migration_present:
+        failures.append("migration_032")
+    if not reliability_migration_present:
+        failures.append("migration_033")
+    # Recovery-required is an honest, structurally valid state.  Only reject
+    # the dangerous claim: an active row marked ready without every admission
+    # prerequisite currently present.
+    if readiness is not None:
+        row = conn.execute(
+            "SELECT refresh_readiness FROM catalog_builds WHERE status='active' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if row is not None and str(row[0]) == READY and not readiness.ready:
+            failures.append("refresh_readiness")
     if integration_link_rows:
         failures.append("integration_links")
     if invalid_active_quality_runs:

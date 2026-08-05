@@ -9,7 +9,6 @@ from pathlib import Path
 
 from intacct_mcp.server import CatalogState, entity_test_coverage_impl
 
-
 ROOT = Path(__file__).resolve().parents[1]
 EXTRACTOR = "gherkin-coverage-v2-workflow-action"
 

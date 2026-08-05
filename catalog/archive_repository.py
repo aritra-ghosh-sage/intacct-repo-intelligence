@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
-from pathlib import Path
 import sqlite3
-from typing import Callable
 import uuid
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
 
 from catalog.archive_ownership import (
     ARCHIVE_OWNED_REPO_TABLES,
@@ -84,6 +84,14 @@ def _target_ids(conn: sqlite3.Connection, repo_id: int) -> dict[str, set[int]]:
                 "SELECT s.id FROM symbols s JOIN files f ON f.id=s.file_id WHERE f.repo_id=?",
                 (repo_id,),
             )
+        elif "id" not in {
+            str(column[1]) for column in conn.execute(f"PRAGMA table_info({table})")
+        }:
+            # Repository-scoped build-state tables can be keyed directly by
+            # repo_id.  They are purged normally but have no surrogate target
+            # IDs for inbound-reference checks.
+            ids[table] = set()
+            continue
         else:
             rows = conn.execute(f"SELECT id FROM {table} WHERE repo_id=?", (repo_id,))
         ids[table] = {int(row[0]) for row in rows}
@@ -311,9 +319,11 @@ def archive_repository(
                     conn.close()
                     candidate.unlink(missing_ok=True)
                     return ArchiveResult(repo_key, source, None, False, True, {}, None)
-                if source == "github":
-                    if github_archive_verifier is None or github_archive_verifier(target) is not True:
-                        raise ArchiveRepositoryError("GitHub archival confirmation is required")
+                if source == "github" and (
+                    github_archive_verifier is None
+                    or github_archive_verifier(target) is not True
+                ):
+                    raise ArchiveRepositoryError("GitHub archival confirmation is required")
                 active_fingerprints = {
                     int(row[0]): repository_evidence_fingerprint(conn, int(row[0]))
                     for row in conn.execute(
@@ -379,9 +389,9 @@ def archive_repository(
 
 
 __all__ = [
+    "ArchiveOwnershipError",
     "ArchiveRepositoryError",
     "ArchiveResult",
-    "ArchiveOwnershipError",
     "CatalogPromotionError",
     "archive_repository",
     "repository_evidence_fingerprint",

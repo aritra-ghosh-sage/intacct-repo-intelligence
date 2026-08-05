@@ -22,7 +22,7 @@ try:
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from catalog.db import get_connection
-    from catalog.repositories import get_repository, resolve_repository_root
+    from catalog.repositories import resolve_repository_root
 
 DEFAULT_DB = "catalog/catalog.db"
 DEFAULT_REPO_ROOT = "/home/aritraghosh/projects/main"

@@ -44,6 +44,7 @@ ARCHIVE_OWNED_REPO_TABLES: tuple[str, ...] = (
     "security_operations",
     "security_policies",
     "test_cases",
+    "test_coverage_build_state",
     "test_diagnostics",
     "ui_artifact_includes",
     "ui_artifacts",

@@ -7,12 +7,11 @@ import unittest
 from pathlib import Path
 
 from catalog.content_fingerprint import (
-    CATALOG_CONTENT_VERSION,
     AUTHORITATIVE_EVIDENCE_TABLES,
+    CATALOG_CONTENT_VERSION,
     logical_content_fingerprint,
 )
 from catalog.migrations import API_REGISTRY_MIGRATION, apply_delta_refresh_migration
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -102,7 +101,7 @@ class ApiRegistryMigrationTests(unittest.TestCase):
                 "ui_source_diagnostics",
             }.issubset(fingerprint_tables)
         )
-        self.assertEqual(CATALOG_CONTENT_VERSION, 3)
+        self.assertEqual(CATALOG_CONTENT_VERSION, 4)
 
     def test_upgrade_recreates_028_tables_idempotently(self) -> None:
         conn = self._connection()

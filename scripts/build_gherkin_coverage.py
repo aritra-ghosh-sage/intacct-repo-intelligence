@@ -26,15 +26,15 @@ except ModuleNotFoundError:
     from catalog.db import get_connection
 
 from catalog.rest_automation_contract import (
-    ContractV1Paths,
     STATIC_MAP_PATH,
+    ContractV1Paths,
     StaticMapEntry,
     audit_static_entry,
-    load_static_map,
-    static_map_hashes,
     load_non_request_inventory_contract,
     load_object_mapping_contract,
+    load_static_map,
     load_version_compatibility_contract,
+    static_map_hashes,
 )
 
 try:

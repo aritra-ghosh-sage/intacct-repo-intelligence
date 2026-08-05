@@ -5,7 +5,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from catalog.rest_automation_contract import RestAutomationContractError, load_static_map
+from catalog.rest_automation_contract import (
+    RestAutomationContractError,
+    load_static_map,
+)
 
 
 def _entry(method: str) -> dict[str, object]:

@@ -27,6 +27,8 @@ API_REGISTRY_MIGRATION = "028_api_registry"
 REPOSITORY_ARCHIVAL_MIGRATION = "029_repository_archival"
 WORKFLOW_ACTION_MIGRATION = "030_workflow_action"
 REST_AUTOMATION_CONTRACT_MIGRATION = "031_rest_automation_contract"
+REFRESH_ATTEMPTS_AND_READINESS_MIGRATION = "032_refresh_attempts_and_readiness"
+REFRESH_RELIABILITY_GATES_MIGRATION = "033_refresh_reliability_gates"
 LEGACY_REPO_KEY = "ia-main"
 
 
@@ -1632,8 +1634,116 @@ def _apply_rest_automation_contract_migration(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_refresh_attempts_and_readiness_migration(conn: sqlite3.Connection) -> None:
+    """Install the attempt ledger without inventing legacy compatibility."""
+
+    _add_columns(
+        conn,
+        "catalog_builds",
+        (
+            (
+                "refresh_readiness TEXT NOT NULL DEFAULT 'full_recovery_required' "
+                "CHECK(refresh_readiness IN ('ready','full_recovery_required'))"
+            ),
+            "content_contract_version INTEGER",
+            "runtime_contract_version INTEGER",
+            "evidence_comparison_version INTEGER",
+        ),
+    )
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS refresh_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            attempt_token TEXT NOT NULL UNIQUE,
+            requested_repo_key TEXT NOT NULL,
+            requested_mode TEXT NOT NULL CHECK(requested_mode IN ('auto','full','delta')),
+            closure_json TEXT, target_revisions_json TEXT,
+            parent_catalog_build_id INTEGER, parent_build_token TEXT,
+            requested_effective_mode TEXT, effective_mode TEXT,
+            manifest_hash TEXT, builder_plan_hash TEXT,
+            delta_contract_version INTEGER, content_contract_version INTEGER,
+            runtime_contract_version INTEGER, evidence_comparison_version INTEGER,
+            readiness_before TEXT, readiness_after TEXT, fallback_reason TEXT,
+            current_stage TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('running','succeeded','failed')),
+            failure_class TEXT, failure_detail TEXT,
+            retryable INTEGER NOT NULL DEFAULT 0 CHECK(retryable IN (0,1)),
+            started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TEXT,
+            FOREIGN KEY(parent_catalog_build_id) REFERENCES catalog_builds(id) ON DELETE SET NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_refresh_attempts_started
+            ON refresh_attempts(started_at DESC);
+        CREATE TABLE IF NOT EXISTS refresh_attempt_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            attempt_id INTEGER NOT NULL,
+            sequence INTEGER NOT NULL, stage TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('started','succeeded','failed','diagnostic')),
+            detail TEXT, diagnostic_json TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(attempt_id, sequence),
+            FOREIGN KEY(attempt_id) REFERENCES refresh_attempts(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_refresh_attempt_events_attempt
+            ON refresh_attempt_events(attempt_id, sequence);
+        """
+    )
+    # This migration has no historic runtime/evidence-comparison provenance.
+    # Marking older rows ready would make a false claim, so recovery is the
+    # only safe classification until a successful full candidate replaces it.
+    conn.execute(
+        "UPDATE catalog_builds SET refresh_readiness='full_recovery_required' "
+        "WHERE status='active'"
+    )
+
+
+def _apply_refresh_reliability_gates_migration(conn: sqlite3.Connection) -> None:
+    """Make the refresh ledger independently bootstrappable and immutable.
+
+    SQLite cannot alter a foreign key in place.  Keep every legacy identifier,
+    token, sequence, and timestamp while rebuilding both ledger tables in one
+    migration transaction.
+    """
+    required_attempts = {"id", "attempt_token", "requested_repo_key", "requested_mode"}
+    if not _table_exists(conn, "refresh_attempts"):
+        _canonical_schema_objects(conn, ("refresh_attempts", "refresh_attempt_events"))
+        return
+    if not required_attempts.issubset(_columns(conn, "refresh_attempts")):
+        raise RuntimeError("refresh ledger is missing required attempt columns")
+    # Rebuild even if an earlier partially-installed 033 DDL exists: the
+    # canonical schema is the contract and preserving row IDs makes this safe.
+    conn.execute("DROP TRIGGER IF EXISTS trg_refresh_attempt_events_no_update")
+    conn.execute("DROP TRIGGER IF EXISTS trg_refresh_attempt_events_no_delete")
+    conn.execute("DROP TRIGGER IF EXISTS trg_refresh_attempts_no_delete")
+    conn.execute("DROP TRIGGER IF EXISTS trg_refresh_attempts_terminal_summary")
+    conn.execute("DROP INDEX IF EXISTS idx_refresh_attempt_events_attempt")
+    conn.execute("DROP INDEX IF EXISTS idx_refresh_attempts_started")
+    conn.execute("ALTER TABLE refresh_attempt_events RENAME TO refresh_attempt_events_legacy_033")
+    conn.execute("ALTER TABLE refresh_attempts RENAME TO refresh_attempts_legacy_033")
+    _canonical_schema_objects(conn, ("refresh_attempts", "refresh_attempt_events"))
+    old_attempt_columns = _columns(conn, "refresh_attempts_legacy_033")
+    new_attempt_columns = _columns(conn, "refresh_attempts")
+    attempt_columns = [
+        row[1] for row in conn.execute("PRAGMA table_info(refresh_attempts)")
+        if row[1] in old_attempt_columns and row[1] in new_attempt_columns
+    ]
+    joined = ",".join(attempt_columns)
+    conn.execute(f"INSERT INTO refresh_attempts({joined}) SELECT {joined} FROM refresh_attempts_legacy_033")
+    old_event_columns = _columns(conn, "refresh_attempt_events_legacy_033")
+    event_columns = [
+        row[1] for row in conn.execute("PRAGMA table_info(refresh_attempt_events)")
+        if row[1] in old_event_columns
+    ]
+    joined = ",".join(event_columns)
+    conn.execute(f"INSERT INTO refresh_attempt_events({joined}) SELECT {joined} FROM refresh_attempt_events_legacy_033")
+    conn.execute("DROP TABLE refresh_attempt_events_legacy_033")
+    conn.execute("DROP TABLE refresh_attempts_legacy_033")
+    violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+    if violations:
+        raise RuntimeError(f"foreign key check failed rebuilding refresh ledger: {violations[:3]}")
+
+
 def apply_delta_refresh_migration(conn: sqlite3.Connection) -> None:
-    """Apply refresh migrations 023 through 031 to a repository-scoped catalog."""
+    """Apply refresh migrations 023 through 032 to a repository-scoped catalog."""
 
     if conn.in_transaction:
         raise RuntimeError(
@@ -1734,6 +1844,26 @@ def apply_delta_refresh_migration(conn: sqlite3.Connection) -> None:
             conn.execute(
                 "INSERT INTO schema_migrations(name) VALUES (?)",
                 (REST_AUTOMATION_CONTRACT_MIGRATION,),
+            )
+        readiness_applied = conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name=?",
+            (REFRESH_ATTEMPTS_AND_READINESS_MIGRATION,),
+        ).fetchone()
+        if readiness_applied is None:
+            _apply_refresh_attempts_and_readiness_migration(conn)
+            conn.execute(
+                "INSERT INTO schema_migrations(name) VALUES (?)",
+                (REFRESH_ATTEMPTS_AND_READINESS_MIGRATION,),
+            )
+        reliability_applied = conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name=?",
+            (REFRESH_RELIABILITY_GATES_MIGRATION,),
+        ).fetchone()
+        if reliability_applied is None:
+            _apply_refresh_reliability_gates_migration(conn)
+            conn.execute(
+                "INSERT INTO schema_migrations(name) VALUES (?)",
+                (REFRESH_RELIABILITY_GATES_MIGRATION,),
             )
         violations = conn.execute("PRAGMA foreign_key_check").fetchall()
         if violations:
@@ -1913,6 +2043,26 @@ def apply_multi_repo_migration(
             conn.execute(
                 "INSERT INTO schema_migrations(name) VALUES (?)",
                 (REST_AUTOMATION_CONTRACT_MIGRATION,),
+            )
+        readiness_applied = conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name=?",
+            (REFRESH_ATTEMPTS_AND_READINESS_MIGRATION,),
+        ).fetchone()
+        if readiness_applied is None:
+            _apply_refresh_attempts_and_readiness_migration(conn)
+            conn.execute(
+                "INSERT INTO schema_migrations(name) VALUES (?)",
+                (REFRESH_ATTEMPTS_AND_READINESS_MIGRATION,),
+            )
+        reliability_applied = conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name=?",
+            (REFRESH_RELIABILITY_GATES_MIGRATION,),
+        ).fetchone()
+        if reliability_applied is None:
+            _apply_refresh_reliability_gates_migration(conn)
+            conn.execute(
+                "INSERT INTO schema_migrations(name) VALUES (?)",
+                (REFRESH_RELIABILITY_GATES_MIGRATION,),
             )
         # FK enforcement is necessarily off while legacy parent tables are
         # rebuilt, but foreign_key_check still validates the candidate before

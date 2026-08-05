@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sqlite3
+from pathlib import Path
 
 from catalog.archive_ownership import target_row_counts
 from catalog.archive_repository import archive_repository

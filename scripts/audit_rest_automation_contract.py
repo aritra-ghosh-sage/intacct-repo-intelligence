@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sqlite3
 import sys
@@ -13,14 +12,20 @@ import click
 
 try:
     from catalog.rest_automation_contract import (
-        STATIC_MAP_PATH, RestAutomationContractError, audit_static_entry,
-        load_static_map, static_map_hashes,
+        STATIC_MAP_PATH,
+        RestAutomationContractError,
+        audit_static_entry,
+        load_static_map,
+        static_map_hashes,
     )
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from catalog.rest_automation_contract import (
-        STATIC_MAP_PATH, RestAutomationContractError, audit_static_entry,
-        load_static_map, static_map_hashes,
+        STATIC_MAP_PATH,
+        RestAutomationContractError,
+        audit_static_entry,
+        load_static_map,
+        static_map_hashes,
     )
 
 
@@ -56,7 +61,10 @@ def main(db_path: Path | None, target_repo: str, map_path: Path, suite_root: Pat
     try:
         # Compatibility-only inspection for obsolete target-owned V1 inputs.
         if db_path is None:
-            from catalog.rest_automation_contract import audit_contract_v1, resolve_contract_v1_paths
+            from catalog.rest_automation_contract import (
+                audit_contract_v1,
+                resolve_contract_v1_paths,
+            )
             if manifest_path is not None:
                 from catalog.repositories import load_workspace_manifest
                 manifest = load_workspace_manifest(manifest_path)

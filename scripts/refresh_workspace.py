@@ -9,7 +9,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import sqlite3
 import subprocess
 import tempfile
@@ -19,7 +18,10 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
-from catalog.content_fingerprint import logical_content_fingerprint
+from catalog.content_fingerprint import (
+    CATALOG_CONTENT_VERSION,
+    logical_content_fingerprint,
+)
 from catalog.db import migrate_multi_repo
 from catalog.delta import (
     DELTA_CONTRACT_VERSION,
@@ -29,8 +31,22 @@ from catalog.delta import (
     collect_repository_change_set,
     path_is_in_scan_scope,
 )
-from catalog.migrations import LEGACY_REPO_KEY
-from catalog.refresh_contract import runtime_fingerprint
+from catalog.migrations import (
+    LEGACY_REPO_KEY,
+    apply_delta_refresh_migration,
+)
+from catalog.refresh_attempts import (
+    bootstrap_refresh_ledger,
+    create_refresh_attempt,
+    record_attempt_event,
+    record_attempt_failure,
+)
+from catalog.refresh_contract import (
+    EVIDENCE_COMPARISON_VERSION,
+    RUNTIME_CONTRACT_VERSION,
+    evaluate_active_readiness,
+    runtime_fingerprint,
+)
 from catalog.refresh_quality import (
     QUALITY_QUERIES,
     RefreshQualityError,
@@ -45,6 +61,24 @@ from catalog.refresh_quality import (
     validate_quality_run,
     write_quality_report_atomic,
 )
+from catalog.refresh_transaction import (
+    ParentDescriptor as TransactionParentDescriptor,
+)
+from catalog.refresh_transaction import (
+    assert_parent_unchanged as transaction_assert_parent_unchanged,
+)
+from catalog.refresh_transaction import (
+    backup_database as transaction_backup_database,
+)
+from catalog.refresh_transaction import (
+    parent_descriptor as transaction_parent_descriptor,
+)
+from catalog.refresh_transaction import (
+    promote_catalog_candidate as transaction_promote_catalog_candidate,
+)
+from catalog.refresh_transaction import (
+    refresh_lock as transaction_refresh_lock,
+)
 from catalog.repositories import (
     get_repository,
     load_workspace_manifest,
@@ -55,17 +89,9 @@ from catalog.repository_lifecycle import (
     require_repository_extractable,
     verify_github_repository_active,
 )
-from catalog.refresh_transaction import (
-    ParentDescriptor as TransactionParentDescriptor,
-    assert_parent_unchanged as transaction_assert_parent_unchanged,
-    backup_database as transaction_backup_database,
-    parent_descriptor as transaction_parent_descriptor,
-    promote_catalog_candidate as transaction_promote_catalog_candidate,
-    refresh_lock as transaction_refresh_lock,
-)
 from catalog.rest_automation_contract import CONTRACT_V1, resolve_contract_v1_paths
-from catalog.source_snapshot import SourceSnapshot, materialize_source_snapshot
 from catalog.source_revisions import active_source_revisions
+from catalog.source_snapshot import SourceSnapshot, materialize_source_snapshot
 from scripts.builder_outcome import BuilderDiagnostic, BuilderOutcome
 from scripts.builder_registry import (
     build_plan,
@@ -1074,56 +1100,60 @@ def _record_failed_refresh(
     requested_mode: str = "auto",
     effective_mode: str = "not_started",
 ) -> None:
-    """Best-effort diagnostic history without replacing the active catalog."""
+    """Record compatibility history after the required attempt-ledger event.
+
+    This is not the authoritative failure record; ``refresh_attempts`` is.
+    It is deliberately not best-effort: a caller that elects to update legacy
+    run/build history must observe a write failure rather than hiding it.
+    """
+    conn = sqlite3.connect(active)
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.row_factory = sqlite3.Row
     try:
-        conn = sqlite3.connect(active)
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.row_factory = sqlite3.Row
         try:
-            try:
-                repo = get_repository(conn, repo_key)
-            except Exception:
-                active_build_exists = bool(
-                    conn.execute(
-                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='catalog_builds'"
-                    ).fetchone()
-                    and conn.execute(
-                        "SELECT 1 FROM catalog_builds WHERE status='active' LIMIT 1"
-                    ).fetchone()
-                )
-                if manifest is None or active_build_exists:
-                    raise
-                register_manifest(conn, _closure_manifest(manifest, {repo_key}))
-                repo = get_repository(conn, repo_key)
-            run_id = conn.execute(
+            repo = get_repository(conn, repo_key)
+        except Exception:
+            active_build_exists = bool(
+                conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='catalog_builds'"
+                ).fetchone()
+                and conn.execute(
+                    "SELECT 1 FROM catalog_builds WHERE status='active' LIMIT 1"
+                ).fetchone()
+            )
+            if manifest is None or active_build_exists:
+                raise
+            register_manifest(conn, _closure_manifest(manifest, {repo_key}))
+            repo = get_repository(conn, repo_key)
+        run_id = conn.execute(
                 """INSERT INTO repo_index_runs(
                        repo_id, tracked_branch, status, diagnostic_error, completed_at
                    ) VALUES (?, ?, 'failed', ?, CURRENT_TIMESTAMP)""",
                 (int(repo["id"]), str(repo["tracked_branch"]), str(error)),
-            ).lastrowid
-            if failed_step is not None:
-                conn.execute(
+        ).lastrowid
+        if failed_step is not None:
+            conn.execute(
                     """INSERT INTO repo_index_stages(
                            run_id,builder_name,status,started_at,completed_at,
                            diagnostic_error
                        ) VALUES (?,?,'failed',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,?)""",
                     (run_id, failed_step, str(error)),
-                )
-            conn.execute(
+            )
+        conn.execute(
                 """UPDATE repos SET
                        last_attempt_status='failed', last_attempted_at=CURRENT_TIMESTAMP,
                        last_attempt_error=?
                    WHERE id=?""",
                 (str(error), int(repo["id"])),
-            )
-            if conn.execute(
+        )
+        if conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='catalog_builds'"
-            ).fetchone():
-                parent = conn.execute(
+        ).fetchone():
+            parent = conn.execute(
                     "SELECT id FROM catalog_builds WHERE status='active' ORDER BY id DESC LIMIT 1"
-                ).fetchone()
-                revisions = active_source_revisions(conn)
-                conn.execute(
+            ).fetchone()
+            revisions = active_source_revisions(conn)
+            conn.execute(
                     """INSERT INTO catalog_builds(
                            build_token,parent_catalog_build_id,catalog_path,
                            requested_mode,effective_mode,status,source_revisions_json,
@@ -1139,14 +1169,10 @@ def _record_failed_refresh(
                         DELTA_CONTRACT_VERSION,
                         f"{repo_key}:{failed_step}: {error}",
                     ),
-                )
-            conn.commit()
-        finally:
-            conn.close()
-    except Exception:  # noqa: BLE001 - failure recording must not mask root cause
-        # The candidate failure remains the primary error.  In particular, do
-        # not mask it if the active catalog has not yet been migrated.
-        return
+            )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _resolve_refresh_order(manifest: dict, repo_key: str) -> list[str]:
@@ -1438,6 +1464,11 @@ def _plan_repository_changes(
             active_build, indexed_revisions, contracts = _active_catalog_contract(
                 active, refresh_order
             )
+            readiness_conn = sqlite3.connect(active)
+            try:
+                readiness = evaluate_active_readiness(readiness_conn)
+            finally:
+                readiness_conn.close()
         except (sqlite3.Error, KeyError, IndexError, TypeError, ValueError) as exc:
             active_build = None
             indexed_revisions = _indexed_revisions(active)
@@ -1447,7 +1478,9 @@ def _plan_repository_changes(
         else:
             global_reason: str | None = None
             source_revisions = {}
-            if active_build is None:
+            if not readiness.ready:
+                global_reason = "; ".join(readiness.reasons)
+            elif active_build is None:
                 global_reason = (
                     "compatibility metadata unavailable: no active catalog build"
                 )
@@ -1625,8 +1658,6 @@ def _record_noop_attempts(
     start_revisions: dict[str, str],
     baselines: dict[str, tuple[int, dict]],
 ) -> None:
-    _recheck_source_revisions(manifest, start_revisions)
-    _assert_parent_unchanged(active, parent)
     conn = sqlite3.connect(active)
     conn.execute("PRAGMA foreign_keys=ON")
     conn.row_factory = sqlite3.Row
@@ -1706,6 +1737,11 @@ def _record_noop_attempts(
                    WHERE id=?""",
                 (int(repo["id"]),),
             )
+        # These checks are deliberately inside the same metadata transaction
+        # and immediately precede COMMIT.  A moving source or parent rolls all
+        # no-op history back instead of leaving a false active run behind.
+        _recheck_source_revisions(manifest, start_revisions)
+        _assert_parent_unchanged(active, parent)
         conn.commit()
     except Exception:
         conn.rollback()
@@ -1724,6 +1760,7 @@ def _refresh_repository_closure(
     manifest_path: Path | None = None,
     prepare_quality_baseline: Path | None = None,
     accept_quality_baseline: str | None = None,
+    attempt_token: str | None = None,
 ) -> None:
     """Refresh one dependency closure through one candidate and one promotion."""
 
@@ -1757,14 +1794,7 @@ def _refresh_repository_closure(
             runtime_hash,
         )
     except Exception as exc:
-        _record_failed_refresh(
-            active_db,
-            manifest,
-            refresh_order[-1] if refresh_order else "unknown",
-            exc,
-            "delta_preflight",
-            requested_mode=requested_mode,
-        )
+        exc.refresh_stage = "delta_preflight"
         raise
     change_by_repo = {change.repo_key: change for change in changes}
     stage_modes: dict[str, dict[str, tuple[str, str]]] = {}
@@ -1830,17 +1860,54 @@ def _refresh_repository_closure(
         active_db, refresh_order
     )
     parent_global_counts = _quality_parent_global_state(active_db)
-    if changes and all(change.is_noop for change in changes):
-        _record_noop_attempts(
-            active_db,
-            manifest,
-            changes,
-            plans,
-            runtime_hash=runtime_hash,
-            parent=parent,
-            start_revisions=start_revisions,
-            baselines=parent_baselines,
+    if attempt_token is not None:
+        effective = sorted({change.effective_mode for change in changes})
+        fallback = sorted(
+            {str(change.fallback_reason) for change in changes if change.fallback_reason}
         )
+        record_attempt_event(
+            active_db,
+            attempt_token,
+            stage="planning",
+            status="succeeded",
+            detail="repository changes planned",
+            fields={
+                "closure_json": _stable_json(refresh_order),
+                "target_revisions_json": _stable_json(start_revisions),
+                "requested_effective_mode": requested_mode,
+                "effective_mode": "hybrid" if len(effective) > 1 else (effective[0] if effective else None),
+                "manifest_hash": _manifest_hash(manifest),
+                "builder_plan_hash": _builder_plan_hash(plans, runtime_hash),
+                "delta_contract_version": DELTA_CONTRACT_VERSION,
+                "content_contract_version": CATALOG_CONTENT_VERSION,
+                "runtime_contract_version": RUNTIME_CONTRACT_VERSION,
+                "evidence_comparison_version": EVIDENCE_COMPARISON_VERSION,
+                "fallback_reason": "; ".join(fallback) if fallback else None,
+            },
+        )
+    if changes and all(change.is_noop for change in changes):
+        if attempt_token is not None:
+            record_attempt_event(active_db, attempt_token, stage="no_op", detail="recording no-op metadata")
+        try:
+            _record_noop_attempts(
+                active_db,
+                manifest,
+                changes,
+                plans,
+                runtime_hash=runtime_hash,
+                parent=parent,
+                start_revisions=start_revisions,
+                baselines=parent_baselines,
+            )
+        except Exception as exc:
+            exc.refresh_stage = (
+                "source_revision_final"
+                if "revision changed while refresh" in str(exc)
+                else "parent_cas"
+                if "compare-and-swap" in str(exc)
+                else "no_op"
+            )
+            raise
         return
 
     effective_modes = {change_by_repo[key].effective_mode for key in refresh_order}
@@ -1873,12 +1940,13 @@ def _refresh_repository_closure(
             "runtime_fingerprint": runtime_hash,
             "builder_plan_hash": plan_digest,
         }
-    failed_repo = refresh_order[0] if refresh_order else "unknown"
     failed_step = "backup_database"
     prepare_only = prepare_quality_baseline is not None
     with ExitStack() as resources:
         snapshots: dict[str, SourceSnapshot] = {}
         git_roots: dict[str, Path] = {}
+        if attempt_token is not None:
+            record_attempt_event(active_db, attempt_token, stage="snapshot", detail="materializing target snapshots")
         for repo_key in refresh_order:
             entry = _manifest_repository(manifest, repo_key)
             git_root = Path(entry["local_root"]).expanduser().resolve()
@@ -1886,13 +1954,17 @@ def _refresh_repository_closure(
             if any(
                 mode != "skipped" for mode, _reason in stage_modes[repo_key].values()
             ):
-                snapshots[repo_key] = resources.enter_context(
-                    materialize_source_snapshot(
-                        repo_key,
-                        git_root,
-                        change_by_repo[repo_key].target_commit_sha,
+                try:
+                    snapshots[repo_key] = resources.enter_context(
+                        materialize_source_snapshot(
+                            repo_key,
+                            git_root,
+                            change_by_repo[repo_key].target_commit_sha,
+                        )
                     )
-                )
+                except Exception as exc:
+                    exc.refresh_stage = "snapshot"
+                    raise
         output_root = Path(
             resources.enter_context(
                 tempfile.TemporaryDirectory(
@@ -1901,6 +1973,8 @@ def _refresh_repository_closure(
             )
         )
         try:
+            if attempt_token is not None:
+                record_attempt_event(active_db, attempt_token, stage="candidate_build", detail="building candidate")
             _backup_database(active_db, candidate)
             legacy_entry = next(
                 (
@@ -1918,8 +1992,6 @@ def _refresh_repository_closure(
                     tracked_branch=str(legacy_entry["tracked_branch"]),
                 )
             else:
-                from catalog.migrations import apply_delta_refresh_migration
-
                 migration_conn = sqlite3.connect(candidate)
                 try:
                     apply_delta_refresh_migration(migration_conn)
@@ -1948,8 +2020,10 @@ def _refresh_repository_closure(
                            build_token,parent_catalog_build_id,catalog_path,
                            requested_mode,effective_mode,status,source_revisions_json,
                            manifest_hash,builder_plan_hash,delta_contract_version,
-                           runtime_fingerprint
-                       ) VALUES (?,?,?,?,?,'building',?,?,?,?,?)""",
+                           runtime_fingerprint,refresh_readiness,
+                           content_contract_version,runtime_contract_version,
+                           evidence_comparison_version
+                       ) VALUES (?,?,?,?,?,'building',?,?,?,?,?,?,?,?,?)""",
                     (
                         build_token,
                         int(parent_row["id"]) if parent_row else None,
@@ -1961,13 +2035,16 @@ def _refresh_repository_closure(
                         plan_digest,
                         DELTA_CONTRACT_VERSION,
                         runtime_hash,
+                        "full_recovery_required",
+                        CATALOG_CONTENT_VERSION,
+                        RUNTIME_CONTRACT_VERSION,
+                        EVIDENCE_COMPARISON_VERSION,
                     ),
                 ).lastrowid
             )
             conn.commit()
 
             for repo_key in refresh_order:
-                failed_repo = repo_key
                 entry = _manifest_repository(manifest, repo_key)
                 repo = get_repository(conn, repo_key)
                 repo_id = int(repo["id"])
@@ -2325,7 +2402,7 @@ def _refresh_repository_closure(
                 (build_id,),
             )
             conn.execute(
-                "UPDATE catalog_builds SET status='active' WHERE id=?", (build_id,)
+                "UPDATE catalog_builds SET status='active',refresh_readiness='ready' WHERE id=?", (build_id,)
             )
             run_placeholders = ",".join("?" for _ in candidate_run_ids)
             conn.execute(
@@ -2336,6 +2413,15 @@ def _refresh_repository_closure(
             conn.execute(
                 "UPDATE graph_builds SET status='previous' WHERE status='active'"
             )
+            # A partial closure can still safely promote a full recovery
+            # generation.  Do not claim delta readiness unless every active
+            # repository retains current run/change-set/quality coverage.
+            candidate_readiness = evaluate_active_readiness(conn)
+            if not candidate_readiness.ready:
+                conn.execute(
+                    "UPDATE catalog_builds SET refresh_readiness='full_recovery_required' WHERE id=?",
+                    (build_id,),
+                )
             validation_summary = validate_catalog_connection(
                 conn,
                 expected_catalog_build_id=build_id,
@@ -2362,21 +2448,7 @@ def _refresh_repository_closure(
             _promote_catalog_candidate(active_db, candidate, previous, build_token)
         except Exception as exc:
             candidate.unlink(missing_ok=True)
-            if not prepare_only and failed_step not in {
-                "parent_cas",
-                "parent_cas_promotion",
-                "source_revision_final",
-                "source_revision_promotion",
-            }:
-                _record_failed_refresh(
-                    active_db,
-                    manifest,
-                    failed_repo,
-                    exc,
-                    failed_step,
-                    requested_mode=requested_mode,
-                    effective_mode=effective_catalog_mode,
-                )
+            exc.refresh_stage = failed_step
             raise
         finally:
             candidate.unlink(missing_ok=True)
@@ -2401,6 +2473,21 @@ def refresh_repository(
     )
     manifest_file = Path(manifest_path).expanduser().resolve()
     with _refresh_lock(active):
+        # The independent ledger is deliberately available before catalog
+        # migrations or manifest parsing.  A bootstrap failure is non-durable;
+        # after it commits every lifecycle boundary is auditable.
+        bootstrap_refresh_ledger(active)
+        attempt_token = create_refresh_attempt(active, repo_key=repo_key, requested_mode=mode)
+        record_attempt_event(active, attempt_token, stage="migration_bootstrap", status="succeeded", detail="independent ledger ready")
+        migration_conn = sqlite3.connect(active)
+        try:
+            apply_delta_refresh_migration(migration_conn)
+            record_attempt_event(active, attempt_token, stage="migration_apply", status="succeeded", detail="catalog migrations applied")
+        except Exception as exc:
+            exc.refresh_stage = "migration_apply"
+            raise
+        finally:
+            migration_conn.close()
         manifest: dict | None = None
         failed_step = "load_workspace_manifest"
         try:
@@ -2408,28 +2495,72 @@ def refresh_repository(
             failed_step = "dependency_preflight"
             refresh_order = _resolve_refresh_order(manifest, repo_key)
             start_revisions = _validate_refresh_preconditions(manifest, refresh_order, active)
+            record_attempt_event(
+                active,
+                attempt_token,
+                stage="admission",
+                status="succeeded",
+                detail="manifest and source preflight accepted",
+                fields={
+                    "closure_json": _stable_json(refresh_order),
+                    "target_revisions_json": (
+                        _stable_json(start_revisions)
+                        if isinstance(start_revisions, dict)
+                        else None
+                    ),
+                },
+            )
         except Exception as exc:
+            record_attempt_failure(active, attempt_token, stage=failed_step, error=exc)
             if prepare_path is None:
                 _record_failed_refresh(
-                    active,
-                    manifest,
-                    repo_key,
-                    exc,
-                    failed_step,
-                    requested_mode=mode,
+                    active, manifest, repo_key, exc, failed_step, requested_mode=mode
                 )
             raise
-
-        _refresh_repository_closure(
-            active,
-            manifest,
-            refresh_order,
-            mode,
-            start_revisions=start_revisions,
-            manifest_path=manifest_file,
-            prepare_quality_baseline=prepare_path,
-            accept_quality_baseline=accept_quality_baseline,
-        )
+        try:
+            _refresh_repository_closure(
+                active,
+                manifest,
+                refresh_order,
+                mode,
+                start_revisions=start_revisions,
+                manifest_path=manifest_file,
+                prepare_quality_baseline=prepare_path,
+                accept_quality_baseline=accept_quality_baseline,
+                attempt_token=attempt_token,
+            )
+            readiness_conn = sqlite3.connect(active)
+            try:
+                readiness_row = readiness_conn.execute(
+                    "SELECT refresh_readiness FROM catalog_builds WHERE status='active' "
+                    "ORDER BY id DESC LIMIT 1"
+                ).fetchone()
+                readiness_after = str(readiness_row[0]) if readiness_row else "full_recovery_required"
+            finally:
+                readiness_conn.close()
+            record_attempt_event(
+                active,
+                attempt_token,
+                stage="terminal",
+                status="succeeded",
+                detail="quality baseline prepared" if prepare_path is not None else "refresh succeeded",
+                fields={"status": "succeeded", "readiness_after": readiness_after},
+            )
+        except Exception as exc:
+            # The stage is retained by the coordinator for precise fault
+            # diagnosis; terminal ledger writes are never best-effort.
+            stage = str(getattr(exc, "refresh_stage", "refresh"))
+            record_attempt_failure(
+                active,
+                attempt_token,
+                stage=stage,
+                error=exc,
+            )
+            if prepare_path is None:
+                _record_failed_refresh(
+                    active, manifest, repo_key, exc, stage, requested_mode=mode
+                )
+            raise
 
 
 def main() -> None:

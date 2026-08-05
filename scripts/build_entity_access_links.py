@@ -17,7 +17,6 @@ try:
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from catalog.db import get_connection
-    from catalog.repositories import get_repository
 
 DEFAULT_DB = "catalog/catalog.db"
 SECURITY_UNRESOLVED_LOG = Path("outputs/security_unresolved_keys.jsonl")

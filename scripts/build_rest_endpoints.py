@@ -32,7 +32,7 @@ try:
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from catalog.db import get_connection, require_foreign_key_integrity
-    from catalog.repositories import get_repository, resolve_repository_root
+    from catalog.repositories import resolve_repository_root
 
 try:
     import yaml

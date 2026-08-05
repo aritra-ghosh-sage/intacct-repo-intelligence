@@ -14,7 +14,13 @@ from pathlib import Path
 
 from tree_sitter_languages import get_parser
 
-from .model import Diagnostic, LoaderFact, LoaderMethodFact, ResolvedLoaderFact, ScriptDependencyFact
+from .model import (
+    Diagnostic,
+    LoaderFact,
+    LoaderMethodFact,
+    ResolvedLoaderFact,
+    ScriptDependencyFact,
+)
 
 _PARSER = get_parser("php")
 _SCRIPT_SUFFIX = ".js"

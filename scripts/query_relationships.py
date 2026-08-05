@@ -29,12 +29,12 @@ DEFAULT_DB = os.environ.get("CATALOG_DB", "catalog/catalog.db")
 def _relationship_row_to_dict(row: sqlite3.Row) -> dict[str, object]:
     payload: dict[str, object] = {
         "relationship_type": row["relationship_type"],
-        "confidence": row["confidence"] if "confidence" in row.keys() else None,
-        "file_path": row["file_path"] if "file_path" in row.keys() else None,
+        "confidence": row.get("confidence", None),
+        "file_path": row.get("file_path", None),
         "resolution_class": (
-            row["resolution_class"] if "resolution_class" in row.keys() else None
+            row.get("resolution_class", None)
         ),
-        "evidence": row["evidence"] if "evidence" in row.keys() else None,
+        "evidence": row.get("evidence", None),
     }
     for key in (
         "source_name",
@@ -42,7 +42,7 @@ def _relationship_row_to_dict(row: sqlite3.Row) -> dict[str, object]:
         "target_name",
         "target_kind",
     ):
-        if key in row.keys():
+        if key in row:
             payload[key] = row[key]
     return payload
 
@@ -316,7 +316,7 @@ def show_deps(
         for r in items:
             cls = (
                 f" class={r['resolution_class']}"
-                if "resolution_class" in r.keys() and r["resolution_class"]
+                if r.get("resolution_class")
                 else ""
             )
             print(
@@ -390,7 +390,7 @@ def show_rdeps(
         for r in items:
             cls = (
                 f" class={r['resolution_class']}"
-                if "resolution_class" in r.keys() and r["resolution_class"]
+                if r.get("resolution_class")
                 else ""
             )
             print(
@@ -445,7 +445,7 @@ def show_unresolved(
     for r in rows:
         cls = (
             f" class={r['resolution_class']}"
-            if "resolution_class" in r.keys() and r["resolution_class"]
+            if r.get("resolution_class")
             else ""
         )
         print(

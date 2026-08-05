@@ -24,8 +24,8 @@ from pydantic import Field
 
 from catalog.graph_projection import GRAPH_PROJECTION_VERSION
 from catalog.graph_state import graph_freshness
-from catalog.rest_coverage import REQUIRED_TABLES, coverage_rows, coverage_summary
 from catalog.rest_automation_contract import STATIC_MAP_PATH
+from catalog.rest_coverage import REQUIRED_TABLES, coverage_rows, coverage_summary
 from config import CATALOG_DB, GRAPH_DB
 from scripts.query_api_registry import (
     ApiRegistryQueryError,

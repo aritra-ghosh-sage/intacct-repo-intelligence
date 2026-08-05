@@ -1453,6 +1453,11 @@ CREATE TABLE IF NOT EXISTS catalog_builds (
     builder_plan_hash TEXT,
     delta_contract_version INTEGER NOT NULL,
     runtime_fingerprint TEXT,
+    refresh_readiness TEXT NOT NULL DEFAULT 'full_recovery_required'
+        CHECK(refresh_readiness IN ('ready','full_recovery_required')),
+    content_contract_version INTEGER,
+    runtime_contract_version INTEGER,
+    evidence_comparison_version INTEGER,
     content_fingerprint TEXT,
     started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     completed_at TEXT,
@@ -1464,6 +1469,80 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_catalog_builds_active
     ON catalog_builds(status) WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS idx_catalog_builds_status_started
     ON catalog_builds(status, started_at);
+
+-- Immutable refresh-attempt history, including failures before a candidate
+-- generation or repository run exists.
+CREATE TABLE IF NOT EXISTS refresh_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    attempt_token TEXT NOT NULL UNIQUE,
+    requested_repo_key TEXT NOT NULL,
+    requested_mode TEXT NOT NULL CHECK(requested_mode IN ('auto','full','delta')),
+    closure_json TEXT,
+    target_revisions_json TEXT,
+    parent_catalog_build_id INTEGER,
+    parent_build_token TEXT,
+    requested_effective_mode TEXT,
+    effective_mode TEXT,
+    manifest_hash TEXT,
+    builder_plan_hash TEXT,
+    delta_contract_version INTEGER,
+    content_contract_version INTEGER,
+    runtime_contract_version INTEGER,
+    evidence_comparison_version INTEGER,
+    readiness_before TEXT,
+    readiness_after TEXT,
+    fallback_reason TEXT,
+    current_stage TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('running','succeeded','failed')),
+    failure_class TEXT,
+    failure_detail TEXT,
+    retryable INTEGER NOT NULL DEFAULT 0 CHECK(retryable IN (0,1)),
+    started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_refresh_attempts_started ON refresh_attempts(started_at DESC);
+
+CREATE TABLE IF NOT EXISTS refresh_attempt_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    attempt_id INTEGER NOT NULL,
+    sequence INTEGER NOT NULL,
+    stage TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('started','succeeded','failed','diagnostic')),
+    detail TEXT,
+    diagnostic_json TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(attempt_id, sequence),
+    FOREIGN KEY(attempt_id) REFERENCES refresh_attempts(id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_refresh_attempt_events_attempt
+    ON refresh_attempt_events(attempt_id, sequence);
+
+CREATE TRIGGER IF NOT EXISTS trg_refresh_attempt_events_no_update
+BEFORE UPDATE ON refresh_attempt_events
+BEGIN SELECT RAISE(ABORT, 'refresh attempt events are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS trg_refresh_attempt_events_no_delete
+BEFORE DELETE ON refresh_attempt_events
+BEGIN SELECT RAISE(ABORT, 'refresh attempt events are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS trg_refresh_attempts_no_delete
+BEFORE DELETE ON refresh_attempts
+BEGIN SELECT RAISE(ABORT, 'refresh attempts are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS trg_refresh_attempts_terminal_summary
+BEFORE UPDATE ON refresh_attempts
+WHEN OLD.status <> 'running'
+BEGIN SELECT RAISE(ABORT, 'terminal refresh attempt summary is immutable'); END;
+CREATE TRIGGER IF NOT EXISTS trg_refresh_attempts_terminal_event_match
+BEFORE UPDATE ON refresh_attempts
+WHEN NEW.status IN ('succeeded','failed')
+BEGIN
+  SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM refresh_attempt_events e
+     WHERE e.attempt_id=OLD.id AND e.sequence=(SELECT MAX(sequence) FROM refresh_attempt_events WHERE attempt_id=OLD.id)
+       AND e.stage=NEW.current_stage AND e.status=NEW.status
+       AND COALESCE(json_extract(e.diagnostic_json,'$.failure_class'),'')=COALESCE(NEW.failure_class,'')
+       AND COALESCE(json_extract(e.diagnostic_json,'$.failure_detail'),'')=COALESCE(NEW.failure_detail,'')
+       AND COALESCE(json_extract(e.diagnostic_json,'$.retryable'),0)=NEW.retryable
+  ) THEN RAISE(ABORT, 'terminal refresh attempt summary must match terminal event') END;
+END;
 
 CREATE TABLE IF NOT EXISTS repo_change_sets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1555,4 +1634,6 @@ INSERT OR IGNORE INTO schema_migrations(name) VALUES
     ('028_api_registry'),
     ('029_repository_archival'),
     ('030_workflow_action'),
-    ('031_rest_automation_contract');
+    ('031_rest_automation_contract'),
+    ('032_refresh_attempts_and_readiness'),
+    ('033_refresh_reliability_gates');

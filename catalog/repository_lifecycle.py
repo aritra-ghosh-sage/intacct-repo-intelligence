@@ -10,7 +10,6 @@ import re
 import shutil
 import sqlite3
 import subprocess
-from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -59,7 +58,7 @@ def normalized_github_identity(remote_url: str | None) -> tuple[str, str] | None
     if not remote_url:
         return None
     value = remote_url.strip()
-    scp = re.fullmatch(r"(?:[^@]+@)?github\.com:([^/]+)/(.+)", value, re.I)
+    scp = re.fullmatch(r"(?:[^@]+@)?github\.com:([^/]+)/(.+)", value, re.IGNORECASE)
     if scp:
         owner, repo = scp.groups()
     else:

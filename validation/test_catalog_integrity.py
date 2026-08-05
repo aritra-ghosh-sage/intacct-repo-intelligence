@@ -7,9 +7,13 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from catalog.content_fingerprint import logical_content_fingerprint
+from catalog.content_fingerprint import (
+    logical_content_fingerprint,
+    normalized_evidence_fingerprint,
+)
 from catalog.delta import DELTA_CONTRACT_VERSION
 from catalog.migrations import apply_delta_refresh_migration
+from catalog.refresh_attempts import create_refresh_attempt, record_attempt_event
 from validation.validate_catalog_integrity import (
     CatalogIntegrityError,
     validate_catalog_connection,
@@ -202,6 +206,94 @@ class CatalogIntegrityTests(unittest.TestCase):
         self.addCleanup(conn.close)
         with self.assertRaisesRegex(CatalogIntegrityError, "quality_runs"):
             validate_catalog_connection(conn, required_quality_run_ids={999})
+
+    def test_migration_032_is_idempotent_and_marks_legacy_active_recovery_required(self) -> None:
+        directory, conn = self._catalog()
+        self.addCleanup(directory.cleanup)
+        self.addCleanup(conn.close)
+        conn.execute("UPDATE catalog_builds SET refresh_readiness='ready' WHERE status='active'")
+        conn.execute(
+            "DELETE FROM schema_migrations WHERE name='032_refresh_attempts_and_readiness'"
+        )
+        conn.commit()
+        apply_delta_refresh_migration(conn)
+        apply_delta_refresh_migration(conn)
+        self.assertEqual(
+            conn.execute(
+                "SELECT refresh_readiness FROM catalog_builds WHERE status='active'"
+            ).fetchone()[0],
+            "full_recovery_required",
+        )
+        self.assertEqual(
+            conn.execute(
+                "SELECT COUNT(*) FROM refresh_attempt_events"
+            ).fetchone()[0],
+            0,
+        )
+
+    def test_validator_rejects_falsely_ready_legacy_generation(self) -> None:
+        directory, conn = self._catalog()
+        self.addCleanup(directory.cleanup)
+        self.addCleanup(conn.close)
+        conn.execute("UPDATE catalog_builds SET refresh_readiness='ready' WHERE status='active'")
+        conn.commit()
+        with self.assertRaisesRegex(CatalogIntegrityError, "refresh_readiness"):
+            validate_catalog_connection(conn)
+
+    def test_attempt_ledger_is_append_only_and_terminal(self) -> None:
+        directory, conn = self._catalog()
+        self.addCleanup(directory.cleanup)
+        self.addCleanup(conn.close)
+        path = Path(conn.execute("PRAGMA database_list").fetchone()[2])
+        token = create_refresh_attempt(path, repo_key="service", requested_mode="auto")
+        record_attempt_event(
+            path,
+            token,
+            stage="terminal",
+            status="succeeded",
+            fields={"status": "succeeded", "readiness_after": "full_recovery_required"},
+        )
+        with self.assertRaisesRegex(Exception, "terminal"):
+            record_attempt_event(path, token, stage="late")
+        self.assertEqual(
+            conn.execute(
+                "SELECT COUNT(*) FROM refresh_attempt_events"
+            ).fetchone()[0],
+            2,
+        )
+
+    def test_migration_033_rebuilds_ledger_without_catalog_parent_fk(self) -> None:
+        directory, conn = self._catalog()
+        self.addCleanup(directory.cleanup)
+        self.addCleanup(conn.close)
+        path = Path(conn.execute("PRAGMA database_list").fetchone()[2])
+        token = create_refresh_attempt(path, repo_key="service", requested_mode="auto")
+        record_attempt_event(path, token, stage="planning", detail="preserve me")
+        conn.execute("DELETE FROM schema_migrations WHERE name='033_refresh_reliability_gates'")
+        conn.commit()
+        apply_delta_refresh_migration(conn)
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM refresh_attempt_events").fetchone()[0], 2)
+        self.assertEqual(conn.execute("PRAGMA foreign_key_list(refresh_attempts)").fetchall(), [])
+        with self.assertRaisesRegex(sqlite3.DatabaseError, "events are immutable"):
+            conn.execute("DELETE FROM refresh_attempt_events")
+
+    def test_normalized_projection_ignores_surrogate_repository_ids(self) -> None:
+        first = sqlite3.connect(":memory:")
+        second = sqlite3.connect(":memory:")
+        self.addCleanup(first.close)
+        self.addCleanup(second.close)
+        schema = (ROOT / "catalog/schema.sql").read_text()
+        first.executescript(schema)
+        second.executescript(schema)
+        for conn, repo_id in ((first, 1), (second, 99)):
+            conn.execute(
+                "INSERT INTO repos(id,repo_key,local_root,tracked_branch) VALUES (?,?,?,?)",
+                (repo_id, "service", "/source", "main"),
+            )
+            conn.commit()
+        self.assertEqual(
+            normalized_evidence_fingerprint(first), normalized_evidence_fingerprint(second)
+        )
 
 
 if __name__ == "__main__":
