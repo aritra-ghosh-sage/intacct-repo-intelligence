@@ -18,7 +18,7 @@ OK — no issues found.
 
 ### workflow_type distribution
 
-- `('allowed_operations', 753)`
+- `('allowed_operations', 382)`
 - `('entry', 79)`
 - `('item', 26)`
 - `('reverse', 20)`
@@ -27,6 +27,6 @@ OK — no issues found.
 
 ### source_kind distribution
 
-- `('yaml', 599)`
-- `('class', 295)`
+- `('class', 297)`
+- `('yaml', 226)`
 

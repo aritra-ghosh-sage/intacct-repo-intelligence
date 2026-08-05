@@ -14,18 +14,18 @@
 
 ```json
 {
-  "total_openapispec_files": 3731,
-  "linked_files": 2603,
-  "linkage_percent": 69.76681854730636,
+  "total_openapispec_files": 3767,
+  "linked_files": 1428,
+  "linkage_percent": 37.908149721263605,
   "threshold_percent": 30.0,
-  "with_explicit_mapping": 779,
-  "without_explicit_mapping": 2952,
+  "with_explicit_mapping": 784,
+  "without_explicit_mapping": 2983,
   "kind_distribution": {
-    "operations": 935,
-    "history": 923,
-    "schema": 918,
-    "view": 575,
-    "uimeta": 371,
+    "operations": 947,
+    "history": 935,
+    "schema": 924,
+    "view": 577,
+    "uimeta": 375,
     "unknown": 8,
     "actions": 1
   },
@@ -37,10 +37,10 @@
 
 ```json
 {
-  "total_endpoints": 2697,
-  "entities_with_endpoints": 676,
-  "total_entities": 1897,
-  "coverage_percent": 35.635213494992094,
+  "total_endpoints": 2710,
+  "entities_with_endpoints": 665,
+  "total_entities": 1903,
+  "coverage_percent": 34.944823962165,
   "status": "REPORT",
   "note": "No threshold set. Reported for awareness."
 }
@@ -51,7 +51,7 @@
 ```json
 {
   "gold_size": 27,
-  "discovered_size": 1897,
+  "discovered_size": 1903,
   "matched": 27,
   "missing": [],
   "recall_percent": 100.0,
