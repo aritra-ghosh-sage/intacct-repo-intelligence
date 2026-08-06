@@ -1,8 +1,7 @@
 # Pending Work
 
 This is the active backlog for the repo-v1 implementation. Phase 0 and Phase
-1 acceptance is tracked in `docs/design/repo_v1_phase_closure.md`; later
-components remain outside this backlog.
+1 acceptance work is complete; later components remain outside this backlog.
 
 ## Repository Selection
 

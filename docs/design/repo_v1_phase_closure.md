@@ -2,11 +2,9 @@
 
 Reviewer: Codex (automated acceptance), 2026-08-06
 
-Implementation commit: pending final certified commit
+Implementation commit: `7fafcd0d777af333252396714a8ff9416d248c6a`
 
-The final certified commit will include the V1 inventory-filter and oracle
-evidence changes. This record remains in progress until that commit and its
-evidence rerun are complete.
+All acceptance evidence below was rerun against this committed revision.
 
 Target `ia-main` commit: `173a9b1fccd0fc046cedee6756dd7ef8f922627d`
 
@@ -14,12 +12,18 @@ The target checkout was verified at `/Users/aritra.ghosh/projects/main`, on
 branch `main`, with a clean status before acceptance. No production refresh,
 legacy catalog refresh, graph build, or main-branch modification was run.
 
+The promoted V1 database evidence was independently verified read-only:
+
+```json
+{"active_db":"/Users/aritra.ghosh/projects/intacct-repo-intelligence/catalog/catalog.db","build_token":"e0c64df8dfeb4e31af5e1254dac21576","file_count":23879,"promoted":true,"target_commit_sha":"173a9b1fccd0fc046cedee6756dd7ef8f922627d"}
+```
+
 ## Phase 0 — Foundation and provenance
 
 Scope: fresh V1 SQLite candidate, build provenance, candidate lifecycle, CAS,
 and atomic first/replacement promotion for `ia-main`.
 
-Status: **in_progress**
+Status: **accepted**
 
 | Acceptance requirement | Exact evidence | Observed result |
 | --- | --- | --- |
@@ -33,9 +37,9 @@ Status: **in_progress**
 | Replacement promotion is atomic and retains only the filesystem previous artifact | `./.venv/bin/python -m pytest -q tests/test_repo_v1.py::test_replacement_promotion_retains_only_filesystem_previous_artifact` | Passed; previous contained the prior logical inventory and active contained the replacement. |
 | V1 schema contains no mode planning, diagnostics, previous, or failed build state | `./.venv/bin/python -m pytest -q tests/test_repo_v1.py::test_v1_schema_has_only_minimal_build_lifecycle` | Passed; only `building`, `validated`, and `active` are allowed. |
 | Lifecycle is `building -> validated -> active` | `./.venv/bin/python -m pytest -q tests/test_repo_v1.py::test_v1_schema_has_only_minimal_build_lifecycle tests/test_repo_v1.py::test_first_promotion_creates_active_catalog_without_previous` | Passed; no `previous` or `failed` status exists in the V1 schema or promoted database. |
+| Promoted active V1 database records the supplied build evidence | Read-only SQLite verification shown above | Passed; active build token, target commit provenance, file count, and active status matched the supplied evidence. |
 
-Remaining gaps: commit the final certified changes and rerun the Phase 0
-evidence against that commit.
+Remaining gaps: none for Phase 0.
 
 Deferred decisions: automatic recovery, generic stale restoration, delta
 refresh, fingerprints as readiness/promotion gates, graph recovery, and legacy
@@ -47,7 +51,7 @@ Scope: complete committed-tree inventory for `ia-main`, including path, Git
 blob identity, mode, size, language classification, target commit provenance,
 and V1-only committed-tree filtering.
 
-Status: **in_progress**
+Status: **accepted**
 
 | Acceptance requirement | Exact evidence | Observed result |
 | --- | --- | --- |
@@ -61,8 +65,7 @@ Status: **in_progress**
 | Repeated builds have equivalent normalized immutable repository/file fields | `./.venv/bin/python -m pytest -q tests/test_repo_v1.py::test_same_commit_uses_committed_blobs_and_is_deterministic` | Passed; generated IDs, tokens, timestamps, and catalog paths were excluded from comparison. |
 | Language classification covers representative and unknown extensions | `./.venv/bin/python -m pytest -q tests/test_repo_v1.py -k 'language_classification or legacy_parser_does_not_define'` | Passed for lowercase, uppercase/mixed-case, V1-local XML/PHP mappings, and unknown extensions. |
 
-Remaining gaps: commit the final certified changes and rerun the complete
-Phase 1 evidence against that commit.
+Remaining gaps: none for Phase 1.
 
 Deferred decisions: symbols, relationships, entity occurrences, OpenAPI/REST,
 UI, workflow/security, graph, MCP, and delta refresh remain outside this
@@ -102,26 +105,21 @@ No extraction or delta behavior was added.
 
 ```text
 ./.venv/bin/python -m pytest -q tests/test_repo_v1.py validation/test_source_snapshot.py
-41 passed in 10.89s
+41 passed in 10.14s
 
 ./.venv/bin/python -m pytest -q tests/test_archive_repository.py
-8 passed in 1.31s
+8 passed in 1.55s
+
+./.venv/bin/python -m pytest -q validation/test_multi_repo_migration.py
+24 passed, 27 subtests passed in 0.84s
 
 git diff --check
 passed
 
 git status --short --branch
 ## repo-v1
- M .gitignore
- M TODO.md
- M catalog/repo_v1.py
- M catalog/repositories.py
- M catalog/source_snapshot.py
- M config/workspace_repos.yaml
- M docs/design/repo_v1_phase_closure.md
- M tests/test_repo_v1.py
-?? docs/design/kiss_full_rebuild_plan.md
+M  .gitignore
 ```
 
-The remaining worktree entries are pre-existing unrelated changes and were
-preserved.
+The remaining staged `.gitignore` change is unrelated and was deliberately
+excluded from the implementation commit.
