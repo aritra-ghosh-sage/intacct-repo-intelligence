@@ -10,9 +10,11 @@ Implementation commits:
   normalization;
 - `4010479` — V1 Phase 2 Symbols implementation and plan update;
 - `d1d230a` — Symbols candidate-validation regression coverage.
+- `7b8162e` — complete Phase 2 symbol acceptance evidence.
 
 Phase 0 and Phase 1 evidence below was rerun against the committed Phase 2
-implementation. Phase 2 evidence was rerun against the latest test commit.
+implementation. Phase 2 evidence was rerun against the latest implementation
+and test commits.
 
 Target `ia-main` commit: `173a9b1fccd0fc046cedee6756dd7ef8f922627d`
 
@@ -91,13 +93,18 @@ target-commit snapshot bytes into the V1 candidate, with file provenance and
 candidate ownership/integrity validation. Legacy symbol orchestration and
 mutable-checkout reads remain outside the V1 path.
 
-Status: **accepted for implementation evidence**
+Status: **accepted**
 
 | Acceptance requirement | Exact evidence | Observed result |
 | --- | --- | --- |
-| Successful files produce deterministic symbols from committed snapshot bytes | `./.venv/bin/python -m pytest -q tests/test_repo_v1_symbols.py::test_symbols_use_committed_snapshot_bytes_and_are_deterministic` | Passed; PHP and JavaScript symbols matched across repeated builds while the checkout was mutated after the target commit. |
-| Parser-failed files retain inventory, record diagnostics, and produce no symbols | `./.venv/bin/python -m pytest -q tests/test_repo_v1_symbols.py::test_parser_failure_retains_inventory_and_emits_no_symbols` | Passed; the YAML file row remained, an error diagnostic carried the target SHA, and no symbols were written. |
-| Candidate validation rejects invalid symbol facts and orphan ownership | `./.venv/bin/python -m pytest -q tests/test_repo_v1_symbols.py::test_candidate_validation_rejects_invalid_symbol_line_ranges tests/test_repo_v1_symbols.py::test_candidate_validation_rejects_orphan_symbols` | Passed; invalid line ranges and foreign-key/orphan ownership were rejected. |
+| Successful supported-language files produce deterministic symbols from committed snapshot bytes | `./.venv/bin/python -m pytest -q tests/test_repo_v1_symbols.py::test_symbols_use_committed_snapshot_bytes_and_are_deterministic` | Passed; PHP and JavaScript symbols matched across repeated builds while the checkout was mutated after the target commit. |
+| Symbols retain file/repository ownership and commit provenance | Same focused test; SQL ownership/provenance assertions | Passed; every symbol joined to its candidate file and repository, and file provenance matched the repository target commit. |
+| Parser-failed files retain inventory and record diagnostics | `./.venv/bin/python -m pytest -q tests/test_repo_v1_symbols.py::test_parser_failure_retains_inventory_and_emits_no_symbols` | Passed; the malformed JavaScript file row remained and an error diagnostic carried the target SHA. |
+| Parser-failed files produce zero symbols and do not reject the candidate | Same focused test | Passed; both repeated candidates promoted and the malformed file had zero symbols. |
+| Repeated builds produce equivalent normalized symbol and diagnostic facts | Same focused test | Passed; repeated symbol rows/stable keys and diagnostic facts matched; generated IDs were excluded. |
+| Candidate validation rejects invalid symbol facts and unexpected ownership/integrity failures | `./.venv/bin/python -m pytest -q tests/test_repo_v1_symbols.py::test_candidate_validation_rejects_invalid_symbol_line_ranges tests/test_repo_v1_symbols.py::test_candidate_validation_rejects_orphan_symbols` | Passed; invalid line ranges and foreign-key/orphan ownership were rejected before promotion. |
+| Unsupported inventory languages produce no symbol facts | Same deterministic-symbol test | Passed; `notes.unknown` remained an inventory row with `unknown` language and zero symbols. |
+| Candidate failure cannot change the active database | `./.venv/bin/python -m pytest -q tests/test_repo_v1_symbols.py::test_invalid_symbol_candidate_leaves_active_database_unchanged` | Passed; injected invalid symbol ownership rejected validation, active bytes were unchanged, and the candidate was deleted. |
 | Symbols do not expand the repository-scan boundary | `rg -n "\\b(scan|walk_repo|apply_changed_paths)\\s*\\(" catalog/repo_v1.py catalog/repo_v1_symbols.py scripts/refresh_repo_v1.py` | Passed; no prohibited legacy scan calls were found. Symbol extraction reads only `SourceSnapshot.snapshot_root` bytes. |
 
 Remaining gaps: none for the implemented Phase 2 Symbols slice.
@@ -145,13 +152,13 @@ scan orchestration or delta behavior was added.
 
 ```text
 ./.venv/bin/python -m pytest -q tests/test_repo_v1.py validation/test_source_snapshot.py
-42 passed in 10.94s
+42 passed, 1 warning in 9.67s
 
 ./.venv/bin/python -m pytest -q tests/test_repo_v1_symbols.py
-4 passed in 0.77s
+5 passed, 1 warning in 1.22s
 
 ./.venv/bin/python -m pytest -q tests/test_archive_repository.py
-8 passed in 1.42s
+8 passed in 1.23s
 
 ./.venv/bin/python -m pytest -q validation/test_multi_repo_migration.py
 24 passed, 27 subtests passed in 0.77s
@@ -173,7 +180,7 @@ git diff --check
 passed
 
 git status --short --branch
-## repo-v1...origin/repo-v1 [ahead 4]
+## repo-v1...origin/repo-v1 [ahead 7]
 ```
 
 The worktree was clean at evidence time.
