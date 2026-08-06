@@ -4,6 +4,9 @@ import sqlite3
 import subprocess
 from pathlib import Path
 
+import pytest
+
+from catalog import repo_v1_symbols
 from catalog.repo_v1 import SCHEMA_PATH, RepoV1Error, _validate_candidate, build_ia_main
 
 
@@ -69,6 +72,7 @@ def test_symbols_use_committed_snapshot_bytes_and_are_deterministic(
         "function committedHandler() {}\n",
         encoding="utf-8",
     )
+    (root / "notes.unknown").write_bytes(b"unsupported inventory language\n")
     _git(root, "add", ".")
     _git(root, "commit", "-qm", "committed symbols")
     target = _git(root, "rev-parse", "HEAD")
@@ -85,8 +89,25 @@ def test_symbols_use_committed_snapshot_bytes_and_are_deterministic(
     assert class_row[3:7] == (None, 2, 4, "php")
     assert any(row[0:3] == ("committed.php", "run", "method") for row in rows)
     assert any(row[0:3] == ("committed.js", "committedHandler", "function") for row in rows)
+    assert not any(row[0] == "notes.unknown" for row in rows)
     conn = sqlite3.connect(first)
     try:
+        ownership = conn.execute(
+            """SELECT COUNT(*)
+               FROM symbols s
+               JOIN files f ON f.id=s.file_id
+               JOIN repos r ON r.id=s.repo_id
+               WHERE s.repo_id<>f.repo_id
+                  OR f.source_commit_sha<>r.target_commit_sha"""
+        ).fetchone()[0]
+        assert ownership == 0
+        assert conn.execute(
+            "SELECT language FROM files WHERE path='notes.unknown'"
+        ).fetchone()[0] == "unknown"
+        assert conn.execute(
+            """SELECT COUNT(*) FROM symbols s JOIN files f ON f.id=s.file_id
+               WHERE f.path='notes.unknown'"""
+        ).fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM symbol_diagnostics").fetchone()[0] == 0
     finally:
         conn.close()
@@ -178,27 +199,77 @@ def test_candidate_validation_rejects_orphan_symbols(tmp_path: Path) -> None:
 
 def test_parser_failure_retains_inventory_and_emits_no_symbols(tmp_path: Path) -> None:
     root, manifest = _fixture(tmp_path)
-    broken = root / "broken.yaml"
-    broken.write_text("key: [\n", encoding="utf-8")
+    broken = root / "broken.js"
+    broken.write_text("function broken( {\n", encoding="utf-8")
     _git(root, "add", ".")
-    _git(root, "commit", "-qm", "broken yaml")
+    _git(root, "commit", "-qm", "broken javascript")
     target = _git(root, "rev-parse", "HEAD")
+    first = tmp_path / "first.db"
+    second = tmp_path / "second.db"
+
+    build_ia_main(manifest_path=manifest, active_db=first, target_sha=target)
+    build_ia_main(manifest_path=manifest, active_db=second, target_sha=target)
+
+    def facts(db: Path) -> tuple[list[tuple], list[tuple]]:
+        conn = sqlite3.connect(db)
+        try:
+            files = conn.execute(
+                "SELECT path,language,source_commit_sha FROM files WHERE path='broken.js'"
+            ).fetchall()
+            diagnostics = conn.execute(
+                """SELECT f.path,d.severity,d.code,d.message,d.source_commit_sha
+                   FROM symbol_diagnostics d JOIN files f ON f.id=d.file_id
+                   WHERE f.path='broken.js'"""
+            ).fetchall()
+            symbols = conn.execute(
+                """SELECT COUNT(*) FROM symbols s JOIN files f ON f.id=s.file_id
+                   WHERE f.path='broken.js'"""
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        return files, diagnostics + [("symbol_count", symbols)]
+
+    first_files, first_diagnostics = facts(first)
+    second_files, second_diagnostics = facts(second)
+    assert first_files == second_files == [("broken.js", "javascript", target)]
+    assert first_diagnostics == second_diagnostics
+    assert first_diagnostics[0][0:3] == ("broken.js", "error", "javascript_parse_error")
+    assert first_diagnostics[0][4] == target
+    assert first_diagnostics[-1] == ("symbol_count", 0)
+
+
+def test_invalid_symbol_candidate_leaves_active_database_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, manifest = _fixture(tmp_path)
     active = tmp_path / "active.db"
+    build_ia_main(manifest_path=manifest, active_db=active)
+    before = active.read_bytes()
+    target = _git(root, "rev-parse", "HEAD")
+    original = repo_v1_symbols.extract_snapshot_symbols
 
-    build_ia_main(manifest_path=manifest, active_db=active, target_sha=target)
+    def inject_invalid_symbol(*args, **kwargs):
+        result = original(*args, **kwargs)
+        conn = args[0]
+        repo_id = kwargs["repo_id"]
+        file_id = conn.execute(
+            "SELECT id FROM files WHERE repo_id=? ORDER BY id LIMIT 1", (repo_id,)
+        ).fetchone()[0]
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute(
+            """INSERT INTO symbols(
+                   repo_id,file_id,name,kind,start_line,end_line,language,stable_key
+               ) VALUES(?,?,?,?,?,?,?,?)""",
+            (999, file_id, "injected", "function", 1, 1, "php", "injected"),
+        )
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys=ON")
+        return result
 
-    conn = sqlite3.connect(active)
-    try:
-        assert conn.execute("SELECT COUNT(*) FROM files WHERE path='broken.yaml'").fetchone()[0] == 1
-        assert conn.execute(
-            """SELECT COUNT(*) FROM symbols s JOIN files f ON f.id=s.file_id
-               WHERE f.path='broken.yaml'"""
-        ).fetchone()[0] == 0
-        diagnostic = conn.execute(
-            """SELECT d.severity,d.code,d.source_commit_sha
-               FROM symbol_diagnostics d JOIN files f ON f.id=d.file_id
-               WHERE f.path='broken.yaml'"""
-        ).fetchone()
-        assert diagnostic == ("error", "invalid_yaml_syntax", target)
-    finally:
-        conn.close()
+    monkeypatch.setattr(repo_v1_symbols, "extract_snapshot_symbols", inject_invalid_symbol)
+    with pytest.raises(RepoV1Error, match="candidate foreign-key check failed"):
+        build_ia_main(manifest_path=manifest, active_db=active, target_sha=target)
+
+    assert active.read_bytes() == before
+    assert not list(active.parent.glob(f".{active.name}.candidate.*"))
