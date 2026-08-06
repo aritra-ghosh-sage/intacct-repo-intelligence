@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Intacct Catalog: PM Value Across the SDLC</title>
+  <style>
+    :root {
+      --ink: #182238;
+      --muted: #64728a;
+      --line: #d8e1ec;
+      --paper: #f6f9fd;
+      --panel: #fff;
+      --blue: #2d68d8;
+      --blue-soft: #eaf1ff;
+      --teal: #087d70;
+      --teal-soft: #e4f7f3;
+      --purple: #7045a3;
+      --purple-soft: #f0eaff;
+      --orange: #a45a00;
+      --orange-soft: #fff1d8;
+      --red: #b63751;
+      --red-soft: #ffebef;
+      --shadow: 0 16px 38px rgba(25, 59, 101, .08);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--ink); background: radial-gradient(circle at 8% 0, #e7f0ff 0, transparent 33%), var(--paper); font: 15px/1.55 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    .wrap { max-width: 1240px; margin: 0 auto; padding: 30px 24px 58px; }
+    .hero { display: grid; grid-template-columns: 1.27fr .73fr; gap: 28px; align-items: end; padding: 32px; border: 1px solid #cad9ee; border-radius: 25px; background: linear-gradient(135deg, #fff, #eef4ff 70%, #e7f8f3); box-shadow: var(--shadow); }
+    .eyebrow { color: var(--blue); font-size: 12px; font-weight: 850; letter-spacing: .12em; text-transform: uppercase; }
+    h1 { max-width: 830px; margin: 8px 0 13px; font-size: clamp(34px, 5vw, 59px); line-height: 1; letter-spacing: -.05em; }
+    h2 { margin: 0 0 10px; font-size: 23px; line-height: 1.18; letter-spacing: -.025em; }
+    h3 { margin: 0 0 7px; font-size: 16px; line-height: 1.25; }
+    h4 { margin: 0 0 8px; font-size: 12px; letter-spacing: .07em; text-transform: uppercase; }
+    p { margin: 0 0 12px; }
+    .hero p { max-width: 790px; color: #485b75; font-size: 17px; }
+    .hero-note { padding: 19px; border: 1px solid #c8d9f2; border-radius: 17px; background: rgba(255,255,255,.86); }
+    .hero-note strong { display: block; margin-bottom: 6px; color: var(--teal); font-size: 23px; }
+    .hero-note span { color: #52677f; }
+    .section { margin-top: 31px; }
+    .section-head { display: flex; gap: 18px; justify-content: space-between; align-items: baseline; margin-bottom: 13px; }
+    .section-head p { color: var(--muted); font-size: 13px; text-align: right; }
+    .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+    .panel { padding: 19px; border: 1px solid var(--line); border-radius: 17px; background: var(--panel); box-shadow: 0 7px 20px rgba(30, 60, 105, .045); }
+    .panel p, .panel li { color: var(--muted); }
+    .thesis { min-height: 170px; }
+    .num { display: inline-grid; place-items: center; width: 31px; height: 31px; margin-bottom: 10px; border-radius: 10px; color: var(--blue); background: var(--blue-soft); font-weight: 850; }
+    .num.teal { color: var(--teal); background: var(--teal-soft); }
+    .num.purple { color: var(--purple); background: var(--purple-soft); }
+    .num.orange { color: var(--orange); background: var(--orange-soft); }
+    .value-map { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 17px; background: var(--panel); }
+    .value-step { min-height: 170px; padding: 19px; border-right: 1px solid var(--line); }
+    .value-step:last-child { border-right: 0; }
+    .value-step:nth-child(1) { background: var(--blue-soft); }
+    .value-step:nth-child(2) { background: var(--teal-soft); }
+    .value-step:nth-child(3) { background: var(--purple-soft); }
+    .value-step:nth-child(4) { background: var(--orange-soft); }
+    .value-step .kicker, .tag { color: var(--blue); font-size: 11px; font-weight: 850; letter-spacing: .08em; text-transform: uppercase; }
+    .value-step strong { display: block; margin: 9px 0 7px; font-size: 18px; }
+    .value-step p { color: #596a81; font-size: 13px; }
+    .use-case-shell { display: grid; grid-template-columns: .73fr 1.27fr; gap: 14px; align-items: stretch; }
+    .case-nav { display: grid; gap: 8px; align-content: start; }
+    .case-button { width: 100%; padding: 14px 15px; border: 1px solid var(--line); border-radius: 13px; color: var(--ink); background: var(--panel); cursor: pointer; font: inherit; text-align: left; transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease, background .15s ease; }
+    .case-button:hover, .case-button:focus-visible { border-color: #8eafe4; box-shadow: 0 7px 17px rgba(45,104,216,.11); outline: none; transform: translateY(-1px); }
+    .case-button[aria-selected="true"] { border-color: var(--blue); background: var(--blue-soft); box-shadow: inset 4px 0 0 var(--blue); }
+    .case-button span { display: block; margin-bottom: 3px; color: var(--blue); font-size: 11px; font-weight: 850; letter-spacing: .08em; text-transform: uppercase; }
+    .case-button strong { display: block; font-size: 15px; }
+    .case-detail { min-height: 430px; padding: 24px; border: 1px solid #bcd0ea; border-radius: 17px; background: linear-gradient(145deg, #fff, #f8fbff); box-shadow: 0 10px 24px rgba(30, 60, 105, .06); }
+    .case-detail h3 { margin: 7px 0 12px; font-size: 25px; letter-spacing: -.025em; }
+    .case-detail > p { max-width: 710px; color: #536780; font-size: 16px; }
+    .case-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 17px; margin-top: 20px; }
+    .case-block { padding-top: 15px; border-top: 1px solid var(--line); }
+    .case-block p, .case-block li { color: var(--muted); font-size: 13px; }
+    ul { margin: 7px 0 0; padding-left: 19px; }
+    code { padding: 2px 5px; border-radius: 5px; color: #244f98; background: #edf3fd; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    pre { margin: 9px 0 0; padding: 11px 12px; overflow: auto; border: 1px solid #d9e4f4; border-radius: 9px; background: #f7faff; color: #28476f; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; }
+    .sdlc { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
+    .sdlc-item { min-height: 166px; padding: 15px; border-top: 4px solid var(--blue); border-radius: 11px; background: var(--panel); box-shadow: 0 5px 15px rgba(30, 60, 105, .045); }
+    .sdlc-item:nth-child(2) { border-top-color: var(--teal); }
+    .sdlc-item:nth-child(3) { border-top-color: var(--purple); }
+    .sdlc-item:nth-child(4) { border-top-color: var(--orange); }
+    .sdlc-item:nth-child(5) { border-top-color: var(--red); }
+    .sdlc-item:nth-child(6) { border-top-color: var(--teal); }
+    .sdlc-item strong { display: block; margin-bottom: 8px; font-size: 15px; }
+    .sdlc-item p { color: var(--muted); font-size: 12px; }
+    .agent-flow { display: grid; grid-template-columns: repeat(6, 1fr); gap: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 17px; background: var(--panel); }
+    .agent-step { position: relative; min-height: 205px; padding: 18px 15px; border-right: 1px solid var(--line); }
+    .agent-step:last-child { border-right: 0; }
+    .agent-step:not(:last-child)::after { content: "→"; position: absolute; z-index: 2; top: 78px; right: -10px; color: var(--blue); background: var(--panel); font-size: 20px; font-weight: 800; }
+    .agent-step:nth-child(2) { background: #fbfdff; }
+    .agent-step:nth-child(3) { background: var(--teal-soft); }
+    .agent-step:nth-child(4) { background: var(--purple-soft); }
+    .agent-step:nth-child(5) { background: var(--orange-soft); }
+    .agent-step:nth-child(6) { background: var(--blue-soft); }
+    .agent-step .kicker { color: var(--blue); font-size: 11px; font-weight: 850; letter-spacing: .07em; text-transform: uppercase; }
+    .agent-step strong { display: block; margin: 9px 0 7px; font-size: 15px; }
+    .agent-step p { color: #5a6b81; font-size: 12px; }
+    .output { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .output-list { display: grid; gap: 8px; margin-top: 10px; }
+    .output-row { padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; background: #fbfdff; }
+    .output-row strong { display: block; margin-bottom: 2px; font-size: 13px; }
+    .output-row span { color: var(--muted); font-size: 12px; }
+    .boundary { border-left: 5px solid var(--orange); background: linear-gradient(90deg, var(--orange-soft), #fff); }
+    .boundary.red { border-left-color: var(--red); background: linear-gradient(90deg, var(--red-soft), #fff); }
+    .boundary.teal { border-left-color: var(--teal); background: linear-gradient(90deg, var(--teal-soft), #fff); }
+    .footer { margin-top: 28px; color: var(--muted); font-size: 12px; }
+    .footer a { color: var(--blue); }
+    @media (max-width: 1060px) { .sdlc { grid-template-columns: repeat(3, 1fr); } .agent-flow { grid-template-columns: repeat(3, 1fr); } .agent-step { border-bottom: 1px solid var(--line); } .agent-step:nth-child(3), .agent-step:nth-child(6) { border-right: 0; } .agent-step:not(:last-child)::after { display: none; } }
+    @media (max-width: 900px) { .hero, .use-case-shell { grid-template-columns: 1fr; } .value-map { grid-template-columns: repeat(2, 1fr); } .value-step:nth-child(2) { border-right: 0; } .value-step:nth-child(-n+2) { border-bottom: 1px solid var(--line); } }
+    @media (max-width: 680px) { .wrap { padding: 18px 13px 42px; } .hero { padding: 23px; } .grid-2, .grid-3, .case-columns, .output, .sdlc, .agent-flow, .value-map { grid-template-columns: 1fr; } .section-head { display: block; } .section-head p { margin-top: 5px; text-align: left; } .value-step, .agent-step { border-right: 0 !important; border-bottom: 1px solid var(--line); } .value-step:last-child, .agent-step:last-child { border-bottom: 0; } }
+    @media print { body { background: #fff; } .wrap { max-width: none; padding: 0; } .hero, .panel, .case-detail, .case-button, .value-map, .agent-flow { box-shadow: none; } .case-nav { display: none; } .use-case-shell { display: block; } .case-detail { margin-top: 0; } }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <section class="hero">
+      <div>
+        <div class="eyebrow">Intacct Repository Intelligence · PM value map</div>
+        <h1>From a product question to delivery-ready context.</h1>
+        <p>A functional Intacct PM should not need to become a code archaeologist to answer whether a capability exists, what is missing, or how a backlog item touches the system. The catalog can make the current-state evidence and the next discovery step visible.</p>
+      </div>
+      <div class="hero-note">
+        <strong>The practical promise</strong>
+        <span>Reduce the time from backlog question to a grounded feature conversation—without turning an incomplete catalog into a false statement of product capability.</span>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head"><h2>What the catalog adds to PM work</h2><p>Four useful shifts in the way a question moves through the SDLC.</p></div>
+      <div class="grid-2">
+        <article class="panel thesis"><div class="num">01</div><h3>Current-state discovery becomes faster</h3><p>Anchor a question to entities, symbols, schema, APIs, actions, security, relationships, and authored test evidence instead of asking several teams for the same map.</p></article>
+        <article class="panel thesis"><div class="num teal">02</div><h3>Gaps become explicit</h3><p>“Not found,” “unresolved,” “partial,” and “not yet covered” can become scoped discovery tasks rather than hidden assumptions in a roadmap conversation.</p></article>
+        <article class="panel thesis"><div class="num purple">03</div><h3>Backlog refinement gains technical context</h3><p>A Jira or Confluence agent can use catalog evidence to draft an initial feature description, affected surfaces, open questions, and candidate test areas for human review.</p></article>
+        <article class="panel thesis"><div class="num orange">04</div><h3>SDLC handoffs carry less context loss</h3><p>The same source-backed summary can travel from discovery to design, estimation, engineering, QA, release notes, and later impact analysis.</p></article>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head"><h2>The value chain</h2><p>One catalog, multiple decision moments.</p></div>
+      <div class="value-map">
+        <article class="value-step"><div class="kicker">PM asks</div><strong>“Do we support this?”</strong><p>Start with a feature, entity, action, user, channel, or competitor capability.</p></article>
+        <article class="value-step"><div class="kicker">Catalog grounds</div><strong>“What exists now?”</strong><p>Collect exact mappings, source paths, dependencies, schemas, APIs, actions, access, and test evidence.</p></article>
+        <article class="value-step"><div class="kicker">Agents synthesize</div><strong>“What does this mean?”</strong><p>Combine catalog context with Jira backlog and Confluence product context into a reviewable summary.</p></article>
+        <article class="value-step"><div class="kicker">Team decides</div><strong>“What is next?”</strong><p>Scope the gap, ask for proof, write the story, plan tests, or defer with a visible reason.</p></article>
+      </div>
+    </section>
+
+    <section class="section" id="use-cases">
+      <div class="section-head"><h2>Four PM questions, translated into catalog value</h2><p>Select a question to see the useful output and the boundary.</p></div>
+      <div class="use-case-shell">
+        <div class="case-nav" role="tablist" aria-label="PM questions">
+          <button class="case-button" type="button" role="tab" aria-selected="true" aria-controls="case-detail" data-case="offline"><span>01 · Capability check</span><strong>Do we support offline synchronization for X?</strong></button>
+          <button class="case-button" type="button" role="tab" aria-selected="false" aria-controls="case-detail" data-case="email"><span>02 · Configuration check</span><strong>Is email scheduling enabled?</strong></button>
+          <button class="case-button" type="button" role="tab" aria-selected="false" aria-controls="case-detail" data-case="competitor"><span>03 · Competitive gap</span><strong>What gaps exist for feature Y?</strong></button>
+          <button class="case-button" type="button" role="tab" aria-selected="false" aria-controls="case-detail" data-case="backlog"><span>04 · Backlog acceleration</span><strong>Can agents draft the feature description?</strong></button>
+        </div>
+        <article class="case-detail" id="case-detail" role="tabpanel" aria-live="polite" tabindex="-1"></article>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head"><h2>Where this improves SDLC velocity</h2><p>Velocity comes from less re-discovery and cleaner handoffs, not from skipping validation.</p></div>
+      <div class="sdlc">
+        <article class="sdlc-item"><strong>Discover</strong><p>Answer “what exists?” with a reusable system map and source trail.</p></article>
+        <article class="sdlc-item"><strong>Define</strong><p>Turn an outcome into affected entities, surfaces, constraints, and open questions.</p></article>
+        <article class="sdlc-item"><strong>Design</strong><p>Expose current schema, action, API, access, and dependency context before proposing a shape.</p></article>
+        <article class="sdlc-item"><strong>Plan</strong><p>Make likely cross-module work, missing evidence, and test follow-ups visible during refinement.</p></article>
+        <article class="sdlc-item"><strong>Build &amp; test</strong><p>Point engineers and QA toward impacted roots, endpoint evidence, and authored coverage.</p></article>
+        <article class="sdlc-item"><strong>Release &amp; learn</strong><p>Reuse the same context for release impact, support questions, and future change analysis.</p></article>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head"><h2>Agentic route: Jira + Confluence + catalog</h2><p>Proposed integration pattern; the current checkout provides the catalog evidence layer, not the Jira/Confluence agents.</p></div>
+      <div class="agent-flow">
+        <article class="agent-step"><div class="kicker">01 · Input</div><strong>Jira backlog item</strong><p>Intent, customer problem, priority, constraints, and any linked issue context.</p></article>
+        <article class="agent-step"><div class="kicker">02 · Interpret</div><strong>Jira agent</strong><p>Extract entities, actions, users, channels, and terms that need catalog lookup.</p></article>
+        <article class="agent-step"><div class="kicker">03 · Retrieve</div><strong>Catalog agent</strong><p>Query source-backed entity, flow, API, access, impact, workflow, and coverage evidence.</p></article>
+        <article class="agent-step"><div class="kicker">04 · Enrich</div><strong>Confluence agent</strong><p>Bring product vocabulary, existing decisions, customer context, and competitor requirements.</p></article>
+        <article class="agent-step"><div class="kicker">05 · Synthesize</div><strong>Feature brief agent</strong><p>Draft a high-level or detailed description with citations, gaps, assumptions, and open questions.</p></article>
+        <article class="agent-step"><div class="kicker">06 · Gate</div><strong>PM + engineering review</strong><p>Approve, edit, reject, or request more evidence before writing back to Jira or Confluence.</p></article>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head"><h2>What the agent should produce</h2><p>A useful draft is an evidence packet, not just polished prose.</p></div>
+      <div class="output">
+        <article class="panel">
+          <div class="tag">High-level brief</div>
+          <h3>For early triage and prioritization</h3>
+          <div class="output-list">
+            <div class="output-row"><strong>Problem and intended outcome</strong><span>Restated from Jira/Confluence, with terms resolved to known entities where possible.</span></div>
+            <div class="output-row"><strong>Current-state evidence</strong><span>What the catalog shows today, with source and snapshot references.</span></div>
+            <div class="output-row"><strong>Gap summary</strong><span>Supported, partial, unresolved, or not evidenced; never silently converted into “missing.”</span></div>
+            <div class="output-row"><strong>Recommended next conversation</strong><span>PM decision, engineering discovery, QA investigation, or documentation lookup.</span></div>
+          </div>
+        </article>
+        <article class="panel">
+          <div class="tag">Detailed feature draft</div>
+          <h3>For refinement with engineering and QA</h3>
+          <div class="output-list">
+            <div class="output-row"><strong>Scope and affected surfaces</strong><span>Entities, code roots, schema, REST/OpenAPI, actions, access, dependencies, and likely impacted files.</span></div>
+            <div class="output-row"><strong>Candidate acceptance criteria</strong><span>Derived proposals marked for human review—not claims that behavior already exists.</span></div>
+            <div class="output-row"><strong>Test and automation context</strong><span>Existing authored cases, endpoint coverage, unresolved diagnostics, and explicit test gaps.</span></div>
+            <div class="output-row"><strong>Open questions and risks</strong><span>Unknown mappings, stale graph state, runtime behavior, tenant configuration, and competitor assumptions.</span></div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head"><h2>Meeting reality check</h2><p>Separate the operating model from what this local checkout is ready to demonstrate.</p></div>
+      <div class="grid-2">
+        <article class="panel boundary teal"><div class="tag">Repository capability</div><h3>The query and evidence contracts are documented</h3><p>The repository defines PM-relevant surfaces for entities, relationships, REST/OpenAPI, workflows, security, UI, coverage, provenance, and diagnostics. These are the right building blocks for the proposed agentic route.</p></article>
+        <article class="panel boundary"><div class="tag">Current local snapshot</div><h3>The active database is not yet a full PM demo catalog</h3><p>In this checkout, the active database currently contains <code>repos</code>, <code>files</code>, <code>symbols</code>, <code>relationships</code>, <code>catalog_builds</code>, and <code>symbol_diagnostics</code>: 23,877 files, 166,280 symbols, 174,560 relationships, and 456 symbol diagnostics.</p></article>
+      </div>
+      <div class="panel" style="margin-top:14px; background:#fbfdff"><p style="margin:0; color:var(--muted)"><strong style="color:var(--ink)">Implication for the meeting:</strong> use this document to explain the value and agentic operating model. For a live end-to-end demonstration of all four questions, first populate the richer entity, API, workflow, security, UI, and coverage surfaces; otherwise demonstrate the current symbol/relationship evidence and show how the focused contracts would be called.</p></div>
+    </section>
+
+    <section class="section">
+      <div class="section-head"><h2>Non-negotiable guardrails</h2><p>Trust is the product feature of the agentic route.</p></div>
+      <div class="grid-3">
+        <article class="panel boundary red"><div class="tag">Evidence</div><h3>Cite the source trail</h3><p>Every generated claim should link back to catalog evidence, Jira/Confluence context, or be labeled as a proposal.</p></article>
+        <article class="panel boundary"><div class="tag">Uncertainty</div><h3>Do not turn absence into proof</h3><p>“Not found in this catalog snapshot” is different from “the product does not support it.” Keep that distinction in the draft.</p></article>
+        <article class="panel boundary teal"><div class="tag">Approval</div><h3>Keep a human decision gate</h3><p>Agents accelerate preparation and handoffs. PM, engineering, and QA still approve scope, semantics, acceptance criteria, and release risk.</p></article>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="panel" style="background:linear-gradient(135deg,#182238,#29436b); color:#fff; border:0">
+        <h2 style="color:#fff">The PM value proposition</h2>
+        <p style="color:#dce8f7; font-size:18px; max-width:1000px; margin:0">“The catalog turns Intacct product questions into source-backed current-state context. With Jira and Confluence agents around it, that context can become a reviewable feature brief faster—preserving gaps, provenance, and approval points all the way through the SDLC.”</p>
+      </div>
+    </section>
+
+    <div class="footer">
+      Source basis: <a href="README.md">README</a>, <a href="docs/design/workflows.md">workflow design</a>, <a href="docs/mcp_llm_guidance.md">MCP guidance</a>, <a href="docs/evaluating_catalog_responses.md">catalog response evaluation</a>, and verified read-only query contracts. Jira/Confluence agent orchestration and feature-brief writeback are presented as a proposed integration, not as an existing catalog capability.
+    </div>
+  </main>
+
+  <script>
+    const cases = {
+      offline: {
+        label: "01 · Capability check",
+        title: "Do we support offline synchronization for X today?",
+        intro: "Decompose “offline synchronization” into the entity, state, sync boundary, API or job, permissions, configuration, and test evidence that would have to exist for the capability to be credible.",
+        query: "./.venv/bin/python scripts/query_catalog.py find offline --json\n./.venv/bin/python scripts/query_catalog.py find sync --json\n./.venv/bin/python scripts/query_entity.py entity ENTITY_NAME --flow --openapispec --access --json",
+        value: ["Locate the canonical business object and its implementation roots", "Check for API, action, workflow, access, and dependency evidence", "Find authored cases or diagnostics relevant to synchronization behavior", "Produce an evidence-backed “supported / partial / unresolved” discussion"],
+        output: "A short feasibility note: known synchronization surfaces, missing proof, impacted areas, and the smallest next engineering or QA investigation.",
+        boundary: "Source evidence cannot by itself prove device behavior, conflict resolution, background execution, or tenant/runtime configuration unless those are represented and validated in the indexed sources."
+      },
+      email: {
+        label: "02 · Configuration check",
+        title: "Do we have scheduling enabled for emails?",
+        intro: "Separate product capability, implementation evidence, security/access, endpoint or job exposure, and environment or tenant enablement before answering “enabled.”",
+        query: "./.venv/bin/python scripts/query_catalog.py find email --json\n./.venv/bin/python scripts/query_catalog.py find schedule --json\n./.venv/bin/python scripts/query_rest.py path email --json",
+        value: ["Find email-related endpoints, handlers, files, and relationships", "Trace menu or operation evidence where the catalog has it", "Identify scheduling terms, jobs, or configuration artifacts for review", "Give the PM a precise follow-up instead of a binary guess"],
+        output: "A capability/configuration matrix: implemented, exposed, permissioned, test-covered, and environment-dependent—each with evidence or an explicit unknown.",
+        boundary: "A repository catalog cannot confirm a live tenant flag, deployment state, feature rollout, or operational scheduler health unless those sources are separately indexed."
+      },
+      competitor: {
+        label: "03 · Competitive gap",
+        title: "We want to launch feature Y. What are the current-system gaps?",
+        intro: "Translate the competitor comparison into capability slices, then compare each slice with the current Intacct evidence instead of comparing slogans or labels.",
+        query: "./.venv/bin/python scripts/query_entity.py entity ENTITY_NAME --flow --openapispec --access --json\n./.venv/bin/python scripts/query_entity.py impact ENTITY_NAME --depth 2 --json\n./.venv/bin/python scripts/query_rest.py entity ENTITY_NAME --json",
+        value: ["Map the proposed outcome to affected Intacct entities and surfaces", "Show existing code, schema, API, action, access, and test building blocks", "Identify cross-module dependencies and evidence gaps", "Turn a competitor requirement into a scoped discovery backlog"],
+        output: "A gap matrix with rows such as existing, extend, new, unknown, or needs product clarification—plus affected surfaces, candidate work, and validation questions.",
+        boundary: "The catalog can describe Intacct’s indexed current state. Competitor behavior, customer desirability, and product strategy must come from PM-owned sources, not inferred from code."
+      },
+      backlog: {
+        label: "04 · Backlog acceleration",
+        title: "Can an agent draft a useful feature description from this backlog item?",
+        intro: "Yes as a proposed agentic workflow: Jira supplies the intent, Confluence supplies product context, and the catalog supplies source-backed system context for a reviewable draft.",
+        query: "./.venv/bin/python scripts/query_entity.py entity ENTITY_NAME --flow --openapispec --access --json\n./.venv/bin/python scripts/query_entity.py risk ENTITY_NAME --depth 2 --json\n./.venv/bin/python scripts/query_rest.py coverage ENTITY_NAME --json",
+        value: ["Resolve backlog language to entities, actions, APIs, access surfaces, and dependencies", "Draft high-level or detailed scope with current-state evidence", "Suggest candidate acceptance criteria and test areas as proposals", "Write back a traceable brief to Jira or Confluence after review"],
+        output: "A feature packet: problem, current state, proposed change, affected surfaces, gap list, candidate acceptance criteria, test context, open questions, evidence links, and catalog snapshot/build metadata.",
+        boundary: "The catalog can ground a draft; it cannot decide product intent, invent missing semantics, certify acceptance criteria, or replace PM/engineering/QA approval."
+      }
+    };
+
+    const root = document.getElementById("case-detail");
+    const buttons = Array.from(document.querySelectorAll(".case-button"));
+
+    function renderCase(key) {
+      const item = cases[key];
+      root.innerHTML = `
+        <div class="tag">${item.label}</div>
+        <h3>${item.title}</h3>
+        <p>${item.intro}</p>
+        <div class="case-columns">
+          <div class="case-block">
+            <h4>Read-only evidence path</h4>
+            <pre>${item.query}</pre>
+          </div>
+          <div class="case-block">
+            <h4>What the catalog adds</h4>
+            <ul>${item.value.map(entry => `<li>${entry}</li>`).join("")}</ul>
+          </div>
+          <div class="case-block">
+            <h4>Useful PM output</h4>
+            <p>${item.output}</p>
+          </div>
+          <div class="case-block">
+            <h4>Boundary</h4>
+            <p>${item.boundary}</p>
+          </div>
+        </div>`;
+    }
+
+    buttons.forEach(button => {
+      button.addEventListener("click", () => {
+        buttons.forEach(candidate => candidate.setAttribute("aria-selected", String(candidate === button)));
+        renderCase(button.dataset.case);
+      });
+    });
+
+    renderCase("offline");
+  </script>
+</body>
+</html>

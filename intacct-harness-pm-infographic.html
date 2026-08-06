@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The Intacct PM Lens</title>
+  <style>
+    :root {
+      --ink: #182338;
+      --muted: #617089;
+      --line: #d8e1ec;
+      --paper: #f5f8fc;
+      --panel: #ffffff;
+      --navy: #182338;
+      --blue: #2d68d8;
+      --blue-soft: #eaf1ff;
+      --teal: #087e72;
+      --teal-soft: #e3f7f3;
+      --orange: #a75b00;
+      --orange-soft: #fff2d9;
+      --purple: #7143a6;
+      --purple-soft: #f1eaff;
+      --red: #b9364f;
+      --red-soft: #ffebef;
+      --shadow: 0 16px 40px rgba(28, 58, 99, .08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: radial-gradient(circle at 9% 0%, #e5efff 0, transparent 34%), var(--paper);
+      font: 15px/1.55 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    .wrap { max-width: 1240px; margin: 0 auto; padding: 30px 24px 58px; }
+    .hero {
+      display: grid;
+      grid-template-columns: 1.3fr .7fr;
+      gap: 28px;
+      align-items: end;
+      padding: 32px;
+      border: 1px solid #cbd9ee;
+      border-radius: 25px;
+      background: linear-gradient(135deg, #fff, #edf4ff 74%, #e9f8f5);
+      box-shadow: var(--shadow);
+    }
+    .eyebrow { color: var(--blue); font-size: 12px; font-weight: 850; letter-spacing: .12em; text-transform: uppercase; }
+    h1 { max-width: 780px; margin: 8px 0 14px; font-size: clamp(34px, 5vw, 60px); line-height: 1; letter-spacing: -.05em; }
+    h2 { margin: 0 0 10px; font-size: 23px; line-height: 1.18; letter-spacing: -.025em; }
+    h3 { margin: 0 0 7px; font-size: 16px; line-height: 1.25; }
+    p { margin: 0 0 12px; }
+    .hero p { max-width: 750px; color: #455873; font-size: 17px; }
+    .hero-note { padding: 19px; border: 1px solid #c8d9f2; border-radius: 17px; background: rgba(255,255,255,.84); }
+    .hero-note strong { display: block; margin-bottom: 6px; color: var(--teal); font-size: 22px; }
+    .hero-note span { color: #50647d; }
+    .section { margin-top: 31px; }
+    .section-head { display: flex; gap: 18px; justify-content: space-between; align-items: baseline; margin-bottom: 13px; }
+    .section-head p { color: var(--muted); font-size: 13px; text-align: right; }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+    .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+    .panel { padding: 19px; border: 1px solid var(--line); border-radius: 17px; background: var(--panel); box-shadow: 0 7px 20px rgba(30, 60, 105, .045); }
+    .panel p, .panel li { color: var(--muted); }
+    .principle { min-height: 157px; }
+    .num { display: inline-grid; place-items: center; width: 31px; height: 31px; margin-bottom: 10px; border-radius: 10px; color: var(--blue); background: var(--blue-soft); font-weight: 850; }
+    .num.teal { color: var(--teal); background: var(--teal-soft); }
+    .num.orange { color: var(--orange); background: var(--orange-soft); }
+    .flow { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0; overflow: hidden; }
+    .flow-step { position: relative; min-height: 172px; padding: 19px 18px; border-right: 1px solid var(--line); }
+    .flow-step:last-child { border-right: 0; }
+    .flow-step:not(:last-child)::after { content: "→"; position: absolute; z-index: 2; top: 68px; right: -11px; color: var(--blue); background: var(--panel); font-size: 22px; font-weight: 800; }
+    .flow-step .kicker, .tag { color: var(--blue); font-size: 11px; font-weight: 850; letter-spacing: .08em; text-transform: uppercase; }
+    .flow-step p { margin-top: 10px; color: var(--muted); font-size: 13px; }
+    .flow-step:nth-child(2) { background: #fbfdff; }
+    .flow-step:nth-child(3) { background: var(--teal-soft); }
+    .flow-step:nth-child(4) { background: var(--purple-soft); }
+    .flow-step:nth-child(5) { background: var(--orange-soft); }
+    .question { color: var(--navy); font-size: 17px; font-weight: 750; }
+    .use-case-shell { display: grid; grid-template-columns: .76fr 1.24fr; gap: 14px; align-items: stretch; }
+    .case-nav { display: grid; gap: 8px; align-content: start; }
+    .case-button {
+      width: 100%;
+      padding: 14px 15px;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      color: var(--ink);
+      background: var(--panel);
+      cursor: pointer;
+      font: inherit;
+      text-align: left;
+      transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease, background .15s ease;
+    }
+    .case-button:hover, .case-button:focus-visible { border-color: #8eafe4; box-shadow: 0 7px 17px rgba(45,104,216,.11); outline: none; transform: translateY(-1px); }
+    .case-button[aria-selected="true"] { border-color: var(--blue); background: var(--blue-soft); box-shadow: inset 4px 0 0 var(--blue); }
+    .case-button span { display: block; margin-bottom: 3px; color: var(--blue); font-size: 11px; font-weight: 850; letter-spacing: .08em; text-transform: uppercase; }
+    .case-button strong { display: block; font-size: 15px; }
+    .case-detail { min-height: 372px; padding: 24px; border: 1px solid #bcd0ea; border-radius: 17px; background: linear-gradient(145deg, #fff, #f8fbff); box-shadow: 0 10px 24px rgba(30, 60, 105, .06); }
+    .case-detail h3 { margin: 7px 0 12px; font-size: 25px; letter-spacing: -.025em; }
+    .case-detail > p { max-width: 710px; color: #536780; font-size: 16px; }
+    .case-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 17px; margin-top: 20px; }
+    .case-block { padding-top: 15px; border-top: 1px solid var(--line); }
+    .case-block h4 { margin: 0 0 8px; color: var(--ink); font-size: 12px; letter-spacing: .07em; text-transform: uppercase; }
+    .case-block p, .case-block li { color: var(--muted); font-size: 13px; }
+    ul { margin: 7px 0 0; padding-left: 19px; }
+    code { padding: 2px 5px; border-radius: 5px; color: #244f98; background: #edf3fd; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    pre { margin: 9px 0 0; padding: 11px 12px; overflow: auto; border: 1px solid #d9e4f4; border-radius: 9px; background: #f7faff; color: #28476f; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; }
+    .evidence-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+    .evidence { min-height: 145px; padding: 16px; border: 1px solid var(--line); border-radius: 15px; background: #fff; }
+    .evidence .label { display: block; margin-bottom: 8px; color: var(--muted); font-size: 12px; }
+    .evidence strong { display: block; margin-bottom: 6px; font-size: 17px; }
+    .evidence p { color: var(--muted); font-size: 13px; }
+    .evidence.blue { border-top: 4px solid var(--blue); }
+    .evidence.teal { border-top: 4px solid var(--teal); }
+    .evidence.purple { border-top: 4px solid var(--purple); }
+    .evidence.orange { border-top: 4px solid var(--orange); }
+    .boundary { border-left: 5px solid var(--orange); background: linear-gradient(90deg, var(--orange-soft), #fff); }
+    .boundary.red { border-left-color: var(--red); background: linear-gradient(90deg, var(--red-soft), #fff); }
+    .boundary.teal { border-left-color: var(--teal); background: linear-gradient(90deg, var(--teal-soft), #fff); }
+    .talk-track { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 17px; background: var(--panel); }
+    .talk-step { padding: 20px; border-right: 1px solid var(--line); }
+    .talk-step:last-child { border-right: 0; }
+    .talk-step strong { display: block; margin-bottom: 7px; color: var(--blue); font-size: 24px; }
+    .talk-step p { color: var(--muted); }
+    .footer { margin-top: 28px; color: var(--muted); font-size: 12px; }
+    .footer a { color: var(--blue); }
+    @media (max-width: 920px) {
+      .hero, .use-case-shell { grid-template-columns: 1fr; }
+      .flow { grid-template-columns: 1fr; }
+      .flow-step { min-height: 0; border-right: 0; border-bottom: 1px solid var(--line); }
+      .flow-step:last-child { border-bottom: 0; }
+      .flow-step:not(:last-child)::after { top: auto; right: 19px; bottom: -14px; transform: rotate(90deg); }
+      .evidence-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 680px) {
+      .wrap { padding: 18px 13px 42px; }
+      .hero { padding: 23px; }
+      .grid-2, .grid-3, .case-columns, .evidence-grid, .talk-track { grid-template-columns: 1fr; }
+      .section-head { display: block; }
+      .section-head p { margin-top: 5px; text-align: left; }
+      .talk-step { border-right: 0; border-bottom: 1px solid var(--line); }
+      .talk-step:last-child { border-bottom: 0; }
+    }
+    @media print {
+      body { background: #fff; }
+      .wrap { max-width: none; padding: 0; }
+      .hero, .panel, .case-detail, .case-button, .talk-track { box-shadow: none; }
+      .case-nav { display: none; }
+      .use-case-shell { display: block; }
+      .case-detail { margin-top: 0; }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <section class="hero">
+      <div>
+        <div class="eyebrow">Intacct Repository Intelligence · PM working session</div>
+        <h1>The Intacct PM lens: turn a product question into evidence.</h1>
+        <p>You already know the objects, processes, and customer outcomes. The harness helps connect that product understanding to the source-backed details behind an entity: code, data shape, APIs, actions, security, dependencies, and test evidence.</p>
+      </div>
+      <div class="hero-note">
+        <strong>PM takeaway</strong>
+        <span>It shortens the path from “what should Intacct do?” to “what do we know, where is it implemented, and what still needs proof?”</span>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head"><h2>What changes for a PM?</h2><p>The product question stays in your language; the evidence becomes traceable.</p></div>
+      <div class="grid-3">
+        <article class="panel principle"><div class="num">01</div><h3>Start with the business object</h3><p>Use a canonical entity such as APBill or GLAccount as the anchor instead of beginning with a filename or a guessed service.</p></article>
+        <article class="panel principle"><div class="num teal">02</div><h3>Follow the surfaces</h3><p>Move from entity to implementation roots, schema, workflow/action, REST/OpenAPI, access, and code relationships.</p></article>
+        <article class="panel principle"><div class="num orange">03</div><h3>Make uncertainty visible</h3><p>Exact mappings and source paths are evidence. Missing, unresolved, or partial coverage stays visible for a deliberate follow-up.</p></article>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head"><h2>One PM question, five evidence moves</h2><p>The harness is a guided path, not a replacement for product judgment.</p></div>
+      <div class="panel flow">
+        <article class="flow-step"><div class="kicker">01 · Ask</div><div class="question">“Can we support this outcome?”</div><p>Frame the scenario around an Intacct entity, action, user, or surface.</p></article>
+        <article class="flow-step"><div class="kicker">02 · Anchor</div><div class="question">Find the canonical object</div><p>Resolve the entity and its exact mapped symbols rather than relying on a name match.</p></article>
+        <article class="flow-step"><div class="kicker">03 · Collect</div><div class="question">Assemble the evidence</div><p>Bring together code roots, database shape, APIs, actions, access, and authored cases.</p></article>
+        <article class="flow-step"><div class="kicker">04 · Challenge</div><div class="question">Trace impact and gaps</div><p>Inspect callers, affected surfaces, unresolved mappings, and what the catalog cannot prove.</p></article>
+        <article class="flow-step"><div class="kicker">05 · Decide</div><div class="question">Choose the next proof</div><p>Turn the result into scope, risk, test, design, or an engineering discovery question.</p></article>
+      </div>
+    </section>
+
+    <section class="section" id="use-cases">
+      <div class="section-head"><h2>Use-case explorer</h2><p>Select the question you want to test in the meeting.</p></div>
+      <div class="use-case-shell">
+        <div class="case-nav" role="tablist" aria-label="PM use cases">
+          <button class="case-button" type="button" role="tab" aria-selected="true" aria-controls="case-detail" data-case="discovery"><span>01 · Discovery</span><strong>Can this object support a new outcome?</strong></button>
+          <button class="case-button" type="button" role="tab" aria-selected="false" aria-controls="case-detail" data-case="impact"><span>02 · Change impact</span><strong>What could move if we change it?</strong></button>
+          <button class="case-button" type="button" role="tab" aria-selected="false" aria-controls="case-detail" data-case="api"><span>03 · API readiness</span><strong>What is exposed and what is covered?</strong></button>
+          <button class="case-button" type="button" role="tab" aria-selected="false" aria-controls="case-detail" data-case="access"><span>04 · Access</span><strong>Who can do what, and where?</strong></button>
+          <button class="case-button" type="button" role="tab" aria-selected="false" aria-controls="case-detail" data-case="lifecycle"><span>05 · Lifecycle</span><strong>Is this a process or one atomic action?</strong></button>
+        </div>
+        <article class="case-detail" id="case-detail" role="tabpanel" aria-live="polite" tabindex="-1"></article>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head"><h2>What “evidence” means here</h2><p>Different stores answer different questions.</p></div>
+      <div class="evidence-grid">
+        <article class="evidence blue"><span class="label">Authoritative facts</span><strong>SQLite</strong><p>Stores extracted facts, mappings, provenance, and validation evidence. Use it to ask: “What do we know?”</p></article>
+        <article class="evidence teal"><span class="label">Source trail</span><strong>Files + symbols</strong><p>Keep the answer connected to a real source artifact, symbol, configuration entry, or authored test case.</p></article>
+        <article class="evidence purple"><span class="label">Connections</span><strong>Ladybug graph</strong><p>Supports traversal, dependency, and impact questions. It is a rebuildable projection and can lag SQLite.</p></article>
+        <article class="evidence orange"><span class="label">Decision signal</span><strong>Known / partial / unresolved</strong><p>The result should tell you whether to decide, ask engineering, or request more validation.</p></article>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head"><h2>Three useful PM boundaries</h2><p>These are the moments where a confident-looking answer can mislead.</p></div>
+      <div class="grid-3">
+        <article class="panel boundary red"><div class="tag">Do not overread</div><h3>Coverage is not completeness</h3><p>An endpoint, mapping, or authored case proves that evidence exists. It does not prove every customer path or integration is represented.</p></article>
+        <article class="panel boundary"><div class="tag">Ask for the next proof</div><h3>Unknown is a valid result</h3><p>If the source does not establish a relationship, treat it as a discovery task—not permission to fill the gap from naming intuition.</p></article>
+        <article class="panel boundary teal"><div class="tag">Keep the distinction</div><h3>Discovery is not execution</h3><p>The harness supports impact analysis and test planning. Runtime, integration, API, and end-to-end behavior still need their own validation.</p></article>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head"><h2>A simple meeting talk track</h2><p>One entity, three questions, one decision.</p></div>
+      <div class="talk-track">
+        <article class="talk-step"><strong>1</strong><h3>Pick a real object</h3><p>“Let’s use <code>APBill</code> or <code>GLAccount</code>. What does the catalog know about it?”</p></article>
+        <article class="talk-step"><strong>2</strong><h3>Change the PM question</h3><p>“Now show me its API, access, workflow/action, or impact surface. What is exact, and what is unresolved?”</p></article>
+        <article class="talk-step"><strong>3</strong><h3>Turn evidence into action</h3><p>“Do we have enough to scope this, or is the next step a targeted engineering or test investigation?”</p></article>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="panel" style="background:linear-gradient(135deg,#182338,#29436b); color:#fff; border:0">
+        <h2 style="color:#fff">The one-sentence explanation</h2>
+        <p style="color:#dce8f7; font-size:18px; max-width:980px; margin:0">“The harness gives a PM a source-backed way to move from an Intacct product question to the object, implementation, API, access, dependency, and test evidence behind it—while keeping the unknowns visible.”</p>
+      </div>
+    </section>
+
+    <div class="footer">
+      Source basis: <a href="README.md">README</a>, <a href="docs/design/workflows.md">workflow design</a>, and the verified CLI contracts for <code>query_entity.py</code>, <code>query_rest.py</code>, <code>query_security.py</code>, <code>query_workflow.py</code>, and <code>query_graph.py</code>. Commands shown are read-only query examples and require a populated catalog; graph queries also require the separately maintained graph projection.
+    </div>
+  </main>
+
+  <script>
+    const cases = {
+      discovery: {
+        label: "01 · Discovery",
+        title: "Can this object support a new outcome?",
+        intro: "Start with the product object and assemble its current shape before discussing a new feature or customer promise.",
+        query: "./.venv/bin/python scripts/query_entity.py entity APBill --flow --openapispec --access --json",
+        evidence: ["canonical entity and mapped symbols", "database tables and fields", "single-action workflow references", "OpenAPI mappings and access links"],
+        decision: "Does the existing shape cover the scenario, or is the missing surface a design and implementation discovery task?",
+        caveat: "The catalog can connect evidence; it cannot decide whether the product behavior is correct for a customer use case."
+      },
+      impact: {
+        label: "02 · Change impact",
+        title: "What could move if we change it?",
+        intro: "Use an entity or a changed file as the starting point for a bounded impact conversation, with direction and confidence preserved.",
+        query: "./.venv/bin/python scripts/query_entity.py impact APBill --depth 2 --json\n./.venv/bin/python scripts/query_entity.py risk APBill --depth 2 --json",
+        evidence: ["incoming callers and outgoing dependencies", "related symbols and files", "affected exact entity mappings", "compact expansion and risk signals"],
+        decision: "Can the change stay local, or should the PM expect cross-module review and broader regression planning?",
+        caveat: "Impact is evidence of connected code, not a guarantee that every runtime or customer dependency was indexed."
+      },
+      api: {
+        label: "03 · API readiness",
+        title: "What is exposed and what is covered?",
+        intro: "Separate “an endpoint exists” from “the intended use case has authored, attributable test evidence.”",
+        query: "./.venv/bin/python scripts/query_rest.py entity GLAccount --json\n./.venv/bin/python scripts/query_rest.py coverage GLAccount --version s1 --json",
+        evidence: ["endpoint methods and source versions", "entity-to-endpoint evidence", "matching Gherkin cases", "resolution, compatibility, and parser diagnostics"],
+        decision: "What can we responsibly call API-ready, and where does the PM need a test or automation follow-up?",
+        caveat: "Coverage is stored in SQLite and is intentionally not treated as a graph edge; absence is a gap signal, not proof that no behavior exists."
+      },
+      access: {
+        label: "04 · Access",
+        title: "Who can do what, and where?",
+        intro: "Trace an entity’s exact security-operation, policy, and menu links so access questions become inspectable rather than tribal knowledge.",
+        query: "./.venv/bin/python scripts/query_security.py op OPERATION_KEY --json\n./.venv/bin/python scripts/query_security.py menu KEY_FRAGMENT --json\n./.venv/bin/python scripts/query_graph.py security-surface APBill --json",
+        evidence: ["security operation records", "policy and menu links", "entity access surfaces", "unresolved operation or menu diagnostics"],
+        decision: "Which user or role surface needs product confirmation, permission testing, or an implementation change?",
+        caveat: "The harness reports exact catalog evidence; it does not infer authorization from a similar-looking label or module name."
+      },
+      lifecycle: {
+        label: "05 · Lifecycle",
+        title: "Is this a process or one atomic action?",
+        intro: "Use the workflow evidence to keep product language aligned with what the current catalog can actually prove.",
+        query: "./.venv/bin/python scripts/query_workflow.py entity APBill --json\n./.venv/bin/python scripts/query_entity.py entity APBill --workflow --json",
+        evidence: ["workflow/action name and type", "source kind and source file", "entity linkage", "one-step versus sequenced evidence"],
+        decision: "Are we describing a single action such as submit, approve, or post—or a proven multi-step business process?",
+        caveat: "The current model represents single-action workflows; do not promise orchestration or sequencing without separate source evidence."
+      }
+    };
+
+    const root = document.getElementById("case-detail");
+    const buttons = Array.from(document.querySelectorAll(".case-button"));
+
+    function renderCase(key) {
+      const item = cases[key];
+      root.innerHTML = `
+        <div class="tag">${item.label}</div>
+        <h3>${item.title}</h3>
+        <p>${item.intro}</p>
+        <div class="case-columns">
+          <div class="case-block">
+            <h4>Read-only query path</h4>
+            <pre>${item.query}</pre>
+          </div>
+          <div class="case-block">
+            <h4>Evidence to look for</h4>
+            <ul>${item.evidence.map(entry => `<li>${entry}</li>`).join("")}</ul>
+          </div>
+          <div class="case-block">
+            <h4>PM decision</h4>
+            <p>${item.decision}</p>
+          </div>
+          <div class="case-block">
+            <h4>Boundary</h4>
+            <p>${item.caveat}</p>
+          </div>
+        </div>`;
+    }
+
+    buttons.forEach(button => {
+      button.addEventListener("click", () => {
+        buttons.forEach(candidate => candidate.setAttribute("aria-selected", String(candidate === button)));
+        renderCase(button.dataset.case);
+      });
+    });
+
+    renderCase("discovery");
+  </script>
+</body>
+</html>
