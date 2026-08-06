@@ -315,6 +315,10 @@ orchestration or read the mutable checkout. Each file is isolated by a
 savepoint. Parser failures retain the inventory row, record an error with the
 target-commit provenance, and emit no symbols. Stable keys are derived from
 symbol facts and duplicate order, so repeated builds do not depend on row IDs.
+Tree-sitter `ERROR` and `MISSING` nodes in Java, JavaScript, and PHP are parser
+failures, including files that would otherwise emit partial symbols. Snapshot
+read failures and SQLite write failures fail the candidate; only extractor
+exceptions are retained as non-blocking parser diagnostics.
 Candidate validation checks symbol/diagnostic ownership, diagnostic
 provenance, symbol fact shape, and SQLite integrity before promotion.
 

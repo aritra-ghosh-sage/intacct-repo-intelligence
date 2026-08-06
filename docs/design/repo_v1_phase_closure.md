@@ -11,6 +11,7 @@ Implementation commits:
 - `4010479` — V1 Phase 2 Symbols implementation and plan update;
 - `d1d230a` — Symbols candidate-validation regression coverage.
 - `7b8162e` — complete Phase 2 symbol acceptance evidence.
+- `6205308` — harden Phase 2 parser diagnostics and snapshot-I/O failure handling.
 
 Phase 0 and Phase 1 evidence below was rerun against the committed Phase 2
 implementation. Phase 2 evidence was rerun against the latest implementation
@@ -99,12 +100,13 @@ Status: **accepted**
 | --- | --- | --- |
 | Successful supported-language files produce deterministic symbols from committed snapshot bytes | `./.venv/bin/python -m pytest -q tests/test_repo_v1_symbols.py::test_symbols_use_committed_snapshot_bytes_and_are_deterministic` | Passed; PHP and JavaScript symbols matched across repeated builds while the checkout was mutated after the target commit. |
 | Symbols retain file/repository ownership and commit provenance | Same focused test; SQL ownership/provenance assertions | Passed; every symbol joined to its candidate file and repository, and file provenance matched the repository target commit. |
-| Parser-failed files retain inventory and record diagnostics | `./.venv/bin/python -m pytest -q tests/test_repo_v1_symbols.py::test_parser_failure_retains_inventory_and_emits_no_symbols` | Passed; the malformed JavaScript file row remained and an error diagnostic carried the target SHA. |
+| Parser-failed JavaScript, Java, and PHP files retain inventory and record diagnostics | `./.venv/bin/python -m pytest -q tests/test_repo_v1_symbols.py -k parser_failure` | Passed; malformed JavaScript, Java, and PHP rows remained and diagnostics carried the target SHA, including Tree-sitter `ERROR` and `MISSING` cases. |
 | Parser-failed files produce zero symbols and do not reject the candidate | Same focused test | Passed; both repeated candidates promoted and the malformed file had zero symbols. |
 | Repeated builds produce equivalent normalized symbol and diagnostic facts | Same focused test | Passed; repeated symbol rows/stable keys and diagnostic facts matched; generated IDs were excluded. |
 | Candidate validation rejects invalid symbol facts and unexpected ownership/integrity failures | `./.venv/bin/python -m pytest -q tests/test_repo_v1_symbols.py::test_candidate_validation_rejects_invalid_symbol_line_ranges tests/test_repo_v1_symbols.py::test_candidate_validation_rejects_orphan_symbols` | Passed; invalid line ranges and foreign-key/orphan ownership were rejected before promotion. |
 | Unsupported inventory languages produce no symbol facts | Same deterministic-symbol test | Passed; `notes.unknown` remained an inventory row with `unknown` language and zero symbols. |
 | Candidate failure cannot change the active database | `./.venv/bin/python -m pytest -q tests/test_repo_v1_symbols.py::test_invalid_symbol_candidate_leaves_active_database_unchanged` | Passed; injected invalid symbol ownership rejected validation, active bytes were unchanged, and the candidate was deleted. |
+| Snapshot read failures fail closed rather than becoming parser diagnostics | `./.venv/bin/python -m pytest -q tests/test_repo_v1_symbols.py::test_snapshot_read_failure_rejects_candidate_and_preserves_active` | Passed; the read error propagated as `RepoV1Error`, active bytes were unchanged, and the candidate was deleted. |
 | Symbols do not expand the repository-scan boundary | `rg -n "\\b(scan|walk_repo|apply_changed_paths)\\s*\\(" catalog/repo_v1.py catalog/repo_v1_symbols.py scripts/refresh_repo_v1.py` | Passed; no prohibited legacy scan calls were found. Symbol extraction reads only `SourceSnapshot.snapshot_root` bytes. |
 
 Remaining gaps: none for the implemented Phase 2 Symbols slice.
@@ -152,13 +154,13 @@ scan orchestration or delta behavior was added.
 
 ```text
 ./.venv/bin/python -m pytest -q tests/test_repo_v1.py validation/test_source_snapshot.py
-42 passed, 1 warning in 9.67s
+42 passed, 1 warning in 11.01s
 
 ./.venv/bin/python -m pytest -q tests/test_repo_v1_symbols.py
-5 passed, 1 warning in 1.22s
+8 passed, 1 warning in 2.91s
 
 ./.venv/bin/python -m pytest -q tests/test_archive_repository.py
-8 passed in 1.23s
+8 passed in 1.25s
 
 ./.venv/bin/python -m pytest -q validation/test_multi_repo_migration.py
 24 passed, 27 subtests passed in 0.77s
