@@ -2,11 +2,15 @@
 
 Reviewer: Codex (automated acceptance), 2026-08-06
 
-Implementation commit: pending canonical-path follow-up commit
+Implementation commits:
 
-The canonical active database path changed after the prior acceptance record;
-this closure remains in progress until the follow-up commit and evidence rerun
-are complete.
+- `7fafcd0d777af333252396714a8ff9416d248c6a` — V1 implementation and oracle
+  acceptance work;
+- `ee333a93fdf64369d6b3674f429ab277cdf7d73b` — canonical active database path
+  normalization.
+
+All acceptance evidence below was rerun against the canonical-path follow-up
+commit.
 
 Target `ia-main` commit: `173a9b1fccd0fc046cedee6756dd7ef8f922627d`
 
@@ -30,7 +34,7 @@ The promoted V1 database evidence was independently verified read-only:
 Scope: fresh V1 SQLite candidate, build provenance, candidate lifecycle, CAS,
 and atomic first/replacement promotion for `ia-main`.
 
-Status: **in_progress**
+Status: **accepted**
 
 | Acceptance requirement | Exact evidence | Observed result |
 | --- | --- | --- |
@@ -47,8 +51,7 @@ Status: **in_progress**
 | Promoted active V1 database records the supplied build evidence | Read-only SQLite verification shown above | Passed; active build token, target commit provenance, file count, and active status matched the supplied evidence. |
 | CLI and library use the canonical active database path | `./.venv/bin/python -m pytest -q tests/test_repo_v1.py::test_v1_cli_and_library_use_canonical_active_database_path` | Passed; both defaults resolve to `catalog/catalog.db`. |
 
-Remaining gaps: commit the canonical-path follow-up and rerun Phase 0
-evidence.
+Remaining gaps: none for Phase 0.
 
 Deferred decisions: automatic recovery, generic stale restoration, delta
 refresh, fingerprints as readiness/promotion gates, graph recovery, and legacy
@@ -60,7 +63,7 @@ Scope: complete committed-tree inventory for `ia-main`, including path, Git
 blob identity, mode, size, language classification, target commit provenance,
 and V1-only committed-tree filtering.
 
-Status: **in_progress**
+Status: **accepted**
 
 | Acceptance requirement | Exact evidence | Observed result |
 | --- | --- | --- |
@@ -74,8 +77,7 @@ Status: **in_progress**
 | Repeated builds have equivalent normalized immutable repository/file fields | `./.venv/bin/python -m pytest -q tests/test_repo_v1.py::test_same_commit_uses_committed_blobs_and_is_deterministic` | Passed; generated IDs, tokens, timestamps, and catalog paths were excluded from comparison. |
 | Language classification covers representative and unknown extensions | `./.venv/bin/python -m pytest -q tests/test_repo_v1.py -k 'language_classification or legacy_parser_does_not_define'` | Passed for lowercase, uppercase/mixed-case, V1-local XML/PHP mappings, and unknown extensions. |
 
-Remaining gaps: rerun Phase 1 evidence after the canonical-path follow-up
-commit.
+Remaining gaps: none for Phase 1.
 
 Deferred decisions: symbols, relationships, entity occurrences, OpenAPI/REST,
 UI, workflow/security, graph, MCP, and delta refresh remain outside this
@@ -115,21 +117,32 @@ No extraction or delta behavior was added.
 
 ```text
 ./.venv/bin/python -m pytest -q tests/test_repo_v1.py validation/test_source_snapshot.py
-41 passed in 10.14s
+42 passed in 10.26s
 
 ./.venv/bin/python -m pytest -q tests/test_archive_repository.py
-8 passed in 1.55s
+8 passed in 1.60s
 
 ./.venv/bin/python -m pytest -q validation/test_multi_repo_migration.py
-24 passed, 27 subtests passed in 0.84s
+24 passed, 27 subtests passed in 0.80s
+
+./.venv/bin/python -m pytest -q \
+  tests/test_repo_v1.py::test_unpromoted_candidate_does_not_touch_active \
+  tests/test_repo_v1.py::test_same_commit_uses_committed_blobs_and_is_deterministic \
+  tests/test_repo_v1.py::test_failed_source_preparation_preserves_active_and_previous \
+  tests/test_repo_v1.py::test_injected_backup_failure_preserves_active_and_previous \
+  tests/test_repo_v1.py::test_injected_candidate_replace_failure_preserves_active_and_previous \
+  tests/test_repo_v1.py::test_cas_detects_active_generation_change \
+  tests/test_repo_v1.py::test_first_promotion_creates_active_catalog_without_previous \
+  tests/test_repo_v1.py::test_replacement_promotion_retains_only_filesystem_previous_artifact \
+  tests/test_repo_v1.py::test_v1_schema_has_only_minimal_build_lifecycle \
+  tests/test_repo_v1.py::test_v1_cli_and_library_use_canonical_active_database_path
+10 passed in 4.10s
 
 git diff --check
 passed
 
 git status --short --branch
-## repo-v1
-M  .gitignore
+## repo-v1...origin/repo-v1 [ahead 1]
 ```
 
-The remaining staged `.gitignore` change is unrelated and was deliberately
-excluded from the implementation commit.
+The worktree was clean at evidence time.
