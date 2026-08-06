@@ -4,7 +4,7 @@ import hashlib
 import os
 import sqlite3
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from unittest.mock import patch
 
 import pytest
@@ -14,8 +14,83 @@ from catalog.refresh_transaction import (
     assert_parent_unchanged,
     parent_descriptor,
 )
-from catalog.repo_v1 import SCHEMA_PATH, RepoV1Error, build_ia_main
+from catalog.repo_v1 import (
+    SCHEMA_PATH,
+    RepoV1Error,
+    _v1_detect_language,
+    build_ia_main,
+)
+from catalog.repositories import load_workspace_manifest
 from parser.scan_repo import detect_language
+
+_IGNORED_FILENAMES = (".gitattributes", ".gitignore", ".gitkeep", "Makefile")
+_IGNORED_FILENAME_PREFIXES = (".env",)
+_IGNORED_SUFFIXES = (
+    ".bin",
+    ".cert",
+    ".cfg",
+    ".conf",
+    ".crt",
+    ".csv",
+    ".deploy",
+    ".dll",
+    ".doc",
+    ".docx",
+    ".eot",
+    ".exe",
+    ".gif",
+    ".jar",
+    ".key",
+    ".md",
+    ".mo",
+    ".pdf",
+    ".pem",
+    ".pfg",
+    ".pfm",
+    ".po",
+    ".png",
+    ".pot",
+    ".properties",
+    ".sh",
+    ".svg",
+    ".swf",
+    ".tmpl",
+    ".ttf",
+    ".txt",
+    ".xls",
+    ".xlsx",
+    ".woff",
+    ".woff2",
+)
+# Keep the oracle's expectations independent from the V1 implementation map.
+_ORACLE_LANGUAGE_BY_SUFFIX = {
+    ".java": "java",
+    ".php": "php",
+    ".inc": "php",
+    ".menu": "php",
+    ".pol": "php",
+    ".ent": "php",
+    ".cls": "php",
+    ".phtml": "php",
+    ".cqry": "php",
+    ".qry": "php",
+    ".rpt": "php",
+    ".wfl": "php",
+    ".map": "php",
+    ".shortcuts": "php",
+    ".js": "javascript",
+    ".ts": "typescript",
+    ".sql": "sql",
+    ".xml": "xml",
+    ".xsd": "xml",
+    ".wsdl": "xml",
+    ".json": "json",
+    ".py": "python",
+    ".yaml": "yaml",
+    ".html": "html",
+    ".xsl": "xslt",
+    ".xslt": "xslt",
+}
 
 
 def _git(root: Path, *args: str) -> str:
@@ -25,7 +100,15 @@ def _git(root: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
-def _repo(tmp_path: Path, *, symlink: bool = False) -> tuple[Path, Path]:
+def _repo(
+    tmp_path: Path,
+    *,
+    symlink: bool = False,
+    ignore_paths: list[str] | None = None,
+    ignore_filenames: list[str] | None = None,
+    ignore_filename_prefixes: list[str] | None = None,
+    ignore_suffixes: list[str] | None = None,
+) -> tuple[Path, Path]:
     root = tmp_path / "source"
     root.mkdir()
     _git(root, "init", "-q", "-b", "main")
@@ -33,11 +116,32 @@ def _repo(tmp_path: Path, *, symlink: bool = False) -> tuple[Path, Path]:
     _git(root, "config", "user.name", "Test")
     (root / "app").mkdir()
     (root / "app" / "main.php").write_text("<?php echo 'committed';\n")
-    (root / "README.md").write_text("inventory\n")
+    (root / "README.php").write_text("inventory\n")
     if symlink:
-        (root / "link").symlink_to("README.md")
+        (root / "link").symlink_to("README.php")
     _git(root, "add", ".")
     _git(root, "commit", "-qm", "fixture")
+    ignore_block = "    ignore_paths: []\n"
+    if ignore_paths:
+        ignore_block = "    ignore_paths:\n" + "".join(
+            f"      - {path}\n" for path in ignore_paths
+        )
+    filenames = _IGNORED_FILENAMES if ignore_filenames is None else ignore_filenames
+    filename_prefixes = (
+        _IGNORED_FILENAME_PREFIXES
+        if ignore_filename_prefixes is None
+        else ignore_filename_prefixes
+    )
+    suffixes = _IGNORED_SUFFIXES if ignore_suffixes is None else ignore_suffixes
+    ignore_filenames_block = "    ignore_filenames:\n" + "".join(
+        f"      - {name}\n" for name in filenames
+    )
+    ignore_prefixes_block = "    ignore_filename_prefixes:\n" + "".join(
+        f"      - {prefix}\n" for prefix in filename_prefixes
+    )
+    ignore_suffixes_block = "    ignore_suffixes:\n" + "".join(
+        f"      - {suffix}\n" for suffix in suffixes
+    )
     manifest = tmp_path / "manifest.yaml"
     manifest.write_text(
         f"""version: 1
@@ -52,7 +156,7 @@ repositories:
     enabled: true
     profile: null
     depends_on: null
-    builders: []
+{ignore_block}{ignore_filenames_block}{ignore_prefixes_block}{ignore_suffixes_block}    builders: []
 """
     )
     return root, manifest
@@ -101,20 +205,50 @@ def _git_tree_oracle(root: Path, commit: str) -> list[tuple]:
                 raw_blob.decode("ascii"),
                 int(raw_mode, 8),
                 int(raw_size),
-                detect_language(path),
+                _ORACLE_LANGUAGE_BY_SUFFIX.get(
+                    PurePosixPath(path).suffix.lower(), "unknown"
+                ),
                 commit,
             )
         )
     return sorted(rows)
 
 
+def _filtered_git_tree_oracle(root: Path, commit: str, manifest: Path) -> list[tuple]:
+    entry = load_workspace_manifest(manifest)["repositories"][0]
+    ignored_paths = tuple(entry["ignore_paths"])
+    ignored_filenames = set(entry["ignore_filenames"])
+    ignored_prefixes = tuple(entry["ignore_filename_prefixes"])
+    ignored_suffixes = set(entry["ignore_suffixes"])
+    rows = _git_tree_oracle(root, commit)
+    return [
+        row
+        for row in rows
+        if not any(
+            part.startswith(".")
+            for part in PurePosixPath(row[0]).parts[:-1]
+        )
+        and row[0].rsplit("/", 1)[-1] not in ignored_filenames
+        and not any(
+            row[0].rsplit("/", 1)[-1].lower().startswith(prefix)
+            for prefix in ignored_prefixes
+        )
+        and PurePosixPath(row[0]).suffix.lower()
+        not in ignored_suffixes
+        and not any(
+            row[0] == ignored or row[0].startswith(f"{ignored}/")
+            for ignored in ignored_paths
+        )
+    ]
+
+
 def _rich_repo(tmp_path: Path) -> tuple[Path, Path, str]:
     root, manifest = _repo(tmp_path)
-    executable = root / "run.sh"
+    executable = root / "run.php"
     executable.write_bytes(b"#!/bin/sh\nexit 0\n")
     executable.chmod(0o755)
     (root / "empty.dat").write_bytes(b"")
-    (root / "binary.bin").write_bytes(b"\x00\x01\xff\x80\n")
+    (root / "binary.data").write_bytes(b"\x00\x01\xff\x80\n")
     return root, manifest, _commit(root, "ordinary executable empty binary")
 
 
@@ -136,7 +270,7 @@ def test_same_commit_uses_committed_blobs_and_is_deterministic(tmp_path: Path) -
     assert php_row[1] == _git(root, "rev-parse", f"{commit}:app/main.php")
 
 
-def test_inventory_matches_complete_git_tree_oracle(tmp_path: Path) -> None:
+def test_inventory_matches_filtered_git_tree_oracle(tmp_path: Path) -> None:
     root, manifest, commit = _rich_repo(tmp_path)
     active = tmp_path / "active.db"
 
@@ -151,10 +285,100 @@ def test_inventory_matches_complete_git_tree_oracle(tmp_path: Path) -> None:
         ).fetchall()
     finally:
         conn.close()
-    assert rows == _git_tree_oracle(root, commit)
-    assert any(row[0] == "run.sh" and row[2] == 0o100755 for row in rows)
+    assert rows == _filtered_git_tree_oracle(root, commit, manifest)
+    assert any(row[0] == "run.php" and row[2] == 0o100755 for row in rows)
     assert any(row[0] == "empty.dat" and row[3] == 0 for row in rows)
-    assert any(row[0] == "binary.bin" and row[4] == "unknown" for row in rows)
+    assert any(row[0] == "binary.data" and row[4] == "unknown" for row in rows)
+
+
+def test_v1_inventory_progress_indicator_is_opt_in(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, manifest = _repo(tmp_path)
+    commit = _git(root, "rev-parse", "HEAD")
+    calls: list[dict[str, object]] = []
+
+    def fake_tqdm(iterable, **kwargs):
+        calls.append(kwargs)
+        return iterable
+
+    monkeypatch.setattr("catalog.repo_v1.tqdm", fake_tqdm)
+    build_ia_main(
+        manifest_path=manifest,
+        active_db=tmp_path / "quiet.db",
+        target_sha=commit,
+    )
+    assert calls == [{"desc": "Writing V1 inventory", "unit": "file", "disable": True}]
+
+    calls.clear()
+    build_ia_main(
+        manifest_path=manifest,
+        active_db=tmp_path / "shown.db",
+        target_sha=commit,
+        show_progress=True,
+    )
+    assert calls == [{"desc": "Writing V1 inventory", "unit": "file", "disable": False}]
+
+
+def test_inventory_applies_v1_tree_filters_and_manifest_ignore_paths(
+    tmp_path: Path,
+) -> None:
+    root, manifest = _repo(
+        tmp_path,
+        ignore_paths=["app/resources/thirdparty/", "app/resources/thirdparty"],
+    )
+    (root / ".github").mkdir()
+    (root / ".github" / "workflow.yml").write_text("ignored\n")
+    (root / ".idea").mkdir()
+    (root / ".idea" / "settings.xml").write_text("ignored\n")
+    (root / ".vscode").mkdir()
+    (root / ".vscode" / "settings.json").write_text("ignored\n")
+    (root / "src" / ".hidden").mkdir(parents=True)
+    (root / "src" / ".hidden" / "secret.php").write_text("ignored\n")
+    (root / ".gitignore").write_text("ignored\n")
+    (root / ".gitkeep").write_text("ignored\n")
+    (root / ".gitattributes").write_text("ignored\n")
+    (root / ".env").write_text("ignored\n")
+    (root / ".env.local").write_text("ignored\n")
+    (root / "Makefile").write_text("ignored\n")
+    for suffix in _IGNORED_SUFFIXES:
+        (root / f"ignored{suffix.upper()}").write_bytes(b"ignored")
+    (root / "app" / "resources" / "thirdparty").mkdir(parents=True)
+    (root / "app" / "resources" / "thirdparty" / "library.php").write_text(
+        "ignored\n"
+    )
+    (root / "retained.PHP").write_text("retained\n")
+    commit = _commit(root, "add V1 inventory exclusions")
+    active = tmp_path / "active.db"
+
+    build_ia_main(manifest_path=manifest, active_db=active, target_sha=commit)
+
+    conn = sqlite3.connect(active)
+    try:
+        rows = conn.execute(
+            "SELECT path,blob_object_id,file_mode,size_bytes,language,source_commit_sha "
+            "FROM files ORDER BY path"
+        ).fetchall()
+    finally:
+        conn.close()
+    assert rows == _filtered_git_tree_oracle(root, commit, manifest)
+    assert "retained.PHP" in {row[0] for row in rows}
+    assert all("/." not in f"/{row[0]}" for row in rows)
+
+
+def test_manifest_normalizes_v1_ignore_lists(tmp_path: Path) -> None:
+    _root, manifest = _repo(
+        tmp_path,
+        ignore_filenames=["Makefile", "Makefile"],
+        ignore_filename_prefixes=[".ENV", ".env"],
+        ignore_suffixes=[".CSV", ".csv"],
+    )
+
+    entry = load_workspace_manifest(manifest)["repositories"][0]
+
+    assert entry["ignore_filenames"] == ["Makefile"]
+    assert entry["ignore_filename_prefixes"] == [".env"]
+    assert entry["ignore_suffixes"] == [".csv"]
 
 
 def test_first_promotion_creates_active_catalog_without_previous(tmp_path: Path) -> None:
@@ -198,7 +422,7 @@ def test_replacement_promotion_retains_only_filesystem_previous_artifact(tmp_pat
 
 def test_inventory_follows_target_tree_for_renamed_paths(tmp_path: Path) -> None:
     root, manifest = _repo(tmp_path)
-    _git(root, "mv", "README.md", "README-renamed.md")
+    _git(root, "mv", "README.php", "README-renamed.php")
     _git(root, "commit", "-qm", "rename")
     active = tmp_path / "active.db"
 
@@ -211,13 +435,13 @@ def test_inventory_follows_target_tree_for_renamed_paths(tmp_path: Path) -> None
         }
     finally:
         conn.close()
-    assert "README-renamed.md" in paths
-    assert "README.md" not in paths
+    assert "README-renamed.php" in paths
+    assert "README.php" not in paths
 
 
 def test_deletion_commit_removes_deleted_path_from_full_inventory(tmp_path: Path) -> None:
     root, manifest = _repo(tmp_path)
-    target = root / "README.md"
+    target = root / "README.php"
     target.unlink()
     commit = _commit(root, "delete README")
     active = tmp_path / "active.db"
@@ -229,7 +453,7 @@ def test_deletion_commit_removes_deleted_path_from_full_inventory(tmp_path: Path
         paths = {row[0] for row in conn.execute("SELECT path FROM files")}
     finally:
         conn.close()
-    assert "README.md" not in paths
+    assert "README.php" not in paths
 
 
 def test_failed_source_preparation_preserves_active_and_previous(tmp_path: Path) -> None:
@@ -242,7 +466,7 @@ def test_failed_source_preparation_preserves_active_and_previous(tmp_path: Path)
     before = active.read_bytes()
     previous = active.with_name("active.db.previous")
     previous_before = previous.read_bytes()
-    (root / "link").symlink_to("README.md")
+    (root / "link").symlink_to("README.php")
     _commit(root, "unsupported object")
     with pytest.raises(RepoV1Error, match="unsupported Git tree mode"):
         build_ia_main(manifest_path=manifest, active_db=active)
@@ -404,3 +628,21 @@ def test_v1_schema_has_only_minimal_build_lifecycle(tmp_path: Path) -> None:
 )
 def test_language_classification_parity(path: str, expected: str) -> None:
     assert detect_language(path) == expected
+
+
+def test_legacy_parser_does_not_define_v1_local_wfl_mapping() -> None:
+    assert detect_language("workflow.WFL") == "unknown"
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("Makefile", "unknown"),
+        ("schema.XSD", "xml"),
+        ("service.WSDL", "xml"),
+        ("modules.MAP", "php"),
+        ("menu.SHORTCUTS", "php"),
+    ],
+)
+def test_v1_language_classification(path: str, expected: str) -> None:
+    assert _v1_detect_language(path) == expected

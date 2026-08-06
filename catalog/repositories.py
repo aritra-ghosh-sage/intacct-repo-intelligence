@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import yaml
@@ -41,6 +41,10 @@ _REPOSITORY_KEYS = frozenset(
         "profile",
         "builders",
         "depends_on",
+        "ignore_paths",
+        "ignore_filenames",
+        "ignore_filename_prefixes",
+        "ignore_suffixes",
         "rest_automation",
         "storage",
     }
@@ -110,6 +114,105 @@ def _normalize_builder_list(repo_key: str, raw_builders: Any) -> list[str]:
         seen.add(builder_name)
         builders.append(builder_name)
     return builders
+
+
+def _normalize_ignore_paths(repo_key: str, raw_paths: Any) -> list[str]:
+    if raw_paths is None:
+        return []
+    if not isinstance(raw_paths, list):
+        raise RepositoryError(
+            f"repository {repo_key} ignore_paths must be a list of relative paths"
+        )
+    paths: set[str] = set()
+    for raw_path in raw_paths:
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            raise RepositoryError(
+                f"repository {repo_key} ignore_paths must contain non-empty strings"
+            )
+        value = raw_path.strip()
+        if "\\" in value:
+            raise RepositoryError(
+                f"repository {repo_key} ignore_paths must use Git POSIX separators"
+            )
+        path = PurePosixPath(value)
+        if value.startswith("/") or any(part in {"", ".", ".."} for part in path.parts):
+            raise RepositoryError(
+                f"repository {repo_key} ignore_paths must contain safe relative paths"
+            )
+        normalized = path.as_posix()
+        if normalized == ".":
+            raise RepositoryError(
+                f"repository {repo_key} ignore_paths must name a directory below the repository root"
+            )
+        paths.add(normalized)
+    return sorted(paths)
+
+
+def _normalize_ignore_filenames(repo_key: str, raw_names: Any) -> list[str]:
+    if raw_names is None:
+        return []
+    if not isinstance(raw_names, list):
+        raise RepositoryError(
+            f"repository {repo_key} ignore_filenames must be a list of filenames"
+        )
+    names: set[str] = set()
+    for raw_name in raw_names:
+        if not isinstance(raw_name, str) or not raw_name.strip():
+            raise RepositoryError(
+                f"repository {repo_key} ignore_filenames must contain non-empty strings"
+            )
+        value = raw_name.strip()
+        if "/" in value or "\\" in value or value in {".", ".."}:
+            raise RepositoryError(
+                f"repository {repo_key} ignore_filenames must contain basenames"
+            )
+        names.add(value)
+    return sorted(names)
+
+
+def _normalize_ignore_filename_prefixes(repo_key: str, raw_prefixes: Any) -> list[str]:
+    if raw_prefixes is None:
+        return []
+    if not isinstance(raw_prefixes, list):
+        raise RepositoryError(
+            f"repository {repo_key} ignore_filename_prefixes must be a list of prefixes"
+        )
+    prefixes: set[str] = set()
+    for raw_prefix in raw_prefixes:
+        if not isinstance(raw_prefix, str) or not raw_prefix.strip():
+            raise RepositoryError(
+                "repository "
+                f"{repo_key} ignore_filename_prefixes must contain non-empty strings"
+            )
+        value = raw_prefix.strip().lower()
+        if "/" in value or "\\" in value:
+            raise RepositoryError(
+                f"repository {repo_key} ignore_filename_prefixes must contain basenames"
+            )
+        prefixes.add(value)
+    return sorted(prefixes)
+
+
+def _normalize_ignore_suffixes(repo_key: str, raw_suffixes: Any) -> list[str]:
+    if raw_suffixes is None:
+        return []
+    if not isinstance(raw_suffixes, list):
+        raise RepositoryError(
+            f"repository {repo_key} ignore_suffixes must be a list of suffixes"
+        )
+    suffixes: set[str] = set()
+    for raw_suffix in raw_suffixes:
+        if not isinstance(raw_suffix, str) or not raw_suffix.strip():
+            raise RepositoryError(
+                f"repository {repo_key} ignore_suffixes must contain non-empty strings"
+            )
+        value = raw_suffix.strip().lower()
+        if not value.startswith(".") or len(value) == 1 or "/" in value or "\\" in value:
+            raise RepositoryError(
+                f"repository {repo_key} ignore_suffixes must contain dot-prefixed suffixes"
+            )
+        suffixes.add(value)
+    return sorted(suffixes)
 
 
 def _normalize_profile_and_validate_builders(
@@ -385,6 +488,18 @@ def load_workspace_manifest(path: str | Path) -> dict[str, Any]:
 
         builders = _normalize_builder_list(repo_key, entry.get("builders", []))
         entry["builders"] = builders
+        entry["ignore_paths"] = _normalize_ignore_paths(
+            repo_key, entry.get("ignore_paths")
+        )
+        entry["ignore_filenames"] = _normalize_ignore_filenames(
+            repo_key, entry.get("ignore_filenames")
+        )
+        entry["ignore_filename_prefixes"] = _normalize_ignore_filename_prefixes(
+            repo_key, entry.get("ignore_filename_prefixes")
+        )
+        entry["ignore_suffixes"] = _normalize_ignore_suffixes(
+            repo_key, entry.get("ignore_suffixes")
+        )
         profile = _normalize_profile_and_validate_builders(
             repo_key, entry.get("profile"), builders
         )

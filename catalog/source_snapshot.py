@@ -7,10 +7,12 @@ import os
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Generator, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+
+from tqdm import tqdm
 
 
 class SourceSnapshotError(RuntimeError):
@@ -101,7 +103,11 @@ def _resolve_commit(root: Path, target_sha: str, object_id_length: int) -> str:
 
 
 def _read_tree(
-    root: Path, commit: str, object_id_length: int
+    root: Path,
+    commit: str,
+    object_id_length: int,
+    include_path: Callable[[str], bool] | None = None,
+    show_progress: bool = False,
 ) -> tuple[GitTreeEntry, ...]:
     output = _git_bytes(root, "ls-tree", "-r", "-z", "-l", commit)
     records = output.split(b"\0")
@@ -109,6 +115,12 @@ def _read_tree(
         records.pop()
     entries: list[GitTreeEntry] = []
     seen: set[str] = set()
+    records = tqdm(
+        records,
+        desc="Reading Git tree",
+        unit="file",
+        disable=not show_progress,
+    )
     for record in records:
         try:
             metadata, raw_path = record.split(b"\t", 1)
@@ -119,6 +131,8 @@ def _read_tree(
         if path in seen:
             raise SourceSnapshotError(f"duplicate Git tree path: {path!r}")
         seen.add(path)
+        if include_path is not None and not include_path(path):
+            continue
         try:
             mode = int(raw_mode, 8)
         except ValueError as exc:
@@ -167,7 +181,9 @@ def _git_blob_hash(data: bytes, algorithm: str) -> str:
 
 
 def _read_blobs(
-    root: Path, entries: tuple[GitTreeEntry, ...]
+    root: Path,
+    entries: tuple[GitTreeEntry, ...],
+    show_progress: bool = False,
 ) -> Iterator[tuple[GitTreeEntry, bytes]]:
     if not entries:
         return
@@ -183,6 +199,13 @@ def _read_blobs(
     assert process.stdin is not None and process.stdout is not None
     algorithm = "sha1" if len(entries[0].object_id) == 40 else "sha256"
     try:
+        entries = tqdm(
+            entries,
+            total=len(entries),
+            desc="Reading Git blobs",
+            unit="blob",
+            disable=not show_progress,
+        )
         for entry in entries:
             try:
                 process.stdin.write(entry.object_id.encode("ascii") + b"\n")
@@ -251,22 +274,29 @@ def _write_entry(snapshot_root: Path, entry: GitTreeEntry, data: bytes) -> None:
     if destination.stat().st_size != entry.size:
         raise SourceSnapshotError(f"materialized size mismatch for {entry.path!r}")
 
-
 @contextmanager
 def materialize_source_snapshot(
     repo_key: str,
     git_root: Path,
     target_sha: str,
     temp_parent: Path | None = None,
-) -> Iterator[SourceSnapshot]:
-    """Yield a temporary tree made only from raw target-commit blob bytes."""
+    include_path: Callable[[str], bool] | None = None,
+    show_progress: bool = False,
+)-> Generator[SourceSnapshot, None, None]:
+    """Yield a temporary tree made only from selected target-commit blob bytes."""
 
     resolved_git_root = git_root.expanduser().resolve()
     if not resolved_git_root.is_dir():
         raise SourceSnapshotError(f"Git root does not exist: {resolved_git_root}")
     object_id_length = _object_id_length(resolved_git_root)
     commit = resolve_commit_sha(resolved_git_root, target_sha)
-    entries = _read_tree(resolved_git_root, commit, object_id_length)
+    entries = _read_tree(
+        resolved_git_root,
+        commit,
+        object_id_length,
+        include_path=include_path,
+        show_progress=show_progress,
+    )
     parent = (temp_parent or Path(tempfile.gettempdir())).expanduser().resolve()
     parent.mkdir(parents=True, exist_ok=True)
     _check_free_space(parent, entries)
@@ -274,7 +304,10 @@ def materialize_source_snapshot(
         tempfile.mkdtemp(prefix=f"catalog-source-{repo_key}-", dir=parent)
     )
     try:
-        for entry, data in _read_blobs(resolved_git_root, entries):
+        #TODO: add a tqdm progress bar for writing blobs to the snapshot directory
+        for entry, data in _read_blobs(
+            resolved_git_root, entries, show_progress=show_progress
+        ):
             _write_entry(snapshot_root, entry, data)
         yield SourceSnapshot(
             repo_key=repo_key,

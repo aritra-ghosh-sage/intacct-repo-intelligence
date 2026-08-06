@@ -14,7 +14,9 @@ import tempfile
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+
+from tqdm import tqdm
 
 from catalog.refresh_transaction import (
     assert_parent_unchanged,
@@ -24,7 +26,6 @@ from catalog.refresh_transaction import (
 )
 from catalog.repositories import RepositoryError, load_workspace_manifest
 from catalog.source_snapshot import SourceSnapshotError, materialize_source_snapshot
-from parser.scan_repo import detect_language
 
 SCHEMA_PATH = Path(__file__).with_name("repo_v1_schema.sql")
 REPO_KEY = "ia-main"
@@ -52,6 +53,69 @@ class _RepositoryConfig:
     remote_url: str | None
     local_root: Path
     tracked_branch: str
+    ignore_paths: tuple[str, ...]
+    ignore_filenames: tuple[str, ...]
+    ignore_filename_prefixes: tuple[str, ...]
+    ignore_suffixes: tuple[str, ...]
+
+
+def _v1_path_is_in_scope(
+    path: str,
+    ignore_paths: tuple[str, ...],
+    ignore_filenames: tuple[str, ...],
+    ignore_filename_prefixes: tuple[str, ...],
+    ignore_suffixes: tuple[str, ...],
+) -> bool:
+    parts = PurePosixPath(path).parts
+    if any(part.startswith(".") for part in parts[:-1]):
+        return False
+    filename = parts[-1]
+    if (
+        filename in ignore_filenames
+        or any(
+            filename.lower().startswith(prefix) for prefix in ignore_filename_prefixes
+        )
+        or PurePosixPath(filename).suffix.lower() in ignore_suffixes
+    ):
+        return False
+    return not any(
+        path == ignored or path.startswith(f"{ignored}/")
+        for ignored in ignore_paths
+    )
+
+
+def _v1_detect_language(path: str) -> str:
+    # TODO(repo-v1-cleanup): reconcile this V1-local map with the legacy parser
+    # map only after V1 language ownership and parser support are separately defined.
+    mapping = {
+        ".java": "java",
+        ".php": "php",
+        ".inc": "php",
+        ".menu": "php",
+        ".pol": "php",
+        ".ent": "php",
+        ".cls": "php",
+        ".phtml": "php",
+        ".cqry": "php",
+        ".qry": "php",
+        ".rpt": "php",
+        ".wfl": "php",
+        ".map": "php",
+        ".shortcuts": "php",
+        ".js": "javascript",
+        ".ts": "typescript",
+        ".sql": "sql",
+        ".xml": "xml",
+        ".xsd": "xml",
+        ".wsdl": "xml",
+        ".json": "json",
+        ".py": "python",
+        ".yaml": "yaml",
+        ".html": "html",
+        ".xsl": "xslt",
+        ".xslt": "xslt",
+    }
+    return mapping.get(PurePosixPath(path).suffix.lower(), "unknown")
 
 
 def _repository_config(manifest_path: Path) -> _RepositoryConfig:
@@ -80,6 +144,10 @@ def _repository_config(manifest_path: Path) -> _RepositoryConfig:
         remote_url=entry.get("remote_url"),
         local_root=root,
         tracked_branch=str(entry["tracked_branch"]),
+        ignore_paths=tuple(entry.get("ignore_paths", [])),
+        ignore_filenames=tuple(entry.get("ignore_filenames", [])),
+        ignore_filename_prefixes=tuple(entry.get("ignore_filename_prefixes", [])),
+        ignore_suffixes=tuple(entry.get("ignore_suffixes", [])),
     )
 
 
@@ -127,6 +195,7 @@ def _build_inventory(
     config: _RepositoryConfig,
     target_commit_sha: str,
     build_token: str,
+    show_progress: bool,
 ) -> int:
     conn = _connect_candidate(candidate)
     try:
@@ -156,9 +225,26 @@ def _build_inventory(
             ).lastrowid
         )
         with materialize_source_snapshot(
-            config.repo_key, config.local_root, target_commit_sha, candidate.parent
+            config.repo_key,
+            config.local_root,
+            target_commit_sha,
+            candidate.parent,
+            include_path=lambda path: _v1_path_is_in_scope(
+                path,
+                config.ignore_paths,
+                config.ignore_filenames,
+                config.ignore_filename_prefixes,
+                config.ignore_suffixes,
+            ),
+            show_progress=show_progress,
         ) as snapshot:
-            for entry in snapshot.entries:
+            entries = tqdm(
+                snapshot.entries,
+                desc="Writing V1 inventory",
+                unit="file",
+                disable=not show_progress,
+            )
+            for entry in entries:
                 conn.execute(
                     """INSERT INTO files(
                            repo_id,path,blob_object_id,file_mode,size_bytes,
@@ -170,7 +256,7 @@ def _build_inventory(
                         entry.object_id,
                         entry.mode,
                         entry.size,
-                        detect_language(entry.path),
+                        _v1_detect_language(entry.path),
                         snapshot.target_sha,
                     ),
                 )
@@ -260,6 +346,7 @@ def build_ia_main(
     active_db: str | Path = "catalog/repo-v1/catalog.db",
     target_sha: str | None = None,
     promote: bool = True,
+    show_progress: bool = False,
 ) -> BuildResult:
     """Build and optionally promote a full immutable ``ia-main`` inventory."""
 
@@ -284,6 +371,7 @@ def build_ia_main(
                 config=manifest,
                 target_commit_sha=resolved_sha,
                 build_token=token,
+                show_progress=show_progress,
             )
             _validate_candidate(candidate, target_commit_sha=resolved_sha, build_token=token)
             if not promote:
@@ -305,12 +393,18 @@ def main() -> int:
     parser.add_argument("--active-db", type=Path, default=Path("catalog/repo-v1/catalog.db"))
     parser.add_argument("--target-sha", help="Git revision; defaults to ia-main tracked_branch")
     parser.add_argument("--no-promote", action="store_true")
+    parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable the V1 inventory progress indicator",
+    )
     args = parser.parse_args()
     result = build_ia_main(
         manifest_path=args.manifest,
         active_db=args.active_db,
         target_sha=args.target_sha,
         promote=not args.no_promote,
+        show_progress=not args.no_progress,
     )
     print(json.dumps(result.__dict__, default=str, sort_keys=True))
     return 0

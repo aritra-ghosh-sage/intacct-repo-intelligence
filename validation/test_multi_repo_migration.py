@@ -57,6 +57,24 @@ class MultiRepoMigrationTests(unittest.TestCase):
             with self.subTest(pattern=pattern):
                 self._assert_manifest_error(manifest, pattern)
 
+    def test_manifest_rejects_ineffective_ignore_path_syntax(self) -> None:
+        cases = (
+            (".", "safe relative paths|directory below the repository root"),
+            ("./", "safe relative paths|directory below the repository root"),
+            (r"app\resources", "Git POSIX separators"),
+        )
+        for ignore_path, pattern in cases:
+            with self.subTest(ignore_path=ignore_path):
+                self._assert_manifest_error(
+                    "version: 1\nrepositories:\n"
+                    "  - repo_key: ia-main\n"
+                    "    local_root: /tmp/ia-main\n"
+                    "    tracked_branch: main\n"
+                    "    ignore_paths:\n"
+                    f"      - {ignore_path}\n",
+                    pattern,
+                )
+
     def test_manifest_requires_exact_version_and_non_empty_repositories(self) -> None:
         cases = (
             ("repositories: []\n", "version must be the integer 1"),

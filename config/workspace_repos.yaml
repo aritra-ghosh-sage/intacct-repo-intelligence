@@ -11,6 +11,98 @@ repositories:
     enabled: true
     profile: intacct_app
     depends_on: null
+    ignore_paths:
+      - app/appconnect
+      - app/resources/thirdparty
+      - CI
+      - docs
+      - rector
+      - composer.json
+      - tests
+      - gwdata
+      - README.md
+      - app/dev
+      - app/external
+      - app/tools
+      - app/tests/tools
+      - app/tests/ci_phpunit.xml
+      - app/tests/coverage_config_company.xml
+      - app/tests/coverage_config_phpunit_9_5_13.xml
+      - app/tests/coverage_config_phpunit_13_2_4.xml
+      - app/tests/coverage_config.xml
+      - app/tests/devtools
+      - app/unitTest
+      - app/resources/css
+      - app/resources/qx/iafonts
+      - app/resources/qx/stylus
+      - app/resources/cstools
+      - app/resources/downloads
+      - app/resources/dm
+      - app/resources/nextgen
+      - app/resources/orgchart
+      - app/resources/obi_sa_tool
+      - app/resources/theme
+      - app/resources/theme2011
+      - app/resources/wysiwyg
+      - app/resources/images
+      - app/resources/sagecopilot
+      - app/resources/minus
+      - app/xml
+      - app/xsd
+      - app/db/db_global_migration/global_conf
+    ignore_filenames:
+      - .gitattributes
+      - .gitignore
+      - .gitkeep
+      - Makefile
+      - Makefile.in
+      - Makefile.migrate
+      - Makefile.queries
+      - .core-rules.yml
+      - .spectral.yml
+      - Makefile.sub
+      - base_lib.js.template
+      - U2505.0.20250324.230155.001__customer_console_tool_times_out
+      - gdpdu-01-08-2002.dtd
+    ignore_filename_prefixes:
+      - .env
+    ignore_suffixes:
+      - .bin
+      - .cert
+      - .cfg
+      - .conf
+      - .crt
+      - .csv
+      - .deploy
+      - .dll
+      - .doc
+      - .docx
+      - .eot
+      - .exe
+      - .gif
+      - .jar
+      - .key
+      - .md
+      - .mo
+      - .pdf
+      - .pem
+      - .pfg
+      - .pfm
+      - .po
+      - .png
+      - .pot
+      - .properties
+      - .sh
+      - .svg
+      - .swf
+      - .tmpl
+      - .ttf
+      - .txt
+      - .xls
+      - .xlsx
+      - .woff
+      - .woff2
+      - .pfb
     builders:
       - scan
       - symbols

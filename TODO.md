@@ -1,93 +1,30 @@
 # Pending Work
 
-This is the repository's active lightweight backlog. Items remain here until
-implemented, explicitly deferred, or accepted by the owner. Runtime states in
-the catalog and historical validation issue reports are not backlog items.
+This is the active backlog for the repo-v1 implementation. Phase 0 and Phase
+1 acceptance is tracked in `docs/design/repo_v1_phase_closure.md`; later
+components remain outside this backlog.
 
-## Parser Correctness
+## Repository Selection
 
-- [ ] Add an explicit per-repository parser/language allowlist. `ia-main`
-      should not run the Java parser unless that language is enabled; the
-      current `language: php` manifest value is metadata, not an allowlist.
-      See `config/workspace_repos.yaml`, `parser/extract_symbols.py`, and
-      `scripts/refresh_workspace.py`.
-- [ ] Validate `tree.root_node.has_error` (and error descendants) in the PHP,
-      Java, and security parsers. Record a diagnostic or fail closed instead
-      of treating partial trees as successful evidence.
-- [ ] Correct the security parser documentation or implement the claimed
-      regex fallback. `parse_all_assigned_arrays()` currently returns an empty
-      result after a parser exception.
-- [ ] Add parser regression tests for named PHP arguments, partial trees,
-      `.cls`, `.ent`, `.cqry`, `.menu`, `.pol`, and `.rpt` routing.
-- [ ] Add `.yml` consistently to scan scope and language detection. The
-      `ia-main` checkout currently contains two `.yml` files that are skipped.
-- [ ] Audit non-tree-sitter extractor coverage. In particular, XSLT extraction
-      currently misses single-quoted template attributes, and YAML extraction
-      has real syntax-failure cases that need an explicit disposition.
-- [ ] Document or implement relationship extraction coverage for SQL, XSLT,
-      and nonstandard PHP-family files such as `.menu`, `.pol`, `.ent`, and
-      `.rpt`.
-- [ ] Refactor relationship extraction to reduce refresh time. This is
-      currently the slowest extraction stage and needs profiling plus a
-      performance-focused redesign without weakening provenance or validation.
+- [ ] Make repository selection manifest-driven when V1 expands beyond
+      `ia-main`. Remove the hardcoded `REPO_KEY`, select the requested
+      manifest entry, and preserve that entry's target-commit provenance.
+      Add focused coverage for an alternate repository key.
 
-## Catalog Semantics
+## Initial V1 Operation
 
-- [x] Add an explicit archived-repository handling policy. Reading an archived
-      repository, extracting its code structure, or querying its SQLite or
-      graph representation can create accuracy and correctness risks; detect
-      and surface that state, and fail closed or clearly mark the affected
-      evidence until it is revalidated.
-- [ ] Add a `tqdm`/progress indicator for the repository archival workflow so
-      long-running ownership checks and evidence removal expose operator
-      progress.
-- [ ] Complete OpenAPI, configuration, and override extraction for entity
-      semantics. See `scripts/build_entity_semantics.py`.
-- [ ] Add the missing static mapping for the `entity_rest` object. Require
-      reviewed source evidence and preserve the existing object-mapping
-      compatibility path.
-- [ ] Investigate the empty `integration_links` table. Define a deterministic,
-      source-provenanced cross-repository link contract and writer, or document
-      and retain its unsupported status; do not fabricate integration facts.
-- [ ] Investigate why `knowledge_items` is empty. Identify authoritative source
-      inputs and an evidence-backed extraction/linking contract before adding a
-      population path.
-- [ ] Decide whether to implement the deferred partial-tree snapshot
-      optimization described in the refresh contract.
-- [ ] Create the follow-up migration for complete legacy parent/child family
-      rebuilding, if still required. See `catalog/migrations.py`.
+- [x] Run the first approved V1 build to create and promote the V1 schema in
+      `catalog/catalog.db` from the committed `config/workspace_repos.yaml`
+      manifest. Do not initialize it through the legacy schema or a migration.
 
-## UI Catalog
+## V1 Inventory Scope
 
-- [x] Implement the source-provenanced actionUI/NextGen UI catalog, including
-      XML extraction, bounded PHP loader resolution, JavaScript handler
-      resolution, SQLite synchronization, validation, query tooling, MCP
-      surfaces, and focused tests. See
-      `docs/design/ui-catalog-implementation-plan.md`.
-- [ ] Consider explicitly approved follow-up scope: Ladybug projection,
-      per-file UI delta mutation, compatibility mappings, runtime event
-      execution, broader JavaScript call-graph analysis, and semantic
-      UI-field-to-entity-field mapping.
-- [ ] Diagnose why the `ui_*` tables are not populated in the active catalog.
-      Verify builder-plan inclusion, candidate refresh execution, and UI
-      snapshot diagnostics before deciding on a repair.
-
-## Gateway Sidecar
-
-- [ ] Investigate why `gateway_entity_links` is empty and define an
-      evidence-backed mapping path from Gateway definitions to catalog entities.
-- [ ] Audit `gateway_definitions.gateway_object` coverage. Determine why values
-      are missing and whether a populated Gateway object can support a
-      provenance-backed entity link.
-- [ ] Triage `gateway_diagnostics.code = 'xml_reference_absent'`: classify the
-      source shapes that omit XML references and decide their supported
-      evidence/disposition without fabricating references.
-- [ ] Triage `gateway_xml_artifacts.diagnostic_code =
-      'unsupported_gateway_object'` rows. Inventory the unsupported Gateway
-      object forms and add support only with reviewed, source-grounded parsing
-      and mapping rules.
-
-## Review And Approval
-
-- [ ] Obtain stakeholder approval for the flat workflow model decision. See
-      `docs/design/workflows.md`.
+- [x] Add committed-Git-tree filtering before V1 blob materialization: skip any
+      dot-directory component (`.github`, `.idea`, `.vscode`, etc.),
+      `.gitignore`, and the case-insensitive suffixes `.jar`, `.po`, `.png`,
+      `.svg`, `.gif`, `.exe`, `.dll`, `.deploy`, `.pdf`, `.eot`, `.ttf`,
+      `.woff2`, and `.woff`. Add an optional per-repository manifest list of
+      ignored relative directory prefixes (for example,
+      `ia-main: app/resources/thirdparty`), with normalized-path validation and
+      focused Git-tree/oracle tests. Keep the policy V1-local and preserve
+      provenance for retained files.
