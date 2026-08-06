@@ -1,7 +1,8 @@
 # Pending Work
 
-This is the active backlog for the repo-v1 implementation. Phase 0 and Phase
-1 acceptance work is complete; later components remain outside this backlog.
+This is the active backlog for the repo-v1 implementation. Phase 0, Phase 1,
+and Phase 2 Symbols acceptance work is complete; later components remain
+outside this backlog.
 
 ## Repository Selection
 
@@ -27,3 +28,9 @@ This is the active backlog for the repo-v1 implementation. Phase 0 and Phase
       `ia-main: app/resources/thirdparty`), with normalized-path validation and
       focused Git-tree/oracle tests. Keep the policy V1-local and preserve
       provenance for retained files.
+
+## Phase 2 Symbols
+
+- [x] Extract deterministic symbols and parser diagnostics from immutable
+      target-commit snapshot bytes into the V1 candidate, validate ownership
+      and integrity, and expose the accepted facts through atomic promotion.

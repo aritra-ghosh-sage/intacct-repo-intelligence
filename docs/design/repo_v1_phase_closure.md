@@ -111,10 +111,12 @@ Status: **accepted**
 
 Remaining gaps: none for the implemented Phase 2 Symbols slice.
 
-Operational note: `catalog/catalog.db` was not rebuilt in this implementation
-turn. It remains the previously promoted Phase 0/1 database. The new Symbols
-tables are created in fresh V1 candidates; exposing Symbols in the canonical
-active database requires one normal fresh V1 build/promotion, not a migration.
+Operational note: the ignored canonical database `catalog/catalog.db` has since
+been rebuilt and promoted through the normal V1 path. Read-only verification on
+2026-08-06 found the active build targeting `ia-main` commit
+`e7fbab69da69cd605076eec74ee456066514adaf`, with 23,877 files, 166,280 symbol
+rows, and 456 symbol-diagnostic rows. The Symbols tables are therefore present
+in the active database; no migration was used or added.
 
 Deferred decisions: relationships and all later plan components remain
 deferred.
