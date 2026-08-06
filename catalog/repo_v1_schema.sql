@@ -1,7 +1,8 @@
 PRAGMA foreign_keys = ON;
 
 -- The V1 development catalog is intentionally independent of catalog/schema.sql.
--- It contains only the foundation, immutable inventory, and symbols slices.
+-- It contains only the foundation, immutable inventory, symbols, and
+-- relationships slices.
 CREATE TABLE catalog_builds (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     build_token TEXT NOT NULL UNIQUE,

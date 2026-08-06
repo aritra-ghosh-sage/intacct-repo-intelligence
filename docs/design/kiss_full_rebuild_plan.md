@@ -49,7 +49,8 @@ UI-specific exception and not a generic stale-data mechanism.
 - `catalog/source_snapshot.py` for exact committed Git source materialization;
 - `catalog/refresh_transaction.py` for locking and atomic candidate promotion;
 - existing parser language extractors;
-- existing relationship resolution and persistence logic;
+- existing relationship extraction, resolution, and classification leaf logic;
+  V1 owns the snapshot-scoped relationship persistence and validation step;
 - SQLite connection and integrity-validation helpers;
 - focused parser, catalog, and source-snapshot tests;
 - existing query scripts after the core schema stabilizes.
@@ -331,8 +332,18 @@ Acceptance:
 
 ### 3. Relationships
 
-Run existing relationship extraction against the candidate symbols and
-immutable source. Preserve explicit resolution classes and source evidence.
+Run the V1 relationship adapter in `catalog/repo_v1_relationships.py` after
+V1 symbols have been extracted, while the same immutable `SourceSnapshot` is
+materialized. The adapter reads source bytes only from
+`SourceSnapshot.snapshot_root`, loads symbols from the candidate, and reuses
+only the compatible leaf extractor/model/resolution logic from
+`parser/extract_relationships.py`. It writes repository- and file-owned
+relationships to the V1 candidate, retains resolved IDs and explicit
+unresolved targets, preserves evidence/language/confidence/resolution and
+extractor provenance, isolates each file with a savepoint, and rejects the
+candidate on snapshot, write, ownership, reference, provenance, or integrity
+failure. The legacy relationship orchestration and persistence path is not
+called.
 
 Acceptance:
 

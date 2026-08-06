@@ -12,15 +12,14 @@ Implementation commits:
 - `d1d230a` — Symbols candidate-validation regression coverage.
 - `7b8162e` — complete Phase 2 symbol acceptance evidence.
 - `6205308` — harden Phase 2 parser diagnostics and snapshot-I/O failure handling.
-- `3c141b71ed3867296fde7e8fe65c2272f53bfc71` — base commit for the Phase 3
-  Relationships implementation; Phase 3 changes were uncommitted at evidence
-  time.
+- `6684f8df6b3f18df7fe884c7dfafd8abb2a11d6e` — Phase 3 Relationships
+  implementation, schema, validation, tests, and acceptance integration.
 
 Phase 0 and Phase 1 evidence below was rerun against the committed Phase 2
 implementation. Phase 2 evidence was rerun against the latest implementation
 and test commits.
 
-Target `ia-main` commit: `173a9b1fccd0fc046cedee6756dd7ef8f922627d`
+Target `ia-main` commit: `e7fbab69da69cd605076eec74ee456066514adaf`
 
 Canonical V1 active database path: `catalog/catalog.db`. The V1 library
 default and `--active-db` CLI default use this same path, matching the
@@ -28,14 +27,36 @@ promoted database recorded below and the repository-wide `config.CATALOG_DB`
 default.
 
 The target checkout was verified at `/Users/aritra.ghosh/projects/main`, on
-branch `main`, with a clean status before acceptance. No production refresh,
-legacy catalog refresh, graph build, or main-branch modification was run.
+branch `main`, with a clean status before acceptance. The active V1 database
+was subsequently rebuilt and promoted through the V1 path at the target commit;
+no legacy catalog refresh, graph build, or main-branch modification was run.
 
 The promoted V1 database evidence was independently verified read-only:
 
 ```json
-{"active_db":"/Users/aritra.ghosh/projects/intacct-repo-intelligence/catalog/catalog.db","build_token":"e0c64df8dfeb4e31af5e1254dac21576","file_count":23879,"promoted":true,"target_commit_sha":"173a9b1fccd0fc046cedee6756dd7ef8f922627d"}
+{"active_db":"/Users/aritra.ghosh/projects/intacct-repo-intelligence/catalog/catalog.db","build_token":"eda1f3122a544325875fac8f481cca2d","file_count":23877,"promoted":true,"relationship_count":174560,"symbol_count":166280,"symbol_diagnostic_count":456,"target_commit_sha":"e7fbab69da69cd605076eec74ee456066514adaf"}
 ```
+
+This replaces the stale primary evidence from the earlier Phase 0/1 build.
+
+## Current promoted evidence by phase
+
+Exact Phase 2 Symbols evidence JSON, independently verified read-only:
+
+```json
+{"active_db":"/Users/aritra.ghosh/projects/intacct-repo-intelligence/catalog/catalog.db","build_token":"eda1f3122a544325875fac8f481cca2d","file_count":23877,"promoted":true,"symbol_count":166280,"symbol_diagnostic_count":456,"target_commit_sha":"e7fbab69da69cd605076eec74ee456066514adaf"}
+```
+
+Exact Phase 3 Relationships evidence JSON, independently verified read-only:
+
+```json
+{"active_db":"/Users/aritra.ghosh/projects/intacct-repo-intelligence/catalog/catalog.db","build_token":"eda1f3122a544325875fac8f481cca2d","file_count":23877,"promoted":true,"relationship_count":174560,"target_commit_sha":"e7fbab69da69cd605076eec74ee456066514adaf"}
+```
+
+The active database contains 174,560 relationship rows, all owned by the
+single `ia-main` repository, with extractor provenance `phase2_regex_mvp`;
+the active build validation summary records the same relationship count and
+target commit.
 
 ## Phase 0 — Foundation and provenance
 
@@ -114,12 +135,13 @@ Status: **accepted**
 
 Remaining gaps: none for the implemented Phase 2 Symbols slice.
 
-Operational note: the ignored canonical database `catalog/catalog.db` has since
-been rebuilt and promoted through the normal V1 path. Read-only verification on
+Operational note: the ignored canonical database `catalog/catalog.db` was
+rebuilt and promoted through the normal V1 path. Read-only verification on
 2026-08-06 found the active build targeting `ia-main` commit
 `e7fbab69da69cd605076eec74ee456066514adaf`, with 23,877 files, 166,280 symbol
-rows, and 456 symbol-diagnostic rows. The Symbols tables are therefore present
-in the active database; no migration was used or added.
+rows, 456 symbol-diagnostic rows, and 174,560 relationship rows. The Symbols
+and Relationships tables are therefore present in the active database; no
+migration was used or added.
 
 Deferred decisions: Entity Occurrences and all later plan components remain
 deferred.
@@ -129,6 +151,12 @@ deferred.
 Scope: snapshot-scoped relationship extraction for `ia-main`, using candidate
 symbols and only target-commit bytes, with explicit unresolved targets,
 relationship provenance, candidate validation, and atomic promotion.
+
+Promoted evidence JSON:
+
+```json
+{"active_db":"/Users/aritra.ghosh/projects/intacct-repo-intelligence/catalog/catalog.db","build_token":"eda1f3122a544325875fac8f481cca2d","file_count":23877,"promoted":true,"relationship_count":174560,"target_commit_sha":"e7fbab69da69cd605076eec74ee456066514adaf"}
+```
 
 KISS/YAGNI admission gate:
 
@@ -166,8 +194,8 @@ provenance without calling legacy relationship orchestration or persistence.
 Remaining gaps: none for the implemented Phase 3 Relationships slice.
 
 Deferred decisions: Entity Occurrences and all later plan components remain
-deferred. The ignored active database was not refreshed as part of this
-acceptance; no production refresh, graph build, legacy catalog refresh, or
+deferred. The ignored active database was refreshed and promoted through the
+normal V1 path for this acceptance; no legacy catalog refresh, graph build, or
 `main`-branch modification was run.
 
 ## Repository-scan boundary
@@ -177,7 +205,10 @@ V1 uses the following path only:
 ```text
 target Git commit
   -> catalog.source_snapshot GitTreeEntry/blob validation and V1 path filter
-  -> V1 candidate repos/files inventory and snapshot-based symbols
+  -> V1 candidate repos/files inventory
+  -> V1 snapshot-based symbols
+  -> V1 snapshot-based relationships
+  -> candidate validation and atomic promotion
 ```
 
 V1 owns a local language-classification helper in `catalog/repo_v1.py` and
@@ -198,8 +229,10 @@ V1 does not call `parser.scan_repo.scan()`, `walk_repo()`, or
 `apply_changed_paths()`, and does not read mutable checkout bytes or
 filesystem metadata for inventory facts. V1 language mappings are local to the
 V1 implementation, including `.wfl`, `.map`, `.shortcuts`, `.xsd`, and `.wsdl`.
-Symbols read only materialized Git blob bytes from the same snapshot. No legacy
-scan orchestration or delta behavior was added.
+Symbols and relationships read only materialized Git blob bytes from the same
+snapshot. Relationship extraction uses the V1 adapter and compatible leaf
+logic only; no legacy scan/relationship orchestration, mutable-checkout read,
+or delta behavior was added.
 
 ## Required acceptance commands
 
@@ -209,6 +242,9 @@ scan orchestration or delta behavior was added.
 
 ./.venv/bin/python -m pytest -q tests/test_repo_v1_symbols.py
 8 passed, 1 warning in 2.91s
+
+./.venv/bin/python -m pytest -q tests/test_repo_v1_relationships.py
+7 passed, 1 warning in 2.58s
 
 ./.venv/bin/python -m pytest -q tests/test_archive_repository.py
 8 passed in 1.25s
