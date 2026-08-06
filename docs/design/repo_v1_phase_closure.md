@@ -180,7 +180,7 @@ git diff --check
 passed
 
 git status --short --branch
-## repo-v1...origin/repo-v1 [ahead 7]
+## repo-v1...origin/repo-v1 [ahead 2]
 ```
 
 The worktree was clean at evidence time.
