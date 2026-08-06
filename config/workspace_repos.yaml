@@ -64,6 +64,8 @@ repositories:
       - base_lib.js.template
       - U2505.0.20250324.230155.001__customer_console_tool_times_out
       - gdpdu-01-08-2002.dtd
+      - .stoplight.json
+      - template.s1.schema.yaml
     ignore_filename_prefixes:
       - .env
     ignore_suffixes:
