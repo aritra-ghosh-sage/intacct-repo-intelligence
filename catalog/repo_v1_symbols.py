@@ -9,7 +9,7 @@ from pathlib import Path
 
 from tqdm import tqdm
 
-from catalog.source_snapshot import SourceSnapshot
+from catalog.source_snapshot import SourceSnapshot, SourceSnapshotError
 from parser.extractors import (
     java_extractor,
     javascript_extractor,
@@ -27,7 +27,7 @@ EXTRACTORS = {
     "yaml": yaml_extractor,
     "xslt": xslt_extractor,
 }
-_PATH_AWARE_LANGUAGES = {"javascript", "php", "yaml"}
+_PATH_AWARE_LANGUAGES = {"java", "javascript", "php", "yaml"}
 
 
 def _stable_key(
@@ -46,9 +46,13 @@ def _stable_key(
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _diagnostic_key(file_id: int, code: str, message: str, source_sha: str) -> str:
+def _diagnostic_key(
+    file_id: int, code: str, message: str, source_sha: str, ordinal: int
+) -> str:
     payload = json.dumps(
-        [file_id, code, message, source_sha], ensure_ascii=True, separators=(",", ":")
+        [file_id, code, message, source_sha, ordinal],
+        ensure_ascii=True,
+        separators=(",", ":"),
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -61,6 +65,7 @@ def _record_diagnostic(
     source_sha: str,
     code: str,
     message: str,
+    ordinal: int = 0,
 ) -> None:
     conn.execute(
         """INSERT INTO symbol_diagnostics(
@@ -69,7 +74,7 @@ def _record_diagnostic(
         (
             repo_id,
             file_id,
-            _diagnostic_key(file_id, code, message, source_sha),
+            _diagnostic_key(file_id, code, message, source_sha, ordinal),
             "error",
             code,
             message,
@@ -125,28 +130,48 @@ def extract_snapshot_symbols(
         if reset_stats is not None:
             reset_stats()
         savepoint = f"symbol_file_{file_id}"
-        conn.execute(f"SAVEPOINT {savepoint}")
         try:
             source = (snapshot.snapshot_root / Path(entry.path)).read_bytes()
+        except Exception as exc:
+            raise SourceSnapshotError(
+                f"snapshot read failed for {entry.path}: {exc}"
+            ) from exc
+        conn.execute(f"SAVEPOINT {savepoint}")
+        try:
             extracted = _extract(extractor, source, entry.path, language)
             failures = list(get_failures()) if get_failures is not None else []
-            if failures:
-                conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
-                conn.execute(f"RELEASE SAVEPOINT {savepoint}")
-                for failure in failures:
-                    code = str(failure.get("reason") or "parser_failure")
-                    message = json.dumps(failure, sort_keys=True, ensure_ascii=True)
-                    _record_diagnostic(
-                        conn,
-                        repo_id=repo_id,
-                        file_id=file_id,
-                        source_sha=source_sha,
-                        code=code,
-                        message=message,
-                    )
-                    diagnostic_count += 1
-                continue
-            ordinals: dict[tuple[object, ...], int] = {}
+        except Exception as exc:  # noqa: BLE001
+            conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+            conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+            _record_diagnostic(
+                conn,
+                repo_id=repo_id,
+                file_id=file_id,
+                source_sha=source_sha,
+                code="parser_exception",
+                message=str(exc),
+            )
+            diagnostic_count += 1
+            continue
+        if failures:
+            conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+            conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+            for failure_ordinal, failure in enumerate(failures):
+                code = str(failure.get("reason") or "parser_failure")
+                message = json.dumps(failure, sort_keys=True, ensure_ascii=True)
+                _record_diagnostic(
+                    conn,
+                    repo_id=repo_id,
+                    file_id=file_id,
+                    source_sha=source_sha,
+                    code=code,
+                    message=message,
+                    ordinal=failure_ordinal,
+                )
+                diagnostic_count += 1
+            continue
+        ordinals: dict[tuple[object, ...], int] = {}
+        try:
             for symbol in extracted:
                 identity = (
                     symbol.kind,
@@ -181,18 +206,9 @@ def extract_snapshot_symbols(
                     ),
                 )
                 symbols_count += 1
-            conn.execute(f"RELEASE SAVEPOINT {savepoint}")
-        except Exception as exc:  # noqa: BLE001
+        except Exception:
             conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
             conn.execute(f"RELEASE SAVEPOINT {savepoint}")
-            _record_diagnostic(
-                conn,
-                repo_id=repo_id,
-                file_id=file_id,
-                source_sha=source_sha,
-                code="parser_exception",
-                message=str(exc),
-            )
-            diagnostic_count += 1
-            continue
+            raise
+        conn.execute(f"RELEASE SAVEPOINT {savepoint}")
     return {"symbols": symbols_count, "diagnostics": diagnostic_count}

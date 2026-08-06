@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import subprocess
 from pathlib import Path
@@ -197,10 +198,29 @@ def test_candidate_validation_rejects_orphan_symbols(tmp_path: Path) -> None:
         raise AssertionError("orphan symbol was accepted")
 
 
-def test_parser_failure_retains_inventory_and_emits_no_symbols(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("filename", "source", "expected_code", "expected_missing"),
+    [
+        ("broken.js", "function broken( {\n", "javascript_parse_error", False),
+        ("broken.java", "class Broken { void partial() {\n", "java_parse_error", True),
+        (
+            "broken.php",
+            "<?php function partial() {} ???\n",
+            "php_parse_error",
+            False,
+        ),
+    ],
+)
+def test_parser_failure_retains_inventory_and_emits_no_symbols(
+    tmp_path: Path,
+    filename: str,
+    source: str,
+    expected_code: str,
+    expected_missing: bool,
+) -> None:
     root, manifest = _fixture(tmp_path)
-    broken = root / "broken.js"
-    broken.write_text("function broken( {\n", encoding="utf-8")
+    broken = root / filename
+    broken.write_text(source, encoding="utf-8")
     _git(root, "add", ".")
     _git(root, "commit", "-qm", "broken javascript")
     target = _git(root, "rev-parse", "HEAD")
@@ -214,16 +234,19 @@ def test_parser_failure_retains_inventory_and_emits_no_symbols(tmp_path: Path) -
         conn = sqlite3.connect(db)
         try:
             files = conn.execute(
-                "SELECT path,language,source_commit_sha FROM files WHERE path='broken.js'"
+                "SELECT path,language,source_commit_sha FROM files WHERE path=?",
+                (filename,),
             ).fetchall()
             diagnostics = conn.execute(
                 """SELECT f.path,d.severity,d.code,d.message,d.source_commit_sha
                    FROM symbol_diagnostics d JOIN files f ON f.id=d.file_id
-                   WHERE f.path='broken.js'"""
+                   WHERE f.path=?""",
+                (filename,),
             ).fetchall()
             symbols = conn.execute(
                 """SELECT COUNT(*) FROM symbols s JOIN files f ON f.id=s.file_id
-                   WHERE f.path='broken.js'"""
+                   WHERE f.path=?""",
+                (filename,),
             ).fetchone()[0]
         finally:
             conn.close()
@@ -231,11 +254,36 @@ def test_parser_failure_retains_inventory_and_emits_no_symbols(tmp_path: Path) -
 
     first_files, first_diagnostics = facts(first)
     second_files, second_diagnostics = facts(second)
-    assert first_files == second_files == [("broken.js", "javascript", target)]
+    expected_language = filename.rsplit(".", 1)[-1]
+    expected_language = "javascript" if expected_language == "js" else expected_language
+    assert first_files == second_files == [(filename, expected_language, target)]
     assert first_diagnostics == second_diagnostics
-    assert first_diagnostics[0][0:3] == ("broken.js", "error", "javascript_parse_error")
+    assert first_diagnostics[0][0:3] == (filename, "error", expected_code)
     assert first_diagnostics[0][4] == target
+    assert json.loads(first_diagnostics[0][3]).get("is_missing", False) is expected_missing
     assert first_diagnostics[-1] == ("symbol_count", 0)
+
+
+def test_snapshot_read_failure_rejects_candidate_and_preserves_active(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _root, manifest = _fixture(tmp_path)
+    active = tmp_path / "active.db"
+    build_ia_main(manifest_path=manifest, active_db=active)
+    before = active.read_bytes()
+    original_read_bytes = Path.read_bytes
+
+    def fail_snapshot_read(path: Path) -> bytes:
+        if path.name == "README.php":
+            raise OSError("injected snapshot read failure")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", fail_snapshot_read)
+    with pytest.raises(RepoV1Error, match="injected snapshot read failure"):
+        build_ia_main(manifest_path=manifest, active_db=active)
+
+    assert active.read_bytes() == before
+    assert not list(active.parent.glob(f".{active.name}.candidate.*"))
 
 
 def test_invalid_symbol_candidate_leaves_active_database_unchanged(
