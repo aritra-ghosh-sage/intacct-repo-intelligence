@@ -133,6 +133,49 @@ def test_candidate_validation_rejects_invalid_symbol_line_ranges(tmp_path: Path)
         raise AssertionError("invalid symbol line range was accepted")
 
 
+def test_candidate_validation_rejects_orphan_symbols(tmp_path: Path) -> None:
+    candidate = tmp_path / "candidate.db"
+    conn = sqlite3.connect(candidate)
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.executescript(SCHEMA_PATH.read_text())
+    build_id = conn.execute(
+        """INSERT INTO catalog_builds(
+               build_token,catalog_path,status,source_revisions_json
+           ) VALUES(?,?,?,?)""",
+        ("token", str(candidate), "validated", '{"ia-main":"target"}'),
+    ).lastrowid
+    repo_id = conn.execute(
+        """INSERT INTO repos(
+               repo_key,name,kind,language,local_root,tracked_branch,
+               target_commit_sha,build_id
+           ) VALUES(?,?,?,?,?,?,?,?)""",
+        ("ia-main", "Fixture", "monorepo", "php", str(tmp_path), "main", "target", build_id),
+    ).lastrowid
+    file_id = conn.execute(
+        """INSERT INTO files(
+               repo_id,path,blob_object_id,file_mode,size_bytes,language,source_commit_sha
+           ) VALUES(?,?,?,?,?,?,?)""",
+        (repo_id, "orphan.php", "blob", 0o100644, 1, "php", "target"),
+    ).lastrowid
+    conn.commit()
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.execute(
+        """INSERT INTO symbols(
+               repo_id,file_id,name,kind,start_line,end_line,language,stable_key
+           ) VALUES(?,?,?,?,?,?,?,?)""",
+        (999, file_id, "orphan", "function", 1, 1, "php", "stable"),
+    )
+    conn.commit()
+    conn.close()
+
+    try:
+        _validate_candidate(candidate, target_commit_sha="target", build_token="token")
+    except RepoV1Error as exc:
+        assert str(exc).startswith("candidate foreign-key check failed:")
+    else:
+        raise AssertionError("orphan symbol was accepted")
+
+
 def test_parser_failure_retains_inventory_and_emits_no_symbols(tmp_path: Path) -> None:
     root, manifest = _fixture(tmp_path)
     broken = root / "broken.yaml"
