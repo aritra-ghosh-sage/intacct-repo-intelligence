@@ -64,6 +64,43 @@ CREATE TABLE symbols (
 
 CREATE INDEX idx_repo_v1_symbols_repo_file ON symbols(repo_id, file_id);
 
+CREATE TABLE relationships (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
+    source_symbol_id INTEGER,
+    source_name TEXT,
+    source_kind TEXT,
+    target_symbol_id INTEGER,
+    target_name TEXT NOT NULL CHECK (target_name <> ''),
+    target_kind TEXT,
+    relationship_type TEXT NOT NULL CHECK (relationship_type <> ''),
+    file_id INTEGER NOT NULL,
+    file_path TEXT NOT NULL CHECK (file_path <> ''),
+    language TEXT NOT NULL CHECK (language <> ''),
+    confidence REAL NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
+    evidence TEXT NOT NULL CHECK (evidence <> ''),
+    resolution_class TEXT NOT NULL CHECK (resolution_class <> ''),
+    resolution_reason TEXT NOT NULL CHECK (resolution_reason <> ''),
+    extractor TEXT NOT NULL CHECK (extractor <> ''),
+    FOREIGN KEY (repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    FOREIGN KEY (source_symbol_id) REFERENCES symbols(id) ON DELETE CASCADE,
+    FOREIGN KEY (target_symbol_id) REFERENCES symbols(id) ON DELETE CASCADE,
+    FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE,
+    UNIQUE (
+        repo_id,source_symbol_id,source_name,target_symbol_id,target_name,
+        relationship_type,file_path,evidence
+    )
+);
+
+CREATE INDEX idx_repo_v1_relationships_repo_file
+    ON relationships(repo_id, file_id);
+CREATE INDEX idx_repo_v1_relationships_source_symbol
+    ON relationships(source_symbol_id);
+CREATE INDEX idx_repo_v1_relationships_target_symbol
+    ON relationships(target_symbol_id);
+CREATE INDEX idx_repo_v1_relationships_resolution
+    ON relationships(resolution_class);
+
 CREATE TABLE symbol_diagnostics (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     repo_id INTEGER NOT NULL,

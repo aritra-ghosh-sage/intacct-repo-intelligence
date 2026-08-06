@@ -269,6 +269,14 @@ def _build_inventory(
                 snapshot=snapshot,
                 show_progress=show_progress,
             )
+            from catalog.repo_v1_relationships import extract_snapshot_relationships
+
+            extract_snapshot_relationships(
+                conn,
+                repo_id=repo_id,
+                snapshot=snapshot,
+                show_progress=show_progress,
+            )
         file_count = int(
             conn.execute("SELECT COUNT(*) FROM files WHERE repo_id=?", (repo_id,)).fetchone()[0]
         )
@@ -276,13 +284,25 @@ def _build_inventory(
             "UPDATE catalog_builds SET status='validated',completed_at=?,validation_summary=? WHERE id=?",
             (
                 datetime.now(UTC).isoformat(),
-                json.dumps({"repo_key": REPO_KEY, "file_count": file_count}, sort_keys=True),
+                json.dumps(
+                    {
+                        "repo_key": REPO_KEY,
+                        "file_count": file_count,
+                        "relationship_count": int(
+                            conn.execute(
+                                "SELECT COUNT(*) FROM relationships WHERE repo_id=?",
+                                (repo_id,),
+                            ).fetchone()[0]
+                        ),
+                    },
+                    sort_keys=True,
+                ),
                 build_id,
             ),
         )
         conn.commit()
         return file_count
-    except (OSError, SourceSnapshotError, sqlite3.Error) as exc:
+    except (OSError, SourceSnapshotError, sqlite3.Error, RuntimeError) as exc:
         conn.rollback()
         raise RepoV1Error(str(exc)) from exc
     finally:
@@ -373,6 +393,48 @@ def _validate_candidate(candidate: Path, *, target_commit_sha: str, build_token:
             raise RepoV1Error("candidate symbol facts are invalid")
         if failed_with_symbols:
             raise RepoV1Error("parser-failed file contains symbols")
+        invalid_relationship_ownership = conn.execute(
+            """SELECT COUNT(*)
+               FROM relationships r
+               LEFT JOIN repos rr ON rr.id=r.repo_id
+               LEFT JOIN files f ON f.id=r.file_id
+               LEFT JOIN symbols ss ON ss.id=r.source_symbol_id
+               LEFT JOIN symbols ts ON ts.id=r.target_symbol_id
+               WHERE rr.id IS NULL OR f.id IS NULL
+                  OR f.repo_id<>r.repo_id
+                  OR r.file_path<>f.path
+                  OR r.language<>f.language
+                  OR f.source_commit_sha<>rr.target_commit_sha
+                  OR (r.source_symbol_id IS NOT NULL AND
+                      (ss.id IS NULL OR ss.repo_id<>r.repo_id OR ss.file_id<>r.file_id))
+                  OR (r.target_symbol_id IS NOT NULL AND
+                      (ts.id IS NULL OR ts.repo_id<>r.repo_id))"""
+        ).fetchone()[0]
+        invalid_relationship_facts = conn.execute(
+            """SELECT COUNT(*)
+               FROM relationships r
+               LEFT JOIN symbols ss ON ss.id=r.source_symbol_id
+               LEFT JOIN symbols ts ON ts.id=r.target_symbol_id
+               WHERE r.target_name=''
+                  OR r.relationship_type=''
+                  OR r.file_path=''
+                  OR r.language=''
+                  OR r.evidence=''
+                  OR r.resolution_class=''
+                  OR r.resolution_reason=''
+                  OR r.extractor<>'phase2_regex_mvp'
+                  OR r.confidence IS NULL
+                  OR r.confidence<0 OR r.confidence>1
+                  OR (r.source_symbol_id IS NOT NULL AND
+                      (ss.name<>r.source_name OR r.source_name IS NULL))
+                  OR (r.target_symbol_id IS NOT NULL AND
+                      (ts.name<>r.target_name OR r.resolution_class<>'project_resolved'))
+                  OR (r.target_symbol_id IS NULL AND r.resolution_class='project_resolved')"""
+        ).fetchone()[0]
+        if invalid_relationship_ownership:
+            raise RepoV1Error("candidate relationship ownership is invalid")
+        if invalid_relationship_facts:
+            raise RepoV1Error("candidate relationship facts are invalid")
     finally:
         conn.close()
 

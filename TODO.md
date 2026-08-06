@@ -1,8 +1,8 @@
 # Pending Work
 
 This is the active backlog for the repo-v1 implementation. Phase 0, Phase 1,
-and Phase 2 Symbols acceptance work is complete; later components remain
-outside this backlog.
+Phase 2 Symbols, and Phase 3 Relationships acceptance work is complete; later
+components remain outside this backlog.
 
 ## Repository Selection
 
@@ -34,3 +34,16 @@ outside this backlog.
 - [x] Extract deterministic symbols and parser diagnostics from immutable
       target-commit snapshot bytes into the V1 candidate, validate ownership
       and integrity, and expose the accepted facts through atomic promotion.
+
+## Phase 3 Relationships
+
+- [x] Extract deterministic relationships from immutable target-commit
+      snapshot bytes against candidate symbols, preserve resolved and explicit
+      unresolved targets with evidence and extractor provenance, validate
+      ownership/provenance/integrity, and include the pass before atomic
+      promotion.
+
+## Later V1 Components
+
+- [ ] Add Entity Occurrences only after the relationship phase is complete;
+      do not begin this component as part of Phase 3.

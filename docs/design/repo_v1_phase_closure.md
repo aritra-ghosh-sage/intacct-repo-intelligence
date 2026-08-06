@@ -12,6 +12,9 @@ Implementation commits:
 - `d1d230a` — Symbols candidate-validation regression coverage.
 - `7b8162e` — complete Phase 2 symbol acceptance evidence.
 - `6205308` — harden Phase 2 parser diagnostics and snapshot-I/O failure handling.
+- `3c141b71ed3867296fde7e8fe65c2272f53bfc71` — base commit for the Phase 3
+  Relationships implementation; Phase 3 changes were uncommitted at evidence
+  time.
 
 Phase 0 and Phase 1 evidence below was rerun against the committed Phase 2
 implementation. Phase 2 evidence was rerun against the latest implementation
@@ -118,8 +121,54 @@ been rebuilt and promoted through the normal V1 path. Read-only verification on
 rows, and 456 symbol-diagnostic rows. The Symbols tables are therefore present
 in the active database; no migration was used or added.
 
-Deferred decisions: relationships and all later plan components remain
+Deferred decisions: Entity Occurrences and all later plan components remain
 deferred.
+
+## Phase 3 — Relationships
+
+Scope: snapshot-scoped relationship extraction for `ia-main`, using candidate
+symbols and only target-commit bytes, with explicit unresolved targets,
+relationship provenance, candidate validation, and atomic promotion.
+
+KISS/YAGNI admission gate:
+
+- KISS passed: one V1-local adapter performs one sequential relationship pass
+  inside the existing snapshot/candidate transaction; it reuses only the
+  existing relationship leaf extractors, model shapes, and resolution logic.
+  No legacy orchestration, mutable-checkout read, migration, delta mode,
+  graph, MCP, query compatibility, parser framework, or dependency was added.
+- YAGNI passed: relationships are the current Phase 3 acceptance component
+  and are required by the V1 plan before Entity Occurrences. No generic
+  builder, recovery, or compatibility surface was admitted.
+
+Status: **accepted**
+
+| Acceptance requirement | Exact evidence | Observed result |
+| --- | --- | --- |
+| Resolved relationships reference valid candidate symbols and retain source/repository ownership | `./.venv/bin/python -m pytest -q tests/test_repo_v1_relationships.py::test_relationships_resolve_and_preserve_unresolved_targets` | Passed; resolved target IDs join candidate symbols, every row joins its candidate file and repository, and source/target names remain present. |
+| Unresolved relationships remain explicit without guessed target IDs | Same focused test | Passed; `MissingClass` retained `target_symbol_id IS NULL`, `target_name`, `project_unresolved`, and `unresolved_project_symbol`. |
+| Evidence and file provenance come from the target commit, independent of mutable checkout bytes | `./.venv/bin/python -m pytest -q tests/test_repo_v1_relationships.py::test_relationships_are_snapshot_provenance_and_repetition_stable` | Passed; normalized rows repeated identically after checkout mutation, evidence matched committed `child.php`, and repository provenance matched the requested target SHA. |
+| Repeated builds produce equivalent normalized relationship facts | Same focused test | Passed; generated IDs were excluded and normalized relationship rows matched. |
+| Duplicate relationship handling is deterministic | `./.venv/bin/python -m pytest -q tests/test_repo_v1_relationships.py::test_duplicate_relationships_are_deterministically_deduplicated` | Passed; duplicated extractor output produced one normalized row per relationship fact. |
+| Unsupported languages emit no invented relationships | `./.venv/bin/python -m pytest -q tests/test_repo_v1_relationships.py::test_relationships_resolve_and_preserve_unresolved_targets` | Passed; the unsupported `notes.unknown` inventory row had no relationship rows. |
+| A failed file emits no partial relationships and cannot replace the active database | `./.venv/bin/python -m pytest -q tests/test_repo_v1_relationships.py::test_failed_relationship_file_has_no_partial_rows_and_preserves_active` | Passed; injected failure rolled back the candidate and preserved active bytes. |
+| Invalid ownership and target references reject the candidate | `./.venv/bin/python -m pytest -q tests/test_repo_v1_relationships.py::test_candidate_validation_rejects_cross_file_relationship_source tests/test_repo_v1_relationships.py::test_invalid_relationship_target_reference_rejects_candidate` | Passed; cross-file source ownership failed semantic validation and an invalid target ID failed SQLite foreign-key validation before promotion. |
+| Snapshot read failure preserves the active database | `./.venv/bin/python -m pytest -q tests/test_repo_v1_relationships.py::test_snapshot_relationship_read_failure_preserves_active` | Passed; the read error rejected the candidate, deleted its temporary database, and left active bytes unchanged. |
+| Existing Phase 0, Phase 1, and Phase 2 Symbols behavior remains green | `./.venv/bin/python -m pytest -q tests/test_repo_v1.py validation/test_source_snapshot.py tests/test_repo_v1_symbols.py` | Passed; all existing V1 foundation, snapshot, inventory, and symbol tests remained green. |
+
+Reused leaf logic: `parser.extract_relationships.EXTRACTORS`, its
+`Relationship`, `FileRow`, and `SymbolRow` model shapes, and the extractor-call
+path's existing symbol resolution/classification behavior. The V1 adapter
+loads symbols from the candidate, reads only `SourceSnapshot.snapshot_root`,
+uses per-file savepoints, and stores the existing `phase2_regex_mvp` extractor
+provenance without calling legacy relationship orchestration or persistence.
+
+Remaining gaps: none for the implemented Phase 3 Relationships slice.
+
+Deferred decisions: Entity Occurrences and all later plan components remain
+deferred. The ignored active database was not refreshed as part of this
+acceptance; no production refresh, graph build, legacy catalog refresh, or
+`main`-branch modification was run.
 
 ## Repository-scan boundary
 
