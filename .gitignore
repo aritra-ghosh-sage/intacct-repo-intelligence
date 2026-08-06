@@ -40,4 +40,7 @@ catalog/backups/quality-baseline-*.json
 catalog/*.refresh.lock
 evals/runs/
 .DS_Store
-catalog/sidecars/*.db
+catalog/*.db
+catalog/*.db.v0
+catalog/*.lbug.v0
+.gitignore
