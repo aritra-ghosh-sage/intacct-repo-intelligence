@@ -33,6 +33,7 @@ class SourceSnapshot:
     snapshot_root: Path
     tracked_blob_bytes: int
     tracked_file_count: int
+    entries: tuple[GitTreeEntry, ...] = ()
 
 
 def _git_bytes(root: Path, *args: str, input_bytes: bytes | None = None) -> bytes:
@@ -282,6 +283,7 @@ def materialize_source_snapshot(
             snapshot_root=snapshot_root,
             tracked_blob_bytes=sum(entry.size for entry in entries),
             tracked_file_count=len(entries),
+            entries=entries,
         )
     finally:
         shutil.rmtree(snapshot_root, ignore_errors=True)

@@ -48,12 +48,22 @@ def backup_database(source: Path, target: Path) -> None:
 def parent_descriptor(active: Path) -> ParentDescriptor:
     """Return the active generation and filesystem identity used for CAS."""
 
+    if not active.exists():
+        return ParentDescriptor(0, "", None, "{}", None, None)
     stat = active.stat()
     conn = sqlite3.connect(f"file:{active}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     try:
+        columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(catalog_builds)")
+        }
+        if "source_revisions_json" not in columns:
+            raise CatalogPromotionError(
+                "active catalog is missing catalog_builds.source_revisions_json"
+            )
+        fingerprint = "content_fingerprint" if "content_fingerprint" in columns else "NULL"
         row = conn.execute(
-            """SELECT id,build_token,content_fingerprint,source_revisions_json
+            f"""SELECT id,build_token,{fingerprint} AS content_fingerprint,source_revisions_json
                FROM catalog_builds WHERE status='active' ORDER BY id DESC LIMIT 1"""
         ).fetchone()
         if row is None:
@@ -122,17 +132,20 @@ def promote_catalog_candidate(
     previous_stage.unlink(missing_ok=True)
     previous_backup.unlink(missing_ok=True)
     promoted = False
+    had_active = active.exists()
     try:
         # Copy rather than rename the active generation: a failed replacement
         # must leave both active and retained previous recovery state intact.
-        backup_database(active, previous_stage)
-        if previous.exists():
+        if had_active:
+            backup_database(active, previous_stage)
+        if had_active and previous.exists():
             # Retain the exact recovery artifact, rather than a SQLite backup
             # whose valid bytes may differ due to page layout.
             os.replace(previous, previous_backup)
         os.replace(candidate, active)
         promoted = True
-        os.replace(previous_stage, previous)
+        if previous_stage.exists():
+            os.replace(previous_stage, previous)
     except Exception:
         if promoted and previous_stage.exists():
             os.replace(previous_stage, active)
