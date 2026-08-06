@@ -29,6 +29,7 @@ from catalog.source_snapshot import SourceSnapshotError, materialize_source_snap
 
 SCHEMA_PATH = Path(__file__).with_name("repo_v1_schema.sql")
 REPO_KEY = "ia-main"
+DEFAULT_ACTIVE_DB = Path("catalog/catalog.db")
 
 
 class RepoV1Error(RuntimeError):
@@ -343,7 +344,7 @@ def _mark_candidate_active(candidate: Path, active_db: Path, build_token: str) -
 def build_ia_main(
     *,
     manifest_path: str | Path = "config/workspace_repos.yaml",
-    active_db: str | Path = "catalog/repo-v1/catalog.db",
+    active_db: str | Path = DEFAULT_ACTIVE_DB,
     target_sha: str | None = None,
     promote: bool = True,
     show_progress: bool = False,
@@ -390,7 +391,7 @@ def main() -> int:
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, default=Path("config/workspace_repos.yaml"))
-    parser.add_argument("--active-db", type=Path, default=Path("catalog/repo-v1/catalog.db"))
+    parser.add_argument("--active-db", type=Path, default=DEFAULT_ACTIVE_DB)
     parser.add_argument("--target-sha", help="Git revision; defaults to ia-main tracked_branch")
     parser.add_argument("--no-promote", action="store_true")
     parser.add_argument(

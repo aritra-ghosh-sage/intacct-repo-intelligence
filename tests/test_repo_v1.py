@@ -15,6 +15,7 @@ from catalog.refresh_transaction import (
     parent_descriptor,
 )
 from catalog.repo_v1 import (
+    DEFAULT_ACTIVE_DB,
     SCHEMA_PATH,
     RepoV1Error,
     _v1_detect_language,
@@ -318,6 +319,11 @@ def test_v1_inventory_progress_indicator_is_opt_in(
         show_progress=True,
     )
     assert calls == [{"desc": "Writing V1 inventory", "unit": "file", "disable": False}]
+
+
+def test_v1_cli_and_library_use_canonical_active_database_path() -> None:
+    assert DEFAULT_ACTIVE_DB == Path("catalog/catalog.db")
+    assert build_ia_main.__kwdefaults__["active_db"] == DEFAULT_ACTIVE_DB
 
 
 def test_inventory_applies_v1_tree_filters_and_manifest_ignore_paths(

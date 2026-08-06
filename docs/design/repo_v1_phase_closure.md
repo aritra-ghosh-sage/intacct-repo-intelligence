@@ -2,11 +2,18 @@
 
 Reviewer: Codex (automated acceptance), 2026-08-06
 
-Implementation commit: `7fafcd0d777af333252396714a8ff9416d248c6a`
+Implementation commit: pending canonical-path follow-up commit
 
-All acceptance evidence below was rerun against this committed revision.
+The canonical active database path changed after the prior acceptance record;
+this closure remains in progress until the follow-up commit and evidence rerun
+are complete.
 
 Target `ia-main` commit: `173a9b1fccd0fc046cedee6756dd7ef8f922627d`
+
+Canonical V1 active database path: `catalog/catalog.db`. The V1 library
+default and `--active-db` CLI default use this same path, matching the
+promoted database recorded below and the repository-wide `config.CATALOG_DB`
+default.
 
 The target checkout was verified at `/Users/aritra.ghosh/projects/main`, on
 branch `main`, with a clean status before acceptance. No production refresh,
@@ -23,7 +30,7 @@ The promoted V1 database evidence was independently verified read-only:
 Scope: fresh V1 SQLite candidate, build provenance, candidate lifecycle, CAS,
 and atomic first/replacement promotion for `ia-main`.
 
-Status: **accepted**
+Status: **in_progress**
 
 | Acceptance requirement | Exact evidence | Observed result |
 | --- | --- | --- |
@@ -38,8 +45,10 @@ Status: **accepted**
 | V1 schema contains no mode planning, diagnostics, previous, or failed build state | `./.venv/bin/python -m pytest -q tests/test_repo_v1.py::test_v1_schema_has_only_minimal_build_lifecycle` | Passed; only `building`, `validated`, and `active` are allowed. |
 | Lifecycle is `building -> validated -> active` | `./.venv/bin/python -m pytest -q tests/test_repo_v1.py::test_v1_schema_has_only_minimal_build_lifecycle tests/test_repo_v1.py::test_first_promotion_creates_active_catalog_without_previous` | Passed; no `previous` or `failed` status exists in the V1 schema or promoted database. |
 | Promoted active V1 database records the supplied build evidence | Read-only SQLite verification shown above | Passed; active build token, target commit provenance, file count, and active status matched the supplied evidence. |
+| CLI and library use the canonical active database path | `./.venv/bin/python -m pytest -q tests/test_repo_v1.py::test_v1_cli_and_library_use_canonical_active_database_path` | Passed; both defaults resolve to `catalog/catalog.db`. |
 
-Remaining gaps: none for Phase 0.
+Remaining gaps: commit the canonical-path follow-up and rerun Phase 0
+evidence.
 
 Deferred decisions: automatic recovery, generic stale restoration, delta
 refresh, fingerprints as readiness/promotion gates, graph recovery, and legacy
@@ -51,7 +60,7 @@ Scope: complete committed-tree inventory for `ia-main`, including path, Git
 blob identity, mode, size, language classification, target commit provenance,
 and V1-only committed-tree filtering.
 
-Status: **accepted**
+Status: **in_progress**
 
 | Acceptance requirement | Exact evidence | Observed result |
 | --- | --- | --- |
@@ -65,7 +74,8 @@ Status: **accepted**
 | Repeated builds have equivalent normalized immutable repository/file fields | `./.venv/bin/python -m pytest -q tests/test_repo_v1.py::test_same_commit_uses_committed_blobs_and_is_deterministic` | Passed; generated IDs, tokens, timestamps, and catalog paths were excluded from comparison. |
 | Language classification covers representative and unknown extensions | `./.venv/bin/python -m pytest -q tests/test_repo_v1.py -k 'language_classification or legacy_parser_does_not_define'` | Passed for lowercase, uppercase/mixed-case, V1-local XML/PHP mappings, and unknown extensions. |
 
-Remaining gaps: none for Phase 1.
+Remaining gaps: rerun Phase 1 evidence after the canonical-path follow-up
+commit.
 
 Deferred decisions: symbols, relationships, entity occurrences, OpenAPI/REST,
 UI, workflow/security, graph, MCP, and delta refresh remain outside this
