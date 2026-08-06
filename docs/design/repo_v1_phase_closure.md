@@ -16,9 +16,12 @@ Implementation commits:
   implementation, schema, validation, tests, and acceptance integration.
 - `0462142` — ambiguity-safe relationship resolution and parser-failure,
   diagnostic-ownership, and ambiguity regression evidence.
+- `fd909d7` — Phase 5/Entity Occurrences implementation, schema, snapshot
+  extraction, candidate validation, tests, and closure evidence.
 
-Phase 4 Entity Occurrences implementation is present in the current
-`repo-v1` working tree; no commit was created by this acceptance run.
+The Phase 5 Entity Occurrences implementation is committed in `fd909d7`.
+The closure section below retains the historical Phase 4 label used by this
+document for the Entity Occurrences slice.
 
 Phase 0 and Phase 1 evidence below was rerun against the committed Phase 2
 implementation. Phase 2 evidence was rerun against the latest implementation
@@ -238,6 +241,17 @@ Promoted isolated-build evidence:
 {"active_db":"/private/tmp/repo-v1-phase4-review-a.db","build_token":"a9464e11c72f4316a104e32988b8e0a6","file_count":23877,"promoted":true,"target_commit_sha":"e7fbab69da69cd605076eec74ee456066514adaf","entity_node_count":1857,"entity_occurrence_count":1859,"entity_diagnostic_count":2139}
 ```
 
+Canonical active-database evidence, independently verified read-only after
+the Phase 5 promotion:
+
+```json
+{"active_db":"/Users/aritra.ghosh/projects/intacct-repo-intelligence/catalog/catalog.db","build_token":"2862530f960a422e8d74fb55958450d6","file_count":23877,"promoted":true,"target_commit_sha":"e7fbab69da69cd605076eec74ee456066514adaf","entity_node_count":1857,"entity_occurrence_count":1859,"entity_diagnostic_count":2139}
+```
+
+The canonical active database records the same target commit and entity
+counts as the isolated acceptance builds. Read-only checks returned
+`PRAGMA integrity_check = ok` and zero foreign-key violations.
+
 Normalized entity facts from the two promoted isolated builds had the same
 SHA-256 `5540f672fd6b73a01511721c84ff5f7b9306b2a2ccffa45978b97ad8d85ef124`.
 
@@ -246,6 +260,7 @@ SHA-256 `5540f672fd6b73a01511721c84ff5f7b9306b2a2ccffa45978b97ad8d85ef124`.
 | Focused entity behavior passes | `PYTHONPATH=. ./.venv/bin/pytest -q tests/test_repo_v1_entities.py` | Passed: 18 tests, 1 warning. |
 | Existing V1 behavior remains green | `PYTHONPATH=. ./.venv/bin/pytest -q tests/test_repo_v1.py validation/test_source_snapshot.py tests/test_repo_v1_symbols.py tests/test_repo_v1_relationships.py tests/test_repo_v1_entities.py` | Passed: 78 tests, 1 warning. |
 | Immutable target-commit build promotes with entity counts | `PYTHONPATH=. ./.venv/bin/python -m catalog.repo_v1 --target-sha e7fbab69da69cd605076eec74ee456066514adaf --active-db /private/tmp/repo-v1-phase4-review-a.db --no-progress` | Promoted; 23,877 files, 1,857 nodes, 1,859 occurrences, and 2,139 diagnostics. |
+| Canonical active catalog retains the supplied Phase 5 evidence | Read-only SQLite verification of `catalog/catalog.db` | Passed; build token `2862530f960a422e8d74fb55958450d6`, target commit, promotion state, file count, and entity counts matched the evidence above. |
 | Repeated full builds are equivalent | Same command with `/private/tmp/repo-v1-phase4-review-b.db`, followed by normalized SQLite comparison | Promoted second build matched the first fact-for-fact; normalized SHA-256s matched at `5540f672fd6b73a01511721c84ff5f7b9306b2a2ccffa45978b97ad8d85ef124`. |
 | Candidate failure preserves active bytes | `PYTHONPATH=. ./.venv/bin/pytest -q tests/test_repo_v1_entities.py::test_entity_candidate_failure_preserves_active_database` | Passed; invalid entity ownership was rejected and active bytes/candidate cleanup were verified. |
 | SQLite and foreign-key checks pass | Read-only Python query: `PRAGMA integrity_check`, `PRAGMA foreign_key_check` on both isolated promoted databases | Both returned `ok` and zero FK violations. |
@@ -253,7 +268,8 @@ SHA-256 `5540f672fd6b73a01511721c84ff5f7b9306b2a2ccffa45978b97ad8d85ef124`.
 | Dirty checkout cannot alter facts | `PYTHONPATH=. ./.venv/bin/pytest -q tests/test_repo_v1_entities.py::test_dirty_checkout_does_not_change_entity_facts` | Passed; committed snapshot facts matched after mutable checkout edits. |
 | Legacy entity/mapping flows remain unused | `PYTHONPATH=. ./.venv/bin/pytest -q tests/test_repo_v1_entities.py::test_phase4_file_has_no_legacy_entity_or_mapping_or_jsonl_flow` | Passed; no legacy scanner, builder, JSONL, mapping, or root flow is referenced. |
 
-Remaining gaps: none for the Phase 4 Minimal Entity Occurrences slice.
+Remaining gaps: none for the Phase 5 / Phase 4 Minimal Entity Occurrences
+slice.
 
 The isolated acceptance builds did not run a legacy refresh, build/promote the
 Ladybug graph, migrate production data, modify `main`, or replace the existing

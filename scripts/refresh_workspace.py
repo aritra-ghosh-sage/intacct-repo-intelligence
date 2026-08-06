@@ -41,26 +41,18 @@ from catalog.refresh_attempts import (
     record_attempt_event,
     record_attempt_failure,
 )
-from catalog.repository_evidence import repository_evidence_fingerprint
 from catalog.refresh_contract import (
     EVIDENCE_COMPARISON_VERSION,
     RUNTIME_CONTRACT_VERSION,
-    evaluate_active_readiness,
     runtime_fingerprint,
 )
 from catalog.refresh_quality import (
     QUALITY_QUERIES,
     RefreshQualityError,
-    build_quality_payload,
     collect_global_counts,
     collect_repository_counts,
-    compare_repository_quality,
-    materialized_quality_run,
-    quality_report,
-    reference_quality_run,
     resolve_reference_quality_run,
     validate_quality_run,
-    write_quality_report_atomic,
 )
 from catalog.refresh_transaction import (
     ParentDescriptor as TransactionParentDescriptor,
@@ -86,6 +78,7 @@ from catalog.repositories import (
     register_manifest,
     rest_automation_paths,
 )
+from catalog.repository_evidence import repository_evidence_fingerprint
 from catalog.repository_lifecycle import (
     RepositoryArchivedError,
     canonical_git_url,

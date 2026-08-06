@@ -162,7 +162,7 @@ def test_failed_relationship_file_has_no_partial_rows_and_preserves_active(
     original = repo_v1_relationships.EXTRACTORS["php"]
 
     def fail_on_targets(text: str, file_row: object, *args: object) -> list[object]:
-        if getattr(file_row, "path") == "targets.php":
+        if file_row.path == "targets.php":
             raise ValueError("injected relationship failure")
         return list(original(text, file_row, *args))
 

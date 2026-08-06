@@ -10,7 +10,6 @@ from pathlib import Path
 from unittest import mock
 
 from catalog.api_registry import RegistryBuildStats
-from catalog.refresh_quality import RefreshQualityError, load_quality_report
 from catalog.repositories import RepositoryError
 from scripts.refresh_workspace import (
     RefreshError,

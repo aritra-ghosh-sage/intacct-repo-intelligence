@@ -10,7 +10,7 @@ from typing import Any
 
 from catalog.content_fingerprint import logical_content_fingerprint
 from catalog.delta import DELTA_CONTRACT_VERSION
-from catalog.refresh_contract import READY, evaluate_active_readiness
+from catalog.refresh_contract import evaluate_active_readiness
 from catalog.refresh_quality import (
     RefreshQualityError,
     resolve_reference_quality_run,

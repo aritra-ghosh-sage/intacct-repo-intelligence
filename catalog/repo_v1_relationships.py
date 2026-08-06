@@ -13,9 +13,9 @@ from catalog.source_snapshot import SourceSnapshot, SourceSnapshotError
 from parser.extract_relationships import (
     EXTRACTORS,
     RELATIONSHIP_EXTRACTOR,
+    RESOLUTION_CLASS_PROJECT_UNRESOLVED,
     FileRow,
     Relationship,
-    RESOLUTION_CLASS_PROJECT_UNRESOLVED,
     SymbolRow,
 )
 
@@ -72,7 +72,7 @@ def _read_snapshot_text(snapshot: SourceSnapshot, path: str) -> str:
     destination = snapshot.snapshot_root.joinpath(*PurePosixPath(path).parts)
     try:
         return destination.read_text(encoding="utf-8", errors="ignore")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise SourceSnapshotError(f"snapshot read failed for {path}: {exc}") from exc
 
 
@@ -285,7 +285,7 @@ def extract_snapshot_relationships(
             conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
             conn.execute(f"RELEASE SAVEPOINT {savepoint}")
             raise
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
             conn.execute(f"RELEASE SAVEPOINT {savepoint}")
             raise RuntimeError(f"relationship extraction failed for {entry.path}: {exc}") from exc
