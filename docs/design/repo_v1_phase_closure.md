@@ -14,6 +14,8 @@ Implementation commits:
 - `6205308` — harden Phase 2 parser diagnostics and snapshot-I/O failure handling.
 - `6684f8df6b3f18df7fe884c7dfafd8abb2a11d6e` — Phase 3 Relationships
   implementation, schema, validation, tests, and acceptance integration.
+- `0462142` — ambiguity-safe relationship resolution and parser-failure,
+  diagnostic-ownership, and ambiguity regression evidence.
 
 Phase 0 and Phase 1 evidence below was rerun against the committed Phase 2
 implementation. Phase 2 evidence was rerun against the latest implementation
