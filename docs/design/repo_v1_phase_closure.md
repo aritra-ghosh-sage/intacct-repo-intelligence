@@ -17,6 +17,9 @@ Implementation commits:
 - `0462142` — ambiguity-safe relationship resolution and parser-failure,
   diagnostic-ownership, and ambiguity regression evidence.
 
+Phase 4 Entity Occurrences implementation is present in the current
+`repo-v1` working tree; no commit was created by this acceptance run.
+
 Phase 0 and Phase 1 evidence below was rerun against the committed Phase 2
 implementation. Phase 2 evidence was rerun against the latest implementation
 and test commits.
@@ -145,8 +148,8 @@ rows, 456 symbol-diagnostic rows, and 174,560 relationship rows. The Symbols
 and Relationships tables are therefore present in the active database; no
 migration was used or added.
 
-Deferred decisions: Entity Occurrences and all later plan components remain
-deferred.
+Deferred decisions: OpenAPI/REST, UI, workflow/security, graph, MCP/query
+compatibility, and delta refresh remain deferred.
 
 ## Phase 3 — Relationships
 
@@ -205,10 +208,57 @@ provenance without calling legacy relationship orchestration or persistence.
 
 Remaining gaps: none for the implemented Phase 3 Relationships slice.
 
-Deferred decisions: Entity Occurrences and all later plan components remain
-deferred. The ignored active database was refreshed and promoted through the
-normal V1 path for this acceptance; no legacy catalog refresh, graph build, or
-`main`-branch modification was run.
+Deferred decisions: OpenAPI/REST, UI, workflow/security, graph, MCP/query
+compatibility, and delta refresh remain deferred. No legacy catalog refresh,
+graph build, production-data migration, or `main`-branch modification was run.
+
+## Phase 4 — Minimal Entity Occurrences
+
+Scope: immutable, source-backed `.ent` declarations only. The extractor reads
+retained inventory paths and bytes from `SourceSnapshot.snapshot_root`, writes
+canonical `entity_nodes`, repository/file-owned `entity_occurrences`, and
+stable `entity_diagnostics` into the candidate, validates ownership and
+provenance, and participates in the existing atomic V1 promotion. Entity
+mappings, roots, companion mappings, OpenAPI/REST, workflow/service mappings,
+UI, graph, MCP/query compatibility, delta refresh, migrations,
+multi-repository support, JSONL intermediates, and legacy entity-builder
+orchestration remain outside this slice.
+
+Target `ia-main` commit used for acceptance: `e7fbab69da69cd605076eec74ee456066514adaf`.
+The effective configured source root was verified as
+`/Users/aritra.ghosh/projects/main`; the checkout was on `main` and clean.
+The acceptance databases were fresh files under `/private/tmp`, so the
+repository's existing `catalog/catalog.db` was not replaced.
+
+Status: **accepted**
+
+Promoted isolated-build evidence:
+
+```json
+{"active_db":"/private/tmp/repo-v1-phase4-review-a.db","build_token":"a9464e11c72f4316a104e32988b8e0a6","file_count":23877,"promoted":true,"target_commit_sha":"e7fbab69da69cd605076eec74ee456066514adaf","entity_node_count":1857,"entity_occurrence_count":1859,"entity_diagnostic_count":2139}
+```
+
+Normalized entity facts from the two promoted isolated builds had the same
+SHA-256 `5540f672fd6b73a01511721c84ff5f7b9306b2a2ccffa45978b97ad8d85ef124`.
+
+| Acceptance requirement | Exact evidence | Observed result |
+| --- | --- | --- |
+| Focused entity behavior passes | `PYTHONPATH=. ./.venv/bin/pytest -q tests/test_repo_v1_entities.py` | Passed: 18 tests, 1 warning. |
+| Existing V1 behavior remains green | `PYTHONPATH=. ./.venv/bin/pytest -q tests/test_repo_v1.py validation/test_source_snapshot.py tests/test_repo_v1_symbols.py tests/test_repo_v1_relationships.py tests/test_repo_v1_entities.py` | Passed: 78 tests, 1 warning. |
+| Immutable target-commit build promotes with entity counts | `PYTHONPATH=. ./.venv/bin/python -m catalog.repo_v1 --target-sha e7fbab69da69cd605076eec74ee456066514adaf --active-db /private/tmp/repo-v1-phase4-review-a.db --no-progress` | Promoted; 23,877 files, 1,857 nodes, 1,859 occurrences, and 2,139 diagnostics. |
+| Repeated full builds are equivalent | Same command with `/private/tmp/repo-v1-phase4-review-b.db`, followed by normalized SQLite comparison | Promoted second build matched the first fact-for-fact; normalized SHA-256s matched at `5540f672fd6b73a01511721c84ff5f7b9306b2a2ccffa45978b97ad8d85ef124`. |
+| Candidate failure preserves active bytes | `PYTHONPATH=. ./.venv/bin/pytest -q tests/test_repo_v1_entities.py::test_entity_candidate_failure_preserves_active_database` | Passed; invalid entity ownership was rejected and active bytes/candidate cleanup were verified. |
+| SQLite and foreign-key checks pass | Read-only Python query: `PRAGMA integrity_check`, `PRAGMA foreign_key_check` on both isolated promoted databases | Both returned `ok` and zero FK violations. |
+| Formatting and static syntax checks pass | `git diff --check`; `./.venv/bin/python -m py_compile catalog/repo_v1_entities.py catalog/repo_v1.py` | Passed. |
+| Dirty checkout cannot alter facts | `PYTHONPATH=. ./.venv/bin/pytest -q tests/test_repo_v1_entities.py::test_dirty_checkout_does_not_change_entity_facts` | Passed; committed snapshot facts matched after mutable checkout edits. |
+| Legacy entity/mapping flows remain unused | `PYTHONPATH=. ./.venv/bin/pytest -q tests/test_repo_v1_entities.py::test_phase4_file_has_no_legacy_entity_or_mapping_or_jsonl_flow` | Passed; no legacy scanner, builder, JSONL, mapping, or root flow is referenced. |
+
+Remaining gaps: none for the Phase 4 Minimal Entity Occurrences slice.
+
+The isolated acceptance builds did not run a legacy refresh, build/promote the
+Ladybug graph, migrate production data, modify `main`, or replace the existing
+active catalog. Later mapping and compatibility work remains explicitly
+deferred.
 
 ## Repository-scan boundary
 
@@ -220,6 +270,7 @@ target Git commit
   -> V1 candidate repos/files inventory
   -> V1 snapshot-based symbols
   -> V1 snapshot-based relationships
+  -> V1 snapshot-based entity nodes/occurrences/diagnostics
   -> candidate validation and atomic promotion
 ```
 

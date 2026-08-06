@@ -367,9 +367,62 @@ Acceptance:
 
 ### 5. Entity occurrences
 
-Add repository-local entity occurrences and their source-backed mappings as a
-separate complete component. Keep canonical entity identity separate from
-repository-local occurrence facts.
+Implement only immutable, source-backed `.ent` declarations in the V1 full
+rebuild path:
+
+```text
+target Git commit
+  -> SourceSnapshot.snapshot_root retained `.ent` bytes
+  -> entity_nodes / entity_occurrences / entity_diagnostics
+  -> candidate ownership, provenance, uniqueness, FK, and integrity validation
+  -> atomic promotion
+```
+
+The extractor is a V1-local `catalog/repo_v1_entities.py` adapter. It scans
+retained `.ent` inventory rows and reads only target-commit snapshot bytes. Its
+lexical grammar recognizes top-level `$kSchemas[quoted-literal-key] =`
+declarations, preserves exact source evidence, and suppresses all facts from a
+file with an unclosed lexical state or unbalanced delimiter. It extracts only
+literal `module`, `table`, `view`, and lowercase boolean `dummy` metadata from
+initial arrays and direct nested updates. Repeated keys coalesce within a file;
+the natural occurrence key is `(repo_id, source_file_id, source_key)`, while
+identical keys in different files remain separate occurrences.
+
+Literal snapshot-only include/require resolution and direct RHS references,
+including constrained `EntityManager::inheritEnts`, may index declarations
+from retained `.ent` files. Missing, dynamic, ambiguous, and cyclic
+include/reference cases emit stable error diagnostics and never create guessed
+facts. Missing metadata may retain a partial occurrence with NULL fields;
+conflicting literal metadata is NULL with one conflict diagnostic.
+
+The schema uses canonical entity identity in `entity_nodes` and repository/file
+facts in `entity_occurrences`, with source-commit, extractor, and canonical JSON
+evidence on every fact and diagnostic. Diagnostic identity is the SHA-256 of
+canonical JSON containing repository, file, source key, code, and evidence.
+`repo_v1_entities_v1` is the only extractor value. Candidate validation checks
+entity ownership, `.ent` file scope, source-commit parity, name/key parity,
+natural uniqueness, diagnostic ownership/code/provenance, foreign keys, and
+SQLite integrity. Per-file parser, identity, metadata, include, and reference
+issues are non-blocking diagnostics; snapshot/global read errors and candidate
+integrity/provenance failures preserve the active database and remove the
+candidate.
+
+Do not add entity mappings, entity roots, companion/OpenAPI/REST/workflow/UI
+facts, graph, MCP/query compatibility, delta refresh, migrations,
+multi-repository support, JSONL intermediates, or legacy entity-builder
+orchestration in this phase.
+
+Acceptance:
+
+- focused and existing V1 tests pass;
+- repeated full builds produce equivalent normalized entity facts;
+- dirty checkout changes do not affect entity facts;
+- malformed lexical state suppresses facts but retains diagnostics;
+- candidate ownership, provenance, FK, integrity, and active-preservation
+  failures are covered;
+- promoted build evidence records target commit and entity counts;
+- closure records exact commands/results and leaves later mappings and
+  compatibility work explicitly deferred.
 
 ### 6. OpenAPI/REST
 

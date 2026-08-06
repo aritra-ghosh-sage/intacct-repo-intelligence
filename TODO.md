@@ -45,5 +45,6 @@ components remain outside this backlog.
 
 ## Later V1 Components
 
-- [ ] Add Entity Occurrences only after the relationship phase is complete;
-      do not begin this component as part of Phase 3.
+- [x] Phase 4 Entity Occurrences implemented and accepted; the slice remains
+      limited to immutable `.ent` declarations, candidate validation, and
+      atomic promotion.

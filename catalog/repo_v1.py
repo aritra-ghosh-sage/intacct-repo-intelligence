@@ -24,6 +24,7 @@ from catalog.refresh_transaction import (
     promote_catalog_candidate,
     refresh_lock,
 )
+from catalog.repo_v1_entities import ENTITY_DIAGNOSTIC_CODES
 from catalog.repositories import RepositoryError, load_workspace_manifest
 from catalog.source_snapshot import SourceSnapshotError, materialize_source_snapshot
 
@@ -277,6 +278,14 @@ def _build_inventory(
                 snapshot=snapshot,
                 show_progress=show_progress,
             )
+            from catalog.repo_v1_entities import extract_snapshot_entity_occurrences
+
+            entity_stats = extract_snapshot_entity_occurrences(
+                conn,
+                repo_id=repo_id,
+                snapshot=snapshot,
+                show_progress=show_progress,
+            )
         file_count = int(
             conn.execute("SELECT COUNT(*) FROM files WHERE repo_id=?", (repo_id,)).fetchone()[0]
         )
@@ -294,6 +303,9 @@ def _build_inventory(
                                 (repo_id,),
                             ).fetchone()[0]
                         ),
+                        "entity_node_count": entity_stats.node_count,
+                        "entity_occurrence_count": entity_stats.occurrence_count,
+                        "entity_diagnostic_count": entity_stats.diagnostic_count,
                     },
                     sort_keys=True,
                 ),
@@ -435,6 +447,59 @@ def _validate_candidate(candidate: Path, *, target_commit_sha: str, build_token:
             raise RepoV1Error("candidate relationship ownership is invalid")
         if invalid_relationship_facts:
             raise RepoV1Error("candidate relationship facts are invalid")
+        invalid_entity_ownership = conn.execute(
+            """SELECT COUNT(*)
+               FROM entity_occurrences eo
+               LEFT JOIN repos r ON r.id=eo.repo_id
+               LEFT JOIN files f ON f.id=eo.source_file_id
+               LEFT JOIN entity_nodes en ON en.id=eo.entity_id
+               WHERE r.id IS NULL OR f.id IS NULL OR en.id IS NULL
+                  OR eo.repo_id<>? OR f.repo_id<>eo.repo_id
+                  OR f.path NOT LIKE '%.ent'
+                  OR eo.source_commit_sha<>f.source_commit_sha
+                  OR eo.source_commit_sha<>r.target_commit_sha
+                  OR eo.source_key='' OR en.name<>eo.source_key""",
+            (repo["id"],),
+        ).fetchone()[0]
+        invalid_entity_uniqueness = conn.execute(
+            """SELECT COUNT(*) FROM (
+                   SELECT repo_id,source_file_id,source_key,COUNT(*) AS count
+                   FROM entity_occurrences
+                   GROUP BY repo_id,source_file_id,source_key
+                   HAVING count<>1
+               )"""
+        ).fetchone()[0]
+        invalid_entity_facts = conn.execute(
+            """SELECT COUNT(*) FROM entity_occurrences
+               WHERE source_key='' OR source_commit_sha='' OR evidence=''
+                  OR extractor<>'repo_v1_entities_v1'
+                  OR dummy IS NOT NULL AND dummy NOT IN (0,1)"""
+        ).fetchone()[0]
+        invalid_entity_diagnostic_ownership = conn.execute(
+            """SELECT COUNT(*)
+               FROM entity_diagnostics d
+               LEFT JOIN repos r ON r.id=d.repo_id
+               LEFT JOIN files f ON f.id=d.file_id
+               LEFT JOIN entity_occurrences eo ON eo.id=d.occurrence_id
+               WHERE r.id IS NULL OR f.id IS NULL OR d.repo_id<>?
+                  OR f.repo_id<>d.repo_id
+                  OR f.path NOT LIKE '%.ent'
+                  OR (eo.id IS NOT NULL AND eo.repo_id<>d.repo_id)
+                  OR (eo.id IS NOT NULL AND (d.source_key IS NULL OR eo.source_key<>d.source_key))
+                  OR d.code NOT IN ({codes})
+                  OR d.severity<>'error' OR d.evidence='' OR d.extractor<>'repo_v1_entities_v1'
+                  OR d.source_commit_sha<>f.source_commit_sha""".format(
+                codes=",".join("?" for _ in ENTITY_DIAGNOSTIC_CODES)
+            ),
+            (repo["id"], *sorted(ENTITY_DIAGNOSTIC_CODES)),
+        ).fetchone()[0]
+        if (
+            invalid_entity_ownership
+            or invalid_entity_uniqueness
+            or invalid_entity_facts
+            or invalid_entity_diagnostic_ownership
+        ):
+            raise RepoV1Error("candidate entity ownership, provenance, or diagnostic validation failed")
     finally:
         conn.close()
 
