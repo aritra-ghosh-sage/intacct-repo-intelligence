@@ -34,7 +34,7 @@ no legacy catalog refresh, graph build, or main-branch modification was run.
 The promoted V1 database evidence was independently verified read-only:
 
 ```json
-{"active_db":"/Users/aritra.ghosh/projects/intacct-repo-intelligence/catalog/catalog.db","build_token":"eda1f3122a544325875fac8f481cca2d","file_count":23877,"promoted":true,"relationship_count":174560,"symbol_count":166280,"symbol_diagnostic_count":456,"target_commit_sha":"e7fbab69da69cd605076eec74ee456066514adaf"}
+{"active_db":"/Users/aritra.ghosh/projects/intacct-repo-intelligence/catalog/catalog.db","build_token":"6552fdea0c004013a98f4bffb4001dc0","file_count":23877,"promoted":true,"relationship_count":174560,"symbol_count":166280,"symbol_diagnostic_count":456,"target_commit_sha":"e7fbab69da69cd605076eec74ee456066514adaf"}
 ```
 
 This replaces the stale primary evidence from the earlier Phase 0/1 build.
@@ -44,13 +44,13 @@ This replaces the stale primary evidence from the earlier Phase 0/1 build.
 Exact Phase 2 Symbols evidence JSON, independently verified read-only:
 
 ```json
-{"active_db":"/Users/aritra.ghosh/projects/intacct-repo-intelligence/catalog/catalog.db","build_token":"eda1f3122a544325875fac8f481cca2d","file_count":23877,"promoted":true,"symbol_count":166280,"symbol_diagnostic_count":456,"target_commit_sha":"e7fbab69da69cd605076eec74ee456066514adaf"}
+{"active_db":"/Users/aritra.ghosh/projects/intacct-repo-intelligence/catalog/catalog.db","build_token":"6552fdea0c004013a98f4bffb4001dc0","file_count":23877,"promoted":true,"symbol_count":166280,"symbol_diagnostic_count":456,"target_commit_sha":"e7fbab69da69cd605076eec74ee456066514adaf"}
 ```
 
 Exact Phase 3 Relationships evidence JSON, independently verified read-only:
 
 ```json
-{"active_db":"/Users/aritra.ghosh/projects/intacct-repo-intelligence/catalog/catalog.db","build_token":"eda1f3122a544325875fac8f481cca2d","file_count":23877,"promoted":true,"relationship_count":174560,"target_commit_sha":"e7fbab69da69cd605076eec74ee456066514adaf"}
+{"active_db":"/Users/aritra.ghosh/projects/intacct-repo-intelligence/catalog/catalog.db","build_token":"6552fdea0c004013a98f4bffb4001dc0","file_count":23877,"promoted":true,"relationship_count":174560,"target_commit_sha":"e7fbab69da69cd605076eec74ee456066514adaf"}
 ```
 
 The active database contains 174,560 relationship rows, all owned by the
@@ -155,7 +155,7 @@ relationship provenance, candidate validation, and atomic promotion.
 Promoted evidence JSON:
 
 ```json
-{"active_db":"/Users/aritra.ghosh/projects/intacct-repo-intelligence/catalog/catalog.db","build_token":"eda1f3122a544325875fac8f481cca2d","file_count":23877,"promoted":true,"relationship_count":174560,"target_commit_sha":"e7fbab69da69cd605076eec74ee456066514adaf"}
+{"active_db":"/Users/aritra.ghosh/projects/intacct-repo-intelligence/catalog/catalog.db","build_token":"6552fdea0c004013a98f4bffb4001dc0","file_count":23877,"promoted":true,"relationship_count":174560,"target_commit_sha":"e7fbab69da69cd605076eec74ee456066514adaf"}
 ```
 
 KISS/YAGNI admission gate:
@@ -180,9 +180,19 @@ Status: **accepted**
 | Duplicate relationship handling is deterministic | `./.venv/bin/python -m pytest -q tests/test_repo_v1_relationships.py::test_duplicate_relationships_are_deterministically_deduplicated` | Passed; duplicated extractor output produced one normalized row per relationship fact. |
 | Unsupported languages emit no invented relationships | `./.venv/bin/python -m pytest -q tests/test_repo_v1_relationships.py::test_relationships_resolve_and_preserve_unresolved_targets` | Passed; the unsupported `notes.unknown` inventory row had no relationship rows. |
 | A failed file emits no partial relationships and cannot replace the active database | `./.venv/bin/python -m pytest -q tests/test_repo_v1_relationships.py::test_failed_relationship_file_has_no_partial_rows_and_preserves_active` | Passed; injected failure rolled back the candidate and preserved active bytes. |
+| Parser-failed relationship files retain diagnostics but emit no relationships | `./.venv/bin/python -m pytest -q tests/test_repo_v1_relationships.py::test_parser_failed_relationship_file_retains_diagnostic_without_relationships` | Passed; the malformed PHP file retained a target-commit diagnostic, produced zero symbols, and produced zero relationships. |
+| Ambiguous target resolution remains explicit and does not guess | `./.venv/bin/python -m pytest -q tests/test_repo_v1_relationships.py::test_ambiguous_target_resolution_remains_explicitly_unresolved` | Passed; duplicate `SharedClass` candidates retained the target name with `target_symbol_id IS NULL` and `ambiguous_project_symbol`. |
 | Invalid ownership and target references reject the candidate | `./.venv/bin/python -m pytest -q tests/test_repo_v1_relationships.py::test_candidate_validation_rejects_cross_file_relationship_source tests/test_repo_v1_relationships.py::test_invalid_relationship_target_reference_rejects_candidate` | Passed; cross-file source ownership failed semantic validation and an invalid target ID failed SQLite foreign-key validation before promotion. |
+| Diagnostic ownership rejects the candidate | `./.venv/bin/python -m pytest -q tests/test_repo_v1_relationships.py::test_candidate_validation_rejects_orphan_diagnostic_ownership` | Passed; an orphan diagnostic failed candidate foreign-key validation. |
 | Snapshot read failure preserves the active database | `./.venv/bin/python -m pytest -q tests/test_repo_v1_relationships.py::test_snapshot_relationship_read_failure_preserves_active` | Passed; the read error rejected the candidate, deleted its temporary database, and left active bytes unchanged. |
 | Existing Phase 0, Phase 1, and Phase 2 Symbols behavior remains green | `./.venv/bin/python -m pytest -q tests/test_repo_v1.py validation/test_source_snapshot.py tests/test_repo_v1_symbols.py` | Passed; all existing V1 foundation, snapshot, inventory, and symbol tests remained green. |
+
+Full Phase 0–3 evidence command:
+
+```text
+./.venv/bin/python -m pytest -q tests/test_repo_v1.py validation/test_source_snapshot.py tests/test_repo_v1_symbols.py tests/test_repo_v1_relationships.py
+60 passed, 1 warning in 16.44s
+```
 
 Reused leaf logic: `parser.extract_relationships.EXTRACTORS`, its
 `Relationship`, `FileRow`, and `SymbolRow` model shapes, and the extractor-call
@@ -244,7 +254,7 @@ or delta behavior was added.
 8 passed, 1 warning in 2.91s
 
 ./.venv/bin/python -m pytest -q tests/test_repo_v1_relationships.py
-7 passed, 1 warning in 2.58s
+10 passed, 1 warning in 3.17s
 
 ./.venv/bin/python -m pytest -q tests/test_archive_repository.py
 8 passed in 1.25s

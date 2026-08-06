@@ -190,6 +190,78 @@ def test_snapshot_relationship_read_failure_preserves_active(
     assert db.read_bytes() == before
 
 
+def test_parser_failed_relationship_file_retains_diagnostic_without_relationships(
+    tmp_path: Path,
+) -> None:
+    root, manifest, _target = _fixture(tmp_path)
+    (root / "broken.php").write_text(
+        "<?php class Broken extends MissingBase { ???\n", encoding="utf-8"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-qm", "broken relationship source")
+    target = _git(root, "rev-parse", "HEAD")
+    db = tmp_path / "catalog.db"
+    build_ia_main(manifest_path=manifest, active_db=db, target_sha=target)
+
+    conn = sqlite3.connect(db)
+    try:
+        diagnostic = conn.execute(
+            """SELECT d.code,d.source_commit_sha
+               FROM symbol_diagnostics d JOIN files f ON f.id=d.file_id
+               WHERE f.path='broken.php'"""
+        ).fetchone()
+        assert diagnostic == ("php_parse_error", target)
+        assert conn.execute(
+            "SELECT COUNT(*) FROM symbols s JOIN files f ON f.id=s.file_id "
+            "WHERE f.path='broken.php'"
+        ).fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT COUNT(*) FROM relationships WHERE file_path='broken.php'"
+        ).fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_ambiguous_target_resolution_remains_explicitly_unresolved(
+    tmp_path: Path,
+) -> None:
+    root, manifest, _target = _fixture(tmp_path)
+    (root / "ambiguous_one.php").write_text(
+        "<?php class SharedClass {}\n", encoding="utf-8"
+    )
+    (root / "ambiguous_two.php").write_text(
+        "<?php class SharedClass {}\n", encoding="utf-8"
+    )
+    (root / "child.php").write_text(
+        "<?php class Child extends ParentClass implements Contract {\n"
+        "    public function go() { new SharedClass(); }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-qm", "ambiguous relationship target")
+    target = _git(root, "rev-parse", "HEAD")
+    db = tmp_path / "catalog.db"
+    build_ia_main(manifest_path=manifest, active_db=db, target_sha=target)
+
+    conn = sqlite3.connect(db)
+    try:
+        row = conn.execute(
+            """SELECT target_symbol_id,target_name,resolution_class,resolution_reason
+               FROM relationships
+               WHERE file_path='child.php' AND target_name='SharedClass'
+                 AND relationship_type='USES'"""
+        ).fetchone()
+        assert row == (
+            None,
+            "SharedClass",
+            "project_unresolved",
+            "ambiguous_project_symbol",
+        )
+    finally:
+        conn.close()
+
+
 def test_invalid_relationship_target_reference_rejects_candidate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -272,4 +344,44 @@ def test_candidate_validation_rejects_cross_file_relationship_source(
     conn.commit()
     conn.close()
     with pytest.raises(RepoV1Error, match="relationship ownership"):
+        _validate_candidate(candidate, target_commit_sha="target", build_token="token")
+
+
+def test_candidate_validation_rejects_orphan_diagnostic_ownership(
+    tmp_path: Path,
+) -> None:
+    candidate = tmp_path / "candidate.db"
+    conn = sqlite3.connect(candidate)
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.executescript(SCHEMA_PATH.read_text())
+    build_id = conn.execute(
+        """INSERT INTO catalog_builds(
+               build_token,catalog_path,status,source_revisions_json
+           ) VALUES(?,?,?,?)""",
+        ("token", str(candidate), "validated", '{"ia-main":"target"}'),
+    ).lastrowid
+    repo_id = conn.execute(
+        """INSERT INTO repos(
+               repo_key,local_root,tracked_branch,target_commit_sha,build_id
+           ) VALUES(?,?,?,?,?)""",
+        ("ia-main", str(tmp_path), "main", "target", build_id),
+    ).lastrowid
+    file_id = conn.execute(
+        """INSERT INTO files(
+               repo_id,path,blob_object_id,file_mode,size_bytes,language,source_commit_sha
+           ) VALUES(?,?,?,?,?,?,?)""",
+        (repo_id, "broken.php", "blob", 0o100644, 1, "php", "target"),
+    ).lastrowid
+    conn.commit()
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute(
+        """INSERT INTO symbol_diagnostics(
+               repo_id,file_id,diagnostic_key,severity,code,message,source_commit_sha
+           ) VALUES(?,?,?,?,?,?,?)""",
+        (999, file_id, "diagnostic", "error", "php_parse_error", "broken", "target"),
+    )
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(RepoV1Error, match="candidate foreign-key check failed"):
         _validate_candidate(candidate, target_commit_sha="target", build_token="token")

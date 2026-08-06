@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import sqlite3
+from dataclasses import replace
 from pathlib import PurePosixPath
 
 from tqdm import tqdm
@@ -14,6 +15,7 @@ from parser.extract_relationships import (
     RELATIONSHIP_EXTRACTOR,
     FileRow,
     Relationship,
+    RESOLUTION_CLASS_PROJECT_UNRESOLVED,
     SymbolRow,
 )
 
@@ -90,6 +92,68 @@ def _relationship_key(relationship: Relationship) -> tuple[object, ...]:
         relationship.evidence,
         relationship.resolution_class,
         relationship.resolution_reason,
+    )
+
+
+def _resolution_candidates(
+    name: str,
+    symbols_by_name: dict[str, list[SymbolRow]],
+    symbols_by_qualified_name: dict[str, list[SymbolRow]],
+) -> list[SymbolRow]:
+    """Mirror the legacy resolver's first-match search without choosing one."""
+
+    if not name:
+        return []
+    candidates = symbols_by_name.get(name)
+    if candidates:
+        return candidates
+    candidates = symbols_by_qualified_name.get(name)
+    if candidates:
+        return candidates
+
+    for sep in ("::", "."):
+        if sep not in name:
+            continue
+        class_name, member_name = name.split(sep, 1)
+        class_name = class_name.strip()
+        member_name = member_name.strip()
+        if not class_name or not member_name:
+            continue
+        class_candidates = [class_name]
+        short_class_name = class_name.split("\\")[-1].split(".")[-1]
+        if short_class_name != class_name:
+            class_candidates.append(short_class_name)
+        for class_candidate in class_candidates:
+            for candidate_sep in ("::", "."):
+                candidates = symbols_by_qualified_name.get(
+                    f"{class_candidate}{candidate_sep}{member_name}"
+                )
+                if candidates:
+                    return candidates
+
+    short_name = name.split("\\")[-1].split(".")[-1]
+    return symbols_by_name.get(short_name, [])
+
+
+def _clear_ambiguous_target(
+    relationship: Relationship,
+    *,
+    symbols_by_name: dict[str, list[SymbolRow]],
+    symbols_by_qualified_name: dict[str, list[SymbolRow]],
+) -> Relationship:
+    if relationship.target_symbol_id is None:
+        return relationship
+    candidates = _resolution_candidates(
+        relationship.target_name, symbols_by_name, symbols_by_qualified_name
+    )
+    if len({candidate.id for candidate in candidates}) <= 1:
+        return relationship
+    return replace(
+        relationship,
+        target_symbol_id=None,
+        target_kind=None,
+        resolution_class=RESOLUTION_CLASS_PROJECT_UNRESOLVED,
+        resolution_reason="ambiguous_project_symbol",
     )
 
 
@@ -204,6 +268,14 @@ def extract_snapshot_relationships(
                     symbols_by_qualified_name,
                 )
             )
+            relationships = [
+                _clear_ambiguous_target(
+                    relationship,
+                    symbols_by_name=symbols_by_name,
+                    symbols_by_qualified_name=symbols_by_qualified_name,
+                )
+                for relationship in relationships
+            ]
             for relationship in relationships:
                 _validate_extracted_relationship(relationship, file_row=file_row)
             relationship_count += _insert_relationships(
