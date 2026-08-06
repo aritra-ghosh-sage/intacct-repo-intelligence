@@ -7,10 +7,12 @@ Implementation commits:
 - `7fafcd0d777af333252396714a8ff9416d248c6a` — V1 implementation and oracle
   acceptance work;
 - `ee333a93fdf64369d6b3674f429ab277cdf7d73b` — canonical active database path
-  normalization.
+  normalization;
+- `4010479` — V1 Phase 2 Symbols implementation and plan update;
+- `d1d230a` — Symbols candidate-validation regression coverage.
 
-All acceptance evidence below was rerun against the canonical-path follow-up
-commit.
+Phase 0 and Phase 1 evidence below was rerun against the committed Phase 2
+implementation. Phase 2 evidence was rerun against the latest test commit.
 
 Target `ia-main` commit: `173a9b1fccd0fc046cedee6756dd7ef8f922627d`
 
@@ -79,9 +81,34 @@ Status: **accepted**
 
 Remaining gaps: none for Phase 1.
 
-Deferred decisions: symbols, relationships, entity occurrences, OpenAPI/REST,
-UI, workflow/security, graph, MCP, and delta refresh remain outside this
-closure.
+Deferred decisions: relationships, entity occurrences, OpenAPI/REST, UI,
+workflow/security, graph, MCP, and delta refresh remain outside this closure.
+
+## Phase 2 — Symbols
+
+Scope: extract deterministic symbols and parser diagnostics from immutable
+target-commit snapshot bytes into the V1 candidate, with file provenance and
+candidate ownership/integrity validation. Legacy symbol orchestration and
+mutable-checkout reads remain outside the V1 path.
+
+Status: **accepted for implementation evidence**
+
+| Acceptance requirement | Exact evidence | Observed result |
+| --- | --- | --- |
+| Successful files produce deterministic symbols from committed snapshot bytes | `./.venv/bin/python -m pytest -q tests/test_repo_v1_symbols.py::test_symbols_use_committed_snapshot_bytes_and_are_deterministic` | Passed; PHP and JavaScript symbols matched across repeated builds while the checkout was mutated after the target commit. |
+| Parser-failed files retain inventory, record diagnostics, and produce no symbols | `./.venv/bin/python -m pytest -q tests/test_repo_v1_symbols.py::test_parser_failure_retains_inventory_and_emits_no_symbols` | Passed; the YAML file row remained, an error diagnostic carried the target SHA, and no symbols were written. |
+| Candidate validation rejects invalid symbol facts and orphan ownership | `./.venv/bin/python -m pytest -q tests/test_repo_v1_symbols.py::test_candidate_validation_rejects_invalid_symbol_line_ranges tests/test_repo_v1_symbols.py::test_candidate_validation_rejects_orphan_symbols` | Passed; invalid line ranges and foreign-key/orphan ownership were rejected. |
+| Symbols do not expand the repository-scan boundary | `rg -n "\\b(scan|walk_repo|apply_changed_paths)\\s*\\(" catalog/repo_v1.py catalog/repo_v1_symbols.py scripts/refresh_repo_v1.py` | Passed; no prohibited legacy scan calls were found. Symbol extraction reads only `SourceSnapshot.snapshot_root` bytes. |
+
+Remaining gaps: none for the implemented Phase 2 Symbols slice.
+
+Operational note: `catalog/catalog.db` was not rebuilt in this implementation
+turn. It remains the previously promoted Phase 0/1 database. The new Symbols
+tables are created in fresh V1 candidates; exposing Symbols in the canonical
+active database requires one normal fresh V1 build/promotion, not a migration.
+
+Deferred decisions: relationships and all later plan components remain
+deferred.
 
 ## Repository-scan boundary
 
@@ -90,7 +117,7 @@ V1 uses the following path only:
 ```text
 target Git commit
   -> catalog.source_snapshot GitTreeEntry/blob validation and V1 path filter
-  -> V1 candidate repos/files inventory
+  -> V1 candidate repos/files inventory and snapshot-based symbols
 ```
 
 V1 owns a local language-classification helper in `catalog/repo_v1.py` and
@@ -111,19 +138,23 @@ V1 does not call `parser.scan_repo.scan()`, `walk_repo()`, or
 `apply_changed_paths()`, and does not read mutable checkout bytes or
 filesystem metadata for inventory facts. V1 language mappings are local to the
 V1 implementation, including `.wfl`, `.map`, `.shortcuts`, `.xsd`, and `.wsdl`.
-No extraction or delta behavior was added.
+Symbols read only materialized Git blob bytes from the same snapshot. No legacy
+scan orchestration or delta behavior was added.
 
 ## Required acceptance commands
 
 ```text
 ./.venv/bin/python -m pytest -q tests/test_repo_v1.py validation/test_source_snapshot.py
-42 passed in 10.26s
+42 passed in 10.94s
+
+./.venv/bin/python -m pytest -q tests/test_repo_v1_symbols.py
+4 passed in 0.77s
 
 ./.venv/bin/python -m pytest -q tests/test_archive_repository.py
-8 passed in 1.60s
+8 passed in 1.42s
 
 ./.venv/bin/python -m pytest -q validation/test_multi_repo_migration.py
-24 passed, 27 subtests passed in 0.80s
+24 passed, 27 subtests passed in 0.77s
 
 ./.venv/bin/python -m pytest -q \
   tests/test_repo_v1.py::test_unpromoted_candidate_does_not_touch_active \
@@ -136,13 +167,13 @@ No extraction or delta behavior was added.
   tests/test_repo_v1.py::test_replacement_promotion_retains_only_filesystem_previous_artifact \
   tests/test_repo_v1.py::test_v1_schema_has_only_minimal_build_lifecycle \
   tests/test_repo_v1.py::test_v1_cli_and_library_use_canonical_active_database_path
-10 passed in 4.10s
+10 passed in 3.92s
 
 git diff --check
 passed
 
 git status --short --branch
-## repo-v1...origin/repo-v1 [ahead 1]
+## repo-v1...origin/repo-v1 [ahead 4]
 ```
 
 The worktree was clean at evidence time.
