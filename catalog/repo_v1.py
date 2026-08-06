@@ -261,6 +261,14 @@ def _build_inventory(
                         snapshot.target_sha,
                     ),
                 )
+            from catalog.repo_v1_symbols import extract_snapshot_symbols
+
+            extract_snapshot_symbols(
+                conn,
+                repo_id=repo_id,
+                snapshot=snapshot,
+                show_progress=show_progress,
+            )
         file_count = int(
             conn.execute("SELECT COUNT(*) FROM files WHERE repo_id=?", (repo_id,)).fetchone()[0]
         )
@@ -323,6 +331,48 @@ def _validate_candidate(candidate: Path, *, target_commit_sha: str, build_token:
         ).fetchone()[0]
         if invalid_provenance:
             raise RepoV1Error("candidate file provenance is invalid")
+        invalid_symbol_ownership = conn.execute(
+            """SELECT COUNT(*)
+               FROM symbols s
+               LEFT JOIN files f ON f.id=s.file_id
+               WHERE f.id IS NULL OR s.repo_id<>f.repo_id OR s.repo_id<>?""",
+            (repo["id"],),
+        ).fetchone()[0]
+        invalid_diagnostic_ownership = conn.execute(
+            """SELECT COUNT(*)
+               FROM symbol_diagnostics d
+               LEFT JOIN files f ON f.id=d.file_id
+               WHERE f.id IS NULL OR d.repo_id<>f.repo_id OR d.repo_id<>?""",
+            (repo["id"],),
+        ).fetchone()[0]
+        invalid_diagnostic_provenance = conn.execute(
+            """SELECT COUNT(*)
+               FROM symbol_diagnostics d
+               JOIN files f ON f.id=d.file_id
+               WHERE d.source_commit_sha<>f.source_commit_sha"""
+        ).fetchone()[0]
+        invalid_symbol_facts = conn.execute(
+            """SELECT COUNT(*)
+               FROM symbols
+               WHERE name='' OR kind='' OR language=''
+                  OR start_line IS NULL OR end_line IS NULL
+                  OR start_line < 1 OR end_line < start_line"""
+        ).fetchone()[0]
+        failed_with_symbols = conn.execute(
+            """SELECT COUNT(*)
+               FROM symbol_diagnostics d
+               JOIN symbols s ON s.file_id=d.file_id
+               WHERE d.repo_id=? AND d.severity='error'""",
+            (repo["id"],),
+        ).fetchone()[0]
+        if invalid_symbol_ownership or invalid_diagnostic_ownership:
+            raise RepoV1Error("candidate symbol ownership is invalid")
+        if invalid_diagnostic_provenance:
+            raise RepoV1Error("candidate symbol diagnostic provenance is invalid")
+        if invalid_symbol_facts:
+            raise RepoV1Error("candidate symbol facts are invalid")
+        if failed_with_symbols:
+            raise RepoV1Error("parser-failed file contains symbols")
     finally:
         conn.close()
 

@@ -309,7 +309,14 @@ Acceptance:
 
 Adapt existing extractors to read the immutable snapshot and write only to the
 candidate. Persist symbols with file provenance. Persist parser diagnostics in
-the candidate.
+the candidate. The V1 adapter in `catalog/repo_v1_symbols.py` reuses only the
+leaf extractors from `parser/extractors`; it does not reuse the legacy symbol
+orchestration or read the mutable checkout. Each file is isolated by a
+savepoint. Parser failures retain the inventory row, record an error with the
+target-commit provenance, and emit no symbols. Stable keys are derived from
+symbol facts and duplicate order, so repeated builds do not depend on row IDs.
+Candidate validation checks symbol/diagnostic ownership, diagnostic
+provenance, symbol fact shape, and SQLite integrity before promotion.
 
 Acceptance:
 
