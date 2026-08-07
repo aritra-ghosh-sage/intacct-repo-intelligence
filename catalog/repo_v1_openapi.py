@@ -621,6 +621,7 @@ def _rest_endpoints(
                             _source_evidence(
                                 document.path,
                                 document.source,
+                                operation_id=operation_id,
                                 pointer=pointer,
                                 path_template=raw_path,
                                 http_method=method,
@@ -817,6 +818,19 @@ def validate_openapi_candidate(
         ):
             raise OpenAPIValidationError(
                 "candidate REST endpoint key validation failed"
+            )
+        try:
+            endpoint_evidence = json.loads(str(row["evidence"]))
+        except (TypeError, ValueError) as exc:
+            raise OpenAPIValidationError(
+                "candidate REST endpoint evidence validation failed"
+            ) from exc
+        if (
+            not isinstance(endpoint_evidence, dict)
+            or endpoint_evidence.get("operation_id") != row["operation_id"]
+        ):
+            raise OpenAPIValidationError(
+                "candidate REST endpoint operation_id provenance validation failed"
             )
     for row in conn.execute(
         """SELECT d.*,f.path AS path,f.repo_id AS file_repo,

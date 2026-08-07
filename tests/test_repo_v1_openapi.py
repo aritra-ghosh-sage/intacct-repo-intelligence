@@ -248,6 +248,22 @@ def test_endpoint_key_tampering_rejects_candidate(tmp_path: Path) -> None:
         conn.close()
 
 
+def test_operation_id_tampering_rejects_candidate(tmp_path: Path) -> None:
+    files = {
+        "app/source/openapispec/ap/paths/bill.api.yaml": b"paths:\n  /bill:\n    get:\n      operationId: committed\n"
+    }
+    conn, snapshot = _fixture(tmp_path, files)
+    try:
+        extract_snapshot_openapi(conn, repo_id=1, snapshot=snapshot)
+        conn.execute("UPDATE rest_endpoints SET operation_id='tampered'")
+        with pytest.raises(OpenAPIValidationError, match="operation_id provenance"):
+            validate_openapi_candidate(
+                conn, repo_id=1, repo_key="ia-main", target_commit_sha=TARGET
+            )
+    finally:
+        conn.close()
+
+
 def test_dirty_checkout_bytes_do_not_change_snapshot_facts(tmp_path: Path) -> None:
     files = {
         "app/source/openapispec/ap/paths/bill.api.yaml": b"paths:\n  /bill:\n    get:\n      operationId: committed\n",

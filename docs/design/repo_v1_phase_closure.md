@@ -403,15 +403,15 @@ The configured source root was verified as `/Users/aritra.ghosh/projects/main`;
 that checkout was on `main` at the target commit and clean. The two current
 acceptance databases were isolated under `/private/tmp`; the canonical
 `catalog/catalog.db` was not targeted and its observed digest was
-`6dc5f898fa921664dd0ec0109db6ad566cf716edc71ef72ca3aaa3bf7512d6ea`.
+`413037f172e3f7394abfb399b6dee7649634ff7a4d7ff66e81e56b861bdc8c97`.
 
 Status: **accepted**
 
 Final post-hardening promoted isolated-build evidence:
 
 ```json
-{"active_db":"/private/tmp/repo-v1-phase6-current-a.ZPzaqc/catalog.db","build_token":"33bf7f3d71b14494bdfad5001168a9a5","file_count":23877,"promoted":true,"target_commit_sha":"e7fbab69da69cd605076eec74ee456066514adaf"}
-{"active_db":"/private/tmp/repo-v1-phase6-current-b.arpaAS/catalog.db","build_token":"56f735f618224aa0a693170a58ddb902","file_count":23877,"promoted":true,"target_commit_sha":"e7fbab69da69cd605076eec74ee456066514adaf"}
+{"active_db":"/private/tmp/repo-v1-phase6-opid-a.DrXed8/catalog.db","build_token":"141080f2954843f9a10d2c55162ac36c","file_count":23877,"promoted":true,"target_commit_sha":"e7fbab69da69cd605076eec74ee456066514adaf"}
+{"active_db":"/private/tmp/repo-v1-phase6-opid-b.8McsrS/catalog.db","build_token":"9b7ba2cd2624476cba555358a5f74b17","file_count":23877,"promoted":true,"target_commit_sha":"e7fbab69da69cd605076eec74ee456066514adaf"}
 ```
 
 Both isolated databases contained:
@@ -435,18 +435,18 @@ columns by schema order, and sorting rows by all projected columns:
 ```text
 openapi_documents=02ddde643d0a1176f489d8bf7f21b62e532a61afc7e2d2b328c286fbe90f4409
 openapi_entity_links=bfcd757bf117f47d6e177e18a4eb612d2a6fea2b555acf3f82d8734d7f529b71
-rest_endpoints=e9582859c0ae4f16028059f381fbae9c86d56bac3bb1fb66af18eab3ea387dec
+rest_endpoints=6ededfbcd3c7cd364e9bf92b70ed81239457ef878a3dc7c224c1bcc838afea97
 openapi_diagnostics=2075a575d4fd77dcb1c54f9ddc03cb05b2e0772fe71022ef4cec11500984af5d
 ```
 
 | Acceptance requirement | Evidence and result |
 | --- | --- |
-| Focused 6A/6B/6C behavior | `PYTHONPATH=. ./.venv/bin/pytest -q tests/test_repo_v1_openapi.py`: 11 passed, 1 warning. |
-| Existing Phase 0–5 behavior | `PYTHONPATH=. ./.venv/bin/pytest -q tests/test_repo_v1.py validation/test_source_snapshot.py tests/test_repo_v1_symbols.py tests/test_repo_v1_relationships.py tests/test_repo_v1_entities.py tests/test_repo_v1_openapi.py`: 100 passed, 1 warning. |
+| Focused 6A/6B/6C behavior | `PYTHONPATH=. ./.venv/bin/pytest -q tests/test_repo_v1_openapi.py`: 12 passed, 1 warning. |
+| Existing Phase 0–5 behavior | `PYTHONPATH=. ./.venv/bin/pytest -q tests/test_repo_v1.py validation/test_source_snapshot.py tests/test_repo_v1_symbols.py tests/test_repo_v1_relationships.py tests/test_repo_v1_entities.py tests/test_repo_v1_openapi.py`: 101 passed, 1 warning. |
 | Exact scope, malformed YAML, links, and endpoints | Focused tests passed; `.yaml`/template exclusions, duplicate/non-mapping diagnostics, required mapping diagnostics, exact stems, literal lower-case methods, uppercase/unsupported method exclusion, pointers, and `$ref` non-traversal were verified. |
 | Candidate failure and active preservation | `test_phase6_failure_preserves_active_database` passed; active bytes were unchanged and temporary candidates were removed. |
 | Legacy active-schema accommodation | `test_phase6_additive_schema_upgrade_promotes_over_legacy_active` and the default smoke command | Passed; a valid active catalog missing only the four Phase 6 tables was upgraded atomically, with the old schema retained as `.previous`. |
-| Stable keys and ownership | Endpoint tampering was rejected; both builds passed candidate validation with all Phase 6 facts owned by repo `1` and commit `e7fbab69...`. |
+| Stable keys, operation provenance, and ownership | Endpoint-key and `operation_id` tampering were rejected; both builds passed candidate validation with all Phase 6 facts owned by repo `1` and commit `e7fbab69...`. |
 | SQLite/FK integrity | Both builds returned `PRAGMA integrity_check = ok` and zero `PRAGMA foreign_key_check` rows. |
 | Dirty checkout and repeatability | `test_dirty_checkout_bytes_do_not_change_snapshot_facts` passed; the two current promoted builds matched all four normalized hashes. |
 | Legacy-flow boundary | `rg` over repo-v1 OpenAPI/pipeline files found no parser scan, legacy OpenAPI scanner/linker/builder, legacy table, mapping manifest, or heuristic call. |
@@ -455,8 +455,9 @@ openapi_diagnostics=2075a575d4fd77dcb1c54f9ddc03cb05b2e0772fe71022ef4cec11500984
 This current verification supersedes the earlier isolated-build tokens and
 counts recorded above. The canonical active database was independently
 verified to remain at target commit `e7fbab69da69cd605076eec74ee456066514adaf`
-with current active build token `2ab041061cb54c05b0a2384e586c2625`; the older
-supplied token is therefore historical, not current. Counts, hashes, target
-commit, integrity, FK, dirty-checkout, candidate-failure, legacy active-schema
-accommodation, and active-preservation evidence above are the current Phase 6
-closure record.
+with current active build token `6288fde678ea41099dec435354998939` and digest
+`413037f172e3f7394abfb399b6dee7649634ff7a4d7ff66e81e56b861bdc8c97`; the
+older supplied token is therefore historical, not current. Counts, hashes,
+operation-id provenance, target commit, integrity, FK, dirty-checkout,
+candidate-failure, legacy active-schema accommodation, and active-preservation
+evidence above are the current Phase 6 closure record.
