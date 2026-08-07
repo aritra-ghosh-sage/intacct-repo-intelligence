@@ -575,7 +575,9 @@ def _rest_endpoints(
                 method = raw_method.casefold() if isinstance(raw_method, str) else ""
                 if method not in HTTP_METHODS:
                     continue
-                pointer = f"/paths/{_pointer_token(raw_path)}/{_pointer_token(raw_method)}"
+                pointer = (
+                    f"/paths/{_pointer_token(raw_path)}/{_pointer_token(raw_method)}"
+                )
                 if not isinstance(operation, dict):
                     _add_diagnostic(
                         conn,
@@ -810,8 +812,8 @@ def validate_openapi_candidate(
                 for part in PurePosixPath(str(row["document_path"])).parts
             )
             or not str(row["source_pointer"]).startswith("/paths/")
-                or str(row["source_pointer"]).rsplit("/", 1)[-1].casefold()
-                != str(row["http_method"])
+            or str(row["source_pointer"]).rsplit("/", 1)[-1].casefold()
+            != str(row["http_method"])
         ):
             raise OpenAPIValidationError(
                 "candidate REST endpoint key validation failed"
