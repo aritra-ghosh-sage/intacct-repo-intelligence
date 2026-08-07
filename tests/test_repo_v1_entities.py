@@ -10,6 +10,7 @@ import pytest
 
 from catalog import repo_v1_entities
 from catalog.repo_v1 import SCHEMA_PATH, RepoV1Error, _validate_candidate, build_ia_main
+from catalog.source_snapshot import SourceSnapshot, SourceSnapshotError
 
 
 def _git(root: Path, *args: str) -> str:
@@ -64,6 +65,7 @@ def _entity_rows(db: Path) -> list[tuple]:
 
 def _diagnostics(db: Path) -> list[tuple]:
     conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
     try:
         return conn.execute(
             """SELECT f.path,d.source_key,d.code,d.message,d.evidence,d.extractor
@@ -130,8 +132,32 @@ def test_multiple_files_repeated_keys_and_partial_metadata_are_source_backed(tmp
     assert one[2:6] == (None, "t", None, None)
     missing = [row for row in _diagnostics(db) if row[1] == "one" and row[2] == "entity_metadata_missing"]
     assert len(missing) == 1
-    assert json.loads(missing[0][3])["missing"] == ["dummy", "module", "view"]
+    assert json.loads(missing[0][3])["missing"] == ["module"]
     assert all(row[6] == target for row in rows)
+
+
+def test_required_metadata_policy_preserves_optional_nulls_and_dynamic_fields(tmp_path: Path) -> None:
+    _root, manifest, _target = _fixture(
+        tmp_path,
+        {
+            "app/source/apar/metadata.ent": "<?php\n$kSchemas['table-only'] = ['module'=>'m','table'=>'t'];\n$kSchemas['view-only'] = ['module'=>'m','view'=>'v'];\n$kSchemas['neither'] = ['module'=>'m'];\n$kSchemas['missing-module'] = ['table'=>'t'];\n$kSchemas['dynamic'] = ['module'=>$runtime,'table'=>'t'];\n",
+        },
+    )
+    db = tmp_path / "catalog.db"
+    build_ia_main(manifest_path=manifest, active_db=db)
+    rows = {row[1]: row for row in _entity_rows(db)}
+    assert rows["table-only"][2:6] == ("m", "t", None, None)
+    assert rows["view-only"][2:6] == ("m", None, "v", None)
+    assert rows["neither"][2:6] == ("m", None, None, None)
+    assert rows["missing-module"][2:6] == (None, "t", None, None)
+    assert rows["dynamic"][2:6] == (None, "t", None, None)
+    missing = {
+        row[1]: json.loads(row[3])["missing"]
+        for row in _diagnostics(db)
+        if row[2] == "entity_metadata_missing"
+    }
+    assert missing == {"neither": ["table", "view"], "missing-module": ["module"], "dynamic": ["module"]}
+    assert any(row[1] == "dynamic" and row[2] == "entity_metadata_dynamic" for row in _diagnostics(db))
 
 
 @pytest.mark.parametrize(
@@ -183,6 +209,60 @@ def test_rhs_references_inherit_ent_and_literal_include_are_snapshot_resolved(tm
     assert not any(row[2] in {"entity_reference_missing", "entity_reference_dynamic", "entity_reference_ambiguous", "entity_reference_cycle"} for row in _diagnostics(db) if row[1] in {"appostedpayment", "release"})
 
 
+def test_inherit_ent_safe_overlays_and_unsafe_overlays_are_fail_closed(tmp_path: Path) -> None:
+    _root, manifest, _target = _fixture(
+        tmp_path,
+        {
+            "app/source/apar/base.ent": "<?php\n$kSchemas['base'] = ['module'=>'m','table'=>'base','dummy'=>false];\n",
+            "app/source/apar/overlays.ent": "<?php\n$kSchemas['empty'] = EntityManager::inheritEnts($kSchemas['base'], []);\n$kSchemas['null'] = EntityManager::inheritEnts($kSchemas['base'], null);\n$kSchemas['self'] = EntityManager::inheritEnts($kSchemas['base'], $kSchemas['self']);\n$kSchemas['fallback'] = EntityManager::inheritEnts($kSchemas['base'], $kSchemas['fallback'] ?? []);\n$kSchemas['unsafe'] = EntityManager::inheritEnts($kSchemas['base'], $diffSchema);\n",
+        },
+    )
+    db = tmp_path / "catalog.db"
+    build_ia_main(manifest_path=manifest, active_db=db)
+    rows = {row[1]: row for row in _entity_rows(db)}
+    for key in ("empty", "null", "self", "fallback"):
+        assert rows[key][2:6] == ("m", "base", None, 0)
+        assert not any(row[1] == key and row[2] in {"entity_reference_dynamic", "entity_reference_cycle"} for row in _diagnostics(db))
+    assert rows["unsafe"][2:6] == (None, None, None, None)
+    assert any(row[1] == "unsafe" and row[2] == "entity_reference_dynamic" for row in _diagnostics(db))
+
+
+def test_wrappers_and_aliases_remain_conservatively_dynamic(tmp_path: Path) -> None:
+    _root, manifest, _target = _fixture(
+        tmp_path,
+        {
+            "app/source/apar/base.ent": "<?php\n$kSchemas['base'] = ['module'=>'m','table'=>'base'];\n",
+            "app/source/apar/wrappers.ent": "<?php\n$kSchemas['helper-arg'] = (static function($meta) { return helper($meta); })($kSchemas['base']);\n$kSchemas['helper-ref'] = (static function($meta) { return helper(&$meta); })($kSchemas['base']);\n$kSchemas['helper-many'] = (static function($meta, $x) { return helper($meta, $x); })($kSchemas['base']);\n$kSchemas['alias'] = (static function($meta) { $alias = $meta; return $alias; })($kSchemas['base']);\n$kSchemas['reference'] = (static function($meta) { return &$meta; })($kSchemas['base']);\n$kSchemas['mutation'] = (static function($meta) { $meta['module'] = 'changed'; return $meta; })($kSchemas['base']);\n",
+        },
+    )
+    db = tmp_path / "catalog.db"
+    build_ia_main(manifest_path=manifest, active_db=db)
+    rows = {row[1]: row for row in _entity_rows(db)}
+    for key in ("helper-arg", "helper-ref", "helper-many", "alias", "reference", "mutation"):
+        assert rows[key][2:6] == (None, None, None, None)
+        assert any(row[1] == key and row[2] == "entity_reference_dynamic" for row in _diagnostics(db))
+
+
+def test_relative_include_resolution_uses_exact_retained_paths(tmp_path: Path) -> None:
+    _root, manifest, _target = _fixture(
+        tmp_path,
+        {
+            "app/source/apar/caller.ent": "<?php\nrequire 'helper.inc';\nrequire 'helper.cls';\nif ($enabled) { require 'conditional.inc'; }\nrequire 'missing.inc';\nrequire 'shared.inc';\n$kSchemas['caller'] = [];\n",
+            "app/source/apar/helper.inc": "<?php\n",
+            "app/source/apar/helper.cls": "<?php\n",
+            "app/source/apar/conditional.inc": "<?php\n",
+            "app/source/common/shared.inc": "<?php\n",
+        },
+    )
+    db = tmp_path / "catalog.db"
+    build_ia_main(manifest_path=manifest, active_db=db)
+    diagnostics = _diagnostics(db)
+    missing = [row for row in diagnostics if row[2] == "entity_include_missing"]
+    assert len(missing) == 2
+    assert {json.loads(row[3])["include"] for row in missing} == {"missing.inc", "shared.inc"}
+    assert not any(row[2] == "entity_include_dynamic" for row in diagnostics)
+
+
 def test_repeated_full_assignments_process_later_reference(tmp_path: Path) -> None:
     _root, manifest, _target = _fixture(
         tmp_path,
@@ -205,7 +285,8 @@ def test_include_and_reference_failures_are_explicit(tmp_path: Path) -> None:
             "app/source/apar/one.ent": "<?php\nrequire 'missing.ent';\n$kSchemas['one'] = $kSchemas['missing'];\n$kSchemas['ambiguous-dest'] = $kSchemas['ambiguous'];\n",
             "app/source/apar/two.ent": "<?php\n$kSchemas['ambiguous'] = [];\n",
             "app/source/apar/three.ent": "<?php\n$kSchemas['ambiguous'] = [];\n$kSchemas['dynamic'] = $kSchemas[$x];\n",
-            "app/source/apar/cycle.ent": "<?php\nrequire 'cycle-two.ent';\n$kSchemas['cycle-a'] = $kSchemas['cycle-b'];\n$kSchemas['cycle-b'] = $kSchemas['cycle-a'];\n",
+            "app/source/apar/failures.ent": "<?php\n$kSchemas['missing-parent'] = $kSchemas['absent'];\n$kSchemas['missing-child'] = $kSchemas['missing-parent'];\n$kSchemas['missing-direct-child'] = $kSchemas['absent-direct'];\n$kSchemas['dynamic-parent'] = $kSchemas[$runtime];\n$kSchemas['dynamic-child'] = $kSchemas['dynamic-parent'];\n$kSchemas['dynamic-direct-child'] = $kSchemas[$runtime_direct];\n",
+            "app/source/apar/cycle.ent": "<?php\nrequire 'cycle-two.ent';\n$kSchemas['cycle-a'] = $kSchemas['cycle-b'];\n$kSchemas['cycle-b'] = $kSchemas['cycle-a'];\n$kSchemas['cycle-child'] = $kSchemas['cycle-a'];\n",
             "app/source/apar/cycle-two.ent": "<?php\nrequire 'cycle.ent';\n$kSchemas['cycle-two'] = [];\n",
             "app/source/apar/dynamic-include.ent": "<?php\nrequire($includePath);\n$kSchemas['dynamic-include'] = [];\n",
         },
@@ -218,8 +299,28 @@ def test_include_and_reference_failures_are_explicit(tmp_path: Path) -> None:
     assert ("dynamic", "entity_reference_dynamic") in codes
     assert ("ambiguous-dest", "entity_reference_ambiguous") in codes
     assert ("cycle-a", "entity_reference_cycle") in codes
+    assert ("cycle-b", "entity_reference_cycle") in codes
+    assert not any(row[1] == "cycle-child" and row[2] == "entity_reference_cycle" for row in _diagnostics(db))
+    assert ("missing-direct-child", "entity_reference_missing") in codes
+    assert ("dynamic-direct-child", "entity_reference_dynamic") in codes
+    assert ("missing-parent", "entity_reference_missing") in codes
+    assert ("dynamic-parent", "entity_reference_dynamic") in codes
     assert (None, "entity_include_dynamic") in codes
     assert (None, "entity_include_cycle") in codes
+    assert not any(
+        row[1]
+        in {
+            "one",
+            "ambiguous-dest",
+            "dynamic",
+            "missing-child",
+            "missing-direct-child",
+            "dynamic-child",
+            "dynamic-direct-child",
+        }
+        and row[2] == "entity_reference_cycle"
+        for row in _diagnostics(db)
+    )
 
 
 def test_ambiguous_include_resolution_is_fail_closed() -> None:
@@ -375,6 +476,36 @@ def test_entity_candidate_failure_preserves_active_database(
         build_ia_main(manifest_path=manifest, active_db=active, target_sha=target)
     assert active.read_bytes() == before
     assert not list(active.parent.glob(f".{active.name}.candidate.*"))
+
+
+def test_entity_candidate_snapshot_mismatch_fails_closed(tmp_path: Path) -> None:
+    root, manifest, target = _fixture(
+        tmp_path,
+        {"app/source/apar/entity.ent": "<?php\n$kSchemas['entity'] = [];\n"},
+    )
+    db = tmp_path / "catalog.db"
+    build_ia_main(manifest_path=manifest, active_db=db, target_sha=target)
+
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    try:
+        repo_id = conn.execute("SELECT id FROM repos WHERE repo_key='ia-main'").fetchone()[0]
+        snapshot = SourceSnapshot(
+            repo_key="ia-main",
+            git_root=root,
+            target_sha=target,
+            snapshot_root=root,
+            tracked_blob_bytes=0,
+            tracked_file_count=0,
+            entries=(),
+        )
+        with pytest.raises(SourceSnapshotError, match="entity.ent"):
+            repo_v1_entities.extract_snapshot_entity_occurrences(
+                conn, repo_id=repo_id, snapshot=snapshot
+            )
+    finally:
+        conn.rollback()
+        conn.close()
 
 
 def test_phase4_file_has_no_legacy_entity_or_mapping_or_jsonl_flow() -> None:

@@ -32,6 +32,8 @@ ENTITY_DIAGNOSTIC_CODES = frozenset(
     }
 )
 _METADATA_FIELDS = ("module", "table", "view", "dummy")
+_REQUIRED_METADATA_FIELDS = ("module",)
+_TABLE_OR_VIEW_METADATA_FIELDS = ("table", "view")
 _IDENTITY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -112,6 +114,13 @@ class _ParsedFile:
 
 def _canonical(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _missing_required_metadata(values: dict[str, object | None]) -> list[str]:
+    missing = [field for field in _REQUIRED_METADATA_FIELDS if values[field] is None]
+    if all(values[field] is None for field in _TABLE_OR_VIEW_METADATA_FIELDS):
+        missing.extend(_TABLE_OR_VIEW_METADATA_FIELDS)
+    return missing
 
 
 def _location(text: str, index: int) -> tuple[int, int]:
@@ -277,8 +286,9 @@ def _delimiter_state(tokens: list[_Token]) -> tuple[list[tuple[int, int, int]], 
 
 
 def _statement_end(tokens: list[_Token], states: list[tuple[int, int, int]], start: int) -> int:
+    baseline = states[start] if start < len(states) else (0, 0, 0)
     for index in range(start, len(tokens)):
-        if tokens[index].value == ";" and states[index] == (0, 0, 0):
+        if tokens[index].value == ";" and states[index] == baseline:
             return index
     return len(tokens)
 
@@ -395,7 +405,34 @@ def _direct_reference(rhs: list[_Token]) -> tuple[str | None, str | None]:
     return None, None
 
 
-def _inherit_references(rhs: list[_Token]) -> tuple[list[str] | None, str | None]:
+def _is_empty_array(tokens: list[_Token]) -> bool:
+    return (
+        (len(tokens) == 2 and tokens[0].value == "[" and tokens[1].value == "]")
+        or (
+            len(tokens) == 3
+            and tokens[0].kind == "ident"
+            and str(tokens[0].value).lower() == "array"
+            and tokens[1].value == "("
+            and tokens[2].value == ")"
+        )
+    )
+
+
+def _is_null(tokens: list[_Token]) -> bool:
+    return len(tokens) == 1 and tokens[0].kind == "ident" and str(tokens[0].value).lower() == "null"
+
+
+def _is_destination_fallback(tokens: list[_Token], destination: str) -> bool:
+    for index in range(len(tokens) - 1):
+        if tokens[index].value != "?" or tokens[index + 1].value != "?":
+            continue
+        key, kind = _direct_reference(tokens[:index])
+        if kind == "direct" and key == destination and _is_empty_array(tokens[index + 2 :]):
+            return True
+    return False
+
+
+def _inherit_references(rhs: list[_Token], destination: str | None = None) -> tuple[list[str] | None, str | None]:
     if len(rhs) < 4 or rhs[0].kind != "ident" or rhs[0].value != "EntityManager" or rhs[1].value != "::" or rhs[2].kind != "ident" or rhs[2].value != "inheritEnts" or rhs[3].value != "(":
         return None, None
     close = _matching_close(rhs, 3)
@@ -416,12 +453,25 @@ def _inherit_references(rhs: list[_Token]) -> tuple[list[str] | None, str | None
             current.append(token)
     if current or args:
         args.append(current)
-    references: list[str] = []
-    for argument in args:
-        key, kind = _direct_reference(argument)
-        if kind != "direct" or key is None:
-            return None, "dynamic"
-        references.append(key)
+    if not args:
+        return None, "dynamic"
+    base, base_kind = _direct_reference(args[0])
+    if base_kind != "direct" or base is None:
+        return None, "dynamic"
+    references = [base]
+    for argument in args[1:]:
+        if _is_empty_array(argument) or _is_null(argument):
+            continue
+        override, override_kind = _direct_reference(argument)
+        if override_kind == "direct":
+            if destination is not None and override == destination:
+                continue
+            if override is not None:
+                references.append(override)
+                continue
+        if destination is not None and _is_destination_fallback(argument, destination):
+            continue
+        return [base], "dynamic"
     return references, "inherit"
 
 
@@ -485,7 +535,7 @@ def _parse_file(path: str, file_id: int, source_sha: str, text: str) -> _ParsedF
                             declaration.literal_values[field_name].append(value)
                         else:
                             declaration.dynamic_fields.add(field_name)
-                references, reference_kind = _inherit_references(rhs_tokens)
+                references, reference_kind = _inherit_references(rhs_tokens, key)
                 if reference_kind is None:
                     references, reference_kind = _direct_reference(rhs_tokens)
                 declaration.references = [references] if reference_kind == "direct" and references is not None else references
@@ -553,6 +603,9 @@ def _resolve_entities(
     diagnostics: list[_Diagnostic] = []
     resolved: dict[tuple[int, str], dict[str, object | None]] = {}
     failed_resolutions: set[tuple[int, str]] = set()
+    cycle_members: set[tuple[int, str]] = set()
+    reported_cycle_members: set[tuple[int, str]] = set()
+    declarations_by_identity = {(declaration.file_id, declaration.key): declaration for declaration in declarations}
     resolving: list[tuple[int, str]] = []
 
     def resolve(declaration: _Declaration) -> dict[str, object | None]:
@@ -560,9 +613,17 @@ def _resolve_entities(
         if identity in resolved:
             return resolved[identity]
         if identity in resolving:
-            declaration.reference_kind = "cycle"
-            failed_resolutions.add(identity)
-            diagnostics.append(_Diagnostic(declaration.file_id, declaration.key, "entity_reference_cycle", _canonical({"destination": declaration.key}), declaration.reference_span or declaration.span))
+            cycle_start = resolving.index(identity)
+            detected_members = resolving[cycle_start:]
+            cycle_members.update(detected_members)
+            failed_resolutions.update(detected_members)
+            for cycle_identity in detected_members:
+                if cycle_identity in reported_cycle_members:
+                    continue
+                cycle_declaration = declarations_by_identity[cycle_identity]
+                cycle_declaration.reference_kind = "cycle"
+                diagnostics.append(_Diagnostic(cycle_declaration.file_id, cycle_declaration.key, "entity_reference_cycle", _canonical({"destination": cycle_declaration.key}), cycle_declaration.reference_span or cycle_declaration.span))
+                reported_cycle_members.add(cycle_identity)
             return {name: None for name in _METADATA_FIELDS}
         resolving.append(identity)
         values: dict[str, object | None] = {name: None for name in _METADATA_FIELDS}
@@ -571,7 +632,7 @@ def _resolve_entities(
         if declaration.reference_kind == "dynamic":
             diagnostics.append(_Diagnostic(declaration.file_id, declaration.key, "entity_reference_dynamic", _canonical({"destination": declaration.key}), declaration.reference_span or declaration.span))
             reference_failed = True
-        elif declaration.references is not None:
+        if declaration.reference_kind != "dynamic" and declaration.references is not None:
             for source_key in declaration.references:
                 candidates = by_key.get(source_key, [])
                 if not candidates:
@@ -583,8 +644,8 @@ def _resolve_entities(
                     reference_failed = True
                     continue
                 source_values = resolve(candidates[0])
-                if (candidates[0].file_id, candidates[0].key) in failed_resolutions:
-                    diagnostics.append(_Diagnostic(declaration.file_id, declaration.key, "entity_reference_cycle", _canonical({"destination": declaration.key, "source": source_key}), declaration.reference_span or declaration.span))
+                source_identity = (candidates[0].file_id, candidates[0].key)
+                if source_identity in failed_resolutions:
                     reference_failed = True
                 for field_name in _METADATA_FIELDS:
                     source_value = source_values[field_name]
@@ -612,8 +673,8 @@ def _resolve_entities(
             elif field_name in inherited_conflicts:
                 values[field_name] = None
                 diagnostics.append(_Diagnostic(declaration.file_id, declaration.key, "entity_metadata_conflict", _canonical({"field": field_name, "kind": "inheritance"}), declaration.reference_span or declaration.span))
-        missing = sorted(field_name for field_name in _METADATA_FIELDS if values[field_name] is None)
-        if missing and (declaration.references is None or not reference_failed):
+        missing = _missing_required_metadata(values)
+        if missing and not reference_failed:
             diagnostics.append(_Diagnostic(declaration.file_id, declaration.key, "entity_metadata_missing", _canonical({"missing": missing}), declaration.span))
         resolving.pop()
         if reference_failed:
@@ -626,13 +687,16 @@ def _resolve_entities(
     return diagnostics, resolved
 
 
-def _include_target(path: str, include_value: str, ent_paths: dict[str, list[int]]) -> tuple[str | None, str]:
+def _include_target(path: str, include_value: str, retained_paths: dict[str, list[int]]) -> tuple[str | None, str]:
+    # Cross-directory stream_resolve_include_path targets remain intentional unresolved
+    # diagnostics until an authoritative configured include-root manifest exists.
+    # No basename fallback is allowed.
     if include_value.startswith("/"):
         return None, "missing"
     candidate = PurePosixPath(posixpath.normpath(posixpath.join(str(PurePosixPath(path).parent), include_value))).as_posix()
-    if candidate == ".." or candidate.startswith("../") or not candidate.endswith(".ent"):
+    if candidate == ".." or candidate.startswith("../"):
         return None, "missing"
-    matches = ent_paths.get(candidate, [])
+    matches = retained_paths.get(candidate, [])
     if not matches:
         return None, "missing"
     if len(matches) != 1:
@@ -678,10 +742,16 @@ def extract_snapshot_entity_occurrences(
         for row in conn.execute("SELECT id,path,source_commit_sha FROM files WHERE repo_id=?", (repo_id,)).fetchall()
     }
     snapshot_entries = {entry.path: entry for entry in snapshot.entries}
-    ent_paths: dict[str, list[int]] = {}
-    for path, row in file_rows.items():
-        if path.endswith(".ent"):
-            ent_paths.setdefault(path, []).append(int(row["id"]))
+    ent_paths: dict[str, list[int]] = {
+        path: [int(row["id"])]
+        for path, row in file_rows.items()
+        if path.endswith(".ent")
+    }
+    retained_paths: dict[str, list[int]] = {
+        path: [int(row["id"])]
+        for path, row in file_rows.items()
+        if path in snapshot_entries
+    }
     parsed_files: dict[str, _ParsedFile] = {}
     all_diagnostics: list[_Diagnostic] = []
     for path in sorted(ent_paths):
@@ -713,9 +783,10 @@ def extract_snapshot_entity_occurrences(
             if not literal or include_value is None:
                 all_diagnostics.append(_Diagnostic(parsed.file_id, "", "entity_include_dynamic", _canonical({"path": path}), span))
                 continue
-            target, state = _include_target(path, include_value, ent_paths)
+            target, state = _include_target(path, include_value, retained_paths)
             if state == "ok" and target is not None:
-                include_graph.setdefault(path, []).append((target, span))
+                if target in parsed_files:
+                    include_graph.setdefault(path, []).append((target, span))
             else:
                 code = "entity_include_ambiguous" if state == "ambiguous" else "entity_include_missing"
                 all_diagnostics.append(_Diagnostic(parsed.file_id, "", code, _canonical({"include": include_value}), span))
