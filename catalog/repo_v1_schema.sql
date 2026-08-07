@@ -267,3 +267,119 @@ CREATE INDEX idx_repo_v1_openapi_diagnostics_document
     ON openapi_diagnostics(document_id);
 CREATE INDEX idx_repo_v1_openapi_diagnostics_lookup
     ON openapi_diagnostics(repo_id, code, diagnostic_key);
+
+CREATE TABLE ui_surfaces (
+    id INTEGER PRIMARY KEY,
+    repo_id INTEGER NOT NULL REFERENCES repos(id),
+    surface_key TEXT NOT NULL CHECK(TRIM(surface_key) <> ''),
+    surface_kind TEXT NOT NULL CHECK(surface_kind = 'actionui_form'),
+    display_name TEXT NOT NULL CHECK(TRIM(display_name) <> ''),
+    source_file_id INTEGER NOT NULL REFERENCES files(id),
+    source_path TEXT NOT NULL CHECK(TRIM(source_path) <> ''),
+    source_commit_sha TEXT NOT NULL CHECK(TRIM(source_commit_sha) <> ''),
+    extractor TEXT NOT NULL CHECK(TRIM(extractor) <> ''),
+    extractor_version TEXT NOT NULL CHECK(TRIM(extractor_version) <> ''),
+    source_hash TEXT NOT NULL CHECK(TRIM(source_hash) <> ''),
+    UNIQUE(repo_id, surface_key)
+);
+
+CREATE INDEX idx_repo_v1_ui_surfaces_repo_file
+    ON ui_surfaces(repo_id, source_file_id);
+CREATE INDEX idx_repo_v1_ui_surfaces_repo_path
+    ON ui_surfaces(repo_id, source_path);
+
+CREATE TABLE ui_artifacts (
+    id INTEGER PRIMARY KEY,
+    repo_id INTEGER NOT NULL REFERENCES repos(id),
+    surface_id INTEGER NOT NULL REFERENCES ui_surfaces(id),
+    artifact_key TEXT NOT NULL CHECK(TRIM(artifact_key) <> ''),
+    artifact_kind TEXT NOT NULL CHECK(artifact_kind = 'actionui_form'),
+    file_id INTEGER NOT NULL REFERENCES files(id),
+    source_path TEXT NOT NULL CHECK(TRIM(source_path) <> ''),
+    source_commit_sha TEXT NOT NULL CHECK(TRIM(source_commit_sha) <> ''),
+    start_line INTEGER NOT NULL CHECK(start_line >= 1),
+    end_line INTEGER NOT NULL CHECK(end_line >= start_line),
+    evidence TEXT NOT NULL CHECK(TRIM(evidence) <> ''),
+    UNIQUE(repo_id, surface_id, artifact_key)
+);
+
+CREATE INDEX idx_repo_v1_ui_artifacts_repo_surface
+    ON ui_artifacts(repo_id, surface_id);
+CREATE INDEX idx_repo_v1_ui_artifacts_repo_file
+    ON ui_artifacts(repo_id, file_id);
+CREATE INDEX idx_repo_v1_ui_artifacts_repo_path
+    ON ui_artifacts(repo_id, source_path);
+
+CREATE TABLE ui_fields (
+    id INTEGER PRIMARY KEY,
+    repo_id INTEGER NOT NULL REFERENCES repos(id),
+    artifact_id INTEGER NOT NULL REFERENCES ui_artifacts(id),
+    field_key TEXT NOT NULL CHECK(TRIM(field_key) <> ''),
+    field_name TEXT NOT NULL CHECK(TRIM(field_name) <> ''),
+    field_path TEXT,
+    source_line INTEGER NOT NULL CHECK(source_line >= 1),
+    evidence TEXT NOT NULL CHECK(TRIM(evidence) <> ''),
+    UNIQUE(repo_id, artifact_id, field_key)
+);
+
+CREATE INDEX idx_repo_v1_ui_fields_repo_artifact
+    ON ui_fields(repo_id, artifact_id);
+
+CREATE TABLE ui_events (
+    id INTEGER PRIMARY KEY,
+    repo_id INTEGER NOT NULL REFERENCES repos(id),
+    artifact_id INTEGER NOT NULL REFERENCES ui_artifacts(id),
+    event_key TEXT NOT NULL CHECK(TRIM(event_key) <> ''),
+    event_name TEXT NOT NULL CHECK(TRIM(event_name) <> ''),
+    source_line INTEGER NOT NULL CHECK(source_line >= 1),
+    evidence TEXT NOT NULL CHECK(TRIM(evidence) <> ''),
+    UNIQUE(repo_id, artifact_id, event_key)
+);
+
+CREATE INDEX idx_repo_v1_ui_events_repo_artifact
+    ON ui_events(repo_id, artifact_id);
+
+CREATE TABLE ui_includes (
+    id INTEGER PRIMARY KEY,
+    repo_id INTEGER NOT NULL REFERENCES repos(id),
+    artifact_id INTEGER NOT NULL REFERENCES ui_artifacts(id),
+    include_key TEXT NOT NULL CHECK(TRIM(include_key) <> ''),
+    raw_include_path TEXT NOT NULL CHECK(TRIM(raw_include_path) <> ''),
+    resolved_path TEXT,
+    resolution_status TEXT NOT NULL CHECK(
+        resolution_status IN ('resolved', 'unresolved', 'invalid')
+    ),
+    source_line INTEGER NOT NULL CHECK(source_line >= 1),
+    evidence TEXT NOT NULL CHECK(TRIM(evidence) <> ''),
+    UNIQUE(repo_id, artifact_id, include_key),
+    CHECK(
+        (resolution_status = 'invalid' AND resolved_path IS NULL)
+        OR
+        (resolution_status IN ('resolved', 'unresolved')
+         AND resolved_path IS NOT NULL
+         AND TRIM(resolved_path) <> '')
+    )
+);
+
+CREATE INDEX idx_repo_v1_ui_includes_repo_artifact
+    ON ui_includes(repo_id, artifact_id);
+
+CREATE TABLE ui_diagnostics (
+    id INTEGER PRIMARY KEY,
+    repo_id INTEGER NOT NULL REFERENCES repos(id),
+    file_id INTEGER NOT NULL REFERENCES files(id),
+    surface_id INTEGER REFERENCES ui_surfaces(id),
+    diagnostic_key TEXT NOT NULL CHECK(TRIM(diagnostic_key) <> ''),
+    severity TEXT NOT NULL CHECK(severity IN ('warning', 'error')),
+    code TEXT NOT NULL CHECK(TRIM(code) <> ''),
+    message TEXT NOT NULL CHECK(TRIM(message) <> ''),
+    source_commit_sha TEXT NOT NULL CHECK(TRIM(source_commit_sha) <> ''),
+    evidence TEXT NOT NULL CHECK(TRIM(evidence) <> ''),
+    extractor TEXT NOT NULL CHECK(TRIM(extractor) <> ''),
+    UNIQUE(repo_id, diagnostic_key)
+);
+
+CREATE INDEX idx_repo_v1_ui_diagnostics_repo_file
+    ON ui_diagnostics(repo_id, file_id);
+CREATE INDEX idx_repo_v1_ui_diagnostics_lookup
+    ON ui_diagnostics(repo_id, code, diagnostic_key);

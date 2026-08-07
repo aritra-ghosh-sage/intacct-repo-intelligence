@@ -1,8 +1,8 @@
 # Pending Work
 
 This is the active backlog for the repo-v1 implementation. Phase 0 through
-Phase 6 acceptance work is complete; later components remain outside this
-backlog.
+Phase 6 and Phase 7A acceptance work is complete; the remaining Phase 7
+components and later components remain outside this backlog.
 
 ## Repository Selection
 
@@ -55,6 +55,8 @@ backlog.
       `$ref` traversal, graph/MCP/query compatibility, delta refresh,
       migrations, and production replacement remain deferred.
 
-- [ ] Phase 7 UI facts and diagnostics.
+- [x] Phase 7A immutable ActionUI XML facts and diagnostics implemented and
+      accepted. PHP, JavaScript, NextGen UI, event-call resolution, UI/entity
+      links, and other Phase 7 slices remain open.
 
 - [ ] Phase 8 workflow and security facts.

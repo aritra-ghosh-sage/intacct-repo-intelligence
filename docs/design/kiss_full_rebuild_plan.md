@@ -556,8 +556,27 @@ foreign-key checks, and closure evidence are recorded in
 
 ### 7. UI
 
-Add UI facts with UI-specific diagnostics and, only where demonstrated by
-source evidence, narrowly scoped last-known-good behavior.
+#### 7A — Immutable ActionUI XML facts
+
+Phase 7A is accepted as a narrow snapshot-only slice. It materializes exactly
+`ui_surfaces`, `ui_artifacts`, `ui_fields`, `ui_events`, `ui_includes`, and
+`ui_diagnostics` from committed `*_form.xml` bytes. Facts use deterministic
+stable keys, canonical evidence, SHA-256 source evidence, normalized include
+paths, and candidate ownership/provenance/integrity validation. Parser errors
+are persisted as errors at the V1 boundary; field identity, missing XInclude
+href, unresolved include, and invalid include conditions remain warnings.
+
+The accepted upgrade boundary preserves the existing Phase 5 -> Phase 6
+additive allowance and adds the complete Phase 7A table family. A valid
+pre-Phase-7A catalog missing all six UI tables can upgrade atomically; a
+partial UI table family is incompatible. No in-place migration, mutable
+checkout read, legacy UI synchronization, recursive include parsing, stale
+retention, event-call resolution, or UI/entity link is included.
+
+Explicitly deferred from Phase 7: PHP loaders, JavaScript handlers, NextGen
+UI, event-call resolution, UI/entity links, legacy `catalog/ui_sync.py`,
+last-known-good/stale retention, migrations, delta refresh, CLI/MCP, graph,
+multi-repository support, workflow, and security.
 
 ### 8. Workflow and security
 

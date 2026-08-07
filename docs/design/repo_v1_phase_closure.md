@@ -452,12 +452,86 @@ openapi_diagnostics=2075a575d4fd77dcb1c54f9ddc03cb05b2e0772fe71022ef4cec11500984
 | Legacy-flow boundary | `rg` over repo-v1 OpenAPI/pipeline files found no parser scan, legacy OpenAPI scanner/linker/builder, legacy table, mapping manifest, or heuristic call. |
 | Formatting and syntax | Ruff, `py_compile`, and `git diff --check` passed. |
 
-This current verification supersedes the earlier isolated-build tokens and
-counts recorded above. The canonical active database was independently
-verified to remain at target commit `e7fbab69da69cd605076eec74ee456066514adaf`
-with current active build token `6288fde678ea41099dec435354998939` and digest
-`413037f172e3f7394abfb399b6dee7649634ff7a4d7ff66e81e56b861bdc8c97`; the
-older supplied token is therefore historical, not current. Counts, hashes,
+This Phase 6 verification recorded the canonical database at target commit
+`e7fbab69da69cd605076eec74ee456066514adaf` with build token
+`6288fde678ea41099dec435354998939` and digest
+`413037f172e3f7394abfb399b6dee7649634ff7a4d7ff66e81e56b861bdc8c97`; those
+values are historical Phase 6 evidence. Counts, hashes,
 operation-id provenance, target commit, integrity, FK, dirty-checkout,
 candidate-failure, legacy active-schema accommodation, and active-preservation
 evidence above are the current Phase 6 closure record.
+
+## Phase 7A — Immutable ActionUI XML Facts
+
+Phase 7A is accepted for immutable ActionUI XML facts only. The implementation
+reads committed snapshot bytes for sorted paths ending exactly in
+`_form.xml`, calls the shared ActionUI XML parser without changing it, and
+materializes exactly six tables: `ui_surfaces`, `ui_artifacts`, `ui_fields`,
+`ui_events`, `ui_includes`, and `ui_diagnostics`. It does not invoke
+`catalog/ui_sync.py`, `parser.scan_repo`, legacy migrations, the legacy schema,
+or any deferred Phase 7 behavior.
+
+Target and source evidence:
+
+- Branch: `repo-v1`.
+- Resolved source checkout: `/Users/aritra.ghosh/projects/main`.
+- Source branch/status: `main`, clean at the target commit.
+- Target commit: `e7fbab69da69cd605076eec74ee456066514adaf`.
+- Active database: `/Users/aritra.ghosh/projects/intacct-repo-intelligence/catalog/catalog.db`.
+- Active build token: `7fbc9e10320f4e9eaec87ff4411f6a3d`.
+- Operator command:
+  `PYTHONPATH=. ./.venv/bin/python -m catalog.repo_v1 --manifest config/workspace_repos.yaml --active-db catalog/catalog.db`.
+- Operator result: promoted atomically with `file_count=23877` and the target
+  commit above.
+
+The active build validation summary and read-only normalized projection were:
+
+```text
+ui_surfaces=581
+ui_artifacts=581
+ui_fields=18743
+ui_events=4269
+ui_includes=133
+ui_diagnostics=49
+```
+
+Each normalized hash below is the SHA-256 of canonical JSON row arrays with
+generated `id` values excluded, schema-order projected columns retained, and
+rows sorted by all projected columns:
+
+```text
+ui_surfaces=eeaf48d426d0dc2a1a6b38ef43deb303108c31be4a8ef7a3c4a5793c57a97f2d
+ui_artifacts=9ee6fc25ba099eee97ca857bbc4332c676bd2a8e6d19c6c4d1e294f0a1cff4f6
+ui_fields=3255509632517e2d874e4d3bd5de67d51a682a47fde90ab3a4c91edd4312a840
+ui_events=c43ebd9bb6ba43a7108623b224de9f14cb31989c8fc3462f85481851ad62ad9e
+ui_includes=22ad59d7a1cab7a11f6047e1c3ce7055f11d3623b2c276b9efaa195a86d27aa1
+ui_diagnostics=ff1f90bcd26f92719cfe31c9e4f32dcb2444c0cd9da5ae06996216c2ff7f984d
+```
+
+The isolated repeat build at `/private/tmp/repo-v1-phase7a-repeat/catalog.db`
+used the same target commit, promoted with token
+`36aeb573c25243ceb1257c2e042c9874`, and produced the same six counts and
+normalized hashes.
+
+| Acceptance requirement | Evidence and observed result |
+| --- | --- |
+| Focused Phase 7A behavior | `PYTHONPATH=. ./.venv/bin/pytest -q tests/test_repo_v1_ui.py` — 14 passed, 1 warning. |
+| Full requested regression | `PYTHONPATH=. ./.venv/bin/pytest -q tests/test_repo_v1.py validation/test_source_snapshot.py tests/test_repo_v1_symbols.py tests/test_repo_v1_relationships.py tests/test_repo_v1_entities.py tests/test_repo_v1_openapi.py tests/test_repo_v1_ui.py` — 115 passed, 1 warning. |
+| Exact six-table schema and indexes | Focused schema test and active SQLite inspection — passed; no additional UI tables were created. |
+| Root-only, empty, whitespace, and malformed XML behavior | Focused tests — valid root produced one surface/artifact; empty and malformed files produced only file-attached parse errors with no UI facts. |
+| Provenance, source hash, nullable `field_path`, diagnostic JSON nulls, and parser severity remapping | Focused provenance/diagnostic test — passed against target commit and SHA-256 raw snapshot bytes. |
+| Include normalization and warning behavior | Focused tests — resolved, unresolved, invalid, relative, dot, dot-dot, backslash, absolute, drive-prefixed, and traversal cases passed; warnings did not reject candidates. |
+| Stable collision ordinals and dirty-checkout immunity | Focused deterministic/dirty-checkout tests plus the two real-repository builds — passed; normalized hashes matched exactly. |
+| Ownership, provenance, orphan, line-range, evidence, include-consistency, and diagnostic validation | Candidate validation tests and the promoted real build — passed; invalid candidates fail closed. |
+| Phase 6 -> Phase 7A atomic upgrade | `test_phase6_upgrade_and_partial_schema_rejection` — passed; complete Phase 6 parent upgraded, partial UI schema rejected without changing active bytes. |
+| Failed-candidate active preservation | `test_candidate_validation_failure_preserves_active_and_previous` — passed; active and `.previous` remained unchanged and the candidate was removed. |
+| `.previous` preservation and atomic promotion | Real operator result was `promoted=true` with `.previous` present; replacement and injected-failure tests passed. |
+| SQLite integrity and foreign keys | Read-only active check — `PRAGMA integrity_check = ok`; `PRAGMA foreign_key_check` returned no rows. |
+| Formatting and syntax | Ruff check/format, `py_compile`, and `git diff --check` — passed. |
+
+Phase 7A remaining gaps: none within the accepted six-table immutable XML
+scope. The following remain explicitly deferred and keep the broader Phase 7
+open: event-call resolution, PHP loaders, JavaScript handlers, NextGen UI,
+UI/entity links, legacy `catalog/ui_sync.py`, last-known-good or stale
+retention, migrations, delta refresh, CLI/MCP, graph projection,
+multi-repository support, workflow, and security.

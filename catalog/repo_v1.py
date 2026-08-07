@@ -19,6 +19,7 @@ from pathlib import Path, PurePosixPath
 from tqdm import tqdm
 
 from catalog.refresh_transaction import (
+    CatalogPromotionError,
     assert_parent_unchanged,
     parent_descriptor,
     promote_catalog_candidate,
@@ -30,6 +31,7 @@ from catalog.repo_v1_openapi import (
     extract_snapshot_openapi,
     validate_openapi_candidate,
 )
+from catalog.repo_v1_ui import extract_snapshot_ui, validate_ui_candidate
 from catalog.repositories import RepositoryError, load_workspace_manifest
 from catalog.source_snapshot import SourceSnapshotError, materialize_source_snapshot
 
@@ -44,6 +46,19 @@ PHASE6_ADDITIVE_TABLES = frozenset(
         "openapi_diagnostics",
     }
 )
+PHASE7A_ADDITIVE_TABLES = frozenset(
+    {
+        "ui_surfaces",
+        "ui_artifacts",
+        "ui_fields",
+        "ui_events",
+        "ui_includes",
+        "ui_diagnostics",
+    }
+)
+# Existing Phase 5 -> Phase 6 upgrades remain valid; Phase 7A adds its own
+# complete table family on top of that accepted boundary.
+_REPO_V1_ADDITIVE_TABLES = PHASE6_ADDITIVE_TABLES | PHASE7A_ADDITIVE_TABLES
 
 
 def _load_schema_contract() -> dict[str, frozenset[str]]:
@@ -325,6 +340,12 @@ def _build_inventory(
                 snapshot=snapshot,
                 show_progress=show_progress,
             )
+            ui_stats = extract_snapshot_ui(
+                conn,
+                repo_id=repo_id,
+                snapshot=snapshot,
+                show_progress=show_progress,
+            )
         file_count = int(
             conn.execute(
                 "SELECT COUNT(*) FROM files WHERE repo_id=?", (repo_id,)
@@ -351,6 +372,12 @@ def _build_inventory(
                         "openapi_entity_link_count": openapi_stats.link_count,
                         "rest_endpoint_count": openapi_stats.endpoint_count,
                         "openapi_diagnostic_count": openapi_stats.diagnostic_count,
+                        "ui_surface_count": ui_stats.surface_count,
+                        "ui_artifact_count": ui_stats.artifact_count,
+                        "ui_field_count": ui_stats.field_count,
+                        "ui_event_count": ui_stats.event_count,
+                        "ui_include_count": ui_stats.include_count,
+                        "ui_diagnostic_count": ui_stats.diagnostic_count,
                     },
                     sort_keys=True,
                 ),
@@ -564,6 +591,14 @@ def _validate_candidate(
             )
         except OpenAPIValidationError as exc:
             raise RepoV1Error(str(exc)) from exc
+        try:
+            validate_ui_candidate(
+                conn,
+                repo_id=int(repo["id"]),
+                target_commit_sha=target_commit_sha,
+            )
+        except (RuntimeError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            raise RepoV1Error(str(exc)) from exc
     finally:
         conn.close()
 
@@ -608,8 +643,9 @@ def build_ia_main(
         expected_parent = parent_descriptor(
             active,
             expected_schema=_REPO_V1_SCHEMA_CONTRACT,
-            allowed_missing_tables=PHASE6_ADDITIVE_TABLES,
+            allowed_missing_tables=_REPO_V1_ADDITIVE_TABLES,
         )
+        _assert_phase7a_parent_boundary(active)
         candidate = _new_candidate(active)
         try:
             file_count = _build_inventory(
@@ -629,13 +665,40 @@ def build_ia_main(
                 active,
                 expected_parent,
                 expected_schema=_REPO_V1_SCHEMA_CONTRACT,
-                allowed_missing_tables=PHASE6_ADDITIVE_TABLES,
+                allowed_missing_tables=_REPO_V1_ADDITIVE_TABLES,
             )
             previous = active.with_name(active.name + ".previous")
             promote_catalog_candidate(active, candidate, previous, token)
             return BuildResult(token, resolved_sha, file_count, active, True)
         finally:
             candidate.unlink(missing_ok=True)
+
+
+def _assert_phase7a_parent_boundary(active: Path) -> None:
+    """Allow only a complete Phase 6 parent or a current Phase 7A parent."""
+
+    if not active.exists():
+        return
+    try:
+        conn = sqlite3.connect(f"file:{active}?mode=ro", uri=True)
+        try:
+            tables = {
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                )
+            }
+        finally:
+            conn.close()
+    except sqlite3.DatabaseError:
+        # parent_descriptor owns the precise malformed-database error.
+        return
+    missing = PHASE7A_ADDITIVE_TABLES - tables
+    if missing and missing != PHASE7A_ADDITIVE_TABLES:
+        raise CatalogPromotionError(
+            "active catalog schema is incompatible with the Phase 7A upgrade: "
+            "partial UI table set is not a valid Phase 6 parent"
+        )
 
 
 def main() -> int:
