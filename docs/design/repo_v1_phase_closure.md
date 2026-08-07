@@ -379,3 +379,82 @@ git status --short --branch
 ```
 
 The worktree was clean at evidence time.
+
+## Phase 6 — OpenAPI/REST
+
+Phase 6 adds three sequential immutable slices: 6A indexes successfully
+parsed `.yaml` documents below `app/source/openapispec` with exact exclusions
+and deterministic kinds; 6B links only a direct top-level string
+`x-mappedTo` to exactly one committed `.ent` filename stem represented by
+`entity_occurrences`; and 6C extracts only direct HTTP operation facts from
+indexed documents under `/paths/`, preserving exact path templates, lower-case
+methods, direct scalar `operationId` values, and RFC 6901 source pointers.
+
+The implementation reads committed `SourceSnapshot` bytes only. It adds no
+mutable checkout read, parser scan call, mapping manifest, legacy OpenAPI
+table, heuristic fallback, `$ref` traversal, graph projection, MCP/query
+compatibility, delta refresh, or in-place migration. A valid pre-Phase-6
+repo-v1 active catalog may be missing only the four additive Phase 6 tables;
+the complete current-schema candidate replaces it atomically and preserves the
+legacy file as `.previous`.
+
+Target `ia-main` commit: `e7fbab69da69cd605076eec74ee456066514adaf`.
+The configured source root was verified as `/Users/aritra.ghosh/projects/main`;
+that checkout was on `main` at the target commit and clean. The two acceptance
+databases were isolated under `/private/tmp`; the canonical
+`catalog/catalog.db` digest remained
+`388466eead8a4a15763daeb4206b5986ac04dea06dd6dc600315acda04ec9272` before
+and after the runs.
+
+Status: **accepted**
+
+Final post-hardening promoted isolated-build evidence:
+
+```json
+{"active_db":"/private/tmp/repo-v1-phase6-c.db","build_token":"09f9ab5c2ab34365a1159480223da3c9","file_count":23877,"promoted":true,"target_commit_sha":"e7fbab69da69cd605076eec74ee456066514adaf"}
+{"active_db":"/private/tmp/repo-v1-phase6-d.db","build_token":"66f72c74f188458d80f0647e83704075","file_count":23877,"promoted":true,"target_commit_sha":"e7fbab69da69cd605076eec74ee456066514adaf"}
+```
+
+Both isolated databases contained:
+
+```text
+files=23877
+entity_occurrences=1859
+entity_diagnostics=407
+openapi_documents=3774
+openapi_entity_links=713
+rest_endpoints=2823
+openapi_diagnostics=3061
+```
+
+OpenAPI diagnostic counts were `OPENAPI_X_MAPPEDTO_BLANK=2988`,
+`OPENAPI_X_MAPPEDTO_CUSTOM=51`, and `OPENAPI_X_MAPPEDTO_ZERO_MATCHES=22`.
+Normalized hashes matched between builds:
+
+```text
+openapi_documents=02ddde643d0a1176f489d8bf7f21b62e532a61afc7e2d2b328c286fbe90f4409
+openapi_entity_links=42c628b56ae86a10d902ab90e1ae42aabb97abd7e53052bab733274f9a9d489b
+rest_endpoints=5face2da2668f8cecc57e12883996bb67de39c2b2d0efdd7755496181b3b45e4
+openapi_diagnostics=689a52c85b3d1644b64d5bc1392831ecc7fd586042f9d150628751dcc7cf3e64
+```
+
+| Acceptance requirement | Evidence and result |
+| --- | --- |
+| Focused 6A/6B/6C behavior | `PYTHONPATH=. ./.venv/bin/pytest -q tests/test_repo_v1_openapi.py`: 10 passed, 1 warning. |
+| Existing Phase 0–5 behavior | `PYTHONPATH=. ./.venv/bin/pytest -q tests/test_repo_v1.py validation/test_source_snapshot.py tests/test_repo_v1_symbols.py tests/test_repo_v1_relationships.py tests/test_repo_v1_entities.py tests/test_repo_v1_openapi.py`: 99 passed, 1 warning. |
+| Exact scope, malformed YAML, links, and endpoints | Focused tests passed; `.yaml`/template exclusions, duplicate/non-mapping diagnostics, required mapping diagnostics, exact stems, pointers, methods, and `$ref` non-traversal were verified. |
+| Candidate failure and active preservation | `test_phase6_failure_preserves_active_database` passed; active bytes were unchanged and temporary candidates were removed. |
+| Legacy active-schema accommodation | `test_phase6_additive_schema_upgrade_promotes_over_legacy_active` and the default smoke command | Passed; a valid active catalog missing only the four Phase 6 tables was upgraded atomically, with the old schema retained as `.previous`. |
+| Stable keys and ownership | Endpoint tampering was rejected; both builds passed candidate validation with all Phase 6 facts owned by repo `1` and commit `e7fbab69...`. |
+| SQLite/FK integrity | Both builds returned `PRAGMA integrity_check = ok` and zero `PRAGMA foreign_key_check` rows. |
+| Dirty checkout and repeatability | `test_dirty_checkout_bytes_do_not_change_snapshot_facts` passed; two final promoted builds matched all four normalized hashes. |
+| Legacy-flow boundary | `rg` over repo-v1 OpenAPI/pipeline files found no parser scan, legacy OpenAPI scanner/linker/builder, legacy table, mapping manifest, or heuristic call. |
+| Formatting and syntax | Ruff, `py_compile`, and `git diff --check` passed. |
+
+The final post-hardening verification reran both isolated promoted commands
+after the duplicate-key merge-loader and explicit null-mapping classification
+hardening. Counts, hashes, target commit, integrity, FK, dirty-checkout,
+candidate-failure, legacy active-schema accommodation, and active-preservation
+evidence above are the final Phase 6 closure record. The default command was
+also smoke-tested against the existing legacy active database and promoted
+successfully with build token `6bc079ef259943d4a8c902b5cf47d013`.

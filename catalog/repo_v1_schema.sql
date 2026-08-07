@@ -1,8 +1,7 @@
 PRAGMA foreign_keys = ON;
 
 -- The V1 development catalog is intentionally independent of catalog/schema.sql.
--- It contains only the foundation, immutable inventory, symbols, and
--- relationships slices.
+-- It contains only immutable repo-v1 facts and their source diagnostics.
 CREATE TABLE catalog_builds (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     build_token TEXT NOT NULL UNIQUE,
@@ -175,3 +174,96 @@ CREATE TABLE symbol_diagnostics (
 
 CREATE INDEX idx_repo_v1_symbol_diagnostics_repo_file
     ON symbol_diagnostics(repo_id, file_id);
+
+CREATE TABLE openapi_documents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
+    file_id INTEGER NOT NULL,
+    path TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN (
+        'history','schema','operations','view','uimeta','viewmeta','paths',
+        'components','security','resource','actions','events','unknown'
+    )),
+    document_key TEXT NOT NULL UNIQUE,
+    source_commit_sha TEXT NOT NULL CHECK(source_commit_sha <> ''),
+    evidence TEXT NOT NULL CHECK(evidence <> ''),
+    extractor TEXT NOT NULL CHECK(extractor <> ''),
+    FOREIGN KEY (repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE,
+    UNIQUE(repo_id, file_id),
+    UNIQUE(repo_id, path)
+);
+
+CREATE INDEX idx_repo_v1_openapi_documents_repo_path
+    ON openapi_documents(repo_id, path);
+
+CREATE TABLE openapi_entity_links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
+    document_id INTEGER NOT NULL,
+    entity_occurrence_id INTEGER NOT NULL,
+    mapped_value TEXT NOT NULL CHECK(mapped_value <> ''),
+    match_key TEXT NOT NULL CHECK(match_key <> ''),
+    link_key TEXT NOT NULL UNIQUE,
+    source_commit_sha TEXT NOT NULL CHECK(source_commit_sha <> ''),
+    evidence TEXT NOT NULL CHECK(evidence <> ''),
+    extractor TEXT NOT NULL CHECK(extractor <> ''),
+    FOREIGN KEY (repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    FOREIGN KEY (document_id) REFERENCES openapi_documents(id) ON DELETE CASCADE,
+    FOREIGN KEY (entity_occurrence_id) REFERENCES entity_occurrences(id) ON DELETE CASCADE,
+    UNIQUE(repo_id, document_id, entity_occurrence_id)
+);
+
+CREATE INDEX idx_repo_v1_openapi_entity_links_repo_document
+    ON openapi_entity_links(repo_id, document_id);
+CREATE INDEX idx_repo_v1_openapi_entity_links_occurrence
+    ON openapi_entity_links(entity_occurrence_id);
+
+CREATE TABLE rest_endpoints (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
+    document_id INTEGER NOT NULL,
+    endpoint_key TEXT NOT NULL UNIQUE,
+    path_template TEXT NOT NULL CHECK(path_template LIKE '/%'),
+    http_method TEXT NOT NULL CHECK(http_method IN (
+        'get','post','put','patch','delete','head','options','trace'
+    )),
+    operation_id TEXT,
+    source_pointer TEXT NOT NULL CHECK(source_pointer LIKE '/%'),
+    source_commit_sha TEXT NOT NULL CHECK(source_commit_sha <> ''),
+    evidence TEXT NOT NULL CHECK(evidence <> ''),
+    extractor TEXT NOT NULL CHECK(extractor <> ''),
+    FOREIGN KEY (repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    FOREIGN KEY (document_id) REFERENCES openapi_documents(id) ON DELETE CASCADE,
+    UNIQUE(repo_id, document_id, path_template, http_method)
+);
+
+CREATE INDEX idx_repo_v1_rest_endpoints_repo_document
+    ON rest_endpoints(repo_id, document_id);
+CREATE INDEX idx_repo_v1_rest_endpoints_route
+    ON rest_endpoints(path_template, http_method);
+
+CREATE TABLE openapi_diagnostics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
+    file_id INTEGER NOT NULL,
+    document_id INTEGER,
+    phase TEXT NOT NULL CHECK(phase IN ('6A','6B','6C')),
+    diagnostic_key TEXT NOT NULL UNIQUE,
+    severity TEXT NOT NULL CHECK(severity = 'error'),
+    code TEXT NOT NULL CHECK(code <> ''),
+    message TEXT NOT NULL CHECK(message <> ''),
+    source_commit_sha TEXT NOT NULL CHECK(source_commit_sha <> ''),
+    evidence TEXT NOT NULL CHECK(evidence <> ''),
+    extractor TEXT NOT NULL CHECK(extractor <> ''),
+    FOREIGN KEY (repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE,
+    FOREIGN KEY (document_id) REFERENCES openapi_documents(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_repo_v1_openapi_diagnostics_repo_file
+    ON openapi_diagnostics(repo_id, file_id);
+CREATE INDEX idx_repo_v1_openapi_diagnostics_document
+    ON openapi_diagnostics(document_id);
+CREATE INDEX idx_repo_v1_openapi_diagnostics_lookup
+    ON openapi_diagnostics(repo_id, code, diagnostic_key);

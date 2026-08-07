@@ -1,8 +1,8 @@
 # Pending Work
 
-This is the active backlog for the repo-v1 implementation. Phase 0, Phase 1,
-Phase 2 Symbols, and Phase 3 Relationships acceptance work is complete; later
-components remain outside this backlog.
+This is the active backlog for the repo-v1 implementation. Phase 0 through
+Phase 6 acceptance work is complete; later components remain outside this
+backlog.
 
 ## Repository Selection
 
@@ -48,3 +48,13 @@ components remain outside this backlog.
 - [x] Phase 4 Entity Occurrences implemented and accepted; the slice remains
       limited to immutable `.ent` declarations, candidate validation, and
       atomic promotion.
+
+- [x] Phase 6 OpenAPI/REST implemented and accepted as sequential immutable
+      document-index, exact entity-link, and REST-endpoint slices. Facts read
+      committed `SourceSnapshot` bytes only; legacy OpenAPI flows, mappings,
+      `$ref` traversal, graph/MCP/query compatibility, delta refresh,
+      migrations, and production replacement remain deferred.
+
+- [ ] Phase 7 UI facts and diagnostics.
+
+- [ ] Phase 8 workflow and security facts.

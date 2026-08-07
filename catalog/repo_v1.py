@@ -25,12 +25,25 @@ from catalog.refresh_transaction import (
     refresh_lock,
 )
 from catalog.repo_v1_entities import ENTITY_DIAGNOSTIC_CODES
+from catalog.repo_v1_openapi import (
+    OpenAPIValidationError,
+    extract_snapshot_openapi,
+    validate_openapi_candidate,
+)
 from catalog.repositories import RepositoryError, load_workspace_manifest
 from catalog.source_snapshot import SourceSnapshotError, materialize_source_snapshot
 
 SCHEMA_PATH = Path(__file__).with_name("repo_v1_schema.sql")
 REPO_KEY = "ia-main"
 DEFAULT_ACTIVE_DB = Path("catalog/catalog.db")
+PHASE6_ADDITIVE_TABLES = frozenset(
+    {
+        "openapi_documents",
+        "openapi_entity_links",
+        "rest_endpoints",
+        "openapi_diagnostics",
+    }
+)
 
 
 def _load_schema_contract() -> dict[str, frozenset[str]]:
@@ -40,9 +53,7 @@ def _load_schema_contract() -> dict[str, frozenset[str]]:
         return {
             str(table_row[0]): frozenset(
                 str(column_row[1])
-                for column_row in conn.execute(
-                    f'PRAGMA table_info("{table_row[0]}")'
-                )
+                for column_row in conn.execute(f'PRAGMA table_info("{table_row[0]}")')
             )
             for table_row in conn.execute(
                 "SELECT name FROM sqlite_master "
@@ -104,8 +115,7 @@ def _v1_path_is_in_scope(
     ):
         return False
     return not any(
-        path == ignored or path.startswith(f"{ignored}/")
-        for ignored in ignore_paths
+        path == ignored or path.startswith(f"{ignored}/") for ignored in ignore_paths
     )
 
 
@@ -149,9 +159,7 @@ def _repository_config(manifest_path: Path) -> _RepositoryConfig:
     except RepositoryError as exc:
         raise RepoV1Error(str(exc)) from exc
     matches = [
-        entry
-        for entry in manifest["repositories"]
-        if entry.get("repo_key") == REPO_KEY
+        entry for entry in manifest["repositories"] if entry.get("repo_key") == REPO_KEY
     ]
     if len(matches) != 1:
         raise RepoV1Error("workspace manifest must contain exactly one ia-main entry")
@@ -208,7 +216,9 @@ def _insert_build(
             build_token,
             str(candidate),
             "building",
-            json.dumps({REPO_KEY: target_commit_sha}, sort_keys=True, separators=(",", ":")),
+            json.dumps(
+                {REPO_KEY: target_commit_sha}, sort_keys=True, separators=(",", ":")
+            ),
         ),
     )
     return int(cursor.lastrowid)
@@ -309,8 +319,16 @@ def _build_inventory(
                 snapshot=snapshot,
                 show_progress=show_progress,
             )
+            openapi_stats = extract_snapshot_openapi(
+                conn,
+                repo_id=repo_id,
+                snapshot=snapshot,
+                show_progress=show_progress,
+            )
         file_count = int(
-            conn.execute("SELECT COUNT(*) FROM files WHERE repo_id=?", (repo_id,)).fetchone()[0]
+            conn.execute(
+                "SELECT COUNT(*) FROM files WHERE repo_id=?", (repo_id,)
+            ).fetchone()[0]
         )
         conn.execute(
             "UPDATE catalog_builds SET status='validated',completed_at=?,validation_summary=? WHERE id=?",
@@ -329,6 +347,10 @@ def _build_inventory(
                         "entity_node_count": entity_stats.node_count,
                         "entity_occurrence_count": entity_stats.occurrence_count,
                         "entity_diagnostic_count": entity_stats.diagnostic_count,
+                        "openapi_document_count": openapi_stats.document_count,
+                        "openapi_entity_link_count": openapi_stats.link_count,
+                        "rest_endpoint_count": openapi_stats.endpoint_count,
+                        "openapi_diagnostic_count": openapi_stats.diagnostic_count,
                     },
                     sort_keys=True,
                 ),
@@ -344,7 +366,9 @@ def _build_inventory(
         conn.close()
 
 
-def _validate_candidate(candidate: Path, *, target_commit_sha: str, build_token: str) -> None:
+def _validate_candidate(
+    candidate: Path, *, target_commit_sha: str, build_token: str
+) -> None:
     conn = sqlite3.connect(candidate)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
@@ -361,12 +385,18 @@ def _validate_candidate(candidate: Path, *, target_commit_sha: str, build_token:
         ).fetchone()
         if build is None or build["status"] != "validated":
             raise RepoV1Error("candidate build is not validated")
-        if json.loads(str(build["source_revisions_json"])) != {REPO_KEY: target_commit_sha}:
+        if json.loads(str(build["source_revisions_json"])) != {
+            REPO_KEY: target_commit_sha
+        }:
             raise RepoV1Error("candidate source revision does not match target commit")
         repo = conn.execute(
-            "SELECT id,repo_key,target_commit_sha FROM repos WHERE build_id=?", (build["id"],)
+            "SELECT id,repo_key,target_commit_sha FROM repos WHERE build_id=?",
+            (build["id"],),
         ).fetchone()
-        if repo is None or (repo["repo_key"], repo["target_commit_sha"]) != (REPO_KEY, target_commit_sha):
+        if repo is None or (repo["repo_key"], repo["target_commit_sha"]) != (
+            REPO_KEY,
+            target_commit_sha,
+        ):
             raise RepoV1Error("candidate repository provenance is invalid")
         if conn.execute("SELECT COUNT(*) FROM repos").fetchone()[0] != 1:
             raise RepoV1Error("V1 candidate must contain exactly one repository")
@@ -522,7 +552,18 @@ def _validate_candidate(candidate: Path, *, target_commit_sha: str, build_token:
             or invalid_entity_facts
             or invalid_entity_diagnostic_ownership
         ):
-            raise RepoV1Error("candidate entity ownership, provenance, or diagnostic validation failed")
+            raise RepoV1Error(
+                "candidate entity ownership, provenance, or diagnostic validation failed"
+            )
+        try:
+            validate_openapi_candidate(
+                conn,
+                repo_id=int(repo["id"]),
+                repo_key=REPO_KEY,
+                target_commit_sha=target_commit_sha,
+            )
+        except OpenAPIValidationError as exc:
+            raise RepoV1Error(str(exc)) from exc
     finally:
         conn.close()
 
@@ -567,6 +608,7 @@ def build_ia_main(
         expected_parent = parent_descriptor(
             active,
             expected_schema=_REPO_V1_SCHEMA_CONTRACT,
+            allowed_missing_tables=PHASE6_ADDITIVE_TABLES,
         )
         candidate = _new_candidate(active)
         try:
@@ -577,7 +619,9 @@ def build_ia_main(
                 build_token=token,
                 show_progress=show_progress,
             )
-            _validate_candidate(candidate, target_commit_sha=resolved_sha, build_token=token)
+            _validate_candidate(
+                candidate, target_commit_sha=resolved_sha, build_token=token
+            )
             if not promote:
                 return BuildResult(token, resolved_sha, file_count, active, False)
             _mark_candidate_active(candidate, active, token)
@@ -585,6 +629,7 @@ def build_ia_main(
                 active,
                 expected_parent,
                 expected_schema=_REPO_V1_SCHEMA_CONTRACT,
+                allowed_missing_tables=PHASE6_ADDITIVE_TABLES,
             )
             previous = active.with_name(active.name + ".previous")
             promote_catalog_candidate(active, candidate, previous, token)
@@ -597,9 +642,13 @@ def main() -> int:
     import argparse
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, default=Path("config/workspace_repos.yaml"))
+    parser.add_argument(
+        "--manifest", type=Path, default=Path("config/workspace_repos.yaml")
+    )
     parser.add_argument("--active-db", type=Path, default=DEFAULT_ACTIVE_DB)
-    parser.add_argument("--target-sha", help="Git revision; defaults to ia-main tracked_branch")
+    parser.add_argument(
+        "--target-sha", help="Git revision; defaults to ia-main tracked_branch"
+    )
     parser.add_argument("--no-promote", action="store_true")
     parser.add_argument(
         "--no-progress",

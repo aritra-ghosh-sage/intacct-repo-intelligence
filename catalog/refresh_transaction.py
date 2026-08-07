@@ -10,7 +10,7 @@ from __future__ import annotations
 import fcntl
 import os
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,12 +50,15 @@ def parent_descriptor(
     active: Path,
     *,
     expected_schema: Mapping[str, frozenset[str]] | None = None,
+    allowed_missing_tables: Collection[str] = (),
 ) -> ParentDescriptor:
     """Return the active generation and filesystem identity used for CAS.
 
     ``expected_schema`` lets a workflow reject a readable database belonging
-    to a different catalog schema before creating a candidate. Callers that
-    do not supply it retain the historical generic descriptor behavior.
+    to a different catalog schema before creating a candidate. A caller may
+    explicitly allow a known additive set of missing tables while it builds a
+    complete replacement candidate. Callers that do not supply it retain the
+    historical generic descriptor behavior.
     """
 
     if not active.exists():
@@ -92,7 +95,10 @@ def parent_descriptor(
                     "WHERE type='table' AND name NOT LIKE 'sqlite_%'"
                 )
             }
-            missing_tables = sorted(set(expected_schema) - set(actual_schema))
+            missing_tables = sorted(
+                (set(expected_schema) - set(actual_schema))
+                - set(allowed_missing_tables)
+            )
             unexpected_tables = sorted(set(actual_schema) - set(expected_schema))
             missing_columns = {
                 table: sorted(expected_schema[table] - actual_schema.get(table, set()))
@@ -106,7 +112,12 @@ def parent_descriptor(
                 if table in actual_schema
                 and actual_schema[table] - expected_schema[table]
             }
-            if missing_tables or unexpected_tables or missing_columns or mismatched_columns:
+            if (
+                missing_tables
+                or unexpected_tables
+                or missing_columns
+                or mismatched_columns
+            ):
                 details: list[str] = []
                 if missing_tables:
                     details.append(f"missing tables: {', '.join(missing_tables)}")
@@ -134,7 +145,9 @@ def parent_descriptor(
                     + f"; restore {active.name}.previous or remove it for deliberate fresh "
                     "initialization"
                 )
-        fingerprint = "content_fingerprint" if "content_fingerprint" in columns else "NULL"
+        fingerprint = (
+            "content_fingerprint" if "content_fingerprint" in columns else "NULL"
+        )
         row = conn.execute(
             f"""SELECT id,build_token,{fingerprint} AS content_fingerprint,source_revisions_json
                FROM catalog_builds WHERE status='active' ORDER BY id DESC LIMIT 1"""
@@ -172,10 +185,13 @@ def assert_parent_unchanged(
     expected: ParentDescriptor,
     *,
     expected_schema: Mapping[str, frozenset[str]] | None = None,
+    allowed_missing_tables: Collection[str] = (),
 ) -> None:
     if (
         parent_descriptor(
-            active, expected_schema=expected_schema
+            active,
+            expected_schema=expected_schema,
+            allowed_missing_tables=allowed_missing_tables,
         )
         != expected
     ):

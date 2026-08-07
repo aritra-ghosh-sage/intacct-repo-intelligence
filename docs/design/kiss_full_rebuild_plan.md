@@ -417,10 +417,12 @@ and candidate integrity/provenance failures preserve the active database and
 remove the candidate.
 
 For promotion, an absent active database is the only valid fresh-initialization
-state. An existing empty, malformed, or incompatible active file is not treated
-as absent and is never overwritten automatically; verify a `catalog.db.previous`
-recovery artifact or deliberately remove the invalid file before starting a
-fresh initialization.
+state. Existing empty, malformed, or otherwise incompatible active files fail
+closed. The repo-v1 Phase 6 workflow has one explicit additive upgrade boundary:
+an otherwise valid pre-Phase-6 repo-v1 active catalog may be missing only the
+four new OpenAPI/REST tables; the workflow builds a complete current-schema
+candidate and atomically promotes it while preserving the old file as
+`catalog.db.previous`. No in-place migration or broad schema bypass is used.
 
 Do not add entity mappings, entity roots, companion/OpenAPI/REST/workflow/UI
 facts, graph, MCP/query compatibility, delta refresh, migrations,
@@ -441,8 +443,116 @@ Acceptance:
 
 ### 6. OpenAPI/REST
 
-Add OpenAPI indexing, reviewed mappings, and REST endpoint facts only after
-entity occurrences are accepted.
+Status: **accepted** on `repo-v1` for target commit
+`e7fbab69da69cd605076eec74ee456066514adaf`; final evidence is recorded in
+`docs/design/repo_v1_phase_closure.md`.
+
+Implement Phase 6 as three sequential, independently accepted slices after
+entity occurrences are accepted:
+
+#### 6A — immutable OpenAPI document index
+
+Read only committed `SourceSnapshot` bytes. Include `.yaml` files below
+`app/source/openapispec`; exclude every `.yml`, paths containing `template`,
+and filenames beginning with `template` (case-insensitive). Do not call
+`parser.scan_repo`, read mutable checkout files, or reuse legacy OpenAPI
+tables/scanners. Create only:
+
+```text
+openapi_documents(
+  id, repo_id, file_id, path, kind, document_key,
+  source_commit_sha, evidence, extractor
+)
+```
+
+Index one successfully parsed, in-scope YAML mapping per file. `document_key`
+is the SHA-256 of canonical JSON containing `repo_key` and the repository
+relative path. `kind` is exactly one of `history`, `schema`, `operations`,
+`view`, `uimeta`, `viewmeta`, `paths`, `components`, `security`, `resource`,
+`actions`, `events`, or `unknown`. Do not extract operations, entity mappings,
+`$ref` facts, or relationships. Malformed, non-mapping, invalid-UTF-8, or
+duplicate-key YAML emits a diagnostic and no document row. Snapshot, Git,
+database, and integrity failures abort the candidate.
+
+#### 6B — exact OpenAPI entity links
+
+Read only successfully indexed documents and only their direct top-level
+`x-mappedTo` scalar. Create only:
+
+```text
+openapi_entity_links(
+  id, repo_id, document_id, entity_occurrence_id, mapped_value,
+  match_key, link_key, source_commit_sha, evidence, extractor
+)
+```
+
+Trim and case-fold the scalar, then match exactly against committed `.ent`
+filename stems represented by `entity_occurrences`. Create a link only for
+exactly one occurrence. Never use filename, slug, path, canonical-name,
+module, title, fuzzy, or manifest fallbacks, and never create entities or
+occurrences. Blank, non-string, path-like, malformed, `__custom__`,
+zero-match, and multiple-match values emit the required non-blocking source
+diagnostics: `OPENAPI_X_MAPPEDTO_BLANK`, `OPENAPI_X_MAPPEDTO_CUSTOM`,
+`OPENAPI_X_MAPPEDTO_INVALID`, `OPENAPI_X_MAPPEDTO_ZERO_MATCHES`, and
+`OPENAPI_X_MAPPEDTO_MULTIPLE_MATCHES`.
+
+#### 6C — REST endpoint facts
+
+Read committed snapshot bytes from indexed documents under `/paths/` and
+create only:
+
+```text
+rest_endpoints(
+  id, repo_id, document_id, endpoint_key, path_template, http_method,
+  operation_id, source_pointer, source_commit_sha, evidence, extractor
+)
+```
+
+Extract only `get`, `post`, `put`, `patch`, `delete`, `head`, `options`, and
+`trace`. Preserve leading-slash path templates exactly, store lower-case
+methods, and read `operationId` only when it is a direct non-empty scalar.
+Never infer operation IDs or entity ownership. Use RFC 6901 pointers such as
+`/paths/~1bills/get`. `endpoint_key` is the SHA-256 of canonical JSON
+containing repository key, document path, path template, lower-case method,
+and source pointer. Duplicate operations in one document fail uniqueness
+validation; identical routes in different documents remain separate facts.
+Invalid paths, path keys, and operation objects emit diagnostics and no facts.
+Ignore and do not traverse or store `$ref`, external references, or transitive
+schema facts.
+
+#### Shared diagnostics and acceptance boundary
+
+Create `openapi_diagnostics(id, repo_id, file_id, document_id, phase,
+diagnostic_key, severity, code, message, source_commit_sha, evidence,
+extractor)`, with nullable `document_id` for parse failures. A diagnostic key
+is the SHA-256 of canonical JSON containing repository, path, phase, code, and
+normalized evidence. Diagnostics are deterministic and ordered by path, phase,
+code, and evidence. Every fact belongs to the candidate repository and file;
+every `source_commit_sha` equals the target commit; and all stable keys are
+recomputable from stored fields. Foreign-key, ownership, provenance,
+uniqueness, malformed-fact, and SQLite integrity failures reject the
+candidate. Parser and unresolved-source diagnostics suppress affected facts
+but do not reject an otherwise valid candidate. Failed candidates preserve
+active bytes, remove temporary candidates, and successful promotion remains
+atomic.
+
+Explicitly deferred: legacy OpenAPI scanners/linkers/REST builders,
+`catalog/schema.sql` migrations, mapping manifests, filename/name/module
+heuristics, `$ref` traversal/reference tables, query/MCP compatibility, graph
+projection, delta refresh, automatic recovery, multi-repository behavior, UI,
+workflow, security, and production database migration/replacement.
+
+Acceptance is sequential. 6A must prove exact YAML scope, deterministic
+indexed rows, malformed-file diagnostics, dirty-checkout immunity, isolated
+repeatability, and no legacy/mutable reads. 6B must prove exact unique
+`x-mappedTo` links and all five required diagnostics without heuristic links.
+6C must prove deterministic endpoint facts, invalid-input diagnostics,
+duplicate rejection, `$ref` non-traversal, provenance/pointer/key validity,
+repeatability, dirty-checkout immunity, candidate failure, and active
+preservation. Phase 6 is complete only after the Phase 0–5 regression suite,
+two isolated full-build normalized hashes, table/diagnostic counts, SQLite and
+foreign-key checks, and closure evidence are recorded in
+`docs/design/repo_v1_phase_closure.md`, with `TODO.md` and this plan updated.
 
 ### 7. UI
 
