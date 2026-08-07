@@ -402,6 +402,105 @@ def test_first_promotion_creates_active_catalog_without_previous(tmp_path: Path)
         conn.close()
 
 
+@pytest.mark.parametrize(
+    ("contents", "error"),
+    [
+        (b"", "active catalog is empty"),
+        (b"not a sqlite database", "not a readable SQLite database"),
+    ],
+)
+def test_invalid_existing_active_catalog_fails_closed(
+    tmp_path: Path, contents: bytes, error: str
+) -> None:
+    _root, manifest = _repo(tmp_path)
+    active = tmp_path / "active.db"
+    active.write_bytes(contents)
+
+    with pytest.raises(CatalogPromotionError, match=error):
+        build_ia_main(manifest_path=manifest, active_db=active)
+
+    assert active.read_bytes() == contents
+    assert not list(active.parent.glob(f".{active.name}.candidate.*"))
+
+
+def test_incompatible_existing_catalog_fails_closed(tmp_path: Path) -> None:
+    _root, manifest = _repo(tmp_path)
+    active = tmp_path / "active.db"
+    conn = sqlite3.connect(active)
+    try:
+        conn.executescript((Path(__file__).parents[1] / "catalog/schema.sql").read_text())
+        conn.commit()
+    finally:
+        conn.close()
+    before = active.read_bytes()
+
+    with pytest.raises(CatalogPromotionError, match="schema is incompatible"):
+        build_ia_main(manifest_path=manifest, active_db=active)
+
+    assert active.read_bytes() == before
+    assert not list(active.parent.glob(f".{active.name}.candidate.*"))
+
+
+def test_partial_v1_catalog_fails_closed(tmp_path: Path) -> None:
+    _root, manifest = _repo(tmp_path)
+    active = tmp_path / "active.db"
+    conn = sqlite3.connect(active)
+    try:
+        conn.execute(
+            "CREATE TABLE catalog_builds ("
+            "id INTEGER PRIMARY KEY, build_token TEXT NOT NULL, "
+            "catalog_path TEXT NOT NULL, status TEXT NOT NULL, "
+            "source_revisions_json TEXT NOT NULL)"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    before = active.read_bytes()
+
+    with pytest.raises(CatalogPromotionError, match="missing tables"):
+        build_ia_main(manifest_path=manifest, active_db=active)
+
+    assert active.read_bytes() == before
+    assert not list(active.parent.glob(f".{active.name}.candidate.*"))
+
+
+def test_complete_v1_schema_without_active_build_fails_closed(tmp_path: Path) -> None:
+    _root, manifest = _repo(tmp_path)
+    active = tmp_path / "active.db"
+    conn = sqlite3.connect(active)
+    try:
+        conn.executescript(SCHEMA_PATH.read_text())
+        conn.commit()
+    finally:
+        conn.close()
+    before = active.read_bytes()
+
+    with pytest.raises(CatalogPromotionError, match="no active build"):
+        build_ia_main(manifest_path=manifest, active_db=active)
+
+    assert active.read_bytes() == before
+    assert not list(active.parent.glob(f".{active.name}.candidate.*"))
+
+
+def test_v1_schema_with_extra_table_fails_closed(tmp_path: Path) -> None:
+    _root, manifest = _repo(tmp_path)
+    active = tmp_path / "active.db"
+    conn = sqlite3.connect(active)
+    try:
+        conn.executescript(SCHEMA_PATH.read_text())
+        conn.execute("CREATE TABLE unrelated_extra (id INTEGER PRIMARY KEY)")
+        conn.commit()
+    finally:
+        conn.close()
+    before = active.read_bytes()
+
+    with pytest.raises(CatalogPromotionError, match="unexpected tables"):
+        build_ia_main(manifest_path=manifest, active_db=active)
+
+    assert active.read_bytes() == before
+    assert not list(active.parent.glob(f".{active.name}.candidate.*"))
+
+
 def test_replacement_promotion_retains_only_filesystem_previous_artifact(tmp_path: Path) -> None:
     root, manifest = _repo(tmp_path)
     active = tmp_path / "active.db"

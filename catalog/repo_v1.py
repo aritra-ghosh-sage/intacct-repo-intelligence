@@ -33,6 +33,29 @@ REPO_KEY = "ia-main"
 DEFAULT_ACTIVE_DB = Path("catalog/catalog.db")
 
 
+def _load_schema_contract() -> dict[str, frozenset[str]]:
+    conn = sqlite3.connect(":memory:")
+    try:
+        conn.executescript(SCHEMA_PATH.read_text())
+        return {
+            str(table_row[0]): frozenset(
+                str(column_row[1])
+                for column_row in conn.execute(
+                    f'PRAGMA table_info("{table_row[0]}")'
+                )
+            )
+            for table_row in conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            )
+        }
+    finally:
+        conn.close()
+
+
+_REPO_V1_SCHEMA_CONTRACT = _load_schema_contract()
+
+
 class RepoV1Error(RuntimeError):
     """A V1 foundation or inventory build cannot safely proceed."""
 
@@ -541,8 +564,11 @@ def build_ia_main(
     active = Path(active_db).expanduser().resolve()
     token = uuid.uuid4().hex
     with refresh_lock(active):
+        expected_parent = parent_descriptor(
+            active,
+            expected_schema=_REPO_V1_SCHEMA_CONTRACT,
+        )
         candidate = _new_candidate(active)
-        expected_parent = parent_descriptor(active)
         try:
             file_count = _build_inventory(
                 candidate=candidate,
@@ -555,7 +581,11 @@ def build_ia_main(
             if not promote:
                 return BuildResult(token, resolved_sha, file_count, active, False)
             _mark_candidate_active(candidate, active, token)
-            assert_parent_unchanged(active, expected_parent)
+            assert_parent_unchanged(
+                active,
+                expected_parent,
+                expected_schema=_REPO_V1_SCHEMA_CONTRACT,
+            )
             previous = active.with_name(active.name + ".previous")
             promote_catalog_candidate(active, candidate, previous, token)
             return BuildResult(token, resolved_sha, file_count, active, True)

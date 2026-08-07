@@ -474,6 +474,33 @@ default; it does not delete the active catalog or build a graph:
 bash scripts/refresh.sh
 ```
 
+This compatibility command belongs to the general workspace/legacy refresh
+pipeline. It does not run the repo-v1 immutable entity extractor. For the
+repo-v1 branch and its source-backed entity occurrences, use the dedicated
+full-snapshot builder:
+
+```bash
+PYTHONPATH=. ./.venv/bin/python -m catalog.repo_v1 \
+  --manifest config/workspace_repos.yaml \
+  --active-db catalog/catalog.db
+```
+
+Repo-v1 has no delta mode. It materializes committed Git tree/blob bytes,
+extracts symbols, relationships, and entity occurrences into a candidate,
+validates provenance and ownership, and atomically promotes the candidate.
+It does not run the legacy entity scanner/builder, build a graph, or create
+mapping/compatibility stages.
+
+The general `validation/validate_catalog_integrity.py` command is for the
+workspace catalog schema and is not applicable to the minimal repo-v1 schema.
+Use the repo-v1 candidate validation, repo-v1 test slice, and direct SQLite
+integrity/foreign-key checks for V1 acceptance.
+
+An absent repo-v1 active database is valid for first initialization. An existing
+empty, malformed, or incompatible active file fails closed rather than being
+silently overwritten. Verify `catalog/catalog.db.previous` and either restore a
+known-good artifact or deliberately remove the invalid file before retrying.
+
 For automation and every additional repository, use the explicit workspace
 command below. Migrate an existing single-repository catalog once, then
 register its manifest:
@@ -611,6 +638,11 @@ a warning. Refresh-time parser details are written to per-repository files in
 the candidate output root (`<repo>/ui_parser_failures.jsonl`, with
 corresponding JavaScript and YAML failure logs). Semantic resolution errors
 and catalog integrity failures remain promotion-blocking.
+
+For repo-v1, `entity_diagnostics` are source-backed audit signals: missing,
+dynamic, ambiguous, or cyclic resolution does not by itself reject a
+candidate. Snapshot, source-read, provenance, ownership, integrity, and
+candidate validation failures remain promotion-blocking.
 
 Refresh has no baseline approval phase. Structured counts and diagnostics are
 audit evidence; SQLite integrity, exact source/provenance validation, semantic

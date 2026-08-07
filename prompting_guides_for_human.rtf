@@ -1,0 +1,111 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2870
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica;}
+{\colortbl;\red255\green255\blue255;}
+{\*\expandedcolortbl;;}
+\paperw11900\paperh16840\margl1440\margr1440\vieww25500\viewh18580\viewkind0
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+
+\f0\fs28 \cf0  ## Recommended prompt structure\
+\
+  Use this order:\
+\
+  Context:\
+  - Repository:\
+  - Branch:\
+  - Source repository:\
+  - Active database:\
+  - Current worktree state:\
+\
+  Objective:\
+  - Exact outcome required.\
+\
+  Source of truth:\
+  - Files, tables, functions, or commands that must be inspected.\
+\
+  Scope:\
+  - Files allowed to change.\
+  - Files explicitly out of scope.\
+  - Whether database/graph refresh is allowed.\
+\
+  Execution order:\
+  1. Investigation\
+  2. Plan\
+  3. Implementation\
+  4. Review\
+  5. QA\
+  6. Smoke test\
+\
+  Agent contracts:\
+  - Planner: read-only, return root cause, touch points, risks, tests.\
+  - Implementer: edit only approved files, add regression tests.\
+  - Reviewer: read-only, attempt to falsify the fix.\
+  - QA: independently run commands and report exact results.\
+\
+  Safety:\
+  - Preserve unrelated worktree changes.\
+  - Do not delete active/previous databases.\
+  - Stop and ask if state or ownership is ambiguous.\
+\
+  Acceptance criteria:\
+  - Exact tests and expected outcomes.\
+  - Required lint/compile checks.\
+  - Required database/provenance checks.\
+  - Known residual risks.\
+\
+  ## Improved version of your original task\
+\
+  Repository: /Users/aritra.ghosh/projects/intacct-repo-intelligence\
+  Branch: repo-v1\
+  Source checkout: verify from config/workspace_repos.yaml\
+  Active DB: catalog/catalog.db\
+\
+  Analyze entity_diagnostics using SQLite only. Group diagnostics by code and\
+  canonical message, report counts, representative evidence, and classify each\
+  as:\
+  - true extraction signal,\
+  - false/incorrect signal,\
+  - non-blocking semantic uncertainty,\
+  - promotion-blocking provenance/integrity failure.\
+\
+  Before proposing fixes, inspect the actual repo-v1 call path and confirm whether\
+  catalog.repo_v1_entities is used by the recommended refresh command.\
+\
+  Do not edit during analysis. Produce:\
+  1. root cause,\
+  2. affected code paths,\
+  3. shortlist ranked by impact,\
+  4. exact regression scenarios,\
+  5. proposed touch points,\
+  6. risks and non-goals.\
+\
+  Then use agents sequentially:\
+  - planner: read-only fix plan;\
+  - implementer: edit only approved files and add tests;\
+  - reviewer: independently try to falsify the fix;\
+  - implementer: resolve reviewer findings;\
+  - QA: independently run focused and repo-v1 tests;\
+  - smoke test: verify the final behavior and database state.\
+\
+  Do not rebuild or promote catalog/graph unless explicitly authorized.\
+  Preserve catalog.db.previous and all unrelated worktree changes.\
+  If active DB state is absent, zero-byte, corrupt, or incompatible, treat each\
+  case separately and stop for clarification if recovery policy is unclear.\
+\
+  ## Prompt quality checklist\
+\
+  Before sending a coding-agent prompt, confirm it states:\
+\
+  - exact repository and branch;\
+  - exact source and database paths;\
+  - canonical command verified from code;\
+  - read-only versus write authority;\
+  - allowed files;\
+  - positive and negative regression cases;\
+  - exact test commands;\
+  - database/graph mutation policy;\
+  - cleanup policy;\
+  - definition of done;\
+  - conditions requiring clarification.\
+\
+  The biggest improvement for your style is to replace \'93investigate and fix\'94 with a staged contract: \'93inspect these sources, produce these artifacts, modify only these files, prove these invariants, and stop under these\
+  conditions.\'94}

@@ -13,7 +13,11 @@ This repository builds an evidence-backed SQLite catalog of the Intacct codebase
 - Python requirement: `>=3.12`.
 - Install dependencies with `uv sync` if `.venv` is missing or stale.
 - Activate the environment with `source .venv/bin/activate`.
-- The main working database is `catalog/catalog.db`.
+- `catalog/catalog.db` is the canonical path used by the repository's existing
+  general catalog workflow and by the repo-v1 CLI default. These are different
+  schemas and workflows; do not run a general refresh against a repo-v1 active
+  database (or vice versa). Use an explicit alternate `--db`/`--active-db` path
+  when both workflows must coexist.
 
 ## Required Local Assumptions
 
@@ -23,7 +27,11 @@ This repository builds an evidence-backed SQLite catalog of the Intacct codebase
 - Before running pipeline commands on another machine, verify the source repo path first. If the path differs, update `config.py` and any explicit `--repo-root` arguments you use.
 - Repo-root preflight is mandatory before proposing commands: verify the effective path from `config.py` and the current workspace, then echo the exact resolved repo-root path in the response before giving pipeline or scan commands.
 
-## Canonical Commands
+## General catalog commands
+
+The commands in this section are for the existing general/legacy catalog
+workflow. They are not the repo-v1 rebuild path and must not be mixed with a
+repo-v1 active database.
 
 - Initialize a fresh database:
 
@@ -43,12 +51,42 @@ python -c "import sqlite3; from pathlib import Path; c=sqlite3.connect('catalog/
 bash scripts/refresh.sh
 ```
 
+The command above is the general workspace/legacy refresh compatibility entry
+point. It does not invoke the repo-v1 immutable entity extractor. For the
+repo-v1 full snapshot build, use the dedicated entry point instead:
+
+```bash
+PYTHONPATH=. ./.venv/bin/python -m catalog.repo_v1 \
+    --manifest config/workspace_repos.yaml \
+    --active-db catalog/catalog.db
+```
+
+Repo-v1 extraction is full-snapshot based: it reads committed Git tree/blob
+bytes, validates the candidate, and atomically promotes it. It has no delta
+mode and does not build mappings, graph data, MCP compatibility, or legacy
+JSONL entity intermediates.
+
+The general `validation/validate_catalog_integrity.py` validator targets the
+workspace catalog schema and is not a repo-v1 validator. Do not use it as the
+acceptance check for a V1 database; repo-v1 performs its own candidate
+ownership/provenance/integrity validation, supplemented by the repo-v1 test
+slice and direct `PRAGMA integrity_check`/foreign-key checks.
+
+An absent `--active-db` path is valid for first initialization. An existing
+empty, malformed, or incompatible active file fails closed; do not replace it
+automatically. Verify `catalog/catalog.db.previous` and either restore a
+known-good artifact or remove the invalid file deliberately before retrying.
+
 - Run the pipeline stepwise when you need narrower validation:
+
+The following stepwise commands are for the general workspace/legacy builder
+pipeline only. They are not a substitute for the repo-v1 command above and do
+not exercise `catalog.repo_v1_entities`.
 
 ```bash
 python -m parser.scan_repo
 python -m parser.extract_symbols --full
-python scripts/scan_ent_files.py --repo-root "$HOME/projects/main" --out catalog/entity_definitions.jsonl
+python scripts/scan_ent_files.py --db catalog/catalog.db --repo ia-main --out catalog/entity_definitions.jsonl
 python scripts/build_entities.py build --entities catalog/entity_definitions.jsonl --db catalog/catalog.db
 python scripts/build_entity_roots.py build
 python -m parser.extract_relationships --repo-root "$HOME/projects/main"
@@ -110,6 +148,16 @@ python scripts/query_graph.py security-surface APBill
 - `parser.extract_symbols` is incremental unless `--full` is passed.
 - Validation documents may be more operationally accurate than the README for current edge cases and failure modes.
 - Do not build or promote the Ladybug graph during an agentic session. Full candidate construction and promotion are lengthy operator-run workflows; agents may run read-only validation, graph queries, and focused unit tests only.
+- Do not use `scripts/refresh.sh` or `scripts.refresh_workspace --mode full` to
+  validate repo-v1 entity extraction; those routes use the legacy/general
+  entity builder. Use `python -m catalog.repo_v1` for repo-v1.
+- In repo-v1, an unknown or dynamic `inheritEnts` overlay emits
+  `entity_reference_dynamic` and does not merge metadata from a known base.
+  Static direct references and safe empty/null/self/fallback overlays remain
+  eligible for inherited metadata.
+- Every candidate `.ent` row must have a matching committed snapshot entry.
+  A missing entry raises `SourceSnapshotError`; it must not be silently
+  omitted. Include resolution uses only retained snapshot paths.
 
 ## Data Quality Hotspots
 
@@ -121,6 +169,12 @@ python scripts/query_graph.py security-surface APBill
 - `relationships.target_kind` values like `unknown` and `cqry` require explicit evidence and should be audited for extraction misclassification.
 
 See [validation/phase2d1_remediation.md](validation/phase2d1_remediation.md) for current remediation rules and acceptance boundaries.
+
+Repo-v1 `entity_diagnostics` rows are source-backed audit signals. Missing,
+dynamic, ambiguous, and cyclic entity resolution means the extractor did not
+assert the affected fact; those rows do not alone make a candidate invalid.
+Snapshot, source-read, provenance, ownership, integrity, and candidate
+validation failures remain fail-closed promotion errors.
 
 ## When Editing
 

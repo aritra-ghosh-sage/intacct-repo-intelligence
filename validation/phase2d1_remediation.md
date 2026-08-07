@@ -38,16 +38,27 @@ authoritative when prose and data disagree.
   validation, `integrity_check`, `foreign_key_check`, migration-025 validation,
   semantic quality, manifest-root restoration, logical fingerprinting, final
   source-SHA verification, and parent-generation CAS.
+- Repo-v1 candidate `.ent` inventory rows must all have matching committed
+  `SourceSnapshot.entries` paths. A mismatch raises `SourceSnapshotError` and
+  is not converted into an ordinary entity diagnostic; retained-path include
+  resolution must not fall back to basename matching.
 - The refresh lock covers all terminal paths. Failed preparation or promotion
   preserves both active and previous SQLite generations.
 - Ladybug graph construction and promotion are excluded.
 
 ## Semantic diagnostic boundary
 
-Counts and structured diagnostics remain audit evidence. Parser diagnostics
-are non-blocking when their file provenance is exact; semantic-resolution and
-catalog-integrity diagnostics remain promotion-blocking.
+Counts and structured diagnostics remain audit evidence. In repo-v1,
+source-backed entity diagnostics for missing, dynamic, ambiguous, or cyclic
+resolution are non-blocking and indicate that the affected fact was not
+asserted. Snapshot, source-read, provenance, ownership, integrity, and
+candidate-validation failures remain promotion-blocking.
 
 Do not repair incompatibility by editing stored fingerprints or migration
 markers. Use a supported full refresh, validate the candidate, and retain
 operator-reviewed backups for rollback.
+
+For repo-v1 fresh initialization, the active path must be absent. An existing
+zero-byte, malformed, or incompatible SQLite file is not treated as absent and
+is never silently replaced; restore a verified `.previous` artifact or
+deliberately remove the invalid file before retrying.

@@ -392,8 +392,17 @@ Literal snapshot-only include/require resolution and direct RHS references,
 including constrained `EntityManager::inheritEnts`, may index declarations
 from retained `.ent` files. Missing, dynamic, ambiguous, and cyclic
 include/reference cases emit stable error diagnostics and never create guessed
-facts. Missing metadata may retain a partial occurrence with NULL fields;
+facts. Static direct `inheritEnts` bases and overlays may contribute inherited
+metadata, but an unknown or dynamic overlay emits `entity_reference_dynamic`
+and never merges a known base; only directly proven literals remain eligible.
+Missing metadata may retain a partial occurrence with NULL fields;
 conflicting literal metadata is NULL with one conflict diagnostic.
+
+Every candidate `.ent` inventory row must correspond to a retained
+`SourceSnapshot.entries` path. A candidate/snapshot mismatch raises
+`SourceSnapshotError` rather than silently omitting the entity. Include
+resolution is limited to retained snapshot paths and does not use basename
+fallbacks or mutable checkout files.
 
 The schema uses canonical entity identity in `entity_nodes` and repository/file
 facts in `entity_occurrences`, with source-commit, extractor, and canonical JSON
@@ -403,9 +412,15 @@ canonical JSON containing repository, file, source key, code, and evidence.
 entity ownership, `.ent` file scope, source-commit parity, name/key parity,
 natural uniqueness, diagnostic ownership/code/provenance, foreign keys, and
 SQLite integrity. Per-file parser, identity, metadata, include, and reference
-issues are non-blocking diagnostics; snapshot/global read errors and candidate
-integrity/provenance failures preserve the active database and remove the
-candidate.
+issues are source-backed non-blocking diagnostics; snapshot/global read errors
+and candidate integrity/provenance failures preserve the active database and
+remove the candidate.
+
+For promotion, an absent active database is the only valid fresh-initialization
+state. An existing empty, malformed, or incompatible active file is not treated
+as absent and is never overwritten automatically; verify a `catalog.db.previous`
+recovery artifact or deliberately remove the invalid file before starting a
+fresh initialization.
 
 Do not add entity mappings, entity roots, companion/OpenAPI/REST/workflow/UI
 facts, graph, MCP/query compatibility, delta refresh, migrations,

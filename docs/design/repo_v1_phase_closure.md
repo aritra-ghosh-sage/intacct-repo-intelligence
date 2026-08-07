@@ -276,6 +276,33 @@ Ladybug graph, migrate production data, modify `main`, or replace the existing
 active catalog. Later mapping and compatibility work remains explicitly
 deferred.
 
+### Post-acceptance entity hardening note — 2026-08-07
+
+The current repo-v1 entity extractor retains the same full-snapshot boundary
+and adds two fail-closed protections validated by the focused entity tests:
+
+- An unknown or dynamic `inheritEnts` overlay emits
+  `entity_reference_dynamic` and does not merge metadata from a known base;
+  known static overlays and safe empty/null/self/fallback overlays retain their
+  prior behavior.
+- Candidate `.ent` rows are inventoried before retained-path filtering. If a
+  candidate `.ent` path is absent from `SourceSnapshot.entries`, extraction
+  raises `SourceSnapshotError` instead of silently omitting entity facts.
+
+The historical acceptance counts above are intentionally preserved. Current
+verification should use the working-tree focused tests and the dedicated
+`python -m catalog.repo_v1` entry point; the general `scripts/refresh.sh`
+compatibility pipeline is not the repo-v1 entity builder.
+
+The current focused entity test file has 23 tests, and the complete repo-v1
+slice has 89 passing tests plus the existing Tree-sitter deprecation warning.
+
+For first initialization, the repo-v1 active path may be absent. An existing
+empty, malformed, or incompatible active file fails closed; verify
+`catalog/catalog.db.previous` and restore it or deliberately remove the invalid
+file before retrying. The historical canonical-database evidence below does not
+override the current filesystem state.
+
 ## Repository-scan boundary
 
 V1 uses the following path only:
