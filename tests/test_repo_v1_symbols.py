@@ -238,7 +238,8 @@ def test_parser_failure_retains_inventory_and_emits_no_symbols(
                 (filename,),
             ).fetchall()
             diagnostics = conn.execute(
-                """SELECT f.path,d.severity,d.code,d.message,d.source_commit_sha
+                """SELECT f.path,d.severity,d.code,d.message,d.diagnostic_key,
+                          d.source_commit_sha
                    FROM symbol_diagnostics d JOIN files f ON f.id=d.file_id
                    WHERE f.path=?""",
                 (filename,),
@@ -259,7 +260,8 @@ def test_parser_failure_retains_inventory_and_emits_no_symbols(
     assert first_files == second_files == [(filename, expected_language, target)]
     assert first_diagnostics == second_diagnostics
     assert first_diagnostics[0][0:3] == (filename, "error", expected_code)
-    assert first_diagnostics[0][4] == target
+    assert first_diagnostics[0][5] == target
+    assert first_diagnostics[0][4]
     assert json.loads(first_diagnostics[0][3]).get("is_missing", False) is expected_missing
     assert first_diagnostics[-1] == ("symbol_count", 0)
 
