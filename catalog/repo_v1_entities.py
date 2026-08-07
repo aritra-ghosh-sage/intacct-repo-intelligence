@@ -22,6 +22,7 @@ ENTITY_DIAGNOSTIC_CODES = frozenset(
         "entity_metadata_dynamic",
         "entity_metadata_conflict",
         "entity_include_missing",
+        "entity_include_unresolved",
         "entity_include_dynamic",
         "entity_include_ambiguous",
         "entity_include_cycle",
@@ -704,6 +705,13 @@ def _include_target(path: str, include_value: str, retained_paths: dict[str, lis
     return candidate, "ok"
 
 
+def _include_basename_candidates(
+    include_value: str, retained_basename_paths: dict[str, list[str]]
+) -> list[str]:
+    """Return evidence-only candidates without using basename resolution."""
+    return list(retained_basename_paths.get(PurePosixPath(include_value).name, ()))
+
+
 def _insert_diagnostic(
     conn: sqlite3.Connection,
     *,
@@ -752,6 +760,11 @@ def extract_snapshot_entity_occurrences(
         for path, row in file_rows.items()
         if path in snapshot_entries
     }
+    retained_basename_paths: dict[str, list[str]] = {}
+    for path in retained_paths:
+        retained_basename_paths.setdefault(PurePosixPath(path).name, []).append(path)
+    for paths in retained_basename_paths.values():
+        paths.sort()
     parsed_files: dict[str, _ParsedFile] = {}
     all_diagnostics: list[_Diagnostic] = []
     for path in sorted(ent_paths):
@@ -789,7 +802,17 @@ def extract_snapshot_entity_occurrences(
                     include_graph.setdefault(path, []).append((target, span))
             else:
                 code = "entity_include_ambiguous" if state == "ambiguous" else "entity_include_missing"
-                all_diagnostics.append(_Diagnostic(parsed.file_id, "", code, _canonical({"include": include_value}), span))
+                message: dict[str, object] = {"include": include_value}
+                if state == "missing" and "/" not in include_value:
+                    candidates = _include_basename_candidates(
+                        include_value, retained_basename_paths
+                    )
+                    if candidates:
+                        code = "entity_include_unresolved"
+                        message["candidates"] = candidates
+                all_diagnostics.append(
+                    _Diagnostic(parsed.file_id, "", code, _canonical(message), span)
+                )
 
     visiting: list[str] = []
     visited: set[str] = set()

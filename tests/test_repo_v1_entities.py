@@ -247,19 +247,33 @@ def test_relative_include_resolution_uses_exact_retained_paths(tmp_path: Path) -
     _root, manifest, _target = _fixture(
         tmp_path,
         {
-            "app/source/apar/caller.ent": "<?php\nrequire 'helper.inc';\nrequire 'helper.cls';\nif ($enabled) { require 'conditional.inc'; }\nrequire 'missing.inc';\nrequire 'shared.inc';\n$kSchemas['caller'] = [];\n",
+            "app/source/apar/caller.ent": "<?php\nrequire 'helper.inc';\nrequire 'helper.cls';\nif ($enabled) { require 'conditional.inc'; }\nrequire 'missing.inc';\nrequire 'common/shared.inc';\nrequire '/etc/shared.inc';\nrequire 'shared.inc';\n$kSchemas['caller'] = [];\n",
             "app/source/apar/helper.inc": "<?php\n",
             "app/source/apar/helper.cls": "<?php\n",
             "app/source/apar/conditional.inc": "<?php\n",
             "app/source/common/shared.inc": "<?php\n",
+            "app/source/other/shared.inc": "<?php\n",
         },
     )
     db = tmp_path / "catalog.db"
     build_ia_main(manifest_path=manifest, active_db=db)
     diagnostics = _diagnostics(db)
     missing = [row for row in diagnostics if row[2] == "entity_include_missing"]
-    assert len(missing) == 2
-    assert {json.loads(row[3])["include"] for row in missing} == {"missing.inc", "shared.inc"}
+    unresolved = [row for row in diagnostics if row[2] == "entity_include_unresolved"]
+    assert len(missing) == 3
+    assert {json.loads(row[3])["include"] for row in missing} == {
+        "missing.inc",
+        "common/shared.inc",
+        "/etc/shared.inc",
+    }
+    assert len(unresolved) == 1
+    assert json.loads(unresolved[0][3]) == {
+        "candidates": [
+            "app/source/common/shared.inc",
+            "app/source/other/shared.inc",
+        ],
+        "include": "shared.inc",
+    }
     assert not any(row[2] == "entity_include_dynamic" for row in diagnostics)
 
 
