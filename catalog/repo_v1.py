@@ -26,14 +26,14 @@ from catalog.refresh_transaction import (
     refresh_lock,
 )
 from catalog.repo_v1_entities import ENTITY_DIAGNOSTIC_CODES
+from catalog.repo_v1_nextgen import (
+    extract_snapshot_nextgen,
+    validate_nextgen_candidate,
+)
 from catalog.repo_v1_openapi import (
     OpenAPIValidationError,
     extract_snapshot_openapi,
     validate_openapi_candidate,
-)
-from catalog.repo_v1_nextgen import (
-    extract_snapshot_nextgen,
-    validate_nextgen_candidate,
 )
 from catalog.repo_v1_ui import extract_snapshot_ui, validate_ui_candidate
 from catalog.repositories import RepositoryError, load_workspace_manifest
