@@ -68,7 +68,8 @@ def _diagnostics(db: Path) -> list[tuple]:
     conn.row_factory = sqlite3.Row
     try:
         return conn.execute(
-            """SELECT f.path,d.source_key,d.code,d.message,d.evidence,d.extractor
+            """SELECT f.path,d.source_key,d.code,d.message,d.evidence,d.extractor,
+                      d.source_commit_sha
                FROM entity_diagnostics d JOIN files f ON f.id=d.file_id
                ORDER BY f.path,d.source_key,d.code,d.diagnostic_key"""
         ).fetchall()
@@ -82,6 +83,8 @@ def test_source_shaped_identity_metadata_comments_and_escaped_keys(tmp_path: Pat
         {
             "app/source/apar/appostedpayment.ent": r'''<?php
 // $kSchemas['commented'] = [];
+$kSchemas['commented-table'] = ['module' => 'm'];
+// $kSchemas['commented-table']['table'] = 'not-real';
 $quoted = "not $kSchemas['a']";
 $kSchemas['appostedpayment'] = array(
     'module' => 'accounts-payable',
@@ -112,6 +115,32 @@ $kSchemas['appostedpayment']['fieldinfo'] = array('text' => "$kSchemas['not-an-i
     assert {"appostedpayment", "releasetopay", "single'quote", 'double"quote'} <= set(by_key)
     assert all(row[6] == target and row[8] == "repo_v1_entities_v1" for row in rows)
     assert not any(row[1] == "commented" for row in rows)
+    assert by_key["commented-table"][2:6] == ("m", None, None, None)
+    commented_table_diagnostic = next(
+        row
+        for row in _diagnostics(db)
+        if row[1] == "commented-table" and row[2] == "entity_metadata_missing"
+    )
+    assert commented_table_diagnostic[0:3] == (
+        "app/source/apar/appostedpayment.ent",
+        "commented-table",
+        "entity_metadata_missing",
+    )
+    assert json.loads(commented_table_diagnostic[3]) == {
+        "missing": ["table", "view"]
+    }
+    assert json.loads(commented_table_diagnostic[4]) == {
+        "path": "app/source/apar/appostedpayment.ent",
+        "start_line": 3,
+        "start_column": 1,
+        "end_line": 3,
+        "end_column": 49,
+        "text": "$kSchemas['commented-table'] = ['module' => 'm']",
+    }
+    assert commented_table_diagnostic[5:] == (
+        "repo_v1_entities_v1",
+        target,
+    )
 
 
 def test_multiple_files_repeated_keys_and_partial_metadata_are_source_backed(tmp_path: Path) -> None:
@@ -228,11 +257,11 @@ def test_inherit_ent_safe_overlays_and_unsafe_overlays_are_fail_closed(tmp_path:
 
 
 def test_wrappers_and_aliases_remain_conservatively_dynamic(tmp_path: Path) -> None:
-    _root, manifest, _target = _fixture(
+    _root, manifest, target = _fixture(
         tmp_path,
         {
             "app/source/apar/base.ent": "<?php\n$kSchemas['base'] = ['module'=>'m','table'=>'base'];\n",
-            "app/source/apar/wrappers.ent": "<?php\n$kSchemas['helper-arg'] = (static function($meta) { return helper($meta); })($kSchemas['base']);\n$kSchemas['helper-ref'] = (static function($meta) { return helper(&$meta); })($kSchemas['base']);\n$kSchemas['helper-many'] = (static function($meta, $x) { return helper($meta, $x); })($kSchemas['base']);\n$kSchemas['alias'] = (static function($meta) { $alias = $meta; return $alias; })($kSchemas['base']);\n$kSchemas['reference'] = (static function($meta) { return &$meta; })($kSchemas['base']);\n$kSchemas['mutation'] = (static function($meta) { $meta['module'] = 'changed'; return $meta; })($kSchemas['base']);\n",
+            "app/source/apar/wrappers.ent": "<?php\n$kSchemas['helper-arg'] = (static function($meta) { return helper($meta); })($kSchemas['base']);\n$kSchemas['helper-ref'] = (static function($meta) { return helper(&$meta); })($kSchemas['base']);\n$kSchemas['helper-many'] = (static function($meta, $x) { return helper($meta, $x); })($kSchemas['base']);\n$kSchemas['alias'] = (static function($meta) { $alias = $meta; return $alias; })($kSchemas['base']);\n$kSchemas['reference'] = (static function($meta) { return &$meta; })($kSchemas['base']);\n$kSchemas['mutation'] = (static function($meta) { $meta['module'] = 'changed'; return $meta; })($kSchemas['base']);\n$alias = $kSchemas['base'];\n$kSchemas['variable-alias'] = $alias;\n",
         },
     )
     db = tmp_path / "catalog.db"
@@ -241,18 +270,47 @@ def test_wrappers_and_aliases_remain_conservatively_dynamic(tmp_path: Path) -> N
     for key in ("helper-arg", "helper-ref", "helper-many", "alias", "reference", "mutation"):
         assert rows[key][2:6] == (None, None, None, None)
         assert any(row[1] == key and row[2] == "entity_reference_dynamic" for row in _diagnostics(db))
+    assert rows["variable-alias"][2:6] == (None, None, None, None)
+    variable_alias_diagnostics = [
+        row
+        for row in _diagnostics(db)
+        if row[1] == "variable-alias"
+    ]
+    assert len(variable_alias_diagnostics) == 1
+    variable_alias_diagnostic = variable_alias_diagnostics[0]
+    assert variable_alias_diagnostic[0:3] == (
+        "app/source/apar/wrappers.ent",
+        "variable-alias",
+        "entity_metadata_missing",
+    )
+    assert json.loads(variable_alias_diagnostic[3]) == {
+        "missing": ["module", "table", "view"]
+    }
+    assert json.loads(variable_alias_diagnostic[4]) == {
+        "path": "app/source/apar/wrappers.ent",
+        "start_line": 9,
+        "start_column": 1,
+        "end_line": 9,
+        "end_column": 37,
+        "text": "$kSchemas['variable-alias'] = $alias",
+    }
+    assert variable_alias_diagnostic[5:] == (
+        "repo_v1_entities_v1",
+        target,
+    )
 
 
 def test_relative_include_resolution_uses_exact_retained_paths(tmp_path: Path) -> None:
-    _root, manifest, _target = _fixture(
+    _root, manifest, target = _fixture(
         tmp_path,
         {
-            "app/source/apar/caller.ent": "<?php\nrequire 'helper.inc';\nrequire 'helper.cls';\nif ($enabled) { require 'conditional.inc'; }\nrequire 'missing.inc';\nrequire 'common/shared.inc';\nrequire '/etc/shared.inc';\nrequire 'shared.inc';\n$kSchemas['caller'] = [];\n",
+            "app/source/apar/caller.ent": "<?php\nrequire 'helper.inc';\nrequire 'helper.cls';\nif ($enabled) { require 'conditional.inc'; }\nrequire 'missing.inc';\nrequire 'common/shared.inc';\nrequire '/etc/shared.inc';\nrequire 'shared.inc';\nrequire 'unique.ent';\n$kSchemas['caller'] = [];\n",
             "app/source/apar/helper.inc": "<?php\n",
             "app/source/apar/helper.cls": "<?php\n",
             "app/source/apar/conditional.inc": "<?php\n",
             "app/source/common/shared.inc": "<?php\n",
             "app/source/other/shared.inc": "<?php\n",
+            "app/source/common/unique.ent": "<?php\n$kSchemas['cross-directory'] = ['module'=>'wrong','table'=>'wrong'];\n",
         },
     )
     db = tmp_path / "catalog.db"
@@ -266,15 +324,50 @@ def test_relative_include_resolution_uses_exact_retained_paths(tmp_path: Path) -
         "common/shared.inc",
         "/etc/shared.inc",
     }
-    assert len(unresolved) == 1
-    assert json.loads(unresolved[0][3]) == {
+    unresolved_messages = {
+        json.loads(row[3])["include"]: row for row in unresolved
+    }
+    assert set(unresolved_messages) == {"shared.inc", "unique.ent"}
+    assert json.loads(unresolved_messages["shared.inc"][3]) == {
         "candidates": [
             "app/source/common/shared.inc",
             "app/source/other/shared.inc",
         ],
         "include": "shared.inc",
     }
+    assert json.loads(unresolved_messages["unique.ent"][3]) == {
+        "candidates": ["app/source/common/unique.ent"],
+        "include": "unique.ent",
+    }
+    assert all(
+        row[0:3] == (
+            "app/source/apar/caller.ent",
+            None,
+            "entity_include_unresolved",
+        )
+        and row[5:] == ("repo_v1_entities_v1", target)
+        for row in unresolved_messages.values()
+    )
+    assert json.loads(unresolved_messages["shared.inc"][4]) == {
+        "path": "app/source/apar/caller.ent",
+        "start_line": 8,
+        "start_column": 1,
+        "end_line": 8,
+        "end_column": 22,
+        "text": "require 'shared.inc';",
+    }
+    assert json.loads(unresolved_messages["unique.ent"][4]) == {
+        "path": "app/source/apar/caller.ent",
+        "start_line": 9,
+        "start_column": 1,
+        "end_line": 9,
+        "end_column": 22,
+        "text": "require 'unique.ent';",
+    }
     assert not any(row[2] == "entity_include_dynamic" for row in diagnostics)
+    rows = {row[1]: row for row in _entity_rows(db)}
+    assert rows["caller"][2:6] == (None, None, None, None)
+    assert rows["cross-directory"][2:6] == ("wrong", "wrong", None, None)
 
 
 def test_repeated_full_assignments_process_later_reference(tmp_path: Path) -> None:
