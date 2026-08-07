@@ -44,6 +44,7 @@ CREATE TABLE files (
 );
 
 CREATE INDEX idx_repo_v1_files_repo_path ON files(repo_id, path);
+CREATE UNIQUE INDEX uq_repo_v1_files_repo_id_id ON files(repo_id, id);
 
 CREATE TABLE entity_nodes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -383,3 +384,82 @@ CREATE INDEX idx_repo_v1_ui_diagnostics_repo_file
     ON ui_diagnostics(repo_id, file_id);
 CREATE INDEX idx_repo_v1_ui_diagnostics_lookup
     ON ui_diagnostics(repo_id, code, diagnostic_key);
+
+CREATE TABLE nextgen_families (
+    id INTEGER PRIMARY KEY,
+    repo_id INTEGER NOT NULL REFERENCES repos(id),
+    family_key TEXT NOT NULL CHECK(TRIM(family_key) <> ''),
+    source_file_id INTEGER NOT NULL,
+    source_path TEXT NOT NULL CHECK(TRIM(source_path) <> ''),
+    source_commit_sha TEXT NOT NULL CHECK(TRIM(source_commit_sha) <> ''),
+    source_hash TEXT NOT NULL CHECK(TRIM(source_hash) <> ''),
+    start_line INTEGER NOT NULL CHECK(start_line >= 1),
+    end_line INTEGER NOT NULL CHECK(end_line >= start_line),
+    evidence TEXT NOT NULL CHECK(TRIM(evidence) <> ''),
+    extractor TEXT NOT NULL CHECK(TRIM(extractor) <> ''),
+    extractor_version TEXT NOT NULL CHECK(TRIM(extractor_version) <> ''),
+    UNIQUE(repo_id, family_key),
+    UNIQUE(repo_id, id),
+    FOREIGN KEY (repo_id, source_file_id) REFERENCES files(repo_id, id)
+);
+
+CREATE INDEX idx_repo_v1_nextgen_families_repo_file
+    ON nextgen_families(repo_id, source_file_id);
+CREATE INDEX idx_repo_v1_nextgen_families_repo_path
+    ON nextgen_families(repo_id, source_path);
+
+CREATE TABLE nextgen_artifacts (
+    id INTEGER PRIMARY KEY,
+    repo_id INTEGER NOT NULL REFERENCES repos(id),
+    family_id INTEGER NOT NULL,
+    artifact_key TEXT NOT NULL CHECK(TRIM(artifact_key) <> ''),
+    artifact_kind TEXT NOT NULL CHECK(artifact_kind IN ('uimeta', 'viewmeta', 'view')),
+    file_id INTEGER NOT NULL,
+    source_path TEXT NOT NULL CHECK(TRIM(source_path) <> ''),
+    source_commit_sha TEXT NOT NULL CHECK(TRIM(source_commit_sha) <> ''),
+    source_hash TEXT NOT NULL CHECK(TRIM(source_hash) <> ''),
+    start_line INTEGER NOT NULL CHECK(start_line >= 1),
+    end_line INTEGER NOT NULL CHECK(end_line >= start_line),
+    evidence TEXT NOT NULL CHECK(TRIM(evidence) <> ''),
+    extractor TEXT NOT NULL CHECK(TRIM(extractor) <> ''),
+    extractor_version TEXT NOT NULL CHECK(TRIM(extractor_version) <> ''),
+    UNIQUE(repo_id, family_id, artifact_key),
+    FOREIGN KEY (repo_id, family_id) REFERENCES nextgen_families(repo_id, id),
+    FOREIGN KEY (repo_id, file_id) REFERENCES files(repo_id, id)
+);
+
+CREATE INDEX idx_repo_v1_nextgen_artifacts_repo_family
+    ON nextgen_artifacts(repo_id, family_id);
+CREATE INDEX idx_repo_v1_nextgen_artifacts_repo_file
+    ON nextgen_artifacts(repo_id, file_id);
+CREATE INDEX idx_repo_v1_nextgen_artifacts_repo_path
+    ON nextgen_artifacts(repo_id, source_path);
+
+CREATE TABLE nextgen_diagnostics (
+    id INTEGER PRIMARY KEY,
+    repo_id INTEGER NOT NULL REFERENCES repos(id),
+    file_id INTEGER NOT NULL,
+    diagnostic_key TEXT NOT NULL CHECK(TRIM(diagnostic_key) <> ''),
+    severity TEXT NOT NULL CHECK(severity IN ('warning', 'error')),
+    code TEXT NOT NULL CHECK(code IN (
+        'nextgen.yaml.invalid',
+        'nextgen.yaml.document_not_mapping',
+        'nextgen.family.invalid_object',
+        'nextgen.family.unresolved'
+    )),
+    message TEXT NOT NULL CHECK(TRIM(message) <> ''),
+    source_commit_sha TEXT NOT NULL CHECK(TRIM(source_commit_sha) <> ''),
+    source_hash TEXT NOT NULL CHECK(TRIM(source_hash) <> ''),
+    start_line INTEGER NOT NULL CHECK(start_line >= 1),
+    end_line INTEGER NOT NULL CHECK(end_line >= start_line),
+    evidence TEXT NOT NULL CHECK(TRIM(evidence) <> ''),
+    extractor TEXT NOT NULL CHECK(TRIM(extractor) <> ''),
+    extractor_version TEXT NOT NULL CHECK(TRIM(extractor_version) <> ''),
+    UNIQUE(repo_id, diagnostic_key),
+    FOREIGN KEY (repo_id, file_id) REFERENCES files(repo_id, id)
+);
+
+CREATE INDEX idx_repo_v1_nextgen_diagnostics_repo_file
+    ON nextgen_diagnostics(repo_id, file_id);
+CREATE INDEX idx_repo_v1_nextgen_diagnostics_lookup
+    ON nextgen_diagnostics(repo_id, code, diagnostic_key);

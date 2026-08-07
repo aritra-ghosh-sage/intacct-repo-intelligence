@@ -478,7 +478,7 @@ Target and source evidence:
 - Source branch/status: `main`, clean at the target commit.
 - Target commit: `e7fbab69da69cd605076eec74ee456066514adaf`.
 - Active database: `/Users/aritra.ghosh/projects/intacct-repo-intelligence/catalog/catalog.db`.
-- Active build token: `7fbc9e10320f4e9eaec87ff4411f6a3d`.
+- Active build token: `3f05b871acc04e2bb368f46a74c3ffa2`.
 - Operator command:
   `PYTHONPATH=. ./.venv/bin/python -m catalog.repo_v1 --manifest config/workspace_repos.yaml --active-db catalog/catalog.db`.
 - Operator result: promoted atomically with `file_count=23877` and the target
@@ -530,8 +530,61 @@ normalized hashes.
 | Formatting and syntax | Ruff check/format, `py_compile`, and `git diff --check` — passed. |
 
 Phase 7A remaining gaps: none within the accepted six-table immutable XML
-scope. The following remain explicitly deferred and keep the broader Phase 7
-open: event-call resolution, PHP loaders, JavaScript handlers, NextGen UI,
-UI/entity links, legacy `catalog/ui_sync.py`, last-known-good or stale
-retention, migrations, delta refresh, CLI/MCP, graph projection,
-multi-repository support, workflow, and security.
+scope. Phase 7B below promotes the immutable NextGen UI fact extension.
+
+## Phase 7B — Immutable NextGen UI Facts
+
+Phase 7B is accepted for immutable NextGen family, artifact, and YAML/family
+diagnostic facts. It reads only retained `SourceSnapshot` bytes and calls
+`parser.ui.nextgen.extract_nextgen_families` without explicit entity mappings.
+Entity references and entity-mapping diagnostics are discarded. No PHP,
+JavaScript, event-call, UI/entity-link, legacy synchronization, graph, MCP,
+delta, or in-place migration behavior is included.
+
+Target and source evidence:
+
+- Branch: `repo-v1`.
+- Resolved source checkout: `/Users/aritra.ghosh/projects/main`.
+- Target commit: `e7fbab69da69cd605076eec74ee456066514adaf`.
+- Canonical active database: `catalog/catalog.db`.
+- Promoted build token: `3c22c4cb00e0443fbe160c7ec01f8419`.
+- Previous active build token preserved in `.previous`:
+  `b2b059f0f3ff4a67872fc18eb57d1b10`.
+
+The promoted active build records:
+
+```text
+nextgen_families=393
+nextgen_artifacts=1002
+nextgen_diagnostics=13
+```
+
+Normalized SHA-256 hashes of schema-order projected rows, excluding generated
+IDs and sorting by all projected columns, are:
+
+```text
+nextgen_families=f3d55abe2014a3e679d2e21e20da7fec893ff353e07a347e9d31d915a863af99
+nextgen_artifacts=f9dbe4980a4c0aa3aa40d40f1eccb8b41b222d5c274242cd833f6ef430d2d24f
+nextgen_diagnostics=99f4f8368a1eba8f43f41acc95930095179336de248c7eaa1fa244433117c799
+```
+
+The two isolated repeat builds and the canonical active build produced the
+same three hashes. Raw SHA-256 source hashes were independently verified for
+all 1,015 retained NextGen-like files against the target Git commit.
+
+| Acceptance requirement | Evidence and observed result |
+| --- | --- |
+| Focused Phase 7B behavior | `PYTHONPATH=. ./.venv/bin/pytest -q tests/test_repo_v1_nextgen.py` — 7 passed, 1 warning. |
+| Full requested regression | 121 passed, 1 failed, 1 warning; the known Phase 6 upgrade fixture fails because it removes Phase 7A tables while retaining complete Phase 7B tables. This is tracked as deferred migration-scheduling work. |
+| Exact three-table schema, indexes, and composite FKs | Focused schema test and active SQLite inspection — passed. |
+| YAML/family diagnostics and parser severity | Focused tests — passed; only the four allowlisted codes persisted, with YAML errors and family warnings preserved. |
+| Canonical evidence, JSON null, stable keys, and collision ordinals | Focused tests — passed. |
+| Dirty-checkout immunity and raw source hashes | Focused tests and independent verification — passed for all 1,015 retained inputs. |
+| Candidate ownership, provenance, evidence, hash, line-range, key, and FK validation | Focused candidate tests and promoted build — passed. |
+| Atomic promotion and active/.previous preservation | Canonical result `promoted=true`; the prior active token remained available in `.previous`. |
+| SQLite integrity and foreign keys | `PRAGMA integrity_check = ok`; `PRAGMA foreign_key_check` returned no rows. |
+| Formatting and syntax | `py_compile` and `git diff --check` — passed. |
+
+Phase 7B deferred work: schedule and repair the legacy Phase 6 upgrade fixture
+for the ordered Phase 7A/7B parent boundary. No in-place migration is added;
+the supported path remains a complete candidate rebuild and atomic promotion.

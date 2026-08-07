@@ -573,9 +573,28 @@ partial UI table family is incompatible. No in-place migration, mutable
 checkout read, legacy UI synchronization, recursive include parsing, stale
 retention, event-call resolution, or UI/entity link is included.
 
-Explicitly deferred from Phase 7: PHP loaders, JavaScript handlers, NextGen
-UI, event-call resolution, UI/entity links, legacy `catalog/ui_sync.py`,
-last-known-good/stale retention, migrations, delta refresh, CLI/MCP, graph,
+#### 7B — Immutable NextGen UI facts
+
+Phase 7B is accepted as a snapshot-only extension of Phase 7A. It materializes
+`nextgen_families`, `nextgen_artifacts`, and `nextgen_diagnostics` from the
+retained bytes of `.uimeta`, `.viewmeta`, and `.view` YAML artifacts through
+`parser.ui.nextgen.extract_nextgen_families`. It preserves canonical stable
+keys, canonical evidence, raw SHA-256 source evidence, parser severity, and
+candidate ownership/provenance/integrity validation. Entity references,
+entity-mapping diagnostics, PHP loaders, JavaScript handlers, event-call
+resolution, and UI/entity links remain outside this slice.
+
+The accepted parent boundary is ordered and additive: a complete Phase 6
+parent may build the complete Phase 7A/7B candidate; a complete Phase 7A
+parent may build the complete Phase 7B candidate; a complete Phase 7B parent
+must contain both complete table families. Partial families and a Phase 7B
+family without Phase 7A are incompatible. No in-place migration is added.
+Scheduling and repairing the legacy Phase 6 upgrade fixture are deferred as
+operator migration work.
+
+Explicitly deferred from Phase 7: PHP loaders, JavaScript handlers, event-call
+resolution, UI/entity links, legacy `catalog/ui_sync.py`, last-known-good/stale
+retention, migration scheduling, delta refresh, CLI/MCP, graph,
 multi-repository support, workflow, and security.
 
 ### 8. Workflow and security

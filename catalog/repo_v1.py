@@ -31,6 +31,10 @@ from catalog.repo_v1_openapi import (
     extract_snapshot_openapi,
     validate_openapi_candidate,
 )
+from catalog.repo_v1_nextgen import (
+    extract_snapshot_nextgen,
+    validate_nextgen_candidate,
+)
 from catalog.repo_v1_ui import extract_snapshot_ui, validate_ui_candidate
 from catalog.repositories import RepositoryError, load_workspace_manifest
 from catalog.source_snapshot import SourceSnapshotError, materialize_source_snapshot
@@ -56,9 +60,18 @@ PHASE7A_ADDITIVE_TABLES = frozenset(
         "ui_diagnostics",
     }
 )
+PHASE7B_ADDITIVE_TABLES = frozenset(
+    {
+        "nextgen_families",
+        "nextgen_artifacts",
+        "nextgen_diagnostics",
+    }
+)
 # Existing Phase 5 -> Phase 6 upgrades remain valid; Phase 7A adds its own
 # complete table family on top of that accepted boundary.
-_REPO_V1_ADDITIVE_TABLES = PHASE6_ADDITIVE_TABLES | PHASE7A_ADDITIVE_TABLES
+_REPO_V1_ADDITIVE_TABLES = (
+    PHASE6_ADDITIVE_TABLES | PHASE7A_ADDITIVE_TABLES | PHASE7B_ADDITIVE_TABLES
+)
 
 
 def _load_schema_contract() -> dict[str, frozenset[str]]:
@@ -346,6 +359,12 @@ def _build_inventory(
                 snapshot=snapshot,
                 show_progress=show_progress,
             )
+            nextgen_stats = extract_snapshot_nextgen(
+                conn,
+                repo_id=repo_id,
+                snapshot=snapshot,
+                show_progress=show_progress,
+            )
         file_count = int(
             conn.execute(
                 "SELECT COUNT(*) FROM files WHERE repo_id=?", (repo_id,)
@@ -378,6 +397,9 @@ def _build_inventory(
                         "ui_event_count": ui_stats.event_count,
                         "ui_include_count": ui_stats.include_count,
                         "ui_diagnostic_count": ui_stats.diagnostic_count,
+                        "nextgen_family_count": nextgen_stats.family_count,
+                        "nextgen_artifact_count": nextgen_stats.artifact_count,
+                        "nextgen_diagnostic_count": nextgen_stats.diagnostic_count,
                     },
                     sort_keys=True,
                 ),
@@ -599,6 +621,14 @@ def _validate_candidate(
             )
         except (RuntimeError, ValueError, KeyError, TypeError, AttributeError) as exc:
             raise RepoV1Error(str(exc)) from exc
+        try:
+            validate_nextgen_candidate(
+                conn,
+                repo_id=int(repo["id"]),
+                target_commit_sha=target_commit_sha,
+            )
+        except (RuntimeError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            raise RepoV1Error(str(exc)) from exc
     finally:
         conn.close()
 
@@ -645,7 +675,7 @@ def build_ia_main(
             expected_schema=_REPO_V1_SCHEMA_CONTRACT,
             allowed_missing_tables=_REPO_V1_ADDITIVE_TABLES,
         )
-        _assert_phase7a_parent_boundary(active)
+        _assert_phase7b_parent_boundary(active)
         candidate = _new_candidate(active)
         try:
             file_count = _build_inventory(
@@ -674,8 +704,8 @@ def build_ia_main(
             candidate.unlink(missing_ok=True)
 
 
-def _assert_phase7a_parent_boundary(active: Path) -> None:
-    """Allow only a complete Phase 6 parent or a current Phase 7A parent."""
+def _assert_phase7b_parent_boundary(active: Path) -> None:
+    """Allow only complete Phase 6, 7A, or 7B parent table families."""
 
     if not active.exists():
         return
@@ -693,11 +723,21 @@ def _assert_phase7a_parent_boundary(active: Path) -> None:
     except sqlite3.DatabaseError:
         # parent_descriptor owns the precise malformed-database error.
         return
-    missing = PHASE7A_ADDITIVE_TABLES - tables
-    if missing and missing != PHASE7A_ADDITIVE_TABLES:
+    phase7a_present = PHASE7A_ADDITIVE_TABLES & tables
+    phase7b_present = PHASE7B_ADDITIVE_TABLES & tables
+    phase7a_complete = phase7a_present == PHASE7A_ADDITIVE_TABLES
+    phase7b_complete = phase7b_present == PHASE7B_ADDITIVE_TABLES
+    phase7a_partial = bool(phase7a_present) and not phase7a_complete
+    phase7b_partial = bool(phase7b_present) and not phase7b_complete
+    invalid = (
+        phase7a_partial
+        or phase7b_partial
+        or (phase7b_complete and not phase7a_complete)
+    )
+    if invalid:
         raise CatalogPromotionError(
-            "active catalog schema is incompatible with the Phase 7A upgrade: "
-            "partial UI table set is not a valid Phase 6 parent"
+            "active catalog schema is incompatible with the Phase 7B upgrade: "
+            "partial UI table set or partial NextGen table set is not a valid parent"
         )
 
 
