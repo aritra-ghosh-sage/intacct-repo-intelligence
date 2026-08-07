@@ -107,7 +107,7 @@ def test_index_scope_duplicate_keys_and_exact_endpoint_facts(tmp_path: Path) -> 
     files = {
         "app/source/openapispec/ap/bill.schema.yaml": b"openapi: 3.0.0\nx-mappedTo: APBill\n",
         "app/source/openapispec/ap/paths/bill.api.yaml": b"openapi: 3.0.0\npaths:\n  /bills/{key}:\n    get:\n      operationId: list-bills\n      responses:\n        '200':\n          $ref: '#/components/responses/ok'\n    post:\n      responses: {}\n",
-        "app/source/openapispec/ap/paths/uppercase.api.yaml": b"openapi: 3.0.0\npaths:\n  /bills/{key}:\n    GET:\n      operationId: uppercase-get\n      responses: {}\n",
+        "app/source/openapispec/ap/paths/uppercase.api.yaml": b"openapi: 3.0.0\npaths:\n  /bills/{key}:\n    GET:\n      operationId: uppercase-get\n      responses: {}\n    connect:\n      operationId: unsupported-connect\n      responses: {}\n",
         "app/source/openapispec/template/ignored.yaml": b"not: indexed\n",
         "app/source/openapispec/bad.yaml": b"a: 1\na: 2\n",
         "app/source/openapispec/not-a-map.yaml": b"- value\n",
@@ -122,7 +122,7 @@ def test_index_scope_duplicate_keys_and_exact_endpoint_facts(tmp_path: Path) -> 
         stats = extract_snapshot_openapi(conn, repo_id=1, snapshot=snapshot)
         assert stats.document_count == 3
         assert stats.link_count == 1
-        assert stats.endpoint_count == 3
+        assert stats.endpoint_count == 2
         docs = conn.execute(
             "SELECT path,kind,document_key FROM openapi_documents ORDER BY path"
         ).fetchall()
@@ -144,9 +144,15 @@ def test_index_scope_duplicate_keys_and_exact_endpoint_facts(tmp_path: Path) -> 
             for row in endpoints
         ] == [
             ("/bills/{key}", "get", "list-bills", "/paths/~1bills~1{key}/get"),
-            ("/bills/{key}", "get", "uppercase-get", "/paths/~1bills~1{key}/GET"),
             ("/bills/{key}", "post", None, "/paths/~1bills~1{key}/post"),
         ]
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM rest_endpoints WHERE operation_id IN (?, ?)",
+                ("uppercase-get", "unsupported-connect"),
+            ).fetchone()[0]
+            == 0
+        )
         codes = {row[0] for row in conn.execute("SELECT code FROM openapi_diagnostics")}
         assert "OPENAPI_YAML_DUPLICATE_KEY" in codes
         assert "OPENAPI_YAML_NON_MAPPING" in codes

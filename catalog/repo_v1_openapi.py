@@ -572,7 +572,7 @@ def _rest_endpoints(
                 )
                 continue
             for raw_method, operation in path_item.items():
-                method = raw_method.casefold() if isinstance(raw_method, str) else ""
+                method = raw_method if isinstance(raw_method, str) else ""
                 if method not in HTTP_METHODS:
                     continue
                 pointer = (
