@@ -141,11 +141,11 @@ Validation evidence:
 - `./.venv/bin/python -m pytest tests/test_pr_impact_step0.py -q` — 19 tests
   passed.
 - `./.venv/bin/python -m scripts.validate_pr_impact_step0 --fixture
-  examples/pr-impact/ia-app-pr-48706.yaml --repo-root
-  /Users/aritra.ghosh/projects/main` — pass, exit code 0.
+  examples/pr-impact/ia-app-pr-48706.yaml --manifest
+  config/workspace_repos.yaml --repo-key ia-main` — pass, exit code 0.
 - `./.venv/bin/python -m scripts.validate_pr_impact_step0 --fixture
-  examples/pr-impact/ia-app-pr-49156.yaml --repo-root
-  /Users/aritra.ghosh/projects/main` — pass, exit code 0.
+  examples/pr-impact/ia-app-pr-49156.yaml --manifest
+  config/workspace_repos.yaml --repo-key ia-main` — pass, exit code 0.
 - `git diff --check` — pass.
 
 The validator confirmed the required fixture sections, full base and target
@@ -170,6 +170,14 @@ runtime-correctness, or downstream test-coverage analysis. Those remain
 follow-up steps.
 
 ## Deliberate Step 0 boundary
+
+Step 1 receives the fixture's exact base and target revisions and validates the
+Git diff before reading repo-v1 facts. The checkout is resolved from the
+workspace manifest by `repo_key`; a user-supplied checkout-root argument is not
+part of the interface. Git diff validation only; no catalog delta processing.
+Step 1 is read-only, emits a separate JSON report, and does not modify this
+YAML fixture.
+Git diff validation only; no catalog delta processing.
 
 Step 0 does not attempt to prove the full call graph, API contract, UI path,
 database consumer path, repository test coverage, or permission behavior. Those

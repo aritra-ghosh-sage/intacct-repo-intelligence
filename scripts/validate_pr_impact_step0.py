@@ -18,6 +18,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from catalog.delta import ChangeType, DeltaUnavailable, collect_changed_paths
+from catalog.pr_impact_manifest import resolve_manifest_repo_root
 from catalog.source_snapshot import SourceSnapshotError, resolve_commit_sha
 
 
@@ -304,16 +305,31 @@ def _status_warnings(value: object, location: str, report: ValidationReport) -> 
             _status_warnings(child, f"{location}[{index}]", report)
 
 
-def validate_fixture(fixture_path: Path, repo_root: Path) -> ValidationReport:
+def validate_fixture(
+    fixture_path: Path,
+    manifest_path: Path,
+    repo_key: str,
+) -> ValidationReport:
     report: ValidationReport = {
         "schema_version": "0.1",
         "fixture": str(fixture_path),
         "repository": "intacct/ia-app",
+        "manifest": str(manifest_path),
+        "repo_key": repo_key,
         "status": "fail",
         "errors": [],
         "warnings": [],
         "checks": [],
     }
+    try:
+        repo_root = resolve_manifest_repo_root(manifest_path, repo_key)
+    except ValueError as exc:
+        code, _, message = str(exc).partition(": ")
+        _error(report, code or "manifest_invalid", message or str(exc), "repo_key")
+        _check(report, "manifest", "error")
+        return report
+    report["repo_root"] = str(repo_root)
+    _check(report, "manifest", "pass")
     document = _load_fixture(fixture_path, report)
     if document is None:
         _check(report, "yaml_schema", "error")
@@ -365,10 +381,13 @@ def validate_fixture(fixture_path: Path, repo_root: Path) -> ValidationReport:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fixture", type=Path, required=True)
-    parser.add_argument("--repo-root", type=Path, required=True)
+    parser.add_argument(
+        "--manifest", type=Path, default=Path("config/workspace_repos.yaml")
+    )
+    parser.add_argument("--repo-key", required=True)
     parser.add_argument("--json", action="store_true", dest="as_json")
     args = parser.parse_args(argv)
-    report = validate_fixture(args.fixture, args.repo_root)
+    report = validate_fixture(args.fixture, args.manifest, args.repo_key)
     if args.as_json:
         print(json.dumps(report, indent=2, sort_keys=False))
     else:

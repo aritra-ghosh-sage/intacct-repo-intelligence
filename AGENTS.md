@@ -176,6 +176,12 @@ assert the affected fact; those rows do not alone make a candidate invalid.
 Snapshot, source-read, provenance, ownership, integrity, and candidate
 validation failures remain fail-closed promotion errors.
 
+PR impact Step 1 is read-only and repo-v1-only. Git diff validation only; no
+catalog delta processing. `catalog.delta.collect_changed_paths` may be used
+only as a raw Git diff/path-status parser, never for catalog change-set
+processing, delta planning, delta refresh, or delta builder execution.
+Git diff validation only; no catalog delta processing.
+
 ## When Editing
 
 - Keep changes evidence-backed and minimal.

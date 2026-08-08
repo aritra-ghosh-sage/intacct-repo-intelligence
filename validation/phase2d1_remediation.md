@@ -20,6 +20,11 @@ authoritative when prose and data disagree.
 ## Builder boundary
 
 - Exact delta is limited to scan, symbols, and relationships.
+- PR impact Step 1 performs Git diff validation only; no catalog delta
+  processing. `catalog.delta.collect_changed_paths`, if reused, is only a raw
+  Git diff/path-status parser and never a catalog change-set, planner, refresh,
+  or builder input.
+Git diff validation only; no catalog delta processing.
 - Reset-style builders run in full only when a declared direct input or upstream
   evidence edge is invalidated.
 - Gherkin coverage depends on scan and its exact manifest-configured feature,

@@ -44,6 +44,12 @@ UI-specific exception and not a generic stale-data mechanism.
 - cross-repository link extraction;
 - Ladybug graph construction and promotion.
 
+PR impact Step 1 follows the same boundary: Git diff validation only; no
+catalog delta processing. It is a read-only trace over the active repo-v1
+snapshot and does not add delta planning or execution to the full-rebuild
+path.
+Git diff validation only; no catalog delta processing.
+
 ## Reusable existing components
 
 - `catalog/source_snapshot.py` for exact committed Git source materialization;

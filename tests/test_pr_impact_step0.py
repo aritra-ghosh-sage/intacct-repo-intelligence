@@ -62,10 +62,31 @@ def _fixture(tmp_path: Path, repo: Path, base: str, target: str, files: list[dic
     return path
 
 
+def _manifest(repo: Path) -> Path:
+    path = repo.parent / "workspace.yaml"
+    path.write_text(yaml.safe_dump({
+        "version": 1,
+        "repositories": [{
+            "repo_key": "ia-main",
+            "local_root": str(repo),
+            "tracked_branch": "main",
+            "profile": "intacct_app",
+            "builders": [],
+        }],
+    }), encoding="utf-8")
+    return path
+
+
+def _validate(path: Path, repo: Path) -> validator.ValidationReport:
+    return validator.validate_fixture(path, _manifest(repo), "ia-main")
+
+
 def test_golden_fixtures_parse_and_validate() -> None:
     repo = Path("/Users/aritra.ghosh/projects/main")
     for name in ("ia-app-pr-49156.yaml", "ia-app-pr-48706.yaml"):
-        report = validator.validate_fixture(FIXTURES / name, repo)
+        report = validator.validate_fixture(
+            FIXTURES / name, ROOT / "config/workspace_repos.yaml", "ia-main"
+        )
         assert report["status"] == "pass", report
 
 
@@ -75,7 +96,7 @@ def test_required_sections_and_status_are_enforced(tmp_path: Path) -> None:
     document = yaml.safe_load(path.read_text())
     del document["pull_request"]
     path.write_text(yaml.safe_dump(document))
-    report = validator.validate_fixture(path, repo)
+    report = _validate(path, repo)
     assert any(item["code"] == "missing_required_section" for item in report["errors"])
 
 
@@ -98,7 +119,7 @@ def test_documented_required_section_cannot_be_omitted(tmp_path: Path, section: 
     document = yaml.safe_load(path.read_text())
     del document[section]
     path.write_text(yaml.safe_dump(document))
-    report = validator.validate_fixture(path, repo)
+    report = _validate(path, repo)
     assert any(item["code"] == "missing_required_section" for item in report["errors"])
 
 
@@ -109,7 +130,7 @@ def test_missing_revision_fails(tmp_path: Path, field: str) -> None:
     document = yaml.safe_load(path.read_text())
     del document["pull_request"][field]
     path.write_text(yaml.safe_dump(document))
-    report = validator.validate_fixture(path, repo)
+    report = _validate(path, repo)
     assert any(item["code"] == "missing_required_field" for item in report["errors"])
 
 
@@ -119,7 +140,7 @@ def test_non_full_or_ambiguous_revision_fails(tmp_path: Path) -> None:
     document = yaml.safe_load(path.read_text())
     document["pull_request"]["base_revision"] = base[:8]
     path.write_text(yaml.safe_dump(document))
-    report = validator.validate_fixture(path, repo)
+    report = _validate(path, repo)
     assert any(item["code"] == "invalid_git_revision" for item in report["errors"])
 
 
@@ -130,7 +151,7 @@ def test_added_modified_deleted_validate(tmp_path: Path) -> None:
         {"path": "app/added.txt", "status": "added"},
         {"path": "app/deleted.txt", "status": "deleted"},
     ]
-    report = validator.validate_fixture(_fixture(tmp_path, repo, base, target, files), repo)
+    report = _validate(_fixture(tmp_path, repo, base, target, files), repo)
     assert report["status"] == "pass", report
 
 
@@ -141,7 +162,7 @@ def test_path_and_status_mismatch_duplicate_and_unsafe_paths_fail(tmp_path: Path
         {"path": "app/a.txt", "status": "modified"},
         {"path": "../escape", "status": "deleted"},
     ]
-    report = validator.validate_fixture(_fixture(tmp_path, repo, base, target, files), repo)
+    report = _validate(_fixture(tmp_path, repo, base, target, files), repo)
     codes = {item["code"] for item in report["errors"]}
     assert {"changed_files_mismatch", "duplicate_path", "unsafe_path"} <= codes
 
@@ -150,7 +171,7 @@ def test_missing_evidence_and_invalid_line_fail(tmp_path: Path) -> None:
     repo, base, target = _repo(tmp_path)
     files = [{"path": "app/a.txt", "status": "modified"}, {"path": "app/added.txt", "status": "added"}, {"path": "app/deleted.txt", "status": "deleted"}]
     document = {"changed_items": [{"evidence": [{"source": "app/a.txt", "line": 99}, "app/nope.txt"]}]}
-    report = validator.validate_fixture(_fixture(tmp_path, repo, base, target, files, **document), repo)
+    report = _validate(_fixture(tmp_path, repo, base, target, files, **document), repo)
     codes = {item["code"] for item in report["errors"]}
     assert {"missing_evidence_path", "invalid_evidence_line"} <= codes
 
@@ -158,7 +179,7 @@ def test_missing_evidence_and_invalid_line_fail(tmp_path: Path) -> None:
 def test_rename_is_explicitly_unsupported(tmp_path: Path) -> None:
     repo, base, target = _repo(tmp_path, rename=True)
     path = _fixture(tmp_path, repo, base, target, [{"path": "app/b.txt", "status": "added"}, {"path": "app/a.txt", "status": "deleted"}])
-    report = validator.validate_fixture(path, repo)
+    report = _validate(path, repo)
     assert any(item["code"] == "unsupported_change_type" for item in report["errors"])
 
 
@@ -166,7 +187,7 @@ def test_malformed_git_diff_is_error(tmp_path: Path, monkeypatch: pytest.MonkeyP
     repo, base, target = _repo(tmp_path)
     path = _fixture(tmp_path, repo, base, target, [{"path": "app/a.txt", "status": "modified"}])
     monkeypatch.setattr(validator, "collect_changed_paths", lambda *args: (_ for _ in ()).throw(validator.DeltaUnavailable("malformed raw Git diff")))
-    report = validator.validate_fixture(path, repo)
+    report = _validate(path, repo)
     assert any(item["code"] == "git_diff_error" for item in report["errors"])
 
 
@@ -174,7 +195,7 @@ def test_unresolved_and_missing_review_reference_are_warnings(tmp_path: Path) ->
     repo, base, target = _repo(tmp_path)
     files = [{"path": "app/a.txt", "status": "modified"}, {"path": "app/added.txt", "status": "added"}, {"path": "app/deleted.txt", "status": "deleted"}]
     path = _fixture(tmp_path, repo, base, target, files, assessment={"confidence": "medium", "risk_level": "low", "blockers": [], "unresolved": ["not checked"]}, review_evidence={"automated": [{"type": "pull_request_review", "reviewed_revision": base}], "human": []})
-    report = validator.validate_fixture(path, repo)
+    report = _validate(path, repo)
     assert report["status"] == "pass"
     assert any(item["code"] == "stale_review_evidence" for item in report["warnings"])
 
@@ -183,7 +204,7 @@ def test_json_envelope_and_cli_exit_codes(tmp_path: Path) -> None:
     repo, base, target = _repo(tmp_path)
     files = [{"path": "app/a.txt", "status": "modified"}, {"path": "app/added.txt", "status": "added"}, {"path": "app/deleted.txt", "status": "deleted"}]
     path = _fixture(tmp_path, repo, base, target, files, assessment={"confidence": "medium", "risk_level": "low", "blockers": [], "unresolved": ["x"]})
-    command = ["./.venv/bin/python", "scripts/validate_pr_impact_step0.py", "--fixture", str(path), "--repo-root", str(repo), "--json"]
+    command = ["./.venv/bin/python", "scripts/validate_pr_impact_step0.py", "--fixture", str(path), "--manifest", str(_manifest(repo)), "--repo-key", "ia-main", "--json"]
     ok = subprocess.run(command, cwd=ROOT, text=True, capture_output=True)
     assert ok.returncode == 0
     payload = json.loads(ok.stdout)
@@ -193,3 +214,17 @@ def test_json_envelope_and_cli_exit_codes(tmp_path: Path) -> None:
     path.write_text(yaml.safe_dump(bad))
     failed = subprocess.run(command, cwd=ROOT, text=True, capture_output=True)
     assert failed.returncode == 1
+
+
+def test_manifest_resolution_failures_are_reported(tmp_path: Path) -> None:
+    repo, base, target = _repo(tmp_path)
+    fixture = _fixture(tmp_path, repo, base, target, [{"path": "app/a.txt", "status": "modified"}])
+    missing = validator.validate_fixture(fixture, tmp_path / "missing.yaml", "ia-main")
+    assert any(item["code"] == "manifest_invalid" for item in missing["errors"])
+    unknown_manifest = tmp_path / "unknown.yaml"
+    unknown_manifest.write_text(yaml.safe_dump({
+        "version": 1,
+        "repositories": [{"repo_key": "other", "local_root": str(repo), "tracked_branch": "main", "builders": []}],
+    }))
+    unknown = validator.validate_fixture(fixture, unknown_manifest, "ia-main")
+    assert any(item["code"] == "repo_not_found" for item in unknown["errors"])
