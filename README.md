@@ -20,6 +20,10 @@ without relying on tribal knowledge or manual repository exploration.
 
 The repository is designed to provide an evidence-based understanding of the Intacct codebase. Every fact in the graph should be traceable back to source artifacts.
 
+The broader product purpose, PM feasibility workflow, agentic use cases,
+current boundary, and first practical product slice are documented in
+[docs/project-purpose.md](docs/project-purpose.md).
+
 ---
 
 ## Why This Exists
