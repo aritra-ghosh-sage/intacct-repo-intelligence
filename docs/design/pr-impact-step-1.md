@@ -49,11 +49,22 @@ is not `project_resolved`, and ambiguous when their resolution reason is
 top-level completeness calculation. `partial` is returned for supported
 `empty`, `unresolved`, `ambiguous`, or `stale` surfaces.
 
+A materialized `complete` report must contain exactly one direct trace for every
+expected surface: `files`, `symbols`, `outgoing_relationships`,
+`incoming_relationships`, `entity_occurrences`, `openapi_documents`,
+`openapi_entity_links`, `rest_endpoints`, `actionui`, `actionui_artifacts`,
+`actionui_fields`, `actionui_events`, `actionui_includes`, `nextgen`,
+`nextgen_artifacts`, `source_diagnostics`, `database_consumers`, `permissions`,
+`workflows`, and `tests`. The supported surfaces must be `available`; the
+unsupported surfaces must be `unavailable`. Missing or unexpected direct
+traces make the materialized report invalid.
+
 Catalog preflight compares repo-v1 table, column, foreign-key, and index
 contracts through SQLite PRAGMAs. CHECK constraints and partial-index
 predicates, which PRAGMAs do not expose, are compared from normalized
-`sqlite_master` definitions. SQLite internal tables and auto-generated indexes
-are excluded.
+`sqlite_master` definitions whenever either the expected or active table/index
+contains the relevant constraint. SQLite internal tables and auto-generated
+indexes are excluded.
 
 An empty Git diff is invalid and returns `{"status":"blocked","error":{"code":"empty_diff"}}`.
 Changed paths are exact repository-relative paths from Git; basename, same-name,
