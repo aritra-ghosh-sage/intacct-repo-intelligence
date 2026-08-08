@@ -9,6 +9,14 @@ from pathlib import Path
 
 STATUSES = {"complete", "partial", "blocked"}
 SURFACE_STATUSES = {"available", "empty", "unavailable", "unresolved", "ambiguous", "stale", "deferred"}
+SUPPORTED_SURFACES = {
+    "files", "symbols", "outgoing_relationships", "incoming_relationships", "entity_occurrences",
+    "openapi_documents", "openapi_entity_links", "rest_endpoints", "actionui", "actionui_artifacts",
+    "actionui_fields", "actionui_events", "actionui_includes", "nextgen", "nextgen_artifacts",
+    "source_diagnostics",
+}
+UNSUPPORTED_SURFACES = {"database_consumers", "permissions", "workflows", "tests"}
+EXPECTED_SURFACES = SUPPORTED_SURFACES | UNSUPPORTED_SURFACES
 
 
 def validate(report: object) -> list[str]:
@@ -31,9 +39,27 @@ def validate(report: object) -> list[str]:
         if isinstance(trace, dict) and trace.get("status") in {"unresolved", "ambiguous", "stale"} and not trace.get("warning"):
             errors.append("classified trace must include a warning")
     if report.get("status") == "complete":
-        for trace in report.get("direct_traces", []):
-            if isinstance(trace, dict) and trace.get("status") not in {"available", "unavailable", "deferred"}:
-                errors.append("complete report contains a direct-trace gap")
+        traces = report.get("direct_traces")
+        if not isinstance(traces, list):
+            errors.append("complete report requires direct_traces")
+        else:
+            by_surface = {
+                trace.get("surface"): trace
+                for trace in traces
+                if isinstance(trace, dict) and isinstance(trace.get("surface"), str)
+            }
+            missing = sorted(EXPECTED_SURFACES - set(by_surface))
+            unexpected = sorted(set(by_surface) - EXPECTED_SURFACES)
+            if missing:
+                errors.append(f"complete report is missing direct traces: {', '.join(missing)}")
+            if unexpected:
+                errors.append(f"complete report has unexpected direct traces: {', '.join(unexpected)}")
+            for surface in sorted(SUPPORTED_SURFACES):
+                if surface in by_surface and by_surface[surface].get("status") != "available":
+                    errors.append("complete report contains a supported direct-trace gap")
+            for surface in sorted(UNSUPPORTED_SURFACES):
+                if surface in by_surface and by_surface[surface].get("status") != "unavailable":
+                    errors.append("complete report has an invalid unsupported-surface status")
     if report.get("status") == "blocked":
         if not isinstance(report.get("error"), dict) or not report["error"].get("code"):
             errors.append("blocked report requires error.code")

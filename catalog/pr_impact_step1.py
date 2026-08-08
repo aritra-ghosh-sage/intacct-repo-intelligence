@@ -195,8 +195,8 @@ def _open_catalog(path: Path, target_sha: str, repo_key: str) -> tuple[sqlite3.C
                                 index=index,
                             )
                 expected_sql = expected.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()[0]
-                if "check" in str(expected_sql).lower():
-                    actual_sql = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()[0]
+                actual_sql = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()[0]
+                if "check" in str(expected_sql).lower() or "check" in str(actual_sql).lower():
                     if " ".join(str(actual_sql).split()).lower() != " ".join(str(expected_sql).split()).lower():
                         raise Step1Error(
                             "catalog_schema_mismatch",

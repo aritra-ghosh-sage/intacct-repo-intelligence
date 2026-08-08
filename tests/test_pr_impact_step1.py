@@ -272,6 +272,25 @@ def test_schema_index_mismatch_blocks(tmp_path: Path) -> None:
         raise AssertionError("schema index mismatch was accepted")
 
 
+def test_added_check_constraint_blocks(tmp_path: Path) -> None:
+    repo, base, target = make_repo(tmp_path)
+    fixture = make_fixture(tmp_path, base, target)
+    db = make_db(tmp_path, target)
+    conn = sqlite3.connect(db)
+    table_sql = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='files'").fetchone()[0]
+    altered_sql = table_sql.replace("size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0)", "size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0) CHECK (size_bytes <> 999)")
+    conn.execute("PRAGMA writable_schema=ON")
+    conn.execute("UPDATE sqlite_master SET sql=? WHERE type='table' AND name='files'", (altered_sql,))
+    conn.execute("PRAGMA schema_version = 2")
+    conn.commit(); conn.close()
+    try:
+        analyze_fixture(fixture, make_manifest(tmp_path, repo), db, "ia-main")
+    except Step1Error as exc:
+        assert exc.code == "catalog_schema_mismatch"
+    else:
+        raise AssertionError("added CHECK constraint was accepted")
+
+
 def test_active_build_absence_blocks(tmp_path: Path) -> None:
     repo, base, target = make_repo(tmp_path)
     fixture = make_fixture(tmp_path, base, target)
@@ -349,4 +368,6 @@ def test_report_validator_requires_classification_warnings_and_complete_surfaces
     }
     assert "empty trace must include a warning" in validate(report)
     report["direct_traces"][0]["warning"] = "not proof"
-    assert "complete report contains a direct-trace gap" in validate(report)
+    errors = validate(report)
+    assert "complete report is missing direct traces: actionui, actionui_artifacts, actionui_events, actionui_fields, actionui_includes, database_consumers, entity_occurrences, incoming_relationships, nextgen, nextgen_artifacts, openapi_documents, openapi_entity_links, outgoing_relationships, permissions, rest_endpoints, source_diagnostics, symbols, tests, workflows" in errors
+    assert "complete report contains a supported direct-trace gap" in errors
