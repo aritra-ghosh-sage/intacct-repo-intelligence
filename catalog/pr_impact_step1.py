@@ -139,18 +139,70 @@ def _open_catalog(path: Path, target_sha: str, repo_key: str) -> tuple[sqlite3.C
                     extra=sorted(actual_tables - expected_tables),
                 )
             for table in sorted(expected_tables):
-                actual_columns = [
-                    r[1] for r in conn.execute(f"PRAGMA table_info({table})")
-                ]
-                expected_columns = [
-                    r[1] for r in expected.execute(f"PRAGMA table_info({table})")
-                ]
+                quoted = '"' + table.replace('"', '""') + '"'
+                actual_columns = [tuple(r) for r in conn.execute(f"PRAGMA table_info({quoted})")]
+                expected_columns = [tuple(r) for r in expected.execute(f"PRAGMA table_info({quoted})")]
                 if actual_columns != expected_columns:
                     raise Step1Error(
                         "catalog_schema_mismatch",
-                        f"columns do not match repo-v1 schema for {table}",
+                        f"column definitions do not match repo-v1 schema for {table}",
                         table=table,
                     )
+                actual_foreign_keys = [tuple(r) for r in conn.execute(f"PRAGMA foreign_key_list({quoted})")]
+                expected_foreign_keys = [tuple(r) for r in expected.execute(f"PRAGMA foreign_key_list({quoted})")]
+                if actual_foreign_keys != expected_foreign_keys:
+                    raise Step1Error(
+                        "catalog_schema_mismatch",
+                        f"foreign keys do not match repo-v1 schema for {table}",
+                        table=table,
+                    )
+                actual_indexes = {
+                    str(r[1]): tuple(r[2:])
+                    for r in conn.execute(f"PRAGMA index_list({quoted})")
+                    if str(r[3]) == "c"
+                }
+                expected_indexes = {
+                    str(r[1]): tuple(r[2:])
+                    for r in expected.execute(f"PRAGMA index_list({quoted})")
+                    if str(r[3]) == "c"
+                }
+                if actual_indexes != expected_indexes:
+                    raise Step1Error(
+                        "catalog_schema_mismatch",
+                        f"indexes do not match repo-v1 schema for {table}",
+                        table=table,
+                        missing=sorted(set(expected_indexes) - set(actual_indexes)),
+                        extra=sorted(set(actual_indexes) - set(expected_indexes)),
+                    )
+                for index in sorted(expected_indexes):
+                    actual_info = [tuple(r) for r in conn.execute(f"PRAGMA index_info(\"{index.replace(chr(34), chr(34) * 2)}\")")]
+                    expected_info = [tuple(r) for r in expected.execute(f"PRAGMA index_info(\"{index.replace(chr(34), chr(34) * 2)}\")")]
+                    if actual_info != expected_info:
+                        raise Step1Error(
+                            "catalog_schema_mismatch",
+                            f"index columns do not match repo-v1 schema for {index}",
+                            table=table,
+                            index=index,
+                        )
+                    if expected_indexes[index][-1]:
+                        actual_sql = conn.execute("SELECT sql FROM sqlite_master WHERE type='index' AND name=?", (index,)).fetchone()[0]
+                        expected_sql = expected.execute("SELECT sql FROM sqlite_master WHERE type='index' AND name=?", (index,)).fetchone()[0]
+                        if " ".join(str(actual_sql).split()).lower() != " ".join(str(expected_sql).split()).lower():
+                            raise Step1Error(
+                                "catalog_schema_mismatch",
+                                f"partial index predicate does not match repo-v1 schema for {index}",
+                                table=table,
+                                index=index,
+                            )
+                expected_sql = expected.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()[0]
+                if "check" in str(expected_sql).lower():
+                    actual_sql = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()[0]
+                    if " ".join(str(actual_sql).split()).lower() != " ".join(str(expected_sql).split()).lower():
+                        raise Step1Error(
+                            "catalog_schema_mismatch",
+                            f"CHECK constraints do not match repo-v1 schema for {table}",
+                            table=table,
+                        )
         finally:
             expected.close()
         if conn.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
@@ -193,9 +245,15 @@ def _evidence(row: sqlite3.Row, path_key: str = "path", revision: str = "") -> d
     for key in ("start_line", "end_line", "source_line", "source_pointer"):
         if key in keys and row[key] is not None: location[key] = row[key]
     source_key = "source_path" if "source_path" in keys else ("file_path" if "file_path" in keys else path_key)
-    return {"catalog_record_id": int(row["id"]), "source_path": str(row[source_key]),
-            "target_revision": revision, "source_location": location or None, "evidence": evidence,
-            "extractor": row["extractor"] if "extractor" in keys else None}
+    result = {"catalog_record_id": int(row["id"]), "source_path": str(row[source_key]),
+              "target_revision": revision, "source_location": location or None, "evidence": evidence,
+              "extractor": row["extractor"] if "extractor" in keys else None}
+    if "source_commit_sha" in keys:
+        result["catalog_source_revision"] = row["source_commit_sha"]
+    for key in ("resolution_class", "resolution_reason"):
+        if key in keys:
+            result[key] = row[key]
+    return result
 
 
 def _rows(conn: sqlite3.Connection, sql: str, args: tuple[Any, ...], path: str, revision: str) -> list[dict[str, Any]]:
@@ -205,6 +263,12 @@ def _rows(conn: sqlite3.Connection, sql: str, args: tuple[Any, ...], path: str, 
 def _surface(name: str, rows: list[dict[str, Any]], supported: bool = True) -> dict[str, Any]:
     if not supported: return {"surface": name, "status": "unavailable", "facts": [], "warning": "repo-v1 does not model this surface"}
     if not rows: return {"surface": name, "status": "empty", "facts": [], "warning": "No direct repo-v1 rows matched; this is not proof of no impact"}
+    if any(row.get("catalog_source_revision") != row.get("target_revision") for row in rows):
+        return {"surface": name, "status": "stale", "facts": rows, "warning": "Direct repo-v1 rows are not from the fixture target revision"}
+    if any(row.get("resolution_reason") == "ambiguous_project_symbol" for row in rows):
+        return {"surface": name, "status": "ambiguous", "facts": rows, "warning": "Direct relationship rows include ambiguous catalog resolutions"}
+    if any(row.get("resolution_class") not in (None, "project_resolved") for row in rows):
+        return {"surface": name, "status": "unresolved", "facts": rows, "warning": "Direct relationship rows include unresolved catalog resolutions"}
     return {"surface": name, "status": "available", "facts": rows}
 
 
@@ -245,9 +309,12 @@ def analyze_fixture(
     base, target = _revision(repo, pr.get("base_revision"), "base_revision"), _revision(repo, pr.get("target_revision"), "target_revision")
     changed = _changed_paths(repo, base, target)
     if not changed: raise Step1Error("empty_diff", "Step 1 requires a non-empty Git diff")
-    declared = {(str(x.get("path")), str(x.get("status"))) for x in document.get("changed_files", []) if isinstance(x, dict)}
+    declared_rows = document.get("changed_files")
+    if not isinstance(declared_rows, list) or not declared_rows:
+        raise Step1Error("changed_path_mismatch", "fixture changed_files must be a non-empty list")
+    declared = {(str(x.get("path")), str(x.get("status"))) for x in declared_rows if isinstance(x, dict)}
     actual = {(x.path, x.status) for x in changed}
-    if declared and declared != actual:
+    if len(declared) != len(declared_rows) or declared != actual:
         raise Step1Error("changed_path_mismatch", "fixture changed_files do not match the exact Git diff", expected=sorted(actual), declared=sorted(declared))
     for change in changed:
         if not _safe_path(change.path): raise Step1Error("malformed_git_diff", f"unsafe changed path: {change.path}")
@@ -260,18 +327,18 @@ def analyze_fixture(
         ids = ",".join("?" for _ in file_ids) or "NULL"
         direct = [
             _surface("files", [_evidence(r, "path", target) for r in files.values()]),
-            _surface("symbols", _rows(conn, f"SELECT s.*, f.path AS source_path FROM symbols s JOIN files f ON f.id=s.file_id WHERE s.repo_id=? AND s.file_id IN ({ids}) ORDER BY s.file_id,s.start_line,s.id", (repo_id, *file_ids), "source_path", target)),
-            _surface("outgoing_relationships", _rows(conn, f"SELECT * FROM relationships WHERE repo_id=? AND file_id IN ({ids}) ORDER BY id", (repo_id, *file_ids), "file_path", target)),
-            _surface("incoming_relationships", _rows(conn, f"SELECT r.* FROM relationships r JOIN symbols s ON s.id=r.target_symbol_id WHERE r.repo_id=? AND s.file_id IN ({ids}) ORDER BY r.id", (repo_id, *file_ids), "file_path", target)),
+            _surface("symbols", _rows(conn, f"SELECT s.*, f.path AS source_path, f.source_commit_sha AS source_commit_sha FROM symbols s JOIN files f ON f.id=s.file_id WHERE s.repo_id=? AND s.file_id IN ({ids}) ORDER BY s.file_id,s.start_line,s.id", (repo_id, *file_ids), "source_path", target)),
+            _surface("outgoing_relationships", _rows(conn, f"SELECT r.*, f.source_commit_sha AS source_commit_sha FROM relationships r JOIN files f ON f.id=r.file_id WHERE r.repo_id=? AND r.file_id IN ({ids}) ORDER BY r.id", (repo_id, *file_ids), "file_path", target)),
+            _surface("incoming_relationships", _rows(conn, f"SELECT r.*, f.source_commit_sha AS source_commit_sha FROM relationships r JOIN files f ON f.id=r.file_id JOIN symbols s ON s.id=r.target_symbol_id WHERE r.repo_id=? AND s.file_id IN ({ids}) ORDER BY r.id", (repo_id, *file_ids), "file_path", target)),
             _surface("entity_occurrences", _rows(conn, f"SELECT e.*, f.path AS source_path FROM entity_occurrences e JOIN files f ON f.id=e.source_file_id WHERE e.repo_id=? AND e.source_file_id IN ({ids}) ORDER BY e.id", (repo_id, *file_ids), "source_path", target) if any(x.endswith(".ent") for x in paths) else [], any(x.endswith(".ent") for x in paths)),
             _surface("openapi_documents", _rows(conn, f"SELECT * FROM openapi_documents WHERE repo_id=? AND file_id IN ({ids}) ORDER BY id", (repo_id, *file_ids), "path", target)),
             _surface("openapi_entity_links", _rows(conn, f"SELECT l.*, d.path AS source_path FROM openapi_entity_links l JOIN openapi_documents d ON d.id=l.document_id JOIN entity_occurrences eo ON eo.id=l.entity_occurrence_id WHERE l.repo_id=? AND (d.file_id IN ({ids}) OR eo.source_file_id IN ({ids})) ORDER BY l.id", (repo_id, *file_ids, *file_ids), "source_path", target)),
             _surface("rest_endpoints", _rows(conn, f"SELECT e.*, d.path AS source_path FROM rest_endpoints e JOIN openapi_documents d ON d.id=e.document_id WHERE e.repo_id=? AND d.file_id IN ({ids}) ORDER BY e.id", (repo_id, *file_ids), "source_path", target)),
             _surface("actionui", _rows(conn, f"SELECT * FROM ui_surfaces WHERE repo_id=? AND source_file_id IN ({ids}) ORDER BY id", (repo_id, *file_ids), "source_path", target)),
             _surface("actionui_artifacts", _rows(conn, f"SELECT * FROM ui_artifacts WHERE repo_id=? AND file_id IN ({ids}) ORDER BY id", (repo_id, *file_ids), "source_path", target)),
-            _surface("actionui_fields", _rows(conn, f"SELECT f.*, a.source_path AS source_path FROM ui_fields f JOIN ui_artifacts a ON a.id=f.artifact_id WHERE f.repo_id=? AND a.file_id IN ({ids}) ORDER BY f.id", (repo_id, *file_ids), "source_path", target)),
-            _surface("actionui_events", _rows(conn, f"SELECT e.*, a.source_path AS source_path FROM ui_events e JOIN ui_artifacts a ON a.id=e.artifact_id WHERE e.repo_id=? AND a.file_id IN ({ids}) ORDER BY e.id", (repo_id, *file_ids), "source_path", target)),
-            _surface("actionui_includes", _rows(conn, f"SELECT i.*, a.source_path AS source_path FROM ui_includes i JOIN ui_artifacts a ON a.id=i.artifact_id WHERE i.repo_id=? AND a.file_id IN ({ids}) ORDER BY i.id", (repo_id, *file_ids), "source_path", target)),
+            _surface("actionui_fields", _rows(conn, f"SELECT f.*, a.source_path AS source_path, a.source_commit_sha AS source_commit_sha FROM ui_fields f JOIN ui_artifacts a ON a.id=f.artifact_id WHERE f.repo_id=? AND a.file_id IN ({ids}) ORDER BY f.id", (repo_id, *file_ids), "source_path", target)),
+            _surface("actionui_events", _rows(conn, f"SELECT e.*, a.source_path AS source_path, a.source_commit_sha AS source_commit_sha FROM ui_events e JOIN ui_artifacts a ON a.id=e.artifact_id WHERE e.repo_id=? AND a.file_id IN ({ids}) ORDER BY e.id", (repo_id, *file_ids), "source_path", target)),
+            _surface("actionui_includes", _rows(conn, f"SELECT i.*, a.source_path AS source_path, a.source_commit_sha AS source_commit_sha FROM ui_includes i JOIN ui_artifacts a ON a.id=i.artifact_id WHERE i.repo_id=? AND a.file_id IN ({ids}) ORDER BY i.id", (repo_id, *file_ids), "source_path", target)),
             _surface("nextgen", _rows(conn, f"SELECT * FROM nextgen_families WHERE repo_id=? AND source_file_id IN ({ids}) ORDER BY id", (repo_id, *file_ids), "source_path", target)),
             _surface("nextgen_artifacts", _rows(conn, f"SELECT * FROM nextgen_artifacts WHERE repo_id=? AND file_id IN ({ids}) ORDER BY id", (repo_id, *file_ids), "source_path", target)),
             _surface("source_diagnostics", _rows(conn, f"SELECT d.*, f.path AS source_path FROM symbol_diagnostics d JOIN files f ON f.id=d.file_id WHERE d.repo_id=? AND d.file_id IN ({ids}) ORDER BY d.id", (repo_id, *file_ids), "source_path", target)
@@ -281,7 +348,7 @@ def analyze_fixture(
             + _rows(conn, f"SELECT d.*, f.path AS source_path FROM nextgen_diagnostics d JOIN files f ON f.id=d.file_id WHERE d.repo_id=? AND d.file_id IN ({ids}) ORDER BY d.id", (repo_id, *file_ids), "source_path", target)),
             _surface("database_consumers", [], False), _surface("permissions", [], False), _surface("workflows", [], False), _surface("tests", [], False),
         ]
-        gaps = [f"{x['surface']}: {x['status']}" for x in direct if x["status"] != "available"]
+        gaps = [f"{x['surface']}: {x['status']}" for x in direct if x["status"] not in {"available", "unavailable", "deferred"}]
         return {"schema_version": "0.1", "analysis_kind": "pr_impact_step_1", "status": "partial" if gaps else "complete",
                 "input": {"fixture": str(Path(fixture)), "manifest": str(Path(manifest)), "repo_root": str(repo), "active_db": str(Path(active_db)), "repo_key": repo_key, "base_revision": base, "target_revision": target},
                 "preflight": preflight, "changed_files": [x.__dict__ for x in changed], "direct_traces": direct,

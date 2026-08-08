@@ -28,6 +28,12 @@ def validate(report: object) -> list[str]:
             errors.append("direct trace has invalid status")
         if isinstance(trace, dict) and trace.get("status") == "empty" and not trace.get("warning"):
             errors.append("empty trace must include a warning")
+        if isinstance(trace, dict) and trace.get("status") in {"unresolved", "ambiguous", "stale"} and not trace.get("warning"):
+            errors.append("classified trace must include a warning")
+    if report.get("status") == "complete":
+        for trace in report.get("direct_traces", []):
+            if isinstance(trace, dict) and trace.get("status") not in {"available", "unavailable", "deferred"}:
+                errors.append("complete report contains a direct-trace gap")
     if report.get("status") == "blocked":
         if not isinstance(report.get("error"), dict) or not report["error"].get("code"):
             errors.append("blocked report requires error.code")

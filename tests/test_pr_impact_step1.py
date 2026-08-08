@@ -112,6 +112,7 @@ def test_valid_diff_traces_exact_rows_and_is_read_only(tmp_path: Path) -> None:
     assert report["changed_files"] == [{"path": "a.php", "status": "modified", "old_path": None}]
     assert report["direct_traces"][1]["facts"][0]["source_path"] == "a.php"
     assert report["direct_traces"][2]["facts"]
+    assert next(trace for trace in report["direct_traces"] if trace["surface"] == "outgoing_relationships")["status"] == "unresolved"
     assert next(trace for trace in report["direct_traces"] if trace["surface"] == "openapi_entity_links")["status"] == "empty"
     assert db.read_bytes() == before
     assert report == analyze_fixture(fixture, make_manifest(tmp_path, repo), db, "ia-main")
@@ -211,6 +212,112 @@ def test_revision_and_path_contracts_block(tmp_path: Path) -> None:
     else: raise AssertionError("malformed revision was accepted")
 
 
+def test_missing_or_empty_declared_paths_block(tmp_path: Path) -> None:
+    repo, base, target = make_repo(tmp_path)
+    db = make_db(tmp_path, target)
+    for declared in (None, []):
+        fixture = make_fixture(tmp_path, base, target)
+        document = yaml.safe_load(fixture.read_text(encoding="utf-8"))
+        if declared is None:
+            document.pop("changed_files", None)
+        else:
+            document["changed_files"] = declared
+        fixture.write_text(yaml.safe_dump(document), encoding="utf-8")
+        try:
+            analyze_fixture(fixture, make_manifest(tmp_path, repo), db, "ia-main")
+        except Step1Error as exc:
+            assert exc.code == "changed_path_mismatch"
+        else:
+            raise AssertionError("missing or empty changed_files was accepted")
+
+
+def test_ambiguous_relationship_status(tmp_path: Path) -> None:
+    repo, base, target = make_repo(tmp_path)
+    fixture = make_fixture(tmp_path, base, target)
+    db = make_db(tmp_path, target)
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE relationships SET resolution_reason='ambiguous_project_symbol'")
+    conn.commit(); conn.close()
+    report = analyze_fixture(fixture, make_manifest(tmp_path, repo), db, "ia-main")
+    trace = next(trace for trace in report["direct_traces"] if trace["surface"] == "outgoing_relationships")
+    assert trace["status"] == "ambiguous"
+    assert trace["warning"]
+
+
+def test_stale_relationship_status(tmp_path: Path) -> None:
+    repo, base, target = make_repo(tmp_path)
+    fixture = make_fixture(tmp_path, base, target)
+    db = make_db(tmp_path, target)
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE files SET source_commit_sha=? WHERE path='a.php'", (base,))
+    conn.commit(); conn.close()
+    report = analyze_fixture(fixture, make_manifest(tmp_path, repo), db, "ia-main")
+    trace = next(trace for trace in report["direct_traces"] if trace["surface"] == "outgoing_relationships")
+    assert trace["status"] == "stale"
+    assert trace["warning"]
+
+
+def test_schema_index_mismatch_blocks(tmp_path: Path) -> None:
+    repo, base, target = make_repo(tmp_path)
+    fixture = make_fixture(tmp_path, base, target)
+    db = make_db(tmp_path, target)
+    conn = sqlite3.connect(db)
+    conn.execute("DROP INDEX idx_repo_v1_files_repo_path")
+    conn.commit(); conn.close()
+    try:
+        analyze_fixture(fixture, make_manifest(tmp_path, repo), db, "ia-main")
+    except Step1Error as exc:
+        assert exc.code == "catalog_schema_mismatch"
+    else:
+        raise AssertionError("schema index mismatch was accepted")
+
+
+def test_active_build_absence_blocks(tmp_path: Path) -> None:
+    repo, base, target = make_repo(tmp_path)
+    fixture = make_fixture(tmp_path, base, target)
+    db = make_db(tmp_path, target)
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE catalog_builds SET status='validated'")
+    conn.commit(); conn.close()
+    try:
+        analyze_fixture(fixture, make_manifest(tmp_path, repo), db, "ia-main")
+    except Step1Error as exc:
+        assert exc.code == "active_build_missing"
+    else:
+        raise AssertionError("missing active build was accepted")
+
+
+def test_foreign_key_failure_blocks(tmp_path: Path) -> None:
+    repo, base, target = make_repo(tmp_path)
+    fixture = make_fixture(tmp_path, base, target)
+    db = make_db(tmp_path, target)
+    conn = sqlite3.connect(db)
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute("INSERT INTO repos(repo_key,local_root,tracked_branch,target_commit_sha,build_id) VALUES(?,?,?,?,?)", ("orphan", str(tmp_path), "main", target, 999))
+    conn.commit(); conn.close()
+    try:
+        analyze_fixture(fixture, make_manifest(tmp_path, repo), db, "ia-main")
+    except Step1Error as exc:
+        assert exc.code == "catalog_foreign_key_failure"
+    else:
+        raise AssertionError("foreign-key failure was accepted")
+
+
+def test_catalog_target_revision_mismatch_blocks(tmp_path: Path) -> None:
+    repo, base, target = make_repo(tmp_path)
+    fixture = make_fixture(tmp_path, base, target)
+    db = make_db(tmp_path, target)
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE repos SET target_commit_sha=?", (base,))
+    conn.commit(); conn.close()
+    try:
+        analyze_fixture(fixture, make_manifest(tmp_path, repo), db, "ia-main")
+    except Step1Error as exc:
+        assert exc.code == "catalog_revision_mismatch"
+    else:
+        raise AssertionError("catalog target revision mismatch was accepted")
+
+
 def test_catalog_preflight_failures(tmp_path: Path) -> None:
     repo, base, target = make_repo(tmp_path)
     fixture = make_fixture(tmp_path, base, target)
@@ -227,3 +334,19 @@ def test_report_validator_and_blocked_envelope() -> None:
     report = blocked_report(Step1Error("empty_diff", "none"))
     assert validate(report) == []
     assert report["error"]["code"] == "empty_diff"
+
+
+def test_report_validator_requires_classification_warnings_and_complete_surfaces() -> None:
+    report = {
+        "schema_version": "0.1",
+        "analysis_kind": "pr_impact_step_1",
+        "status": "complete",
+        "input": {"manifest": "m", "repo_key": "ia-main", "repo_root": "r", "base_revision": "b", "target_revision": "t"},
+        "preflight": {}, "changed_files": [], "direct_traces": [
+            {"surface": "files", "status": "empty", "facts": []}
+        ],
+        "onboarding_feasibility": [], "impact_ranking": [], "gaps": [], "warnings": [], "provenance": {},
+    }
+    assert "empty trace must include a warning" in validate(report)
+    report["direct_traces"][0]["warning"] = "not proof"
+    assert "complete report contains a direct-trace gap" in validate(report)

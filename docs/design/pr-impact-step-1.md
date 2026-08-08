@@ -31,7 +31,29 @@ top-level status `complete`, `partial`, or `blocked`. Direct surfaces use
 rows; it includes a warning and is never proof of no impact. Unsupported
 database-consumer, permission, workflow, and test surfaces are explicitly
 `unavailable`. External onboarding feasibility is manifest-only and
-`deferred`.
+`deferred`; it does not downgrade the current repo-v1 report status.
+
+`changed_files` is required and must be non-empty. Its exact path/status set
+must equal the raw Git diff. Missing, empty, malformed, or mismatched fixture
+paths block with `changed_path_mismatch`.
+
+For supported surfaces, `stale` takes precedence over `ambiguous`, which takes
+precedence over `unresolved`, which takes precedence over `available`. A fact
+is stale when its catalog source revision is absent or differs from the fixture
+target revision. Relationship facts are unresolved when their resolution class
+is not `project_resolved`, and ambiguous when their resolution reason is
+`ambiguous_project_symbol`.
+
+`complete` requires all supported direct surfaces to be `available`. Expected
+`unavailable` surfaces and deferred onboarding are excluded from the
+top-level completeness calculation. `partial` is returned for supported
+`empty`, `unresolved`, `ambiguous`, or `stale` surfaces.
+
+Catalog preflight compares repo-v1 table, column, foreign-key, and index
+contracts through SQLite PRAGMAs. CHECK constraints and partial-index
+predicates, which PRAGMAs do not expose, are compared from normalized
+`sqlite_master` definitions. SQLite internal tables and auto-generated indexes
+are excluded.
 
 An empty Git diff is invalid and returns `{"status":"blocked","error":{"code":"empty_diff"}}`.
 Changed paths are exact repository-relative paths from Git; basename, same-name,
