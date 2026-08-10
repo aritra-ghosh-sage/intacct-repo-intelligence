@@ -8,29 +8,37 @@ import sys
 from pathlib import Path
 
 STATUSES = {"complete", "partial", "blocked"}
+SCHEMA_VERSION = "0.2"
 SURFACE_STATUSES = {"available", "empty", "unavailable", "unresolved", "ambiguous", "stale", "deferred"}
 SUPPORTED_SURFACES = {
     "files", "symbols", "outgoing_relationships", "incoming_relationships", "entity_occurrences",
     "openapi_documents", "openapi_entity_links", "rest_endpoints", "actionui", "actionui_artifacts",
     "actionui_fields", "actionui_events", "actionui_includes", "nextgen", "nextgen_artifacts",
-    "source_diagnostics",
+    "source_diagnostics", "database_consumers", "permissions", "workflows", "tests",
 }
-UNSUPPORTED_SURFACES = {"database_consumers", "permissions", "workflows", "tests"}
+UNSUPPORTED_SURFACES: set[str] = set()
 EXPECTED_SURFACES = SUPPORTED_SURFACES | UNSUPPORTED_SURFACES
 
 
 def validate(report: object) -> list[str]:
     errors: list[str] = []
     if not isinstance(report, dict): return ["report must be a JSON object"]
-    if report.get("schema_version") != "0.1": errors.append("schema_version must be 0.1")
+    if report.get("schema_version") != SCHEMA_VERSION: errors.append(f"schema_version must be {SCHEMA_VERSION}")
     if report.get("analysis_kind") != "pr_impact_step_1": errors.append("invalid analysis_kind")
     if report.get("status") not in STATUSES: errors.append("invalid status")
-    for key in ("input", "preflight", "changed_files", "direct_traces", "onboarding_feasibility", "impact_ranking", "gaps", "warnings", "provenance"):
+    for key in ("input", "preflight", "changed_files", "direct_traces", "pr_metadata", "onboarding_feasibility", "impact_ranking", "gaps", "warnings", "provenance"):
         if key not in report: errors.append(f"missing section: {key}")
     if isinstance(report.get("input"), dict):
         for key in ("manifest", "repo_key", "repo_root", "base_revision", "target_revision"):
             if key not in report["input"] and report.get("status") != "blocked":
                 errors.append(f"missing input field: {key}")
+    metadata = report.get("pr_metadata")
+    if not isinstance(metadata, dict) or metadata.get("status") not in {"not_provided", "available"}:
+        errors.append("pr_metadata must have status not_provided or available")
+    elif metadata.get("status") == "available":
+        for key in ("repository", "repo_key", "number", "base_revision", "target_revision", "provider"):
+            if key not in metadata:
+                errors.append(f"available pr_metadata missing {key}")
     for trace in report.get("direct_traces", []):
         if not isinstance(trace, dict) or trace.get("status") not in SURFACE_STATUSES:
             errors.append("direct trace has invalid status")
@@ -38,6 +46,42 @@ def validate(report: object) -> list[str]:
             errors.append("empty trace must include a warning")
         if isinstance(trace, dict) and trace.get("status") in {"unresolved", "ambiguous", "stale"} and not trace.get("warning"):
             errors.append("classified trace must include a warning")
+        if isinstance(trace, dict):
+            for fact in trace.get("facts", []):
+                if not isinstance(fact, dict):
+                    errors.append("direct trace fact must be an object")
+                elif fact.get("catalog_record_id") is None and not fact.get("fact_key"):
+                    errors.append("direct trace fact needs catalog_record_id or fact_key")
+            if trace.get("surface") == "database_consumers" and trace.get("status") == "available":
+                if not trace.get("facts") or any(
+                    not isinstance(fact, dict) or fact.get("catalog_record_id") is None
+                    for fact in trace.get("facts", [])
+                ):
+                    errors.append("available database_consumers requires direct catalog facts")
+    ranking = report.get("impact_ranking")
+    if not isinstance(ranking, list):
+        errors.append("impact_ranking must be a list")
+    else:
+        for expected_rank, item in enumerate(ranking, start=1):
+            if not isinstance(item, dict):
+                errors.append("impact ranking item must be an object")
+                continue
+            if item.get("rank") != expected_rank:
+                errors.append("impact ranking ranks must be contiguous")
+            if not isinstance(item.get("source_path"), str) or not item["source_path"]:
+                errors.append("impact ranking source_path must be non-empty")
+            if not isinstance(item.get("distinct_surface_count"), int) or item["distinct_surface_count"] <= 0:
+                errors.append("impact ranking distinct_surface_count must be positive")
+            if not isinstance(item.get("fact_count"), int) or item["fact_count"] <= 0:
+                errors.append("impact ranking fact_count must be positive")
+            if not isinstance(item.get("changed_file"), bool):
+                errors.append("impact ranking changed_file must be boolean")
+            if not isinstance(item.get("surfaces"), list) or len(item["surfaces"]) != len(set(item["surfaces"])):
+                errors.append("impact ranking surfaces must be a unique list")
+            elif any(surface not in EXPECTED_SURFACES for surface in item["surfaces"]):
+                errors.append("impact ranking contains an unexpected surface")
+            if not isinstance(item.get("fact_keys"), list) or len(item["fact_keys"]) != len(set(item["fact_keys"])):
+                errors.append("impact ranking fact_keys must be a unique list")
     if report.get("status") == "complete":
         traces = report.get("direct_traces")
         if not isinstance(traces, list):

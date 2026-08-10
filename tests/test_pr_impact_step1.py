@@ -6,6 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -116,6 +117,116 @@ def test_valid_diff_traces_exact_rows_and_is_read_only(tmp_path: Path) -> None:
     assert next(trace for trace in report["direct_traces"] if trace["surface"] == "openapi_entity_links")["status"] == "empty"
     assert db.read_bytes() == before
     assert report == analyze_fixture(fixture, make_manifest(tmp_path, repo), db, "ia-main")
+
+
+def test_workflow_and_permissions_trace_existing_repo_v1_facts(tmp_path: Path) -> None:
+    repo, base, target = make_repo(tmp_path)
+    fixture = make_fixture(tmp_path, base, target)
+    db = make_db(tmp_path, target)
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO openapi_documents(repo_id,file_id,path,kind,document_key,source_commit_sha,evidence,extractor) VALUES(?,?,?,?,?,?,?,?)",
+        (1, 1, "a.php", "paths", "doc", target, "doc", "test"),
+    )
+    document_id = conn.execute("SELECT id FROM openapi_documents").fetchone()[0]
+    conn.execute(
+        "INSERT INTO rest_endpoints(repo_id,document_id,endpoint_key,path_template,http_method,operation_id,source_pointer,source_commit_sha,evidence,extractor) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        (1, document_id, "endpoint", "/a", "get", "getA", "/paths/~1a/get", target, "endpoint", "test"),
+    )
+    endpoint_id = conn.execute("SELECT id FROM rest_endpoints").fetchone()[0]
+    entity_id = conn.execute("INSERT INTO entity_nodes(name) VALUES('a')").lastrowid
+    occurrence_id = conn.execute(
+        "INSERT INTO entity_occurrences(repo_id,entity_id,source_file_id,source_key,source_commit_sha,evidence,extractor) VALUES(?,?,?,?,?,?,?)",
+        (1, entity_id, 1, "a", target, "entity", "test"),
+    ).lastrowid
+    conn.execute(
+        "INSERT INTO workflow_facts(repo_id,workflow_key,endpoint_id,source_file_id,source_path,source_commit_sha,source_hash,source_pointer,start_line,end_line,module,object_name,action,http_method,path_template,operation_id,transition_json,entity_occurrence_id,entity_link_status,evidence,extractor,extractor_version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (1, "workflow", endpoint_id, 1, "a.php", target, "hash", "/paths/~1a/get", 1, 1, "test", "A", "read", "get", "/a", "getA", None, occurrence_id, "resolved", "workflow", "test", "1"),
+    )
+    conn.execute(
+        "INSERT INTO security_operations(repo_id,fact_key,op_key,source_file_id,source_path,source_commit_sha,source_hash,source_pointer,start_line,end_line,evidence,extractor,extractor_version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (1, "security", "op.a", 1, "a.php", target, "hash", "/kElements/0", 1, 1, "security", "test", "1"),
+    )
+    conn.commit()
+    before = db.read_bytes()
+    conn.close()
+
+    report = analyze_fixture(fixture, make_manifest(tmp_path, repo), db, "ia-main")
+    assert next(trace for trace in report["direct_traces"] if trace["surface"] == "workflows")["status"] == "available"
+    assert next(trace for trace in report["direct_traces"] if trace["surface"] == "permissions")["status"] == "available"
+    assert db.read_bytes() == before
+
+
+@pytest.mark.parametrize("database_status", ["not_in_scope_for_this_change", "confirmed", "assessed"])
+def test_step0_database_assertion_does_not_make_report_complete(tmp_path: Path, database_status: str) -> None:
+    repo, base, target = make_repo(tmp_path)
+    fixture = make_fixture(tmp_path, base, target)
+    document = yaml.safe_load(fixture.read_text(encoding="utf-8"))
+    document["affected_surfaces"] = {"database": {"status": database_status}}
+    fixture.write_text(yaml.safe_dump(document), encoding="utf-8")
+    report = analyze_fixture(fixture, make_manifest(tmp_path, repo), make_db(tmp_path, target), "ia-main")
+    database = next(trace for trace in report["direct_traces"] if trace["surface"] == "database_consumers")
+    assert database["status"] == "deferred"
+    assert "database_consumers: deferred" in report["gaps"]
+    assert report["status"] == "partial"
+    assert database["facts"][0].get("catalog_source_revision") is None
+
+
+def test_report_validator_rejects_fixture_only_database_evidence() -> None:
+    report = {
+        "schema_version": "0.2", "analysis_kind": "pr_impact_step_1", "status": "partial",
+        "input": {"manifest": "m", "repo_key": "ia-main", "repo_root": "r", "base_revision": "b", "target_revision": "t"},
+        "preflight": {}, "changed_files": [],
+        "direct_traces": [{"surface": "database_consumers", "status": "available", "facts": [{"fact_key": "step0:database:0", "extractor": "pr_impact_step0_fixture"}]}],
+        "pr_metadata": {"status": "not_provided"}, "onboarding_feasibility": [], "impact_ranking": [],
+        "gaps": [], "warnings": [], "provenance": {},
+    }
+    assert "available database_consumers requires direct catalog facts" in validate(report)
+
+
+def test_metadata_artifact_revision_and_path_parity(tmp_path: Path) -> None:
+    repo, base, target = make_repo(tmp_path)
+    fixture = make_fixture(tmp_path, base, target)
+    db = make_db(tmp_path, target)
+    metadata = tmp_path / "metadata.json"
+    metadata.write_text(json.dumps({
+        "schema_version": "0.1",
+        "analysis_kind": "pr_impact_metadata",
+        "repo_key": "ia-main",
+        "repository": "intacct/ia-app",
+        "pull_request": {
+            "number": 1,
+            "url": "https://github.com/intacct/ia-app/pull/1",
+            "base_revision": base,
+            "target_revision": target,
+        },
+        "changed_files": [{"filename": "a.php", "status": "modified"}],
+        "provenance": {"provider": "test"},
+    }), encoding="utf-8")
+    report = analyze_fixture(fixture, make_manifest(tmp_path, repo), db, "ia-main", metadata)
+    assert report["pr_metadata"]["status"] == "available"
+    assert report["pr_metadata"]["target_revision"] == target
+
+    metadata.write_text(metadata.read_text(encoding="utf-8").replace(base, "0" * 40), encoding="utf-8")
+    with pytest.raises(Step1Error, match="metadata revisions"):
+        analyze_fixture(fixture, make_manifest(tmp_path, repo), db, "ia-main", metadata)
+
+
+@pytest.mark.parametrize("changed_files", [None, [], [{}], [{"filename": "a.php"}], [{"status": "modified"}], ["a.php"]])
+def test_metadata_changed_files_are_required_and_exact(tmp_path: Path, changed_files: object) -> None:
+    repo, base, target = make_repo(tmp_path)
+    fixture = make_fixture(tmp_path, base, target)
+    db = make_db(tmp_path, target)
+    metadata = tmp_path / "metadata.json"
+    payload = {
+        "schema_version": "0.1", "analysis_kind": "pr_impact_metadata", "repo_key": "ia-main", "repository": "intacct/ia-app",
+        "pull_request": {"number": 1, "url": "https://github.com/intacct/ia-app/pull/1", "base_revision": base, "target_revision": target},
+        "changed_files": changed_files, "provenance": {"provider": "test"},
+    }
+    metadata.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(Step1Error, match="metadata changed") as error:
+        analyze_fixture(fixture, make_manifest(tmp_path, repo), db, "ia-main", metadata)
+    assert error.value.code == "metadata_changed_path_mismatch"
 
 
 def test_manifest_tilde_resolution(tmp_path: Path, monkeypatch) -> None:

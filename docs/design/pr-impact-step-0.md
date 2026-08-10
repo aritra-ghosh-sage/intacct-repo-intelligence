@@ -183,3 +183,12 @@ Step 0 does not attempt to prove the full call graph, API contract, UI path,
 database consumer path, repository test coverage, or permission behavior. Those
 are follow-up steps. Its job is to establish a trustworthy, revision-pinned
 starting point and make uncertainty visible.
+
+## Automated PR metadata artifact
+
+`scripts/intake_pr_metadata.py` can fetch normalized pull-request metadata into
+a separate JSON artifact. It does not modify this YAML fixture or the catalog.
+The intake prefers `gh api` and falls back to the GitHub HTTP API using
+`GH_TOKEN` or `GITHUB_TOKEN`. Step 1 may consume the artifact with `--metadata`
+after verifying repository identity, revision parity, and exact changed-path
+parity against Git.

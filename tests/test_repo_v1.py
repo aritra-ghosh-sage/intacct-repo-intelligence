@@ -271,6 +271,31 @@ def test_same_commit_uses_committed_blobs_and_is_deterministic(tmp_path: Path) -
     assert php_row[1] == _git(root, "rev-parse", f"{commit}:app/main.php")
 
 
+def test_alternate_target_catalog_does_not_touch_canonical(tmp_path: Path) -> None:
+    root, manifest = _repo(tmp_path)
+    target = _git(root, "rev-parse", "HEAD")
+    canonical = tmp_path / "canonical.db"
+    alternate = tmp_path / "pr-impact.db"
+    build_ia_main(manifest_path=manifest, active_db=canonical, target_sha=target)
+    before = canonical.read_bytes()
+
+    (root / "app" / "main.php").write_text("<?php echo 'later';\n")
+    _commit(root, "later source")
+    result = build_ia_main(manifest_path=manifest, active_db=alternate, target_sha=target)
+
+    assert result.promoted is True
+    assert result.target_commit_sha == target
+    assert canonical.read_bytes() == before
+    conn = sqlite3.connect(alternate)
+    try:
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert conn.execute("PRAGMA foreign_key_check").fetchone() is None
+        assert conn.execute("SELECT target_commit_sha FROM repos").fetchone()[0] == target
+    finally:
+        conn.close()
+    assert not list(tmp_path.glob(f".{alternate.name}.candidate.*"))
+
+
 def test_inventory_matches_filtered_git_tree_oracle(tmp_path: Path) -> None:
     root, manifest, commit = _rich_repo(tmp_path)
     active = tmp_path / "active.db"

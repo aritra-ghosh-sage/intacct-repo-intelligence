@@ -17,15 +17,25 @@ from typing import Any
 import yaml
 
 from catalog.pr_impact_manifest import resolve_manifest_repo_root
+from catalog.pr_impact_ranking import rank_direct_traces
 
 
 ERROR_CODES = {
     "catalog_unavailable", "catalog_schema_mismatch", "catalog_integrity_failure",
     "catalog_foreign_key_failure", "active_build_missing", "repo_v1_single_repository",
     "repo_not_found", "catalog_revision_mismatch", "empty_diff", "malformed_git_revision",
-    "changed_path_mismatch",
+    "changed_path_mismatch", "malformed_fixture", "malformed_git_diff", "catalog_provenance_mismatch",
+    "metadata_unavailable", "metadata_malformed", "metadata_repository_mismatch",
+    "metadata_revision_mismatch", "metadata_changed_path_mismatch",
 }
 SURFACE_STATUSES = {"available", "empty", "unavailable", "unresolved", "ambiguous", "stale", "deferred"}
+REPORT_SCHEMA_VERSION = "0.2"
+SUPPORTED_SURFACES = {
+    "files", "symbols", "outgoing_relationships", "incoming_relationships", "entity_occurrences",
+    "openapi_documents", "openapi_entity_links", "rest_endpoints", "actionui", "actionui_artifacts",
+    "actionui_fields", "actionui_events", "actionui_includes", "nextgen", "nextgen_artifacts",
+    "source_diagnostics", "database_consumers", "permissions", "workflows", "tests",
+}
 _STATUS_MAP = {"A": "added", "M": "modified", "D": "deleted", "R": "renamed", "C": "copied"}
 _REQUIRED_TABLES = {
     "catalog_builds", "repos", "files", "symbols", "relationships", "entity_nodes",
@@ -250,7 +260,7 @@ def _evidence(row: sqlite3.Row, path_key: str = "path", revision: str = "") -> d
               "extractor": row["extractor"] if "extractor" in keys else None}
     if "source_commit_sha" in keys:
         result["catalog_source_revision"] = row["source_commit_sha"]
-    for key in ("resolution_class", "resolution_reason"):
+    for key in ("resolution_class", "resolution_reason", "resolution_status", "entity_link_status"):
         if key in keys:
             result[key] = row[key]
     return result
@@ -265,11 +275,62 @@ def _surface(name: str, rows: list[dict[str, Any]], supported: bool = True) -> d
     if not rows: return {"surface": name, "status": "empty", "facts": [], "warning": "No direct repo-v1 rows matched; this is not proof of no impact"}
     if any(row.get("catalog_source_revision") != row.get("target_revision") for row in rows):
         return {"surface": name, "status": "stale", "facts": rows, "warning": "Direct repo-v1 rows are not from the fixture target revision"}
-    if any(row.get("resolution_reason") == "ambiguous_project_symbol" for row in rows):
+    if any(row.get("resolution_reason") == "ambiguous_project_symbol" or row.get("entity_link_status") == "ambiguous" for row in rows):
         return {"surface": name, "status": "ambiguous", "facts": rows, "warning": "Direct relationship rows include ambiguous catalog resolutions"}
-    if any(row.get("resolution_class") not in (None, "project_resolved") for row in rows):
+    if any(
+        row.get("resolution_class") not in (None, "project_resolved")
+        or row.get("resolution_status") not in (None, "resolved")
+        or row.get("entity_link_status") not in (None, "resolved")
+        for row in rows
+    ):
         return {"surface": name, "status": "unresolved", "facts": rows, "warning": "Direct relationship rows include unresolved catalog resolutions"}
     return {"surface": name, "status": "available", "facts": rows}
+
+
+def _fixture_fact(section: str, index: int, value: Any, revision: str) -> dict[str, Any]:
+    if isinstance(value, dict):
+        evidence = value.get("evidence")
+        path = value.get("path") or value.get("source")
+        location = {key: value[key] for key in ("line", "start_line", "end_line") if key in value}
+        status = value.get("status")
+    else:
+        evidence, path, location, status = value, None, {}, None
+    return {
+        "fact_key": f"step0:{section}:{index}",
+        "source_path": path,
+        "source_location": location or None,
+        "target_revision": revision,
+        "evidence": evidence if evidence is not None else value,
+        "extractor": "pr_impact_step0_fixture",
+        "status": status,
+    }
+
+
+def _fixture_surface(document: dict[str, Any], section: str, revision: str) -> dict[str, Any]:
+    surfaces = document.get("affected_surfaces")
+    surface = surfaces.get(section) if isinstance(surfaces, dict) else None
+    if section == "database":
+        if isinstance(surface, dict) and surface.get("status") == "not_in_scope_for_this_change":
+            fact = _fixture_fact("affected_surfaces.database", 0, surface, revision)
+            return {"surface": "database_consumers", "status": "deferred", "facts": [fact], "warning": "Step 0 records an explicit not-in-scope assertion; target-revision database evidence was not read"}
+        if isinstance(surface, dict) and surface.get("status") in {"confirmed", "assessed"}:
+            facts = [_fixture_fact("affected_surfaces.database", 0, surface, revision)]
+            return {"surface": "database_consumers", "status": "deferred", "facts": facts, "warning": "Step 0 database assertions require target-revision catalog evidence and are not direct evidence"}
+        return {"surface": "database_consumers", "status": "deferred", "facts": [], "warning": "Step 0 does not contain exact database evidence"}
+    obligations = document.get("test_obligations")
+    related = document.get("related_repositories")
+    facts: list[dict[str, Any]] = []
+    if isinstance(obligations, dict):
+        for key in ("existing_or_expected", "recommended", "unresolved"):
+            values = obligations.get(key, [])
+            if isinstance(values, list):
+                facts.extend(_fixture_fact(f"test_obligations.{key}", index, value, revision) for index, value in enumerate(values))
+    if isinstance(related, list):
+        facts.extend(_fixture_fact("related_repositories", index, value, revision) for index, value in enumerate(related))
+    exact = [fact for fact in facts if fact.get("source_path")]
+    if exact and all(fact.get("status") in {None, "confirmed", "assessed"} for fact in exact):
+        return {"surface": "tests", "status": "available", "facts": exact}
+    return {"surface": "tests", "status": "deferred", "facts": facts, "warning": "Exact target-revision test evidence is unavailable"}
 
 
 def _onboarding(config: Path) -> list[dict[str, Any]]:
@@ -293,11 +354,62 @@ def _onboarding(config: Path) -> list[dict[str, Any]]:
     return result
 
 
+def _load_metadata(path: str | Path, document: dict[str, Any], changed: list[ChangedFile], base: str, target: str, repo_key: str) -> dict[str, Any]:
+    metadata_path = Path(path)
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise Step1Error("metadata_malformed", str(exc), path=str(metadata_path)) from exc
+    if not isinstance(metadata, dict) or metadata.get("schema_version") != "0.1" or metadata.get("analysis_kind") != "pr_impact_metadata":
+        raise Step1Error("metadata_malformed", "metadata artifact has an unsupported shape", path=str(metadata_path))
+    pr = metadata.get("pull_request")
+    fixture_pr = document.get("pull_request", {})
+    if not isinstance(pr, dict):
+        raise Step1Error("metadata_malformed", "metadata artifact has no pull_request object")
+    if metadata.get("repo_key") != repo_key:
+        raise Step1Error("metadata_repository_mismatch", "metadata repo_key does not match the analysis")
+    if metadata.get("repository") != fixture_pr.get("repository"):
+        raise Step1Error("metadata_repository_mismatch", "metadata repository differs from fixture repository")
+    if pr.get("base_revision") != base or pr.get("target_revision") != target:
+        raise Step1Error("metadata_revision_mismatch", "metadata revisions differ from fixture revisions")
+    files = metadata.get("changed_files")
+    if not isinstance(files, list) or not files:
+        raise Step1Error("metadata_changed_path_mismatch", "metadata changed_files must be a non-empty list")
+    declared: set[tuple[str, str]] = set()
+    for item in files:
+        if not isinstance(item, dict):
+            raise Step1Error("metadata_changed_path_mismatch", "metadata changed_files entries must be objects")
+        filename, status = item.get("filename"), item.get("status")
+        if not isinstance(filename, str) or not filename or not isinstance(status, str) or not status:
+            raise Step1Error("metadata_changed_path_mismatch", "metadata changed_files entries require filename and status")
+        declared.add((filename, status))
+    actual = {(item.path, item.status) for item in changed}
+    if len(declared) != len(files) or declared != actual:
+        raise Step1Error("metadata_changed_path_mismatch", "metadata changed files differ from the exact Git diff")
+    return {
+        "status": "available",
+        "artifact_path": str(metadata_path),
+        "repository": metadata.get("repository"),
+        "repo_key": metadata.get("repo_key"),
+        "number": pr.get("number"),
+        "url": pr.get("url"),
+        "base_revision": pr.get("base_revision"),
+        "target_revision": pr.get("target_revision"),
+        "provider": metadata.get("provenance", {}).get("provider") if isinstance(metadata.get("provenance"), dict) else None,
+        "record_counts": {
+            key: len(metadata.get(key, []))
+            for key in ("changed_files", "reviews", "inline_comments", "issue_comments", "check_runs")
+            if isinstance(metadata.get(key, []), list)
+        },
+    }
+
+
 def analyze_fixture(
     fixture: str | Path,
     manifest: str | Path,
     active_db: str | Path,
     repo_key: str,
+    metadata: str | Path | None = None,
 ) -> dict[str, Any]:
     document = _fixture(Path(fixture))
     pr = document["pull_request"]
@@ -325,6 +437,83 @@ def analyze_fixture(
         files = {str(r["path"]): r for r in conn.execute(f"SELECT * FROM files WHERE repo_id=? AND path IN ({marks}) ORDER BY path", (repo_id, *paths)).fetchall()}
         file_ids = [int(r["id"]) for r in files.values()]
         ids = ",".join("?" for _ in file_ids) or "NULL"
+        entity_file_ids = [
+            int(row[0])
+            for row in conn.execute(
+                f"SELECT id FROM files WHERE repo_id=? AND path IN ({ids}) AND lower(path) LIKE '%.ent'",
+                (repo_id, *paths),
+            ).fetchall()
+        ]
+        entity_ids = ",".join("?" for _ in entity_file_ids) or "NULL"
+        workflow_entity_args = (repo_id, *file_ids, repo_id, *entity_file_ids)
+        workflow_entity_query = f"""
+            SELECT w.* FROM workflow_facts w
+            WHERE w.repo_id=? AND (
+                w.source_file_id IN ({ids})
+                OR w.entity_occurrence_id IN (
+                    SELECT id FROM entity_occurrences WHERE repo_id=? AND source_file_id IN ({entity_ids})
+                )
+            ) ORDER BY w.id
+        """
+        security_operations = _rows(conn, f"SELECT * FROM security_operations WHERE repo_id=? AND source_file_id IN ({ids}) ORDER BY id", (repo_id, *file_ids), "source_path", target)
+        operation_ids = [fact["catalog_record_id"] for fact in security_operations]
+        operation_marks = ",".join("?" for _ in operation_ids) or "NULL"
+        security_policies = _rows(conn, f"SELECT * FROM security_policies WHERE repo_id=? AND source_file_id IN ({ids}) ORDER BY id", (repo_id, *file_ids), "source_path", target)
+        policy_ids = [fact["catalog_record_id"] for fact in security_policies]
+        policy_marks = ",".join("?" for _ in policy_ids) or "NULL"
+        security_menus = _rows(conn, f"SELECT * FROM security_menus WHERE repo_id=? AND source_file_id IN ({ids}) ORDER BY id", (repo_id, *file_ids), "source_path", target)
+        menu_ids = [fact["catalog_record_id"] for fact in security_menus]
+        menu_marks = ",".join("?" for _ in menu_ids) or "NULL"
+        security_operation_allowops = _rows(
+            conn,
+            f"SELECT * FROM security_operation_allowops WHERE repo_id=? AND (source_file_id IN ({ids}) OR operation_id IN ({operation_marks}) OR allowed_operation_id IN ({operation_marks})) ORDER BY id",
+            (repo_id, *file_ids, *operation_ids, *operation_ids),
+            "source_path",
+            target,
+        )
+        security_policy_values = _rows(
+            conn,
+            f"SELECT * FROM security_policy_values WHERE repo_id=? AND (source_file_id IN ({ids}) OR policy_id IN ({policy_marks})) ORDER BY id",
+            (repo_id, *file_ids, *policy_ids),
+            "source_path",
+            target,
+        )
+        policy_value_ids = [fact["catalog_record_id"] for fact in security_policy_values]
+        policy_value_marks = ",".join("?" for _ in policy_value_ids) or "NULL"
+        security_policy_eops = _rows(
+            conn,
+            f"SELECT * FROM security_policy_eops WHERE repo_id=? AND (source_file_id IN ({ids}) OR policy_value_id IN ({policy_value_marks}) OR operation_id IN ({operation_marks})) ORDER BY id",
+            (repo_id, *file_ids, *policy_value_ids, *operation_ids),
+            "source_path",
+            target,
+        )
+        security_menu_items = _rows(
+            conn,
+            f"SELECT * FROM security_menu_items WHERE repo_id=? AND (source_file_id IN ({ids}) OR menu_id IN ({menu_marks})) ORDER BY id",
+            (repo_id, *file_ids, *menu_ids),
+            "source_path",
+            target,
+        )
+        menu_item_ids = [fact["catalog_record_id"] for fact in security_menu_items]
+        menu_item_marks = ",".join("?" for _ in menu_item_ids) or "NULL"
+        security_menu_op_links = _rows(
+            conn,
+            f"SELECT * FROM security_menu_op_links WHERE repo_id=? AND (source_file_id IN ({ids}) OR menu_item_id IN ({menu_item_marks}) OR operation_id IN ({operation_marks})) ORDER BY id",
+            (repo_id, *file_ids, *menu_item_ids, *operation_ids),
+            "source_path",
+            target,
+        )
+        security_direct = {
+            "security_operations": security_operations,
+            "security_operation_allowops": security_operation_allowops,
+            "security_policies": security_policies,
+            "security_policy_values": security_policy_values,
+            "security_policy_eops": security_policy_eops,
+            "security_menus": security_menus,
+            "security_menu_items": security_menu_items,
+            "security_menu_op_links": security_menu_op_links,
+        }
+        permissions = [fact for rows in security_direct.values() for fact in rows]
         direct = [
             _surface("files", [_evidence(r, "path", target) for r in files.values()]),
             _surface("symbols", _rows(conn, f"SELECT s.*, f.path AS source_path, f.source_commit_sha AS source_commit_sha FROM symbols s JOIN files f ON f.id=s.file_id WHERE s.repo_id=? AND s.file_id IN ({ids}) ORDER BY s.file_id,s.start_line,s.id", (repo_id, *file_ids), "source_path", target)),
@@ -345,20 +534,28 @@ def analyze_fixture(
             + _rows(conn, f"SELECT d.*, f.path AS source_path FROM entity_diagnostics d JOIN files f ON f.id=d.file_id WHERE d.repo_id=? AND d.file_id IN ({ids}) ORDER BY d.id", (repo_id, *file_ids), "source_path", target)
             + _rows(conn, f"SELECT d.*, f.path AS source_path FROM openapi_diagnostics d JOIN files f ON f.id=d.file_id WHERE d.repo_id=? AND d.file_id IN ({ids}) ORDER BY d.id", (repo_id, *file_ids), "source_path", target)
             + _rows(conn, f"SELECT d.*, f.path AS source_path FROM ui_diagnostics d JOIN files f ON f.id=d.file_id WHERE d.repo_id=? AND d.file_id IN ({ids}) ORDER BY d.id", (repo_id, *file_ids), "source_path", target)
-            + _rows(conn, f"SELECT d.*, f.path AS source_path FROM nextgen_diagnostics d JOIN files f ON f.id=d.file_id WHERE d.repo_id=? AND d.file_id IN ({ids}) ORDER BY d.id", (repo_id, *file_ids), "source_path", target)),
-            _surface("database_consumers", [], False), _surface("permissions", [], False), _surface("workflows", [], False), _surface("tests", [], False),
+            + _rows(conn, f"SELECT d.*, f.path AS source_path FROM nextgen_diagnostics d JOIN files f ON f.id=d.file_id WHERE d.repo_id=? AND d.file_id IN ({ids}) ORDER BY d.id", (repo_id, *file_ids), "source_path", target)
+            + _rows(conn, f"SELECT d.*, f.path AS source_path FROM workflow_diagnostics d JOIN files f ON f.id=d.file_id WHERE d.repo_id=? AND d.file_id IN ({ids}) ORDER BY d.id", (repo_id, *file_ids), "source_path", target)
+            + _rows(conn, f"SELECT d.*, f.path AS source_path FROM security_diagnostics d JOIN files f ON f.id=d.file_id WHERE d.repo_id=? AND d.file_id IN ({ids}) ORDER BY d.id", (repo_id, *file_ids), "source_path", target)),
+            _fixture_surface(document, "database", target),
+            _surface("permissions", permissions),
+            _surface("workflows", _rows(conn, workflow_entity_query, workflow_entity_args, "source_path", target)),
+            _fixture_surface(document, "tests", target),
         ]
         gaps = [f"{x['surface']}: {x['status']}" for x in direct if x["status"] not in {"available", "unavailable", "deferred"}]
-        return {"schema_version": "0.1", "analysis_kind": "pr_impact_step_1", "status": "partial" if gaps else "complete",
+        metadata_summary = {"status": "not_provided"} if metadata is None else _load_metadata(metadata, document, changed, base, target, repo_key)
+        gaps.extend(f"{x['surface']}: {x['status']}" for x in direct if x["status"] == "deferred")
+        ranking = rank_direct_traces(direct, [x.__dict__ for x in changed])
+        return {"schema_version": REPORT_SCHEMA_VERSION, "analysis_kind": "pr_impact_step_1", "status": "partial" if gaps else "complete",
                 "input": {"fixture": str(Path(fixture)), "manifest": str(Path(manifest)), "repo_root": str(repo), "active_db": str(Path(active_db)), "repo_key": repo_key, "base_revision": base, "target_revision": target},
                 "preflight": preflight, "changed_files": [x.__dict__ for x in changed], "direct_traces": direct,
-                "onboarding_feasibility": _onboarding(Path(manifest)), "impact_ranking": [], "gaps": gaps,
+                "pr_metadata": metadata_summary, "onboarding_feasibility": _onboarding(Path(manifest)), "impact_ranking": ranking, "gaps": sorted(set(gaps)),
                 "warnings": [x["warning"] for x in direct if "warning" in x], "provenance": {"source": "repo-v1 active SQLite and exact Git diff", "read_only": True,
                 "contract": "Git diff validation only; no catalog delta processing."}}
     finally: conn.close()
 
 
 def blocked_report(error: Step1Error) -> dict[str, Any]:
-    return {"schema_version": "0.1", "analysis_kind": "pr_impact_step_1", "status": "blocked", "error": {"code": error.code, "message": error.message, **error.extra},
+    return {"schema_version": REPORT_SCHEMA_VERSION, "analysis_kind": "pr_impact_step_1", "status": "blocked", "error": {"code": error.code, "message": error.message, **error.extra},
             "input": {}, "preflight": {},
-            "changed_files": [], "direct_traces": [], "onboarding_feasibility": [], "impact_ranking": [], "gaps": [], "warnings": [], "provenance": {"read_only": True}}
+            "changed_files": [], "direct_traces": [], "pr_metadata": {"status": "not_provided"}, "onboarding_feasibility": [], "impact_ranking": [], "gaps": [], "warnings": [], "provenance": {"read_only": True}}

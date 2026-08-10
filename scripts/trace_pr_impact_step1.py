@@ -20,10 +20,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--active-db", required=True)
     parser.add_argument("--repo-key", required=True)
+    parser.add_argument("--metadata", help="optional normalized PR metadata JSON artifact")
     parser.add_argument("--json", action="store_true", help="emit JSON (the default)")
     args = parser.parse_args(argv)
     try:
-        report = analyze_fixture(args.fixture, args.manifest, args.active_db, args.repo_key)
+        report = analyze_fixture(args.fixture, args.manifest, args.active_db, args.repo_key, args.metadata)
     except Step1Error as exc:
         report = blocked_report(exc)
     except Exception as exc:  # keep operator output a stable report envelope
