@@ -639,6 +639,18 @@ security_menu_op_links=7511eb9981d3fd3689753c1b064bad2ba503aa66f3736e9b79f3e6d13
 security_diagnostics=5beb0600a6cb94be26b530804d0a78012b2184baf559aa07c6311f4a87269501
 ```
 
+Latest post-change promotion evidence, recorded separately from the isolated
+acceptance builds above:
+
+```json
+{"active_db":"/Users/aritra.ghosh/projects/intacct-repo-intelligence/catalog/catalog.db","build_token":"ebf4c59b6d214bc39c08ebf642900e77","file_count":23874,"promoted":true,"target_commit_sha":"776d1ffe49efb9189d022912e23aaef065bda1a6"}
+```
+
+This confirms successful promotion of the canonical V1 database at the
+recorded target commit. It is not isolated PR-impact acceptance evidence:
+Step 1 must use an alternate active-database path and the exact target SHA
+from the Step 0 fixture, while leaving the canonical database unchanged.
+
 Focused Phase 8 tests passed (`8 passed, 1 warning`), and the full repo-v1
 regression passed (`153 passed, 1 warning`). Candidate validation now rejects
 workflow endpoint re-parenting, explicit-null transition drift, incomplete

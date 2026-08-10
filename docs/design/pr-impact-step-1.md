@@ -109,6 +109,24 @@ PYTHONPATH=. ./.venv/bin/python scripts/trace_pr_impact_step1.py \
 The isolated database must record the fixture target SHA, pass SQLite
 integrity and foreign-key checks, and leave the canonical database unchanged.
 
+### Observed promotion evidence
+
+The following post-change operator run confirms that the repo-v1 builder can
+promote a 23,874-file catalog at commit
+`776d1ffe49efb9189d022912e23aaef065bda1a6`:
+
+```json
+{"active_db":"/Users/aritra.ghosh/projects/intacct-repo-intelligence/catalog/catalog.db","build_token":"ebf4c59b6d214bc39c08ebf642900e77","file_count":23874,"promoted":true,"target_commit_sha":"776d1ffe49efb9189d022912e23aaef065bda1a6"}
+```
+
+This is successful repo-v1 promotion evidence, but it is not PR-target
+evidence for the golden fixtures: PR 49156 targets
+`f914d9892a51c1d34eadfd0e4da89f8418ed2c59`, and PR 48706 targets
+`44ff9701e94a69c835063b4fd39e515ff0ae4680`. Because this run used the
+canonical `catalog/catalog.db` path, it must not be used as the isolated
+database for either PR analysis. A PR analysis requires a promoted database
+at the fixture's exact target SHA under an alternate path.
+
 ## PR metadata intake
 
 Fetch normalized metadata without changing the Step 0 YAML fixture:
