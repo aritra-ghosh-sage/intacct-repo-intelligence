@@ -301,12 +301,15 @@ def test_phase6_upgrade_and_partial_schema_rejection(tmp_path: Path) -> None:
     try:
         conn.execute("PRAGMA foreign_keys=OFF")
         for table in (
+            "ui_surfaces",
+            "ui_artifacts",
             "ui_fields",
             "ui_events",
             "ui_includes",
-            "ui_artifacts",
             "ui_diagnostics",
-            "ui_surfaces",
+            "nextgen_families",
+            "nextgen_artifacts",
+            "nextgen_diagnostics",
         ):
             conn.execute(f"DROP TABLE {table}")
         conn.commit()
@@ -315,8 +318,28 @@ def test_phase6_upgrade_and_partial_schema_rejection(tmp_path: Path) -> None:
     result = build_ia_main(manifest_path=manifest, active_db=upgrade)
     assert result.promoted
     assert upgrade.with_name("upgrade.db.previous").exists()
+    conn = sqlite3.connect(upgrade)
+    try:
+        for table in (
+            "ui_surfaces",
+            "ui_artifacts",
+            "ui_fields",
+            "ui_events",
+            "ui_includes",
+            "ui_diagnostics",
+            "nextgen_families",
+            "nextgen_artifacts",
+            "nextgen_diagnostics",
+        ):
+            assert conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+            ).fetchone() == (1,)
+    finally:
+        conn.close()
+    assert not list(upgrade.parent.glob(f".{upgrade.name}.candidate.*"))
 
     partial = tmp_path / "partial.db"
+    build_ia_main(manifest_path=manifest, active_db=partial)
     build_ia_main(manifest_path=manifest, active_db=partial)
     conn = sqlite3.connect(partial)
     try:
@@ -324,10 +347,66 @@ def test_phase6_upgrade_and_partial_schema_rejection(tmp_path: Path) -> None:
         conn.commit()
     finally:
         conn.close()
-    before = partial.read_bytes()
+    previous = partial.with_name(f"{partial.name}.previous")
+    assert previous.exists()
+    preserved = {
+        path: path.read_bytes()
+        for path in (
+            partial,
+            partial.with_name(f"{partial.name}-wal"),
+            partial.with_name(f"{partial.name}-shm"),
+            previous,
+            previous.with_name(f"{previous.name}-wal"),
+            previous.with_name(f"{previous.name}-shm"),
+        )
+        if path.exists()
+    }
     with pytest.raises(CatalogPromotionError, match="partial UI table set"):
         build_ia_main(manifest_path=manifest, active_db=partial)
-    assert partial.read_bytes() == before
+    assert {path: path.read_bytes() for path in preserved} == preserved
+    assert not list(partial.parent.glob(f".{partial.name}.candidate.*"))
+
+
+def test_phase7b_parent_without_phase7a_rejected(tmp_path: Path) -> None:
+    _root, manifest, _commit = _fixture(tmp_path, {"app/root_form.xml": b"<form/>"})
+    active = tmp_path / "active.db"
+    build_ia_main(manifest_path=manifest, active_db=active)
+    build_ia_main(manifest_path=manifest, active_db=active)
+
+    conn = sqlite3.connect(active)
+    try:
+        conn.execute("PRAGMA foreign_keys=OFF")
+        for table in (
+            "ui_surfaces",
+            "ui_artifacts",
+            "ui_fields",
+            "ui_events",
+            "ui_includes",
+            "ui_diagnostics",
+        ):
+            conn.execute(f"DROP TABLE {table}")
+        conn.commit()
+    finally:
+        conn.close()
+
+    previous = active.with_name(f"{active.name}.previous")
+    assert previous.exists()
+    preserved = {
+        path: path.read_bytes()
+        for path in (
+            active,
+            active.with_name(f"{active.name}-wal"),
+            active.with_name(f"{active.name}-shm"),
+            previous,
+            previous.with_name(f"{previous.name}-wal"),
+            previous.with_name(f"{previous.name}-shm"),
+        )
+        if path.exists()
+    }
+    with pytest.raises(CatalogPromotionError, match="partial UI table set"):
+        build_ia_main(manifest_path=manifest, active_db=active)
+    assert {path: path.read_bytes() for path in preserved} == preserved
+    assert not list(active.parent.glob(f".{active.name}.candidate.*"))
 
 
 def test_candidate_validation_failure_preserves_active_and_previous(

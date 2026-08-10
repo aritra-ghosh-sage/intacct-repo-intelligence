@@ -603,6 +603,28 @@ resolution, UI/entity links, legacy `catalog/ui_sync.py`, last-known-good/stale
 retention, migration scheduling, delta refresh, CLI/MCP, graph,
 multi-repository support, workflow, and security.
 
+### Pre-Phase-8 closure remediation
+
+Before Phase 8 implementation, repair the parent-boundary regression coverage
+without changing `catalog/repo_v1.py` or the V1 schema. Keep
+`test_phase6_upgrade_and_partial_schema_rejection` limited to two cases:
+
+- a valid Phase 6 parent with both the complete Phase 7A and complete Phase 7B
+  table families absent, which must rebuild and promote successfully;
+- a partial Phase 7A parent with complete Phase 7B retained, which must raise
+  `CatalogPromotionError` and preserve the active and `.previous` databases.
+
+Add the separate test
+`test_phase7b_parent_without_phase7a_rejected` for a parent with complete
+Phase 7B tables and no Phase 7A tables. It must raise
+`CatalogPromotionError`, preserve active and `.previous` bytes, and leave no
+candidate database. Both test selectors are required for closure; there is no
+optional test split or alternate acceptance path.
+
+The remediation is test-only for the parent boundary. Phase 8 remains blocked
+until both selectors and the repo-v1 regression suite pass with no unexpected
+failures.
+
 ### 8. Workflow and security
 
 Add workflow and security facts as independent builders with independent
