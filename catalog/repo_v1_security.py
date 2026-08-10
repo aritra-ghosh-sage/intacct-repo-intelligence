@@ -90,8 +90,6 @@ def _value(node, source: bytes) -> object:
                 key, value_node = _value(parts[0], source), parts[-1]
             else:
                 continue
-            if key is _DYNAMIC:
-                key = None
             items.append(
                 (
                     key if key is not None else ordinal,
@@ -168,6 +166,30 @@ def _source_meta(
 
 
 def _insert_fact(conn, table: str, fields: dict[str, object]) -> int:
+    evidence = fields.get("evidence")
+    if isinstance(evidence, str):
+        parsed = json.loads(evidence)
+        if isinstance(parsed, dict) and isinstance(parsed.get("fields"), dict):
+            evidence_fields = parsed["fields"]
+            for name in (
+                "source_file_id",
+                "source_path",
+                "source_commit_sha",
+                "source_hash",
+                "source_pointer",
+                "start_line",
+                "end_line",
+                "extractor",
+                "extractor_version",
+                "operation_id",
+                "policy_id",
+                "policy_value_id",
+                "menu_id",
+                "menu_item_id",
+            ):
+                if name in fields:
+                    evidence_fields[name] = fields[name]
+            fields["evidence"] = _canonical(parsed)
     names = list(fields)
     cur = conn.execute(
         f"INSERT INTO {table}({','.join(names)}) VALUES({','.join('?' for _ in names)})",
@@ -194,15 +216,26 @@ def _diag(
     pointer,
     detail,
 ):
-    evidence = _canonical(
+    evidence = _evidence(
+        "security.diagnostic",
         {
-            "fact_type": "security.diagnostic",
+            "file_id": file_id,
+            "subject_kind": None,
+            "subject_key": None,
+            "source_file_id": file_id,
+            "source_path": path,
+            "source_commit_sha": sha,
+            "source_hash": raw_hash,
+            "source_pointer": pointer,
+            "start_line": start,
+            "end_line": end,
+            "severity": "warning",
             "code": code,
             "message": message,
-            "source_path": path,
-            "source_pointer": pointer,
             "detail": detail,
-        }
+            "extractor": EXTRACTOR,
+            "extractor_version": EXTRACTOR_VERSION,
+        },
     )
     key = _fact_key("diagnostic:" + code, path, pointer, detail)
     conn.execute(
@@ -404,6 +437,22 @@ def extract_snapshot_security(
                 values_value = _map(policy_value.value).get("values")
                 values = _array(values_value.value if values_value else [])
                 for vord, (raw_vkey, vval) in enumerate(values):
+                    if raw_vkey is _DYNAMIC:
+                        counts["diag"] += 1
+                        _diag(
+                            conn,
+                            repo_id,
+                            file_id,
+                            path,
+                            source_hash,
+                            snapshot.target_sha,
+                            *_line(vval.node),
+                            "security.value.dynamic",
+                            "dynamic policy value identity was omitted",
+                            f"{pointer}/values/{vord}",
+                            {"kind": "policy_value"},
+                        )
+                        continue
                     vkey = str(raw_vkey)
                     vmap = _map(vval.value)
                     pointer2 = f"{pointer}/values/{vord}"
@@ -827,6 +876,7 @@ def _resolve_refs(conn, repo_id, allows, eops, menus, counts, sha):
         fields = {"source_path": meta["path"], "source_pointer": meta["pointer"]}
         if kind == "allow":
             evidence_fields = {
+                "operation_id": parent,
                 "allowed_op_key": raw,
                 "resolution_status": status,
                 "resolution_reason": reason,
@@ -835,6 +885,7 @@ def _resolve_refs(conn, repo_id, allows, eops, menus, counts, sha):
             }
         else:
             evidence_fields = {
+                ("policy_value_id" if kind == "eop" else "menu_item_id"): parent,
                 "op_key": raw,
                 "resolution_status": status,
                 "resolution_reason": reason,
@@ -906,6 +957,90 @@ def validate_security_candidate(
         "security_menu_items": "menu-item",
         "security_menu_op_links": "menu",
     }
+    common = (
+        "source_file_id",
+        "source_path",
+        "source_commit_sha",
+        "source_hash",
+        "source_pointer",
+        "start_line",
+        "end_line",
+        "extractor",
+        "extractor_version",
+    )
+    evidence_fields_by_table = {
+        "security_operations": (
+            "op_key",
+            "op_numeric_id",
+            "title",
+            "action",
+            "script",
+            "force_mode",
+            "secure_only",
+            "allow_dev_env_only",
+            *common,
+        ),
+        "security_operation_allowops": (
+            "operation_id",
+            "allowed_op_key",
+            "allowed_operation_id",
+            "resolution_status",
+            "resolution_reason",
+            *common,
+        ),
+        "security_policies": ("policy_name", "module", "label", *common),
+        "security_policy_values": (
+            "policy_id",
+            "value_key",
+            "display",
+            "value_label",
+            *common,
+        ),
+        "security_policy_eops": (
+            "policy_value_id",
+            "op_key",
+            "operation_id",
+            "resolution_status",
+            "resolution_reason",
+            *common,
+        ),
+        "security_menus": ("module", "menu_name", *common),
+        "security_menu_items": (
+            "menu_id",
+            "item_path",
+            "item_name",
+            "menu_item_id",
+            "menu_script",
+            "menu_key",
+            *common,
+        ),
+        "security_menu_op_links": (
+            "menu_item_id",
+            "op_key",
+            "operation_id",
+            "resolution_status",
+            "resolution_reason",
+            *common,
+        ),
+        "security_diagnostics": (
+            "file_id",
+            "subject_kind",
+            "subject_key",
+            "source_file_id",
+            "source_path",
+            "source_commit_sha",
+            "source_hash",
+            "source_pointer",
+            "start_line",
+            "end_line",
+            "severity",
+            "code",
+            "message",
+            "detail",
+            "extractor",
+            "extractor_version",
+        ),
+    }
     for table in tables:
         for row in conn.execute(f"SELECT * FROM {table} WHERE repo_id=?", (repo_id,)):
             if (
@@ -954,42 +1089,30 @@ def validate_security_candidate(
                 evidence = json.loads(str(row["evidence"]))
             except ValueError as exc:
                 raise RuntimeError(f"security evidence is invalid: {table}") from exc
-            if _canonical(evidence) != str(row["evidence"]):
+            if (
+                not isinstance(evidence, dict)
+                or evidence.get("fact_type")
+                != (
+                    "security.diagnostic"
+                    if table == "security_diagnostics"
+                    else kinds[table]
+                )
+                or not isinstance(evidence.get("fields"), dict)
+                or _canonical(evidence) != str(row["evidence"])
+            ):
                 raise RuntimeError(f"security evidence is not canonical: {table}")
-            fields = evidence.get("fields") if isinstance(evidence, dict) else None
-            if isinstance(fields, dict):
-                for name in (
-                    "op_key",
-                    "op_numeric_id",
-                    "title",
-                    "action",
-                    "script",
-                    "force_mode",
-                    "secure_only",
-                    "allow_dev_env_only",
-                    "policy_name",
-                    "module",
-                    "label",
-                    "value_key",
-                    "display",
-                    "value_label",
-                    "item_path",
-                    "item_name",
-                    "menu_item_id",
-                    "menu_script",
-                    "menu_key",
-                    "menu_name",
-                    "menu_key",
-                    "allowed_op_key",
-                    "resolution_status",
-                    "resolution_reason",
-                    "allowed_operation_id",
-                    "operation_id",
-                ):
-                    if name in fields and fields[name] != row[name]:
-                        raise RuntimeError(
-                            f"security evidence scalar mismatch: {table}.{name}"
-                        )
+            fields = evidence["fields"]
+            expected_fields = {
+                name: row[name]
+                for name in evidence_fields_by_table[table]
+                if name != "detail"
+            }
+            if table == "security_diagnostics":
+                if not isinstance(fields.get("detail"), dict):
+                    raise RuntimeError("security diagnostic detail is invalid")
+                expected_fields["detail"] = fields["detail"]
+            if fields != expected_fields:
+                raise RuntimeError(f"security evidence scalar mismatch: {table}")
             if table in {
                 "security_operation_allowops",
                 "security_policy_eops",
@@ -1003,3 +1126,62 @@ def validate_security_candidate(
                 )
             ):
                 raise RuntimeError(f"security resolution state invalid: {table}")
+            if table in {
+                "security_operation_allowops",
+                "security_policy_eops",
+                "security_menu_op_links",
+            }:
+                if table == "security_operation_allowops":
+                    raw = str(row["allowed_op_key"])
+                    numeric = re.fullmatch(r"-?\d+", raw)
+                    matches = (
+                        conn.execute(
+                            "SELECT id FROM security_operations WHERE repo_id=? AND op_numeric_id=?",
+                            (repo_id, int(raw)),
+                        ).fetchall()
+                        if numeric
+                        else []
+                    )
+                    target_column = "allowed_operation_id"
+                    expected_reason = (
+                        "unique_numeric_id"
+                        if len(matches) == 1
+                        else "ambiguous_numeric_operation"
+                        if len(matches) > 1
+                        else "missing_numeric_operation"
+                    )
+                    expected_status = "resolved" if len(matches) == 1 else "unresolved"
+                else:
+                    raw = str(row["op_key"])
+                    matches = conn.execute(
+                        "SELECT id FROM security_operations WHERE repo_id=? AND op_key=?",
+                        (repo_id, raw),
+                    ).fetchall()
+                    target_column = "operation_id"
+                    expected_reason = (
+                        "unique_operation_key"
+                        if len(matches) == 1
+                        else "ambiguous_operation_key"
+                        if len(matches) > 1
+                        else "missing_operation_key"
+                    )
+                    expected_status = "resolved" if len(matches) == 1 else "unresolved"
+                expected_target = int(matches[0][0]) if len(matches) == 1 else None
+                if (
+                    row["resolution_status"] != expected_status
+                    or row["resolution_reason"] != expected_reason
+                    or row[target_column] != expected_target
+                ):
+                    raise RuntimeError(
+                        f"security reference resolution validation failed: {table}"
+                    )
+            if table == "security_diagnostics":
+                detail = fields["detail"]
+                expected_key = _fact_key(
+                    "diagnostic:" + str(row["code"]),
+                    str(row["source_path"]),
+                    str(row["source_pointer"]),
+                    detail,
+                )
+                if row["diagnostic_key"] != expected_key:
+                    raise RuntimeError("security diagnostic key validation failed")

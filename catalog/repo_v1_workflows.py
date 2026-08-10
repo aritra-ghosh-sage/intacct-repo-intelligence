@@ -17,6 +17,7 @@ from catalog.source_snapshot import SourceSnapshot
 EXTRACTOR = "repo_v1_workflows"
 EXTRACTOR_VERSION = "1"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_MISSING = object()
 
 
 @dataclass(frozen=True)
@@ -137,9 +138,13 @@ def extract_snapshot_workflows(
             continue
         module, object_name, action = route
         transition_value = (
-            operation.get("x-transition") if isinstance(operation, dict) else None
+            operation.get("x-transition", _MISSING)
+            if isinstance(operation, dict)
+            else _MISSING
         )
-        transition_json = _transition(transition_value)
+        transition_json = (
+            None if transition_value is _MISSING else _transition(transition_value)
+        )
         endpoint_id = int(row["id"])
         link_rows = conn.execute(
             "SELECT entity_occurrence_id FROM openapi_entity_links WHERE repo_id=? AND document_id=(SELECT document_id FROM rest_endpoints WHERE id=?) ORDER BY id",
@@ -207,7 +212,7 @@ def extract_snapshot_workflows(
                 ),
             ).lastrowid
         )
-        if transition_value is not None and transition_json is None:
+        if transition_value is not _MISSING and transition_json is None:
             diagnostics += 1
             _diagnostic(
                 conn,
@@ -264,7 +269,23 @@ def _diagnostic(
     detail,
 ):
     evidence = _evidence(
-        {"source_path": path, "source_pointer": pointer, "code": code, **detail}
+        {
+            "fact_type": "workflow.diagnostic",
+            "fields": {
+                "source_path": path,
+                "source_pointer": pointer,
+                "source_commit_sha": conn.execute(
+                    "SELECT target_commit_sha FROM repos WHERE id=?", (repo_id,)
+                ).fetchone()[0],
+                "source_hash": source_hash,
+                "start_line": start,
+                "end_line": end,
+                "severity": "warning",
+                "code": code,
+                "message": message,
+                "detail": detail,
+            },
+        }
     )
     key = _key(
         "workflow-diagnostic",
@@ -304,7 +325,22 @@ def validate_workflow_candidate(
     if repo is None:
         raise RuntimeError("workflow repository is missing")
     for row in conn.execute(
-        "SELECT w.*,e.endpoint_key,e.repo_id AS endpoint_repo,d.path AS document_path,f.repo_id AS file_repo,f.path AS file_path,f.source_commit_sha AS file_sha FROM workflow_facts w LEFT JOIN rest_endpoints e ON e.id=w.endpoint_id LEFT JOIN openapi_documents d ON d.id=e.document_id LEFT JOIN files f ON f.id=w.source_file_id WHERE w.repo_id=?",
+        """SELECT w.*,e.endpoint_key,e.repo_id AS endpoint_repo,
+                  e.document_id AS endpoint_document_id,
+                  e.path_template AS endpoint_path_template,
+                  e.http_method AS endpoint_http_method,
+                  e.operation_id AS endpoint_operation_id,
+                  e.source_pointer AS endpoint_source_pointer,
+                  e.source_commit_sha AS endpoint_sha,
+                  d.repo_id AS document_repo,d.file_id AS document_file_id,
+                  d.path AS document_path,d.source_commit_sha AS document_sha,
+                  f.repo_id AS file_repo,f.path AS file_path,
+                  f.source_commit_sha AS file_sha
+           FROM workflow_facts w
+           LEFT JOIN rest_endpoints e ON e.id=w.endpoint_id
+           LEFT JOIN openapi_documents d ON d.id=e.document_id
+           LEFT JOIN files f ON f.id=w.source_file_id
+           WHERE w.repo_id=?""",
         (repo_id,),
     ):
         expected = endpoint_key(
@@ -327,8 +363,18 @@ def validate_workflow_candidate(
             or not str(row["source_pointer"]).startswith("/paths/")
             or not str(row["source_pointer"]).endswith("/" + str(row["http_method"]))
             or row["endpoint_repo"] != repo_id
+            or row["document_repo"] != repo_id
             or row["file_repo"] != repo_id
             or row["file_path"] != row["source_path"]
+            or row["source_path"] != row["document_path"]
+            or row["source_file_id"] != row["document_file_id"]
+            or row["endpoint_document_id"] is None
+            or row["endpoint_path_template"] != row["path_template"]
+            or row["endpoint_http_method"] != row["http_method"]
+            or row["endpoint_operation_id"] != row["operation_id"]
+            or row["endpoint_source_pointer"] != row["source_pointer"]
+            or row["endpoint_sha"] != target_commit_sha
+            or row["document_sha"] != target_commit_sha
             or row["workflow_key"] != expected
             or row["source_commit_sha"] != target_commit_sha
             or row["source_commit_sha"] != row["file_sha"]
@@ -387,9 +433,41 @@ def validate_workflow_candidate(
         ):
             raise RuntimeError("workflow entity-link cardinality validation failed")
     for row in conn.execute(
-        "SELECT d.*,f.repo_id AS file_repo,f.path AS file_path,f.source_commit_sha AS file_sha FROM workflow_diagnostics d LEFT JOIN files f ON f.id=d.file_id WHERE d.repo_id=?",
+        """SELECT d.*,f.repo_id AS file_repo,f.path AS file_path,
+                  f.source_commit_sha AS file_sha,
+                  w.repo_id AS workflow_repo,w.source_file_id AS workflow_file_id,
+                  w.source_path AS workflow_path
+           FROM workflow_diagnostics d
+           LEFT JOIN files f ON f.id=d.file_id
+           LEFT JOIN workflow_facts w ON w.id=d.workflow_id
+           WHERE d.repo_id=?""",
         (repo_id,),
     ):
+        try:
+            evidence = json.loads(str(row["evidence"]))
+        except ValueError as exc:
+            raise RuntimeError("workflow diagnostic evidence is not JSON") from exc
+        if not isinstance(evidence, dict):
+            raise TypeError("workflow diagnostic evidence is not an object")
+        detail = (
+            evidence.get("fields", {}).get("detail", {})
+            if isinstance(evidence.get("fields"), dict)
+            else {}
+        )
+        if not isinstance(detail, dict):
+            raise TypeError("workflow diagnostic detail is invalid")
+        expected_evidence = {
+            "source_path": row["file_path"],
+            "source_pointer": row["source_pointer"],
+            "source_commit_sha": row["source_commit_sha"],
+            "source_hash": row["source_hash"],
+            "start_line": row["start_line"],
+            "end_line": row["end_line"],
+            "severity": row["severity"],
+            "code": row["code"],
+            "message": row["message"],
+            "detail": detail,
+        }
         if (
             row["file_repo"] != repo_id
             or row["file_sha"] != target_commit_sha
@@ -406,6 +484,19 @@ def validate_workflow_candidate(
             }
             or int(row["start_line"]) < 1
             or int(row["end_line"]) < int(row["start_line"])
-            or _canonical(json.loads(row["evidence"])) != str(row["evidence"])
+            or row["workflow_repo"] != repo_id
+            or row["workflow_file_id"] != row["file_id"]
+            or row["workflow_path"] != row["file_path"]
+            or evidence.get("fact_type") != "workflow.diagnostic"
+            or evidence.get("fields") != expected_evidence
+            or _canonical(evidence) != str(row["evidence"])
+            or row["diagnostic_key"]
+            != _key(
+                "workflow-diagnostic",
+                "ia-main",
+                row["file_path"],
+                row["source_pointer"],
+                {"code": row["code"], "detail": detail},
+            )
         ):
             raise RuntimeError("workflow diagnostic validation failed")

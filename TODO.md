@@ -68,5 +68,6 @@ Phase 7 components and later components remain outside this backlog.
       Phase 7B/8.
 
 - [x] Phase 8A/8B immutable OpenAPI workflow endpoint and source-backed security
-      facts implemented in the repo-v1 candidate path; focused acceptance and
-      isolated repeat-build evidence remain operator follow-up.
+      facts implemented and accepted in the repo-v1 candidate path; provenance
+      closure, nested menu traversal, focused tests, two isolated repeat builds,
+      normalized Phase 8 parity, SQLite integrity, and foreign-key checks passed.

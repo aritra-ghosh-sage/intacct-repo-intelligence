@@ -73,6 +73,9 @@ def test_security_operations_policies_menus_and_resolution(tmp_path: Path) -> No
         conn.execute("SELECT COUNT(*) FROM security_menu_op_links").fetchone()[0] == 1
     )
     validate_security_candidate(conn, repo_id=1, target_commit_sha="a" * 40)
+    conn.execute("UPDATE security_menu_op_links SET operation_id=2")
+    with pytest.raises(RuntimeError):
+        validate_security_candidate(conn, repo_id=1, target_commit_sha="a" * 40)
 
 
 def test_security_nested_menu_items_and_container_traversal(tmp_path: Path) -> None:
@@ -152,5 +155,66 @@ def test_security_dynamic_reference_and_tamper_rejected(tmp_path: Path) -> None:
         == 1
     )
     conn.execute("UPDATE security_operations SET fact_key=?", ("b" * 64,))
+    with pytest.raises(RuntimeError):
+        validate_security_candidate(conn, repo_id=1, target_commit_sha="a" * 40)
+
+
+def test_security_dynamic_policy_value_identity_is_omitted(tmp_path: Path) -> None:
+    conn, snapshot = _fixture(
+        tmp_path,
+        {
+            "app/source/common/security.inc": b"<?php $kElements=array(array('key'=>'read','id'=>1));",
+            "app/source/common/Policies/ap.pol": b"<?php $kPolicy=array('bill'=>array('values'=>array($dynamic=>array('value'=>'On','eops'=>array('read')))));",
+        },
+    )
+    stats = extract_snapshot_security(conn, repo_id=1, snapshot=snapshot)
+    assert stats.policy_count == 1
+    assert stats.policy_value_count == 0
+    assert stats.policy_eop_count == 0
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM security_diagnostics "
+            "WHERE code='security.value.dynamic'"
+        ).fetchone()[0]
+        == 1
+    )
+    validate_security_candidate(conn, repo_id=1, target_commit_sha="a" * 40)
+
+
+def test_security_provenance_evidence_hash_and_diagnostic_key_tampering_rejected(
+    tmp_path: Path,
+) -> None:
+    cases = (
+        (
+            "evidence",
+            "UPDATE security_operations SET evidence=?",
+            '{"fact_type":"operation","fields":{}}',
+        ),
+        ("hash", "UPDATE security_operations SET source_hash=?", "b" * 64),
+    )
+    for name, statement, value in cases:
+        case_root = tmp_path / name
+        case_root.mkdir()
+        conn, snapshot = _fixture(
+            case_root,
+            {
+                "app/source/common/security.inc": b"<?php $kElements=array(array('key'=>'read','id'=>1));",
+            },
+        )
+        extract_snapshot_security(conn, repo_id=1, snapshot=snapshot)
+        conn.execute(statement, (value,))
+        with pytest.raises(RuntimeError):
+            validate_security_candidate(conn, repo_id=1, target_commit_sha="a" * 40)
+
+    diagnostic_root = tmp_path / "diagnostic"
+    diagnostic_root.mkdir()
+    conn, snapshot = _fixture(
+        diagnostic_root,
+        {
+            "app/source/common/security.inc": b"<?php $x='read'; $kElements=array(array('key'=>'read','allowops'=>array($x)));",
+        },
+    )
+    extract_snapshot_security(conn, repo_id=1, snapshot=snapshot)
+    conn.execute("UPDATE security_diagnostics SET diagnostic_key=?", ("c" * 64,))
     with pytest.raises(RuntimeError):
         validate_security_candidate(conn, repo_id=1, target_commit_sha="a" * 40)

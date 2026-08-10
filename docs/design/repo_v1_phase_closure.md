@@ -600,16 +600,45 @@ Phase 8 adds immutable OpenAPI workflow endpoint facts and conservative
 Tree-sitter security operations, policies, menus, and direct references. Both
 extractors read only retained `SourceSnapshot` bytes, persist canonical
 evidence/source hashes, retain unresolved semantic references, and validate
-ownership, keys, provenance, evidence, and composite foreign keys before the
-existing atomic promotion path.
+ownership, keys, provenance, evidence, semantic resolution, and composite
+foreign keys before the existing atomic promotion path.
 
 The implementation excludes legacy workflow/security builders, delta refresh,
 migrations, graph/MCP projection, `$ref` traversal, inferred entity
 association, and generated security data execution. The ordered parent
 boundary rejects partial or out-of-order Phase 6–8 families.
 
-Focused in-memory checks and the existing repo-v1/OpenAPI/NextGen tests passed
-after implementation. Older Phase 6/7 tests that expect a later family to
-remain valid after deletion of an earlier family conflict with the Phase 8
-parent contract and require test-suite reconciliation before full regression
-sign-off.
+Current isolated acceptance evidence:
+
+- Target commit: `776d1ffe49efb9189d022912e23aaef065bda1a6`.
+- Isolated build A: token `77ed5e64f23d4966b00489f0349ef545`.
+- Isolated build B: token `810aa585db3a43cfaca1c97ba39980b5`.
+- Both builds promoted successfully with 23,874 source files.
+- Phase 8 counts: workflow facts `111`, workflow diagnostics `114`, security
+  operations `4,822`, allowops `5,331`, policies `703`, policy values `2,446`,
+  policy eops `2,832`, menus `40`, menu items `556`, menu-operation links
+  `556`, security diagnostics `243`.
+- Both databases returned `PRAGMA integrity_check = ok` and zero foreign-key
+  violations. No candidate, stage, or backup artifacts remained.
+- The normalized Phase 8 projections matched exactly across both isolated
+  builds:
+
+```text
+workflow_facts=effb7ad48790eedbdd1051981a85c1f9873ac4df2664ca415157fd17e64cafdd
+workflow_diagnostics=3fc7d7afb82c156be1c7f65e72ef45174bc8abea2bdbe5946e623aec651476b5
+security_operations=85ff318ca34c9adc52f3c40cf54b57700e3add0431aec68ca5e95aa50cd992a1
+security_operation_allowops=f48470ca627348a296f68e32214c62cf66fa90bb6db63d1bbbee313dbbdf430f
+security_policies=45057cf629aa33b4708a6043e16e91140f01df2defb62563eafa51bab5aa8d62
+security_policy_values=efa4f6ff2a5555054c4245d7fd2d1aacc67bbcc55e16d96539288c346d05151b
+security_policy_eops=ffb15e5f8e5ca9d43dfd3d25285b5ad7ebe3302aa44b91ba09deff66b49f0be3
+security_menus=d7353f2f765e3a893a7d6313ccf5fb53766e9b8af3d253d18b5d86f175e34f3b
+security_menu_items=d9e22d91df07292a5ac826c9eb3be71280e95f6a7aa7c311a99afeb0b0950cff
+security_menu_op_links=7511eb9981d3fd3689753c1b064bad2ba503aa66f3736e9b79f3e6d13d71880d
+security_diagnostics=5beb0600a6cb94be26b530804d0a78012b2184baf559aa07c6311f4a87269501
+```
+
+Focused Phase 8 tests passed (`7 passed, 1 warning`), and the full repo-v1
+regression passed (`152 passed, 1 warning`). Candidate validation now rejects
+workflow endpoint re-parenting, explicit-null transition drift, incomplete
+security evidence, invalid diagnostic keys, invalid reference targets, and
+dynamic policy identities inferred as ordinals.

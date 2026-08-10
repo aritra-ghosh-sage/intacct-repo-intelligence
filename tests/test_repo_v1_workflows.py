@@ -68,3 +68,41 @@ def test_workflow_selection_and_tampering_rejected(tmp_path: Path) -> None:
     conn.execute("UPDATE workflow_facts SET source_hash=?", ("b" * 64,))
     with pytest.raises(RuntimeError):
         validate_workflow_candidate(conn, repo_id=1, target_commit_sha="a" * 40)
+    extract_snapshot_workflows(conn, repo_id=1, snapshot=snapshot)
+    conn.execute("UPDATE workflow_diagnostics SET diagnostic_key=?", ("d" * 64,))
+    with pytest.raises(RuntimeError):
+        validate_workflow_candidate(conn, repo_id=1, target_commit_sha="a" * 40)
+
+
+def test_workflow_endpoint_binding_and_explicit_null_transition_rejected(
+    tmp_path: Path,
+) -> None:
+    conn, snapshot = _fixture(
+        tmp_path,
+        {
+            "app/source/openapispec/ap/paths/routes.api.yaml": b"""paths:
+  /workflows/ap/bill/approve:
+    post:
+      x-transition: null
+  /workflows/ap/bill/review:
+    post: {}
+""",
+        },
+    )
+    extract_snapshot_openapi(conn, repo_id=1, snapshot=snapshot)
+    stats = extract_snapshot_workflows(conn, repo_id=1, snapshot=snapshot)
+    assert stats.fact_count == 2
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM workflow_diagnostics "
+            "WHERE code='workflow.transition.invalid'"
+        ).fetchone()[0]
+        == 1
+    )
+    conn.execute(
+        "UPDATE workflow_facts SET source_pointer='/paths/tampered/post', "
+        "workflow_key=? WHERE id=(SELECT MIN(id) FROM workflow_facts)",
+        ("c" * 64,),
+    )
+    with pytest.raises(RuntimeError):
+        validate_workflow_candidate(conn, repo_id=1, target_commit_sha="a" * 40)
