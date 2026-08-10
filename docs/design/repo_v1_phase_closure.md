@@ -596,6 +596,8 @@ rebuild and atomic promotion.
 
 ## Phase 8 — Workflow and Security Facts
 
+Status: **accepted** for the defined repo-v1 Phase 8 scope.
+
 Phase 8 adds immutable OpenAPI workflow endpoint facts and conservative
 Tree-sitter security operations, policies, menus, and direct references. Both
 extractors read only retained `SourceSnapshot` bytes, persist canonical
@@ -637,8 +639,8 @@ security_menu_op_links=7511eb9981d3fd3689753c1b064bad2ba503aa66f3736e9b79f3e6d13
 security_diagnostics=5beb0600a6cb94be26b530804d0a78012b2184baf559aa07c6311f4a87269501
 ```
 
-Focused Phase 8 tests passed (`7 passed, 1 warning`), and the full repo-v1
-regression passed (`152 passed, 1 warning`). Candidate validation now rejects
+Focused Phase 8 tests passed (`8 passed, 1 warning`), and the full repo-v1
+regression passed (`153 passed, 1 warning`). Candidate validation now rejects
 workflow endpoint re-parenting, explicit-null transition drift, incomplete
 security evidence, invalid diagnostic keys, invalid reference targets, and
 dynamic policy identities inferred as ordinals.

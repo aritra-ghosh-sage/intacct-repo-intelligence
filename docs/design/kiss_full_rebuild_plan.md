@@ -629,6 +629,16 @@ complete ordered Phase 6, 7A, 7B, 8A, and 8B prefixes; no in-place migration or
 legacy-builder compatibility is added. Focused Phase 8 acceptance and isolated
 repeat-build evidence are the operator sign-off step.
 
+Phase 8 is **accepted** for repo-v1. The current target commit is
+`776d1ffe49efb9189d022912e23aaef065bda1a6`; two isolated builds promoted with
+matching normalized projections for all 11 Phase 8 tables, SQLite integrity
+`ok`, zero foreign-key violations, and no leaked candidate/stage/backup
+artifacts. Real-build counts include 111 workflow facts, 114 workflow
+diagnostics, 40 security menus, 556 security menu items, and 556
+security-menu operation links. The complete evidence, build tokens, counts,
+and projection hashes are recorded in
+`docs/design/repo_v1_phase_closure.md`.
+
 ### 8. Workflow and security
 
 Add workflow and security facts as independent builders with independent
