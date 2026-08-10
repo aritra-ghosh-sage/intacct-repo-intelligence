@@ -541,6 +541,10 @@ Entity references and entity-mapping diagnostics are discarded. No PHP,
 JavaScript, event-call, UI/entity-link, legacy synchronization, graph, MCP,
 delta, or in-place migration behavior is included.
 
+Status: **implementation complete**. The ordered Phase 7A/7B parent boundary is
+covered by test-only regression remediation; production extraction and
+promotion behavior was not changed.
+
 Target and source evidence:
 
 - Branch: `repo-v1`.
@@ -575,16 +579,17 @@ all 1,015 retained NextGen-like files against the target Git commit.
 | Acceptance requirement | Evidence and observed result |
 | --- | --- |
 | Focused Phase 7B behavior | `PYTHONPATH=. ./.venv/bin/pytest -q tests/test_repo_v1_nextgen.py` — 7 passed, 1 warning. |
-| Full requested regression | 121 passed, 1 failed, 1 warning; the known Phase 6 upgrade fixture fails because it removes Phase 7A tables while retaining complete Phase 7B tables. This is tracked as deferred migration-scheduling work. |
+| Full requested regression | `PYTHONPATH=. ./.venv/bin/pytest -q tests/test_repo_v1*.py tests/test_pr_impact_step1.py` — 145 passed, 1 warning; no failures, errors, skips, or xfails. |
 | Exact three-table schema, indexes, and composite FKs | Focused schema test and active SQLite inspection — passed. |
 | YAML/family diagnostics and parser severity | Focused tests — passed; only the four allowlisted codes persisted, with YAML errors and family warnings preserved. |
 | Canonical evidence, JSON null, stable keys, and collision ordinals | Focused tests — passed. |
 | Dirty-checkout immunity and raw source hashes | Focused tests and independent verification — passed for all 1,015 retained inputs. |
 | Candidate ownership, provenance, evidence, hash, line-range, key, and FK validation | Focused candidate tests and promoted build — passed. |
+| Ordered Phase 7A/7B parent boundary | `test_phase6_upgrade_and_partial_schema_rejection` and `test_phase7b_parent_without_phase7a_rejected` — 2 passed; complete Phase 6 parent upgrades with all nine UI/NextGen tables restored, while partial Phase 7A and Phase 7B-without-Phase 7A parents fail closed. Active and `.previous` bytes, existing SQLite sidecars, and candidate cleanup were verified. |
 | Atomic promotion and active/.previous preservation | Canonical result `promoted=true`; the prior active token remained available in `.previous`. |
 | SQLite integrity and foreign keys | `PRAGMA integrity_check = ok`; `PRAGMA foreign_key_check` returned no rows. |
 | Formatting and syntax | `py_compile` and `git diff --check` — passed. |
 
-Phase 7B deferred work: schedule and repair the legacy Phase 6 upgrade fixture
-for the ordered Phase 7A/7B parent boundary. No in-place migration is added;
-the supported path remains a complete candidate rebuild and atomic promotion.
+Phase 7B implementation and parent-boundary test remediation are complete. No
+in-place migration is added; the supported path remains a complete candidate
+rebuild and atomic promotion.
