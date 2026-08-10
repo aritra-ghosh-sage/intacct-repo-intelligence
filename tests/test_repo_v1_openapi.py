@@ -9,6 +9,7 @@ import pytest
 from test_repo_v1 import _repo
 
 from catalog import repo_v1
+from catalog.refresh_transaction import CatalogPromotionError
 from catalog.repo_v1 import RepoV1Error, build_ia_main
 from catalog.repo_v1_openapi import (
     OpenAPIValidationError,
@@ -304,12 +305,15 @@ def test_phase6_failure_preserves_active_database(
     assert not list(active.parent.glob(f".{active.name}.candidate.*"))
 
 
-def test_phase6_additive_schema_upgrade_promotes_over_legacy_active(
+def test_phase6_later_families_without_phase6_rejected(
     tmp_path: Path,
 ) -> None:
     _root, manifest = _repo(tmp_path)
     active = tmp_path / "active.db"
     build_ia_main(manifest_path=manifest, active_db=active, promote=True)
+    build_ia_main(manifest_path=manifest, active_db=active, promote=True)
+    previous = active.with_name(active.name + ".previous")
+    previous_before = previous.read_bytes()
 
     conn = sqlite3.connect(active)
     try:
@@ -324,21 +328,13 @@ def test_phase6_additive_schema_upgrade_promotes_over_legacy_active(
     finally:
         conn.close()
 
-    build_ia_main(manifest_path=manifest, active_db=active, promote=True)
+    active_before = active.read_bytes()
+    with pytest.raises(
+        CatalogPromotionError,
+        match="incomplete or out-of-order Phase 6-8 family",
+    ):
+        build_ia_main(manifest_path=manifest, active_db=active, promote=True)
 
-    conn = sqlite3.connect(active)
-    try:
-        tables = {
-            row[0]
-            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        }
-        assert {
-            "openapi_documents",
-            "openapi_entity_links",
-            "rest_endpoints",
-            "openapi_diagnostics",
-        } <= tables
-        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
-    finally:
-        conn.close()
+    assert active.read_bytes() == active_before
+    assert previous.read_bytes() == previous_before
+    assert not list(active.parent.glob(f".{active.name}.candidate.*"))

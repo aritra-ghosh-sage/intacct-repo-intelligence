@@ -445,7 +445,7 @@ openapi_diagnostics=2075a575d4fd77dcb1c54f9ddc03cb05b2e0772fe71022ef4cec11500984
 | Existing Phase 0–5 behavior | `PYTHONPATH=. ./.venv/bin/pytest -q tests/test_repo_v1.py validation/test_source_snapshot.py tests/test_repo_v1_symbols.py tests/test_repo_v1_relationships.py tests/test_repo_v1_entities.py tests/test_repo_v1_openapi.py`: 101 passed, 1 warning. |
 | Exact scope, malformed YAML, links, and endpoints | Focused tests passed; `.yaml`/template exclusions, duplicate/non-mapping diagnostics, required mapping diagnostics, exact stems, literal lower-case methods, uppercase/unsupported method exclusion, pointers, and `$ref` non-traversal were verified. |
 | Candidate failure and active preservation | `test_phase6_failure_preserves_active_database` passed; active bytes were unchanged and temporary candidates were removed. |
-| Legacy active-schema accommodation | `test_phase6_additive_schema_upgrade_promotes_over_legacy_active` and the default smoke command | Passed; a valid active catalog missing only the four Phase 6 tables was upgraded atomically, with the old schema retained as `.previous`. |
+| Ordered parent boundary | `test_phase6_later_families_without_phase6_rejected` and the default smoke command | Passed; an active catalog retaining later additive families after removal of all Phase 6 tables was rejected before candidate construction, with active and `.previous` bytes preserved. |
 | Stable keys, operation provenance, and ownership | Endpoint-key and `operation_id` tampering were rejected; both builds passed candidate validation with all Phase 6 facts owned by repo `1` and commit `e7fbab69...`. |
 | SQLite/FK integrity | Both builds returned `PRAGMA integrity_check = ok` and zero `PRAGMA foreign_key_check` rows. |
 | Dirty checkout and repeatability | `test_dirty_checkout_bytes_do_not_change_snapshot_facts` passed; the two current promoted builds matched all four normalized hashes. |
@@ -458,7 +458,7 @@ This Phase 6 verification recorded the canonical database at target commit
 `413037f172e3f7394abfb399b6dee7649634ff7a4d7ff66e81e56b861bdc8c97`; those
 values are historical Phase 6 evidence. Counts, hashes,
 operation-id provenance, target commit, integrity, FK, dirty-checkout,
-candidate-failure, legacy active-schema accommodation, and active-preservation
+candidate-failure, ordered-parent-boundary, and active-preservation
 evidence above are the current Phase 6 closure record.
 
 ## Phase 7A — Immutable ActionUI XML Facts
@@ -593,3 +593,23 @@ all 1,015 retained NextGen-like files against the target Git commit.
 Phase 7B implementation and parent-boundary test remediation are complete. No
 in-place migration is added; the supported path remains a complete candidate
 rebuild and atomic promotion.
+
+## Phase 8 — Workflow and Security Facts
+
+Phase 8 adds immutable OpenAPI workflow endpoint facts and conservative
+Tree-sitter security operations, policies, menus, and direct references. Both
+extractors read only retained `SourceSnapshot` bytes, persist canonical
+evidence/source hashes, retain unresolved semantic references, and validate
+ownership, keys, provenance, evidence, and composite foreign keys before the
+existing atomic promotion path.
+
+The implementation excludes legacy workflow/security builders, delta refresh,
+migrations, graph/MCP projection, `$ref` traversal, inferred entity
+association, and generated security data execution. The ordered parent
+boundary rejects partial or out-of-order Phase 6–8 families.
+
+Focused in-memory checks and the existing repo-v1/OpenAPI/NextGen tests passed
+after implementation. Older Phase 6/7 tests that expect a later family to
+remain valid after deletion of an earlier family conflict with the Phase 8
+parent contract and require test-suite reconciliation before full regression
+sign-off.

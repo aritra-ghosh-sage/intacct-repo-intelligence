@@ -595,8 +595,9 @@ parent may build the complete Phase 7A/7B candidate; a complete Phase 7A
 parent may build the complete Phase 7B candidate; a complete Phase 7B parent
 must contain both complete table families. Partial families and a Phase 7B
 family without Phase 7A are incompatible. No in-place migration is added.
-Scheduling and repairing the legacy Phase 6 upgrade fixture are deferred as
-operator migration work.
+The legacy Phase 6 upgrade fixture is intentionally reconciled with this
+boundary: a later-family active catalog missing Phase 6 is rejected before
+candidate construction. No operator migration or in-place repair is added.
 
 Explicitly deferred from Phase 7: PHP loaders, JavaScript handlers, event-call
 resolution, UI/entity links, legacy `catalog/ui_sync.py`, last-known-good/stale
@@ -621,9 +622,12 @@ Phase 7B tables and no Phase 7A tables. It must raise
 candidate database. Both test selectors are required for closure; there is no
 optional test split or alternate acceptance path.
 
-The remediation is test-only for the parent boundary. Phase 8 remains blocked
-until both selectors and the repo-v1 regression suite pass with no unexpected
-failures.
+The remediation is test-only for the parent boundary. Phase 8 is now
+implemented as two additive source-snapshot families: endpoint workflow facts
+followed by Tree-sitter security facts. The parent truth table accepts only
+complete ordered Phase 6, 7A, 7B, 8A, and 8B prefixes; no in-place migration or
+legacy-builder compatibility is added. Focused Phase 8 acceptance and isolated
+repeat-build evidence are the operator sign-off step.
 
 ### 8. Workflow and security
 

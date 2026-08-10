@@ -35,7 +35,15 @@ from catalog.repo_v1_openapi import (
     extract_snapshot_openapi,
     validate_openapi_candidate,
 )
+from catalog.repo_v1_security import (
+    extract_snapshot_security,
+    validate_security_candidate,
+)
 from catalog.repo_v1_ui import extract_snapshot_ui, validate_ui_candidate
+from catalog.repo_v1_workflows import (
+    extract_snapshot_workflows,
+    validate_workflow_candidate,
+)
 from catalog.repositories import RepositoryError, load_workspace_manifest
 from catalog.source_snapshot import SourceSnapshotError, materialize_source_snapshot
 
@@ -67,10 +75,28 @@ PHASE7B_ADDITIVE_TABLES = frozenset(
         "nextgen_diagnostics",
     }
 )
+PHASE8A_ADDITIVE_TABLES = frozenset({"workflow_facts", "workflow_diagnostics"})
+PHASE8B_ADDITIVE_TABLES = frozenset(
+    {
+        "security_operations",
+        "security_operation_allowops",
+        "security_policies",
+        "security_policy_values",
+        "security_policy_eops",
+        "security_menus",
+        "security_menu_items",
+        "security_menu_op_links",
+        "security_diagnostics",
+    }
+)
 # Existing Phase 5 -> Phase 6 upgrades remain valid; Phase 7A adds its own
 # complete table family on top of that accepted boundary.
 _REPO_V1_ADDITIVE_TABLES = (
-    PHASE6_ADDITIVE_TABLES | PHASE7A_ADDITIVE_TABLES | PHASE7B_ADDITIVE_TABLES
+    PHASE6_ADDITIVE_TABLES
+    | PHASE7A_ADDITIVE_TABLES
+    | PHASE7B_ADDITIVE_TABLES
+    | PHASE8A_ADDITIVE_TABLES
+    | PHASE8B_ADDITIVE_TABLES
 )
 
 
@@ -365,6 +391,12 @@ def _build_inventory(
                 snapshot=snapshot,
                 show_progress=show_progress,
             )
+            workflow_stats = extract_snapshot_workflows(
+                conn, repo_id=repo_id, snapshot=snapshot, show_progress=show_progress
+            )
+            security_stats = extract_snapshot_security(
+                conn, repo_id=repo_id, snapshot=snapshot, show_progress=show_progress
+            )
         file_count = int(
             conn.execute(
                 "SELECT COUNT(*) FROM files WHERE repo_id=?", (repo_id,)
@@ -400,6 +432,22 @@ def _build_inventory(
                         "nextgen_family_count": nextgen_stats.family_count,
                         "nextgen_artifact_count": nextgen_stats.artifact_count,
                         "nextgen_diagnostic_count": nextgen_stats.diagnostic_count,
+                        "workflow_fact_count": workflow_stats.fact_count,
+                        "workflow_diagnostic_count": workflow_stats.diagnostic_count,
+                        "workflow_resolved_entity_link_count": workflow_stats.resolved_entity_link_count,
+                        "workflow_unresolved_entity_link_count": workflow_stats.unresolved_entity_link_count,
+                        "workflow_ambiguous_entity_link_count": workflow_stats.ambiguous_entity_link_count,
+                        "security_operation_count": security_stats.operation_count,
+                        "security_allowop_count": security_stats.allowop_count,
+                        "security_policy_count": security_stats.policy_count,
+                        "security_policy_value_count": security_stats.policy_value_count,
+                        "security_policy_eop_count": security_stats.policy_eop_count,
+                        "security_menu_count": security_stats.menu_count,
+                        "security_menu_item_count": security_stats.menu_item_count,
+                        "security_menu_op_link_count": security_stats.menu_op_link_count,
+                        "security_diagnostic_count": security_stats.diagnostic_count,
+                        "security_unresolved_link_count": security_stats.unresolved_link_count,
+                        "security_conflict_count": security_stats.conflict_count,
                     },
                     sort_keys=True,
                 ),
@@ -629,6 +677,15 @@ def _validate_candidate(
             )
         except (RuntimeError, ValueError, KeyError, TypeError, AttributeError) as exc:
             raise RepoV1Error(str(exc)) from exc
+        try:
+            validate_workflow_candidate(
+                conn, repo_id=int(repo["id"]), target_commit_sha=target_commit_sha
+            )
+            validate_security_candidate(
+                conn, repo_id=int(repo["id"]), target_commit_sha=target_commit_sha
+            )
+        except (RuntimeError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            raise RepoV1Error(str(exc)) from exc
     finally:
         conn.close()
 
@@ -675,7 +732,7 @@ def build_ia_main(
             expected_schema=_REPO_V1_SCHEMA_CONTRACT,
             allowed_missing_tables=_REPO_V1_ADDITIVE_TABLES,
         )
-        _assert_phase7b_parent_boundary(active)
+        _assert_phase_parent_boundary(active)
         candidate = _new_candidate(active)
         try:
             file_count = _build_inventory(
@@ -704,8 +761,8 @@ def build_ia_main(
             candidate.unlink(missing_ok=True)
 
 
-def _assert_phase7b_parent_boundary(active: Path) -> None:
-    """Allow only complete Phase 6, 7A, or 7B parent table families."""
+def _assert_phase_parent_boundary(active: Path) -> None:
+    """Allow only the complete ordered Phase 6 through Phase 8 families."""
 
     if not active.exists():
         return
@@ -723,22 +780,43 @@ def _assert_phase7b_parent_boundary(active: Path) -> None:
     except sqlite3.DatabaseError:
         # parent_descriptor owns the precise malformed-database error.
         return
-    phase7a_present = PHASE7A_ADDITIVE_TABLES & tables
-    phase7b_present = PHASE7B_ADDITIVE_TABLES & tables
-    phase7a_complete = phase7a_present == PHASE7A_ADDITIVE_TABLES
-    phase7b_complete = phase7b_present == PHASE7B_ADDITIVE_TABLES
-    phase7a_partial = bool(phase7a_present) and not phase7a_complete
-    phase7b_partial = bool(phase7b_present) and not phase7b_complete
-    invalid = (
-        phase7a_partial
-        or phase7b_partial
-        or (phase7b_complete and not phase7a_complete)
+    families = (
+        PHASE6_ADDITIVE_TABLES,
+        PHASE7A_ADDITIVE_TABLES,
+        PHASE7B_ADDITIVE_TABLES,
+        PHASE8A_ADDITIVE_TABLES,
+        PHASE8B_ADDITIVE_TABLES,
     )
+    states = []
+    invalid = False
+    for family in families:
+        present = family & tables
+        complete = present == family
+        if present and not complete:
+            invalid = True
+        states.append(complete)
+    if any(states[index] and not all(states[:index]) for index in range(len(states))):
+        invalid = True
     if invalid:
-        raise CatalogPromotionError(
-            "active catalog schema is incompatible with the Phase 7B upgrade: "
-            "partial UI table set or partial NextGen table set is not a valid parent"
-        )
+        if (
+            PHASE7B_ADDITIVE_TABLES <= tables
+            and not (PHASE7A_ADDITIVE_TABLES <= tables)
+        ) or (
+            PHASE7A_ADDITIVE_TABLES & tables and not (PHASE7A_ADDITIVE_TABLES <= tables)
+        ):
+            message = "partial UI table set"
+        elif PHASE7B_ADDITIVE_TABLES & tables and not (
+            PHASE7B_ADDITIVE_TABLES <= tables
+        ):
+            message = "partial NextGen table set"
+        elif PHASE6_ADDITIVE_TABLES & tables and not (PHASE6_ADDITIVE_TABLES <= tables):
+            message = "partial OpenAPI table set"
+        else:
+            message = "active catalog schema has an incomplete or out-of-order Phase 6-8 family"
+        raise CatalogPromotionError(message)
+
+
+_assert_phase7b_parent_boundary = _assert_phase_parent_boundary
 
 
 def main() -> int:

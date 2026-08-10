@@ -310,6 +310,17 @@ def test_phase6_upgrade_and_partial_schema_rejection(tmp_path: Path) -> None:
             "nextgen_families",
             "nextgen_artifacts",
             "nextgen_diagnostics",
+            "workflow_facts",
+            "workflow_diagnostics",
+            "security_operations",
+            "security_operation_allowops",
+            "security_policies",
+            "security_policy_values",
+            "security_policy_eops",
+            "security_menus",
+            "security_menu_items",
+            "security_menu_op_links",
+            "security_diagnostics",
         ):
             conn.execute(f"DROP TABLE {table}")
         conn.commit()

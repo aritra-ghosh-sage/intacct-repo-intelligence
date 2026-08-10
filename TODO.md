@@ -62,7 +62,11 @@ Phase 7 components and later components remain outside this backlog.
       diagnostics implemented and accepted. Entity references, PHP,
       JavaScript, event-call resolution, and UI/entity links remain deferred.
 
-- [ ] Schedule and repair the legacy Phase 6 upgrade fixture for the complete
-      Phase 7A/7B parent boundary; no in-place migration is part of Phase 7B.
+- [x] Reconcile the legacy Phase 6 upgrade fixture with the ordered Phase 6-8
+      parent boundary; later families without their complete predecessors are
+      rejected before candidate construction. No in-place migration is part of
+      Phase 7B/8.
 
-- [ ] Phase 8 workflow and security facts.
+- [x] Phase 8A/8B immutable OpenAPI workflow endpoint and source-backed security
+      facts implemented in the repo-v1 candidate path; focused acceptance and
+      isolated repeat-build evidence remain operator follow-up.

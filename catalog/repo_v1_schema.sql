@@ -76,6 +76,8 @@ CREATE INDEX idx_repo_v1_entity_occurrences_entity
     ON entity_occurrences(entity_id);
 CREATE INDEX idx_repo_v1_entity_occurrences_source_key
     ON entity_occurrences(source_key);
+CREATE UNIQUE INDEX uq_repo_v1_entity_occurrences_repo_id
+    ON entity_occurrences(repo_id, id);
 
 CREATE TABLE entity_diagnostics (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -197,6 +199,8 @@ CREATE TABLE openapi_documents (
 
 CREATE INDEX idx_repo_v1_openapi_documents_repo_path
     ON openapi_documents(repo_id, path);
+CREATE UNIQUE INDEX uq_repo_v1_openapi_documents_repo_id
+    ON openapi_documents(repo_id, id);
 
 CREATE TABLE openapi_entity_links (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -243,6 +247,8 @@ CREATE INDEX idx_repo_v1_rest_endpoints_repo_document
     ON rest_endpoints(repo_id, document_id);
 CREATE INDEX idx_repo_v1_rest_endpoints_route
     ON rest_endpoints(path_template, http_method);
+CREATE UNIQUE INDEX uq_repo_v1_rest_endpoints_repo_id
+    ON rest_endpoints(repo_id, id);
 
 CREATE TABLE openapi_diagnostics (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -463,3 +469,151 @@ CREATE INDEX idx_repo_v1_nextgen_diagnostics_repo_file
     ON nextgen_diagnostics(repo_id, file_id);
 CREATE INDEX idx_repo_v1_nextgen_diagnostics_lookup
     ON nextgen_diagnostics(repo_id, code, diagnostic_key);
+
+-- Phase 8: immutable workflow and security facts.  These tables deliberately
+-- remain separate from the legacy workflow/security catalog.
+CREATE TABLE workflow_facts (
+    id INTEGER PRIMARY KEY,
+    repo_id INTEGER NOT NULL,
+    workflow_key TEXT NOT NULL,
+    endpoint_id INTEGER NOT NULL,
+    source_file_id INTEGER NOT NULL,
+    source_path TEXT NOT NULL,
+    source_commit_sha TEXT NOT NULL,
+    source_hash TEXT NOT NULL,
+    source_pointer TEXT NOT NULL,
+    start_line INTEGER NOT NULL CHECK(start_line >= 1),
+    end_line INTEGER NOT NULL CHECK(end_line >= start_line),
+    module TEXT NOT NULL,
+    object_name TEXT NOT NULL,
+    action TEXT NOT NULL,
+    http_method TEXT NOT NULL,
+    path_template TEXT NOT NULL,
+    operation_id TEXT,
+    transition_json TEXT,
+    entity_occurrence_id INTEGER,
+    entity_link_status TEXT NOT NULL CHECK(entity_link_status IN ('resolved','unresolved','ambiguous')),
+    evidence TEXT NOT NULL,
+    extractor TEXT NOT NULL,
+    extractor_version TEXT NOT NULL,
+    UNIQUE(repo_id, workflow_key), UNIQUE(repo_id, id),
+    CHECK((entity_link_status='resolved' AND entity_occurrence_id IS NOT NULL) OR
+          (entity_link_status IN ('unresolved','ambiguous') AND entity_occurrence_id IS NULL)),
+    FOREIGN KEY(repo_id, endpoint_id) REFERENCES rest_endpoints(repo_id,id),
+    FOREIGN KEY(repo_id, source_file_id) REFERENCES files(repo_id,id),
+    FOREIGN KEY(repo_id, entity_occurrence_id) REFERENCES entity_occurrences(repo_id,id)
+);
+CREATE INDEX idx_repo_v1_workflow_facts_repo_endpoint ON workflow_facts(repo_id,endpoint_id);
+
+CREATE TABLE workflow_diagnostics (
+    id INTEGER PRIMARY KEY,
+    repo_id INTEGER NOT NULL,
+    file_id INTEGER NOT NULL,
+    workflow_id INTEGER,
+    diagnostic_key TEXT NOT NULL,
+    severity TEXT NOT NULL CHECK(severity='warning'),
+    code TEXT NOT NULL CHECK(code IN ('workflow.transition.invalid','workflow.entity_link.unresolved','workflow.entity_link.ambiguous')),
+    message TEXT NOT NULL,
+    source_commit_sha TEXT NOT NULL,
+    source_hash TEXT NOT NULL,
+    source_pointer TEXT NOT NULL,
+    start_line INTEGER NOT NULL CHECK(start_line >= 1),
+    end_line INTEGER NOT NULL CHECK(end_line >= start_line),
+    evidence TEXT NOT NULL,
+    extractor TEXT NOT NULL,
+    extractor_version TEXT NOT NULL,
+    UNIQUE(repo_id, diagnostic_key),
+    FOREIGN KEY(repo_id,file_id) REFERENCES files(repo_id,id),
+    FOREIGN KEY(repo_id,workflow_id) REFERENCES workflow_facts(repo_id,id)
+);
+
+CREATE TABLE security_operations (
+    id INTEGER PRIMARY KEY, repo_id INTEGER NOT NULL, fact_key TEXT NOT NULL,
+    op_key TEXT NOT NULL, op_numeric_id INTEGER, title TEXT, action TEXT, script TEXT,
+    force_mode TEXT, secure_only INTEGER, allow_dev_env_only INTEGER,
+    source_file_id INTEGER NOT NULL, source_path TEXT NOT NULL, source_commit_sha TEXT NOT NULL,
+    source_hash TEXT NOT NULL, source_pointer TEXT NOT NULL, start_line INTEGER NOT NULL,
+    end_line INTEGER NOT NULL, evidence TEXT NOT NULL, extractor TEXT NOT NULL,
+    extractor_version TEXT NOT NULL, UNIQUE(repo_id,fact_key), UNIQUE(repo_id,id),
+    FOREIGN KEY(repo_id,source_file_id) REFERENCES files(repo_id,id)
+);
+CREATE TABLE security_operation_allowops (
+    id INTEGER PRIMARY KEY, repo_id INTEGER NOT NULL, fact_key TEXT NOT NULL,
+    operation_id INTEGER NOT NULL, allowed_op_key TEXT NOT NULL, allowed_operation_id INTEGER,
+    resolution_status TEXT NOT NULL CHECK(resolution_status IN ('resolved','unresolved')),
+    resolution_reason TEXT NOT NULL, source_file_id INTEGER NOT NULL, source_path TEXT NOT NULL,
+    source_commit_sha TEXT NOT NULL, source_hash TEXT NOT NULL, source_pointer TEXT NOT NULL,
+    start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, evidence TEXT NOT NULL,
+    extractor TEXT NOT NULL, extractor_version TEXT NOT NULL, UNIQUE(repo_id,fact_key), UNIQUE(repo_id,id),
+    CHECK((resolution_status='resolved' AND allowed_operation_id IS NOT NULL) OR (resolution_status='unresolved' AND allowed_operation_id IS NULL)),
+    FOREIGN KEY(repo_id,operation_id) REFERENCES security_operations(repo_id,id),
+    FOREIGN KEY(repo_id,allowed_operation_id) REFERENCES security_operations(repo_id,id),
+    FOREIGN KEY(repo_id,source_file_id) REFERENCES files(repo_id,id)
+);
+CREATE TABLE security_policies (
+    id INTEGER PRIMARY KEY, repo_id INTEGER NOT NULL, fact_key TEXT NOT NULL,
+    policy_name TEXT NOT NULL, module TEXT, label TEXT, source_file_id INTEGER NOT NULL,
+    source_path TEXT NOT NULL, source_commit_sha TEXT NOT NULL, source_hash TEXT NOT NULL,
+    source_pointer TEXT NOT NULL, start_line INTEGER NOT NULL, end_line INTEGER NOT NULL,
+    evidence TEXT NOT NULL, extractor TEXT NOT NULL, extractor_version TEXT NOT NULL,
+    UNIQUE(repo_id,fact_key), UNIQUE(repo_id,id), FOREIGN KEY(repo_id,source_file_id) REFERENCES files(repo_id,id)
+);
+CREATE TABLE security_policy_values (
+    id INTEGER PRIMARY KEY, repo_id INTEGER NOT NULL, fact_key TEXT NOT NULL,
+    policy_id INTEGER NOT NULL, value_key TEXT NOT NULL, display TEXT, value_label TEXT,
+    source_file_id INTEGER NOT NULL, source_path TEXT NOT NULL, source_commit_sha TEXT NOT NULL,
+    source_hash TEXT NOT NULL, source_pointer TEXT NOT NULL, start_line INTEGER NOT NULL,
+    end_line INTEGER NOT NULL, evidence TEXT NOT NULL, extractor TEXT NOT NULL,
+    extractor_version TEXT NOT NULL, UNIQUE(repo_id,fact_key), UNIQUE(repo_id,id),
+    FOREIGN KEY(repo_id,policy_id) REFERENCES security_policies(repo_id,id), FOREIGN KEY(repo_id,source_file_id) REFERENCES files(repo_id,id)
+);
+CREATE TABLE security_policy_eops (
+    id INTEGER PRIMARY KEY, repo_id INTEGER NOT NULL, fact_key TEXT NOT NULL,
+    policy_value_id INTEGER NOT NULL, op_key TEXT NOT NULL, operation_id INTEGER,
+    resolution_status TEXT NOT NULL CHECK(resolution_status IN ('resolved','unresolved')),
+    resolution_reason TEXT NOT NULL, source_file_id INTEGER NOT NULL, source_path TEXT NOT NULL,
+    source_commit_sha TEXT NOT NULL, source_hash TEXT NOT NULL, source_pointer TEXT NOT NULL,
+    start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, evidence TEXT NOT NULL,
+    extractor TEXT NOT NULL, extractor_version TEXT NOT NULL, UNIQUE(repo_id,fact_key), UNIQUE(repo_id,id),
+    CHECK((resolution_status='resolved' AND operation_id IS NOT NULL) OR (resolution_status='unresolved' AND operation_id IS NULL)),
+    FOREIGN KEY(repo_id,policy_value_id) REFERENCES security_policy_values(repo_id,id),
+    FOREIGN KEY(repo_id,operation_id) REFERENCES security_operations(repo_id,id), FOREIGN KEY(repo_id,source_file_id) REFERENCES files(repo_id,id)
+);
+CREATE TABLE security_menus (
+    id INTEGER PRIMARY KEY, repo_id INTEGER NOT NULL, fact_key TEXT NOT NULL,
+    module TEXT, menu_name TEXT, source_file_id INTEGER NOT NULL, source_path TEXT NOT NULL,
+    source_commit_sha TEXT NOT NULL, source_hash TEXT NOT NULL, source_pointer TEXT NOT NULL,
+    start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, evidence TEXT NOT NULL,
+    extractor TEXT NOT NULL, extractor_version TEXT NOT NULL, UNIQUE(repo_id,fact_key), UNIQUE(repo_id,id),
+    FOREIGN KEY(repo_id,source_file_id) REFERENCES files(repo_id,id)
+);
+CREATE TABLE security_menu_items (
+    id INTEGER PRIMARY KEY, repo_id INTEGER NOT NULL, fact_key TEXT NOT NULL,
+    menu_id INTEGER NOT NULL, item_path TEXT NOT NULL, item_name TEXT NOT NULL, menu_item_id TEXT,
+    menu_script TEXT, menu_key TEXT, source_file_id INTEGER NOT NULL, source_path TEXT NOT NULL,
+    source_commit_sha TEXT NOT NULL, source_hash TEXT NOT NULL, source_pointer TEXT NOT NULL,
+    start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, evidence TEXT NOT NULL,
+    extractor TEXT NOT NULL, extractor_version TEXT NOT NULL, UNIQUE(repo_id,fact_key), UNIQUE(repo_id,id),
+    FOREIGN KEY(repo_id,menu_id) REFERENCES security_menus(repo_id,id), FOREIGN KEY(repo_id,source_file_id) REFERENCES files(repo_id,id)
+);
+CREATE TABLE security_menu_op_links (
+    id INTEGER PRIMARY KEY, repo_id INTEGER NOT NULL, fact_key TEXT NOT NULL,
+    menu_item_id INTEGER NOT NULL, op_key TEXT NOT NULL, operation_id INTEGER,
+    resolution_status TEXT NOT NULL CHECK(resolution_status IN ('resolved','unresolved')),
+    resolution_reason TEXT NOT NULL, source_file_id INTEGER NOT NULL, source_path TEXT NOT NULL,
+    source_commit_sha TEXT NOT NULL, source_hash TEXT NOT NULL, source_pointer TEXT NOT NULL,
+    start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, evidence TEXT NOT NULL,
+    extractor TEXT NOT NULL, extractor_version TEXT NOT NULL, UNIQUE(repo_id,fact_key), UNIQUE(repo_id,id),
+    CHECK((resolution_status='resolved' AND operation_id IS NOT NULL) OR (resolution_status='unresolved' AND operation_id IS NULL)),
+    FOREIGN KEY(repo_id,menu_item_id) REFERENCES security_menu_items(repo_id,id), FOREIGN KEY(repo_id,operation_id) REFERENCES security_operations(repo_id,id),
+    FOREIGN KEY(repo_id,source_file_id) REFERENCES files(repo_id,id)
+);
+CREATE TABLE security_diagnostics (
+    id INTEGER PRIMARY KEY, repo_id INTEGER NOT NULL, file_id INTEGER NOT NULL,
+    subject_kind TEXT, subject_key TEXT, diagnostic_key TEXT NOT NULL, severity TEXT NOT NULL CHECK(severity='warning'),
+    code TEXT NOT NULL CHECK(code IN ('security.php.parse_error','security.php.assignment_missing','security.value.dynamic','security.include.missing','security.operation.conflict','security.allowop.unresolved','security.policy_eop.unresolved','security.menu_op.unresolved')),
+    message TEXT NOT NULL, source_file_id INTEGER NOT NULL, source_path TEXT NOT NULL, source_commit_sha TEXT NOT NULL,
+    source_hash TEXT NOT NULL, source_pointer TEXT NOT NULL, start_line INTEGER NOT NULL, end_line INTEGER NOT NULL,
+    evidence TEXT NOT NULL, extractor TEXT NOT NULL, extractor_version TEXT NOT NULL, UNIQUE(repo_id,diagnostic_key), UNIQUE(repo_id,id),
+    FOREIGN KEY(repo_id,file_id) REFERENCES files(repo_id,id), FOREIGN KEY(repo_id,source_file_id) REFERENCES files(repo_id,id)
+);
