@@ -321,6 +321,14 @@ def test_phase6_upgrade_and_partial_schema_rejection(tmp_path: Path) -> None:
             "security_menu_items",
             "security_menu_op_links",
             "security_diagnostics",
+            "dbschema_tables",
+            "dbschema_fields",
+            "entity_section_facts",
+            "entity_field_facts",
+            "entity_schema_mappings",
+            "entity_db_table_links",
+            "entity_db_field_links",
+            "repo_v1_database_diagnostics",
         ):
             conn.execute(f"DROP TABLE {table}")
         conn.commit()
@@ -341,6 +349,25 @@ def test_phase6_upgrade_and_partial_schema_rejection(tmp_path: Path) -> None:
             "nextgen_families",
             "nextgen_artifacts",
             "nextgen_diagnostics",
+            "workflow_facts",
+            "workflow_diagnostics",
+            "security_operations",
+            "security_operation_allowops",
+            "security_policies",
+            "security_policy_values",
+            "security_policy_eops",
+            "security_menus",
+            "security_menu_items",
+            "security_menu_op_links",
+            "security_diagnostics",
+            "dbschema_tables",
+            "dbschema_fields",
+            "entity_section_facts",
+            "entity_field_facts",
+            "entity_schema_mappings",
+            "entity_db_table_links",
+            "entity_db_field_links",
+            "repo_v1_database_diagnostics",
         ):
             assert conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)

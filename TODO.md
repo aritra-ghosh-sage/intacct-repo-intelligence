@@ -1,8 +1,9 @@
 # Pending Work
 
 This is the active backlog for the repo-v1 implementation. Phase 0 through
-Phase 6 and Phase 7A/7B acceptance work is complete; the remaining deferred
-Phase 7 components and later components remain outside this backlog.
+Phase 8 acceptance work is complete, and the Phase 9 database-facts extension
+is implemented with current-target repeat-build evidence; formal Phase 9
+closure remains explicitly tracked below.
 
 ## Repository Selection
 
@@ -71,3 +72,11 @@ Phase 7 components and later components remain outside this backlog.
       facts implemented and accepted in the repo-v1 candidate path; provenance
       closure, nested menu traversal, focused tests, two isolated repeat builds,
       normalized Phase 8 parity, SQLite integrity, and foreign-key checks passed.
+
+- [x] Phase 9 database-facts extraction implemented in the repo-v1 candidate
+      path, including committed dbschema facts, entity metadata/schema mappings,
+      database links, diagnostics, candidate validation, and ordered parent
+      boundaries.
+
+- [ ] Record dedicated Phase 9 closure acceptance evidence, including the
+      database-specific candidate-failure and active-preservation scenarios.

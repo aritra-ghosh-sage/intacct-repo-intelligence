@@ -656,3 +656,89 @@ regression passed (`153 passed, 1 warning`). Candidate validation now rejects
 workflow endpoint re-parenting, explicit-null transition drift, incomplete
 security evidence, invalid diagnostic keys, invalid reference targets, and
 dynamic policy identities inferred as ordinals.
+
+## Current post-Phase-9 evidence — 2026-08-11
+
+The current repo-v1 implementation commit is `9bcaaac04c6fde4b2c75451a51d3265b7a860139`.
+The resolved `ia-main` source checkout and canonical active database both target
+`17b67923a2b45b8b0732e0464797319a2f6b510d`. The canonical database was inspected
+read-only and returned `PRAGMA integrity_check = ok` with zero foreign-key
+violations. Its active build token is `3fe74aede9f24f8aa218b4eadae3bf17`.
+
+The current canonical active catalog contains:
+
+```text
+files=23915
+symbols=166373
+relationships=174724
+entity_nodes=1865
+entity_occurrences=1867
+dbschema_tables=1161
+dbschema_fields=16586
+entity_section_facts=3229
+entity_field_facts=3202
+entity_schema_mappings=1452
+entity_db_table_links=218
+entity_db_field_links=962
+repo_v1_database_diagnostics=45
+openapi_documents=3788
+openapi_entity_links=716
+rest_endpoints=2835
+ui_surfaces=582
+nextgen_families=396
+workflow_facts=111
+security_operations=4840
+```
+
+Two isolated full builds at the exact target commit promoted successfully:
+
+```json
+{"active_db":"/private/tmp/repo-v1-current-a.iApxpv/catalog.db","build_token":"8c26570bd7a447ba9d059894b3d449ea","file_count":23915,"promoted":true,"target_commit_sha":"17b67923a2b45b8b0732e0464797319a2f6b510d"}
+{"active_db":"/private/tmp/repo-v1-current-b.pBCijO/catalog.db","build_token":"a1d3e3540a2e4a9986bb4242c79e67ca","file_count":23915,"promoted":true,"target_commit_sha":"17b67923a2b45b8b0732e0464797319a2f6b510d"}
+```
+
+The Phase 6–9 normalized projections matched exactly. Hashes exclude generated
+`id` and `build_id` values, retain schema-order columns, sort projected rows by
+all retained columns, and hash canonical JSON row arrays:
+
+```text
+openapi_documents=589aeb20ab326517b1069585c409dcf2c1f65d3fe43f474024aa802ca12ac54c
+openapi_entity_links=8289810dcfe8fa58617d11842886daa99475b74791aad57e8e5810c19e258c17
+rest_endpoints=296d90ee2f9e637c7e5ab8b81acfeec00159fbbbeb1dd082037f68d7b80f0e0b
+openapi_diagnostics=93fe7ae8374a4be095a6e551b228e632763bf265026a6654ea646d68937136d0
+ui_surfaces=7386ac884aa628db2434cd0834cd9231d0d051251d5d065f1e0381faf4faa534
+ui_artifacts=ea2ee9df3a6891887219471459d6377fff3bac31570bc8922108dae40f7bfd51
+ui_fields=60c47ce414a91a51c3dccbd380e8f5c6d56faeca52610bace025111ae92ce8c5
+ui_events=43372b5b151b787913b408c6a2f2d3387cee4387e5247b34349b192d683d6222
+ui_includes=61219a69707fa853ef8f720c9a550718aeb5294f118bddc25803fb5cba39bfbf
+ui_diagnostics=9cd647309aa1254249fa70ce651e72320596f1ed28ad7617425d721a35e4c2a1
+nextgen_families=af18c19b8f904e92ace511daeed5f9ca08cb55bfe95b7ec9c0338145edb88688
+nextgen_artifacts=a9f3823dfc195cacc353094558295d20f428eb7b4934cc8d296a551e53aa8aaa
+nextgen_diagnostics=6ab8a522cf8ffadbbf5f2e521fbd66c5110e04a660487bdcfc4c4563c54e6bcb
+workflow_facts=db3de16c37b557b954bc0d4848e3577c8b8edf253690ffbf1a114bffca082873
+workflow_diagnostics=3459f0d363723eb1881f87e9a81daa371b9d5c8f31ace22f82fe6fa93890af33
+security_operations=a6f1b76161a76821bdb8839abee5a40a6fb891ed0906786ac448126c9f5611e5
+security_operation_allowops=46c685ef5cb8aa749cbc9c250bd070a87df0cf971d48cb3ca8bd03e403391630
+security_policies=49aaf850dfbaf9834f30aa781bc034723756c321eb1d8d4381378b714f660a83
+security_policy_values=9f38c909f8edfbf79282b47f3b79ccf76a7ba6b596ec4585ebcc424807523a19
+security_policy_eops=d5a6a12fbb91d3dd0f4d7bdc6a5c420e12950b6b1699f92c74092711bf4c18a8
+security_menus=0a3cc5bd47a075f43fe53988ec326374aad1e7b81e8fac961db1a42bdd4cafc2
+security_menu_items=447b93c0264d65f1287fda6aa978d17d5e344c08d18818d69108b5d85e159f3
+security_menu_op_links=d633eff3a38d54c3c25c6af257b74db6338805a600de6cabf587780c56e05d10
+security_diagnostics=b6a022f3235b2abc8a03b12d5e1d0f5e9fd247f8c906013a0fee7607dedcadd1
+dbschema_tables=e74c8318fea9a76c9dbe27bd101835894ba72de6a327936930e17493c908adba
+dbschema_fields=9aad6300a2f64d3a2007571ea1dcfa758392aeee1817af2a2bc0ccbf3690579a
+entity_section_facts=8574ec54f42c4a475a115dde6a3c810f2fa3451a66cb943c044e95660c40223e
+entity_field_facts=1c2a01d8e44ff43af60fef3b1e3567d468814ec6c9778deabd40c712dad4659f
+entity_schema_mappings=ab9de736d9f669c5fea241882e6b5a04f936f979b0a88a69887bb9ee3693606d
+entity_db_table_links=9c697b2d01b52b6057e9987f4102d832bace5b23898b2fc543a78c5c99232923
+entity_db_field_links=3d4dd815fcdc1e7c689b31e95d9f3bd08e2b8ac2173f1c9a5dc0291e05a40a00
+repo_v1_database_diagnostics=6045e9ebff8af95c6077050e753b984650f3caab4564168ea5f4d823be1c91b8
+```
+
+The targeted parent-boundary selectors and the full repo-v1/PR-impact
+regression both pass. The focused database tests pass. The full regression
+result is `168 passed, 1 warning`; the remaining warning is the existing
+Tree-sitter deprecation warning. The database-facts implementation is current
+and repeat-build verified; dedicated Phase 9 candidate-failure and
+active-preservation acceptance evidence remains a separate backlog item.
