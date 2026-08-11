@@ -55,6 +55,50 @@ class DatabaseExtractionStats:
     diagnostic_count: int
 
 
+@dataclass(frozen=True)
+class _Span:
+    start: int
+    end: int
+
+
+@dataclass
+class _ValueNode:
+    value: Any
+    start: int
+    end: int
+    valid: bool
+    children: list[tuple[str, _Span, "_ValueNode"]]
+
+    def child(self, key: str) -> "_ValueNode | None":
+        for child_key, _span, child in reversed(self.children):
+            if child_key == key:
+                return child
+        return None
+
+    def child_span(self, key: str) -> _Span | None:
+        for child_key, span, _child in reversed(self.children):
+            if child_key == key:
+                return span
+        return None
+
+
+@dataclass(frozen=True)
+class _Assignment:
+    path: list[str]
+    value: Any
+    valid: bool
+    start: int
+    end: int
+    evidence: str
+    value_node: _ValueNode | None
+
+
+@dataclass(frozen=True)
+class _LocatedSpan:
+    path: str
+    span: _Span
+
+
 def _canon(value: Any) -> str:
     return json.dumps(
         value, sort_keys=True, ensure_ascii=True, separators=(",", ":"), allow_nan=False
@@ -91,25 +135,56 @@ def _source(
     }
 
 
-def _value(tokens: list[Any], start: int = 0) -> tuple[Any, int, bool]:
+def _bounded_source(
+    path: str,
+    file_id: int,
+    sha: str,
+    raw: bytes,
+    text: str,
+    start: int,
+    end: int,
+    pointer: str,
+) -> dict[str, Any]:
+    if not 0 <= start < end <= len(text):
+        raise SourceSnapshotError(f"database evidence span is invalid: {pointer}")
+    source = _source(path, file_id, sha, raw, text, start, end, pointer)
+    if not source["evidence"] or len(source["evidence"]) >= len(text):
+        raise SourceSnapshotError(f"database evidence span is not bounded: {pointer}")
+    if source["start_line"] < 1 or source["end_line"] < source["start_line"]:
+        raise SourceSnapshotError(f"database evidence lines are invalid: {pointer}")
+    return source
+
+
+def _parse_value(
+    tokens: list[Any], start: int = 0
+) -> tuple[_ValueNode | None, int, bool]:
     if start >= len(tokens):
         return None, start, False
     token = tokens[start]
     if token.kind == "string":
+        valid = bool(token.valid and not token.interpolation)
         return (
-            (token.value if token.valid and not token.interpolation else None),
+            _ValueNode(
+                token.value if valid else None,
+                token.start,
+                token.end,
+                valid,
+                [],
+            ),
             start + 1,
-            bool(token.valid and not token.interpolation),
+            valid,
         )
     if token.kind == "number":
+        value = float(token.value) if "." in str(token.value) else int(str(token.value))
         return (
-            (float(token.value) if "." in str(token.value) else int(str(token.value))),
+            _ValueNode(value, token.start, token.end, True, []),
             start + 1,
             True,
         )
     if token.kind == "ident" and str(token.value).lower() in {"true", "false", "null"}:
+        value = {"true": True, "false": False, "null": None}[str(token.value).lower()]
         return (
-            ({"true": True, "false": False, "null": None}[str(token.value).lower()]),
+            _ValueNode(value, token.start, token.end, True, []),
             start + 1,
             True,
         )
@@ -127,6 +202,8 @@ def _value(tokens: list[Any], start: int = 0) -> tuple[Any, int, bool]:
         return None, len(tokens), False
     result: dict[str, Any] = {}
     positional: list[Any] = []
+    positional_nodes: list[_ValueNode] = []
+    children: list[tuple[str, _Span, _ValueNode]] = []
     static = True
     cursor = opener + 1
     index = 0
@@ -136,6 +213,7 @@ def _value(tokens: list[Any], start: int = 0) -> tuple[Any, int, bool]:
             continue
         key: str | None = None
         value_start = cursor
+        entry_start = tokens[cursor].start
         if cursor + 1 < close and tokens[cursor + 1].value == "=>":
             key_token = tokens[cursor]
             if (
@@ -149,31 +227,52 @@ def _value(tokens: list[Any], start: int = 0) -> tuple[Any, int, bool]:
             else:
                 static = False
             value_start = cursor + 2
-        value, next_cursor, valid = _value(tokens, value_start)
-        if next_cursor <= value_start:
+        value_node, next_cursor, valid = _parse_value(tokens, value_start)
+        if value_node is None or next_cursor <= value_start:
             return None, close + 1, False
         static = static and valid
         if key is None:
-            positional.append(value)
+            positional.append(value_node.value)
+            positional_nodes.append(value_node)
             index += 1
         else:
-            result[key] = value
+            result[key] = value_node.value
+            children.append((key, _Span(entry_start, value_node.end), value_node))
         cursor = next_cursor
         if cursor < close and tokens[cursor].value == ",":
             cursor += 1
     if result and positional:
-        for i, value in enumerate(positional):
-            result[str(i)] = value
-        return result, close + 1, static
-    return (result if result else positional), close + 1, static
+        for i, (value, value_node) in enumerate(zip(positional, positional_nodes)):
+            key = str(i)
+            result[key] = value
+            children.append((key, _Span(value_node.start, value_node.end), value_node))
+        value: Any = result
+    else:
+        value = result if result else positional
+    return (
+        _ValueNode(
+            value,
+            tokens[start].start,
+            tokens[close].end,
+            static,
+            children,
+        ),
+        close + 1,
+        static,
+    )
 
 
-def _assignments(text: str) -> list[tuple[list[str], Any, bool, int, int, str]]:
+def _value(tokens: list[Any], start: int = 0) -> tuple[Any, int, bool]:
+    node, next_cursor, valid = _parse_value(tokens, start)
+    return (node.value if node is not None else None), next_cursor, valid
+
+
+def _assignments(text: str) -> list[_Assignment]:
     tokens, lexical = _lex(text)
     states, delimiter = _delimiter_state(tokens)
     if lexical is not None or delimiter is not None:
         return []
-    out: list[tuple[list[str], Any, bool, int, int, str]] = []
+    out: list[_Assignment] = []
     for i, token in enumerate(tokens):
         if (
             token.kind != "var"
@@ -209,14 +308,25 @@ def _assignments(text: str) -> list[tuple[list[str], Any, bool, int, int, str]]:
             continue
         end = _statement_end(tokens, states, cursor + 1)
         rhs = tokens[cursor + 1 : end]
-        value, _, valid = _value(rhs)
+        value_node, _, valid = _parse_value(rhs)
+        value = value_node.value if value_node is not None else None
         start = token.start
         finish = (
             tokens[end].end
             if end < len(tokens)
             else (rhs[-1].end if rhs else token.end)
         )
-        out.append((path, value, valid, start, finish, text[start:finish]))
+        out.append(
+            _Assignment(
+                path,
+                value,
+                valid,
+                start,
+                finish,
+                text[start:finish],
+                value_node,
+            )
+        )
     return out
 
 
@@ -229,7 +339,9 @@ def _walk(value: Any, prefix: str = "") -> list[tuple[str, Any]]:
     return [(prefix, value)]
 
 
-def _merge_entity_assignment(values: dict[str, Any], path: list[str], value: Any) -> None:
+def _merge_entity_assignment(
+    values: dict[str, Any], path: list[str], value: Any
+) -> None:
     """Apply a source-shaped kSchemas assignment to the normalized tree."""
     if not path:
         if isinstance(value, dict):
@@ -237,7 +349,11 @@ def _merge_entity_assignment(values: dict[str, Any], path: list[str], value: Any
         return
     section = path[0]
     if len(path) == 1:
-        if section in values and isinstance(values[section], dict) and isinstance(value, dict):
+        if (
+            section in values
+            and isinstance(values[section], dict)
+            and isinstance(value, dict)
+        ):
             values[section].update(value)
         else:
             values[section] = value
@@ -306,12 +422,17 @@ def _insert_diag(
 
 def _facts(
     source: SourceSnapshot, conn: sqlite3.Connection, repo_id: int
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+) -> tuple[
+    dict[str, Any],
+    dict[str, _LocatedSpan],
+    dict[tuple[str, str], _LocatedSpan],
+    list[dict[str, Any]],
+]:
     files = {
         str(r["path"]): r
         for r in conn.execute("SELECT * FROM files WHERE repo_id=?", (repo_id,))
     }
-    assignments: dict[str, list[tuple[list[str], Any, bool, int, int, str]]] = {}
+    assignments: dict[str, list[_Assignment]] = {}
     for path in sorted(files):
         if path != "app/source/common/dbschema.inc" and not (
             path.startswith("app/source/") and path.endswith(".ent")
@@ -342,11 +463,53 @@ def _facts(
             )
         assignments[path] = values
     tables: dict[str, Any] = {}
+    table_spans: dict[str, _LocatedSpan] = {}
+    field_spans: dict[tuple[str, str], _LocatedSpan] = {}
     entities: list[dict[str, Any]] = []
     for path, values in assignments.items():
-        for lhs, value, valid, start, end, evidence in values:
-            if lhs[0] == "kTables" and valid and isinstance(value, dict):
+        for assignment in values:
+            lhs = assignment.path
+            value = assignment.value
+            valid = assignment.valid
+            if (
+                lhs[0] == "kTables"
+                and valid
+                and isinstance(value, dict)
+                and assignment.value_node is not None
+            ):
                 tables.update(value)
+                for table_name in value:
+                    table_node = assignment.value_node.child(str(table_name))
+                    table_span = assignment.value_node.child_span(str(table_name))
+                    if table_node is None or table_span is None:
+                        raise SourceSnapshotError(
+                            f"database table span is not provable: {path}:{table_name}"
+                        )
+                    table_spans[str(table_name)] = _LocatedSpan(path, table_span)
+                    field_node = table_node.child("db_fieldinfo")
+                    fields = value[table_name]
+                    if not isinstance(fields, dict):
+                        continue
+                    fields = fields.get("db_fieldinfo", {})
+                    if not isinstance(fields, dict):
+                        continue
+                    if not fields:
+                        continue
+                    if field_node is None:
+                        raise SourceSnapshotError(
+                            f"database field map span is not provable: {path}:{table_name}"
+                        )
+                    for field_name in fields:
+                        field_value_node = field_node.child(str(field_name))
+                        field_span = field_node.child_span(str(field_name))
+                        if field_value_node is None or field_span is None:
+                            raise SourceSnapshotError(
+                                "database field span is not provable: "
+                                f"{path}:{table_name}:{field_name}"
+                            )
+                        field_spans[(str(table_name), str(field_name))] = _LocatedSpan(
+                            path, field_span
+                        )
             if lhs[0] == "kSchemas" and len(lhs) >= 2:
                 item = next(
                     (x for x in entities if x["path"] == path and x["name"] == lhs[1]),
@@ -360,12 +523,10 @@ def _facts(
                         "assignments": [],
                     }
                     entities.append(item)
-                item["assignments"].append(
-                    (lhs[2:], value, valid, start, end, evidence)
-                )
+                item["assignments"].append(assignment)
                 if valid:
                     _merge_entity_assignment(item["values"], lhs[2:], value)
-    return tables, entities
+    return tables, table_spans, field_spans, entities
 
 
 def extract_snapshot_database_facts(
@@ -387,7 +548,7 @@ def extract_snapshot_database_facts(
         "repo_v1_database_diagnostics",
     ):
         conn.execute(f"DELETE FROM {table} WHERE repo_id=?", (repo_id,))
-    tables, entities = _facts(snapshot, conn, repo_id)
+    tables, table_spans, field_spans, entities = _facts(snapshot, conn, repo_id)
     file_rows = {
         str(r["path"]): r
         for r in conn.execute("SELECT * FROM files WHERE repo_id=?", (repo_id,))
@@ -395,16 +556,39 @@ def extract_snapshot_database_facts(
     table_ids: dict[str, int] = {}
     field_ids: dict[tuple[str, str], int] = {}
     dbpath = "app/source/common/dbschema.inc"
-    dbfile = file_rows.get(dbpath)
-    if dbfile is not None:
-        raw = (snapshot.snapshot_root / dbpath).read_bytes()
-        text = raw.decode("utf-8", errors="replace")
-        sha = str(dbfile["source_commit_sha"])
+    source_cache: dict[str, tuple[sqlite3.Row, bytes, str]] = {}
+
+    def source_for(path: str) -> tuple[sqlite3.Row, bytes, str]:
+        cached = source_cache.get(path)
+        if cached is not None:
+            return cached
+        file = file_rows.get(path)
+        if file is None:
+            raise SourceSnapshotError(f"database source file is unavailable: {path}")
+        raw = (snapshot.snapshot_root / path).read_bytes()
+        value = (file, raw, raw.decode("utf-8", errors="replace"))
+        source_cache[path] = value
+        return value
+
+    if dbpath in file_rows:
         for name in sorted(tables):
             value = tables[name] if isinstance(tables[name], dict) else {}
             pointer = f"$kTables[{name!r}]"
-            src = _source(
-                dbpath, int(dbfile["id"]), sha, raw, text, 0, len(text), pointer
+            table_location = table_spans.get(name)
+            if table_location is None:
+                raise SourceSnapshotError(
+                    f"database table source span is unavailable: {name}"
+                )
+            table_file, raw, text = source_for(table_location.path)
+            src = _bounded_source(
+                table_location.path,
+                int(table_file["id"]),
+                str(table_file["source_commit_sha"]),
+                raw,
+                text,
+                table_location.span.start,
+                table_location.span.end,
+                pointer,
             )
             cur = conn.execute(
                 "INSERT INTO dbschema_tables(repo_id,fact_key,table_name,properties_json,primary_keys_json,source_file_id,source_path,source_commit_sha,source_hash,source_pointer,start_line,end_line,evidence,extractor,extractor_version,resolution_status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -427,12 +611,13 @@ def extract_snapshot_database_facts(
             table_ids[name] = int(cur.lastrowid)
             fields = value.get("db_fieldinfo", {}) if isinstance(value, dict) else {}
             if not isinstance(fields, dict):
+                dbfile, raw, text = source_for(dbpath)
                 _insert_diag(
                     conn,
                     repo_id,
                     int(dbfile["id"]),
                     dbpath,
-                    sha,
+                    str(dbfile["source_commit_sha"]),
                     raw,
                     text,
                     "dbschema_dynamic_field_map",
@@ -442,8 +627,21 @@ def extract_snapshot_database_facts(
             for field in sorted(fields if isinstance(fields, dict) else {}):
                 info = fields[field] if isinstance(fields[field], dict) else {}
                 fp = f"{pointer}['db_fieldinfo'][{field!r}]"
-                fs = _source(
-                    dbpath, int(dbfile["id"]), sha, raw, text, 0, len(text), fp
+                field_location = field_spans.get((name, field))
+                if field_location is None:
+                    raise SourceSnapshotError(
+                        f"database field source span is unavailable: {name}:{field}"
+                    )
+                field_file, field_raw, field_text = source_for(field_location.path)
+                fs = _bounded_source(
+                    field_location.path,
+                    int(field_file["id"]),
+                    str(field_file["source_commit_sha"]),
+                    field_raw,
+                    field_text,
+                    field_location.span.start,
+                    field_location.span.end,
+                    fp,
                 )
                 fid = int(
                     conn.execute(
@@ -483,7 +681,13 @@ def extract_snapshot_database_facts(
         text = raw.decode("utf-8", errors="replace")
         sha = str(file["source_commit_sha"])
         values = entity["values"]
-        for lhs, value, valid, start, end, evidence in entity["assignments"]:
+        for assignment in entity["assignments"]:
+            lhs = assignment.path[2:]
+            value = assignment.value
+            valid = assignment.valid
+            start = assignment.start
+            end = assignment.end
+            evidence = assignment.evidence
             section = str(lhs[0]).lower() if lhs else "entity"
             if section == "[]":
                 continue
@@ -747,11 +951,49 @@ def validate_database_candidate(
         "repo_v1_database_diagnostics",
     ):
         bad = conn.execute(
-            f"SELECT COUNT(*) FROM {table} x JOIN repos r ON r.id=x.repo_id WHERE x.repo_id<>? OR x.source_commit_sha<>? OR x.source_path='' OR x.evidence='' OR x.extractor<>?",
-            (repo_id, target_commit_sha, EXTRACTOR),
+            f"""SELECT COUNT(*)
+                FROM {table} x
+                JOIN repos r ON r.id=x.repo_id
+                LEFT JOIN files f
+                  ON f.repo_id=x.repo_id AND f.id=x.source_file_id
+                WHERE x.repo_id<>?
+                   OR r.target_commit_sha<>?
+                   OR x.source_commit_sha<>?
+                   OR x.source_path=''
+                   OR x.evidence=''
+                   OR x.extractor<>?
+                   OR f.id IS NULL
+                   OR f.path<>x.source_path
+                   OR f.source_commit_sha<>x.source_commit_sha
+                   OR length(x.source_hash)<>64
+                   OR lower(x.source_hash) GLOB '*[^0-9a-f]*'
+                   OR x.start_line<1
+                   OR x.end_line<x.start_line""",
+            (repo_id, target_commit_sha, target_commit_sha, EXTRACTOR),
         ).fetchone()[0]
         if bad:
             raise RuntimeError(f"database candidate provenance is invalid for {table}")
+    for row in conn.execute(
+        "SELECT table_name,fact_key,source_path,source_pointer FROM dbschema_tables WHERE repo_id=?",
+        (repo_id,),
+    ):
+        expected_pointer = f"$kTables[{row[0]!r}]"
+        expected_key = _key("table", "app/source/common/dbschema.inc", expected_pointer)
+        if row[1] != expected_key or row[3] != expected_pointer:
+            raise RuntimeError("database table fact identity is invalid")
+    for row in conn.execute(
+        """SELECT f.table_name,f.field_name,f.fact_key,f.source_path,f.source_pointer,
+                         t.table_name
+           FROM dbschema_fields f
+           JOIN dbschema_tables t
+             ON t.repo_id=f.repo_id AND t.id=f.table_id
+           WHERE f.repo_id=?""",
+        (repo_id,),
+    ):
+        expected_pointer = f"$kTables[{row[0]!r}]['db_fieldinfo'][{row[1]!r}]"
+        expected_key = _key("field", "app/source/common/dbschema.inc", expected_pointer)
+        if row[0] != row[5] or row[2] != expected_key or row[4] != expected_pointer:
+            raise RuntimeError("database field fact identity is invalid")
     invalid = conn.execute(
         "SELECT COUNT(*) FROM entity_db_field_links WHERE (resolution_status='resolved' AND db_field_id IS NULL) OR resolution_status NOT IN ('resolved','unresolved','ambiguous','unsupported')"
     ).fetchone()[0]
