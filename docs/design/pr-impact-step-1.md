@@ -69,6 +69,32 @@ Facts are built from committed snapshot bytes only. Dynamic, unresolved, and
 ambiguous source facts remain classified rather than inferred. `fieldinfo`
 `fullname` values are metadata and never create database links.
 
+## Review Markdown
+
+The existing Step 1 report can be rendered as review Markdown with
+`catalog.pr_impact_step1.render_review_markdown(report)`. The renderer uses the
+heading and section order from `docs/review/pr-review-template.md` exactly and
+does not add facts that are absent from the report. Review metadata not modeled
+by Step 1 uses `Not available`, `Unknown`, or `Not computed`; API, database,
+and UI coverage is not inferred from filenames or surface names.
+
+The CLI accepts stdout-only `--markdown`, mutually exclusive with `--json`:
+
+```bash
+./.venv/bin/python -m scripts.trace_pr_impact_step1 \
+  --fixture <step0-fixture.yaml> \
+  --manifest config/workspace_repos.yaml \
+  --active-db <target-revision-catalog.db> \
+  --repo-key ia-main \
+  --markdown
+```
+
+JSON remains the default and is unchanged when `--json` is selected. Markdown
+recommendations are `Request Changes` for a blocked report, `Comment` when the
+report contains warnings or gaps, and `Approve` only for a clean complete
+report. Direct facts retain their source path, target revision, source
+location, catalog identity, extractor, and evidence in the reviewed table.
+
 ## Target-revision isolated catalog
 
 Build the target revision into an alternate active database. Do not use the
