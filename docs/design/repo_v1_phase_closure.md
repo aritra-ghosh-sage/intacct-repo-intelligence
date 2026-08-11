@@ -736,9 +736,23 @@ entity_db_field_links=3d4dd815fcdc1e7c689b31e95d9f3bd08e2b8ac2173f1c9a5dc0291e05
 repo_v1_database_diagnostics=6045e9ebff8af95c6077050e753b984650f3caab4564168ea5f4d823be1c91b8
 ```
 
-The targeted parent-boundary selectors and the full repo-v1/PR-impact
-regression both pass. The focused database tests pass. The full regression
-result is `168 passed, 1 warning`; the remaining warning is the existing
-Tree-sitter deprecation warning. The database-facts implementation is current
-and repeat-build verified; dedicated Phase 9 candidate-failure and
-active-preservation acceptance evidence remains a separate backlog item.
+Phase 9 acceptance is **accepted** for the defined database-facts scope.
+
+The focused database test command passed with `4 passed, 2 warnings`:
+
+```text
+PYTHONPATH=. ./.venv/bin/pytest -q tests/test_repo_v1_database.py
+```
+
+The new acceptance scenarios inject database candidate-validation failure and
+database snapshot-extraction failure. Both preserve active and `.previous`
+bytes and leave no candidate database. The full repo-v1/PR-impact regression
+passed with `170 passed, 1 warning`:
+
+```text
+PYTHONPATH=. ./.venv/bin/pytest -q tests/test_repo_v1*.py tests/test_pr_impact_step1.py
+```
+
+The remaining warning is the existing Tree-sitter deprecation warning. Legacy
+catalog refresh, mapping, graph, MCP, delta, and retirement behavior remain
+unchanged and deferred according to the KISS/YAGNI boundaries.

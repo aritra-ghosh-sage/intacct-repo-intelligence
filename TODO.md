@@ -78,5 +78,6 @@ closure remains explicitly tracked below.
       database links, diagnostics, candidate validation, and ordered parent
       boundaries.
 
-- [ ] Record dedicated Phase 9 closure acceptance evidence, including the
-      database-specific candidate-failure and active-preservation scenarios.
+- [x] Record dedicated Phase 9 closure acceptance evidence, including the
+      database-specific candidate-validation and snapshot-failure scenarios,
+      active/previous preservation, candidate cleanup, and full regression.
