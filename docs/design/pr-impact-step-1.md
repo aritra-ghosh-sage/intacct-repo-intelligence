@@ -4,17 +4,27 @@ Step 1 is a read-only, repo-v1-native direct-impact trace over a validated
 Step 0 revision pair. It emits a separate JSON report and never edits the Step
 0 YAML fixture.
 
-The current report schema is `0.2`. It can optionally consume a normalized PR
+The current report schema is `0.3`. It can optionally consume a normalized PR
 metadata JSON artifact produced by `scripts/intake_pr_metadata.py`; metadata is
 context only and never overrides Git or SQLite evidence.
+
+## P0 direct surfaces
+
+`database_consumers` contains direct `dbschema` tables and fields, proven
+entity table and field links, and database-relevant schema mappings.
+`entity_metadata` contains direct `.ent` facts for `fieldinfo`, `schema`, `api`,
+`dbfilters`, `children`, `nexus`, `ownedobjects`, `publish`, `importOrder`, and
+other persisted entity sections. Step 0 database assertions remain contextual
+and cannot satisfy either direct surface.
 
 ## Contract
 
 Inputs are `--fixture`, `--manifest`, `--active-db`, `--repo-key`, and optional
 `--metadata`. `--manifest` defaults to `config/workspace_repos.yaml`; the
-checkout root is resolved from the selected manifest entry. The fixture's `base_revision` and `target_revision` are
-authoritative. Step 1 validates the exact Git diff between those revisions
-before reading catalog facts. Git diff validation only; no catalog delta processing.
+checkout root is resolved from the selected manifest entry. The fixture's
+`base_revision` and `target_revision` are authoritative. Step 1 validates the
+exact Git diff between those revisions before reading catalog facts. Git diff
+validation only; no catalog delta processing.
 
 `catalog.delta.collect_changed_paths` may be reused only as the Git raw-diff/path-status
 parser. It must not be used for catalog change-set processing, delta planning,
@@ -28,65 +38,41 @@ extraction is performed.
 
 ## Output
 
-The report has schema version `0.2`, analysis kind `pr_impact_step_1`, and
+The report has schema version `0.3`, analysis kind `pr_impact_step_1`, and
 top-level status `complete`, `partial`, or `blocked`. Direct surfaces use
 `available`, `empty`, `unavailable`, `unresolved`, `ambiguous`, `stale`, or
 `deferred`. `empty` means the repo-v1 table was queried and returned no direct
-rows; it includes a warning and is never proof of no impact. Database,
-permission, workflow, and test surfaces are supported. Step 0 database
-assertions remain deferred context until direct target-revision catalog facts
-are read; they cannot establish database evidence or completeness. Test
-obligations may use exact Step 0/manifest evidence, but they do not substitute
-for unavailable target-revision test execution. External onboarding feasibility
-is manifest-only and `deferred`; it does not downgrade the current repo-v1 report status.
+rows; it includes a warning and is never proof of no impact. Step 0 assertions
+remain deferred context until direct target-revision catalog facts are read;
+they cannot establish database evidence or completeness. Every direct fact
+retains catalog record ID, source path, target revision, source location,
+evidence, and extractor identity.
 
 `changed_files` is required and must be non-empty. Its exact path/status set
 must equal the raw Git diff. Missing, empty, malformed, or mismatched fixture
 paths block with `changed_path_mismatch`.
 
 For supported surfaces, `stale` takes precedence over `ambiguous`, which takes
-precedence over `unresolved`, which takes precedence over `available`. A fact
-is stale when its catalog source revision is absent or differs from the fixture
-target revision. Relationship facts are unresolved when their resolution class
-is not `project_resolved`, and ambiguous when their resolution reason is
-`ambiguous_project_symbol`.
-
+precedence over `unresolved`, which takes precedence over `available`.
 `complete` requires all supported direct surfaces to be `available`, and an
-available database surface must contain direct catalog facts. Workflow,
-permissions, database, and test surfaces are supported. `partial` is returned
-for supported `empty`, `deferred`, `unresolved`, `ambiguous`, or `stale`
-surfaces.
+available database or entity metadata surface must contain direct catalog
+facts. `partial` is returned for supported `empty`, `deferred`, `unresolved`,
+`ambiguous`, or `stale` surfaces.
 
 A materialized `complete` report must contain exactly one direct trace for every
-expected surface: `files`, `symbols`, `outgoing_relationships`,
-`incoming_relationships`, `entity_occurrences`, `openapi_documents`,
-`openapi_entity_links`, `rest_endpoints`, `actionui`, `actionui_artifacts`,
-`actionui_fields`, `actionui_events`, `actionui_includes`, `nextgen`,
-`nextgen_artifacts`, `source_diagnostics`, `database_consumers`, `permissions`,
-`workflows`, and `tests`. Every expected surface is supported and must be
-present exactly once. Missing or unexpected direct traces make the materialized
-report invalid.
+expected surface, including `database_consumers` and `entity_metadata`, in
+addition to the existing files, symbols, relationship, entity, OpenAPI, UI,
+NextGen, diagnostics, permissions, workflow, and test surfaces. Missing or
+unexpected direct traces make the materialized report invalid.
 
-Catalog preflight compares repo-v1 table, column, foreign-key, and index
-contracts through SQLite PRAGMAs. CHECK constraints and partial-index
-predicates, which PRAGMAs do not expose, are compared from normalized
-`sqlite_master` definitions whenever either the expected or active table/index
-contains the relevant constraint. SQLite internal tables and auto-generated
-indexes are excluded.
-
-An empty Git diff is invalid and returns `{"status":"blocked","error":{"code":"empty_diff"}}`.
-Changed paths are exact repository-relative paths from Git; basename, same-name,
-directory, symbol-name, and inferred cross-repository/entity mappings are not
-used. Facts retain catalog record ID, source path, target revision, location
-when present, evidence, and extractor identity. For a changed entity file,
-OpenAPI links are traced through the exact entity occurrence to the linked
-OpenAPI document. Ordering is deterministic.
+Facts are built from committed snapshot bytes only. Dynamic, unresolved, and
+ambiguous source facts remain classified rather than inferred. `fieldinfo`
+`fullname` values are metadata and never create database links.
 
 ## Target-revision isolated catalog
 
 Build the target revision into an alternate active database. Do not use the
-canonical `catalog/catalog.db` path and do not use `--no-promote`, because Step
-1 needs a promoted readable database:
+canonical `catalog/catalog.db` path:
 
 ```bash
 PR_IMPACT_TMP=$(mktemp -d /private/tmp/repo-v1-pr-impact.XXXXXX)
@@ -97,13 +83,6 @@ PYTHONPATH=. ./.venv/bin/python -m catalog.repo_v1 \
   --target-sha <fixture-target-sha> \
   --active-db "$ISOLATED_DB" \
   --no-progress
-
-PYTHONPATH=. ./.venv/bin/python scripts/trace_pr_impact_step1.py \
-  --fixture <step0-fixture.yaml> \
-  --manifest config/workspace_repos.yaml \
-  --active-db "$ISOLATED_DB" \
-  --repo-key ia-main \
-  --json
 ```
 
 The isolated database must record the fixture target SHA, pass SQLite

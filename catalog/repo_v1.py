@@ -26,6 +26,7 @@ from catalog.refresh_transaction import (
     refresh_lock,
 )
 from catalog.repo_v1_entities import ENTITY_DIAGNOSTIC_CODES
+from catalog.repo_v1_database import extract_snapshot_database_facts, validate_database_candidate
 from catalog.repo_v1_nextgen import (
     extract_snapshot_nextgen,
     validate_nextgen_candidate,
@@ -89,6 +90,13 @@ PHASE8B_ADDITIVE_TABLES = frozenset(
         "security_diagnostics",
     }
 )
+PHASE9_DATABASE_ADDITIVE_TABLES = frozenset(
+    {
+        "dbschema_tables", "dbschema_fields", "entity_section_facts", "entity_field_facts",
+        "entity_schema_mappings", "entity_db_table_links", "entity_db_field_links",
+        "repo_v1_database_diagnostics",
+    }
+)
 # Existing Phase 5 -> Phase 6 upgrades remain valid; Phase 7A adds its own
 # complete table family on top of that accepted boundary.
 _REPO_V1_ADDITIVE_TABLES = (
@@ -97,6 +105,7 @@ _REPO_V1_ADDITIVE_TABLES = (
     | PHASE7B_ADDITIVE_TABLES
     | PHASE8A_ADDITIVE_TABLES
     | PHASE8B_ADDITIVE_TABLES
+    | PHASE9_DATABASE_ADDITIVE_TABLES
 )
 
 
@@ -397,6 +406,9 @@ def _build_inventory(
             security_stats = extract_snapshot_security(
                 conn, repo_id=repo_id, snapshot=snapshot, show_progress=show_progress
             )
+            database_stats = extract_snapshot_database_facts(
+                conn, repo_id=repo_id, snapshot=snapshot, show_progress=show_progress
+            )
         file_count = int(
             conn.execute(
                 "SELECT COUNT(*) FROM files WHERE repo_id=?", (repo_id,)
@@ -448,6 +460,14 @@ def _build_inventory(
                         "security_diagnostic_count": security_stats.diagnostic_count,
                         "security_unresolved_link_count": security_stats.unresolved_link_count,
                         "security_conflict_count": security_stats.conflict_count,
+                        "dbschema_table_count": database_stats.table_count,
+                        "dbschema_field_count": database_stats.field_count,
+                        "entity_section_count": database_stats.section_count,
+                        "entity_field_fact_count": database_stats.entity_field_count,
+                        "entity_schema_mapping_count": database_stats.mapping_count,
+                        "entity_db_table_link_count": database_stats.table_link_count,
+                        "entity_db_field_link_count": database_stats.field_link_count,
+                        "database_diagnostic_count": database_stats.diagnostic_count,
                     },
                     sort_keys=True,
                 ),
@@ -684,6 +704,9 @@ def _validate_candidate(
             validate_security_candidate(
                 conn, repo_id=int(repo["id"]), target_commit_sha=target_commit_sha
             )
+            validate_database_candidate(
+                conn, repo_id=int(repo["id"]), target_commit_sha=target_commit_sha
+            )
         except (RuntimeError, ValueError, KeyError, TypeError, AttributeError) as exc:
             raise RepoV1Error(str(exc)) from exc
     finally:
@@ -762,7 +785,7 @@ def build_ia_main(
 
 
 def _assert_phase_parent_boundary(active: Path) -> None:
-    """Allow only the complete ordered Phase 6 through Phase 8 families."""
+    """Allow only the complete ordered Phase 6 through Phase 9 families."""
 
     if not active.exists():
         return
@@ -786,6 +809,7 @@ def _assert_phase_parent_boundary(active: Path) -> None:
         PHASE7B_ADDITIVE_TABLES,
         PHASE8A_ADDITIVE_TABLES,
         PHASE8B_ADDITIVE_TABLES,
+        PHASE9_DATABASE_ADDITIVE_TABLES,
     )
     states = []
     invalid = False
@@ -811,6 +835,8 @@ def _assert_phase_parent_boundary(active: Path) -> None:
             message = "partial NextGen table set"
         elif PHASE6_ADDITIVE_TABLES & tables and not (PHASE6_ADDITIVE_TABLES <= tables):
             message = "partial OpenAPI table set"
+        elif PHASE9_DATABASE_ADDITIVE_TABLES & tables and not (PHASE9_DATABASE_ADDITIVE_TABLES <= tables):
+            message = "partial database table set"
         else:
             message = "active catalog schema has an incomplete or out-of-order Phase 6-8 family"
         raise CatalogPromotionError(message)

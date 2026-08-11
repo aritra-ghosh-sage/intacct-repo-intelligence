@@ -166,15 +166,14 @@ def test_step0_database_assertion_does_not_make_report_complete(tmp_path: Path, 
     fixture.write_text(yaml.safe_dump(document), encoding="utf-8")
     report = analyze_fixture(fixture, make_manifest(tmp_path, repo), make_db(tmp_path, target), "ia-main")
     database = next(trace for trace in report["direct_traces"] if trace["surface"] == "database_consumers")
-    assert database["status"] == "deferred"
-    assert "database_consumers: deferred" in report["gaps"]
+    assert database["status"] == "empty"
     assert report["status"] == "partial"
-    assert database["facts"][0].get("catalog_source_revision") is None
+    assert database["facts"] == []
 
 
 def test_report_validator_rejects_fixture_only_database_evidence() -> None:
     report = {
-        "schema_version": "0.2", "analysis_kind": "pr_impact_step_1", "status": "partial",
+        "schema_version": "0.3", "analysis_kind": "pr_impact_step_1", "status": "partial",
         "input": {"manifest": "m", "repo_key": "ia-main", "repo_root": "r", "base_revision": "b", "target_revision": "t"},
         "preflight": {}, "changed_files": [],
         "direct_traces": [{"surface": "database_consumers", "status": "available", "facts": [{"fact_key": "step0:database:0", "extractor": "pr_impact_step0_fixture"}]}],
@@ -480,5 +479,5 @@ def test_report_validator_requires_classification_warnings_and_complete_surfaces
     assert "empty trace must include a warning" in validate(report)
     report["direct_traces"][0]["warning"] = "not proof"
     errors = validate(report)
-    assert "complete report is missing direct traces: actionui, actionui_artifacts, actionui_events, actionui_fields, actionui_includes, database_consumers, entity_occurrences, incoming_relationships, nextgen, nextgen_artifacts, openapi_documents, openapi_entity_links, outgoing_relationships, permissions, rest_endpoints, source_diagnostics, symbols, tests, workflows" in errors
+    assert "complete report is missing direct traces: actionui, actionui_artifacts, actionui_events, actionui_fields, actionui_includes, database_consumers, entity_metadata, entity_occurrences, incoming_relationships, nextgen, nextgen_artifacts, openapi_documents, openapi_entity_links, outgoing_relationships, permissions, rest_endpoints, source_diagnostics, symbols, tests, workflows" in errors
     assert "complete report contains a supported direct-trace gap" in errors

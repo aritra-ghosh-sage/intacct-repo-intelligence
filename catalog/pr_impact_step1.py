@@ -29,12 +29,12 @@ ERROR_CODES = {
     "metadata_revision_mismatch", "metadata_changed_path_mismatch",
 }
 SURFACE_STATUSES = {"available", "empty", "unavailable", "unresolved", "ambiguous", "stale", "deferred"}
-REPORT_SCHEMA_VERSION = "0.2"
+REPORT_SCHEMA_VERSION = "0.3"
 SUPPORTED_SURFACES = {
     "files", "symbols", "outgoing_relationships", "incoming_relationships", "entity_occurrences",
     "openapi_documents", "openapi_entity_links", "rest_endpoints", "actionui", "actionui_artifacts",
     "actionui_fields", "actionui_events", "actionui_includes", "nextgen", "nextgen_artifacts",
-    "source_diagnostics", "database_consumers", "permissions", "workflows", "tests",
+    "source_diagnostics", "database_consumers", "entity_metadata", "permissions", "workflows", "tests",
 }
 _STATUS_MAP = {"A": "added", "M": "modified", "D": "deleted", "R": "renamed", "C": "copied"}
 _REQUIRED_TABLES = {
@@ -43,6 +43,9 @@ _REQUIRED_TABLES = {
     "openapi_entity_links", "rest_endpoints", "openapi_diagnostics", "ui_surfaces", "ui_artifacts",
     "ui_fields", "ui_events", "ui_includes", "ui_diagnostics", "nextgen_families", "nextgen_artifacts",
     "nextgen_diagnostics",
+    "dbschema_tables", "dbschema_fields", "entity_section_facts", "entity_field_facts",
+    "entity_schema_mappings", "entity_db_table_links", "entity_db_field_links",
+    "repo_v1_database_diagnostics",
 }
 
 
@@ -514,6 +517,17 @@ def analyze_fixture(
             "security_menu_op_links": security_menu_op_links,
         }
         permissions = [fact for rows in security_direct.values() for fact in rows]
+        entity_metadata = (
+            _rows(conn, f"SELECT * FROM entity_section_facts WHERE repo_id=? AND source_file_id IN ({ids}) ORDER BY id", (repo_id, *file_ids), "source_path", target)
+            + _rows(conn, f"SELECT * FROM entity_field_facts WHERE repo_id=? AND source_file_id IN ({ids}) ORDER BY id", (repo_id, *file_ids), "source_path", target)
+            + _rows(conn, f"SELECT * FROM entity_schema_mappings WHERE repo_id=? AND source_file_id IN ({ids}) ORDER BY id", (repo_id, *file_ids), "source_path", target)
+        )
+        database_consumers = (
+            _rows(conn, f"SELECT * FROM dbschema_tables WHERE repo_id=? AND source_file_id IN ({ids}) ORDER BY id", (repo_id, *file_ids), "source_path", target)
+            + _rows(conn, f"SELECT * FROM dbschema_fields WHERE repo_id=? AND source_file_id IN ({ids}) ORDER BY id", (repo_id, *file_ids), "source_path", target)
+            + _rows(conn, f"SELECT * FROM entity_db_table_links WHERE repo_id=? AND source_file_id IN ({ids}) ORDER BY id", (repo_id, *file_ids), "source_path", target)
+            + _rows(conn, f"SELECT * FROM entity_db_field_links WHERE repo_id=? AND source_file_id IN ({ids}) ORDER BY id", (repo_id, *file_ids), "source_path", target)
+        )
         direct = [
             _surface("files", [_evidence(r, "path", target) for r in files.values()]),
             _surface("symbols", _rows(conn, f"SELECT s.*, f.path AS source_path, f.source_commit_sha AS source_commit_sha FROM symbols s JOIN files f ON f.id=s.file_id WHERE s.repo_id=? AND s.file_id IN ({ids}) ORDER BY s.file_id,s.start_line,s.id", (repo_id, *file_ids), "source_path", target)),
@@ -536,8 +550,10 @@ def analyze_fixture(
             + _rows(conn, f"SELECT d.*, f.path AS source_path FROM ui_diagnostics d JOIN files f ON f.id=d.file_id WHERE d.repo_id=? AND d.file_id IN ({ids}) ORDER BY d.id", (repo_id, *file_ids), "source_path", target)
             + _rows(conn, f"SELECT d.*, f.path AS source_path FROM nextgen_diagnostics d JOIN files f ON f.id=d.file_id WHERE d.repo_id=? AND d.file_id IN ({ids}) ORDER BY d.id", (repo_id, *file_ids), "source_path", target)
             + _rows(conn, f"SELECT d.*, f.path AS source_path FROM workflow_diagnostics d JOIN files f ON f.id=d.file_id WHERE d.repo_id=? AND d.file_id IN ({ids}) ORDER BY d.id", (repo_id, *file_ids), "source_path", target)
-            + _rows(conn, f"SELECT d.*, f.path AS source_path FROM security_diagnostics d JOIN files f ON f.id=d.file_id WHERE d.repo_id=? AND d.file_id IN ({ids}) ORDER BY d.id", (repo_id, *file_ids), "source_path", target)),
-            _fixture_surface(document, "database", target),
+            + _rows(conn, f"SELECT d.*, f.path AS source_path FROM security_diagnostics d JOIN files f ON f.id=d.file_id WHERE d.repo_id=? AND d.file_id IN ({ids}) ORDER BY d.id", (repo_id, *file_ids), "source_path", target)
+            + _rows(conn, f"SELECT d.*, f.path AS source_path FROM repo_v1_database_diagnostics d JOIN files f ON f.id=d.file_id WHERE d.repo_id=? AND d.file_id IN ({ids}) ORDER BY d.id", (repo_id, *file_ids), "source_path", target)),
+            _surface("database_consumers", database_consumers),
+            _surface("entity_metadata", entity_metadata),
             _surface("permissions", permissions),
             _surface("workflows", _rows(conn, workflow_entity_query, workflow_entity_args, "source_path", target)),
             _fixture_surface(document, "tests", target),

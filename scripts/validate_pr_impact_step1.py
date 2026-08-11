@@ -8,13 +8,13 @@ import sys
 from pathlib import Path
 
 STATUSES = {"complete", "partial", "blocked"}
-SCHEMA_VERSION = "0.2"
+SCHEMA_VERSION = "0.3"
 SURFACE_STATUSES = {"available", "empty", "unavailable", "unresolved", "ambiguous", "stale", "deferred"}
 SUPPORTED_SURFACES = {
     "files", "symbols", "outgoing_relationships", "incoming_relationships", "entity_occurrences",
     "openapi_documents", "openapi_entity_links", "rest_endpoints", "actionui", "actionui_artifacts",
     "actionui_fields", "actionui_events", "actionui_includes", "nextgen", "nextgen_artifacts",
-    "source_diagnostics", "database_consumers", "permissions", "workflows", "tests",
+    "source_diagnostics", "database_consumers", "entity_metadata", "permissions", "workflows", "tests",
 }
 UNSUPPORTED_SURFACES: set[str] = set()
 EXPECTED_SURFACES = SUPPORTED_SURFACES | UNSUPPORTED_SURFACES
@@ -58,6 +58,12 @@ def validate(report: object) -> list[str]:
                     for fact in trace.get("facts", [])
                 ):
                     errors.append("available database_consumers requires direct catalog facts")
+            if trace.get("surface") == "entity_metadata" and trace.get("status") == "available":
+                if not trace.get("facts") or any(
+                    not isinstance(fact, dict) or fact.get("catalog_record_id") is None
+                    for fact in trace.get("facts", [])
+                ):
+                    errors.append("available entity_metadata requires direct catalog facts")
     ranking = report.get("impact_ranking")
     if not isinstance(ranking, list):
         errors.append("impact_ranking must be a list")

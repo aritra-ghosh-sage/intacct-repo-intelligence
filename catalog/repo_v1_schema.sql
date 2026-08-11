@@ -617,3 +617,79 @@ CREATE TABLE security_diagnostics (
     evidence TEXT NOT NULL, extractor TEXT NOT NULL, extractor_version TEXT NOT NULL, UNIQUE(repo_id,diagnostic_key), UNIQUE(repo_id,id),
     FOREIGN KEY(repo_id,file_id) REFERENCES files(repo_id,id), FOREIGN KEY(repo_id,source_file_id) REFERENCES files(repo_id,id)
 );
+
+CREATE TABLE dbschema_tables (
+    id INTEGER PRIMARY KEY, repo_id INTEGER NOT NULL, fact_key TEXT NOT NULL,
+    table_name TEXT NOT NULL, properties_json TEXT NOT NULL, primary_keys_json TEXT NOT NULL,
+    source_file_id INTEGER NOT NULL, source_path TEXT NOT NULL, source_commit_sha TEXT NOT NULL,
+    source_hash TEXT NOT NULL, source_pointer TEXT NOT NULL, start_line INTEGER NOT NULL,
+    end_line INTEGER NOT NULL, evidence TEXT NOT NULL, extractor TEXT NOT NULL,
+    extractor_version TEXT NOT NULL, resolution_status TEXT NOT NULL CHECK(resolution_status IN ('resolved','unresolved','ambiguous','unsupported')),
+    UNIQUE(repo_id,fact_key), UNIQUE(repo_id,id), FOREIGN KEY(repo_id,source_file_id) REFERENCES files(repo_id,id)
+);
+CREATE TABLE dbschema_fields (
+    id INTEGER PRIMARY KEY, repo_id INTEGER NOT NULL, fact_key TEXT NOT NULL, table_id INTEGER NOT NULL,
+    table_name TEXT NOT NULL, field_name TEXT NOT NULL, field_type TEXT, properties_json TEXT NOT NULL,
+    source_file_id INTEGER NOT NULL, source_path TEXT NOT NULL, source_commit_sha TEXT NOT NULL,
+    source_hash TEXT NOT NULL, source_pointer TEXT NOT NULL, start_line INTEGER NOT NULL,
+    end_line INTEGER NOT NULL, evidence TEXT NOT NULL, extractor TEXT NOT NULL, extractor_version TEXT NOT NULL,
+    resolution_status TEXT NOT NULL CHECK(resolution_status IN ('resolved','unresolved','ambiguous','unsupported')),
+    UNIQUE(repo_id,fact_key), UNIQUE(repo_id,id), FOREIGN KEY(repo_id,table_id) REFERENCES dbschema_tables(repo_id,id),
+    FOREIGN KEY(repo_id,source_file_id) REFERENCES files(repo_id,id)
+);
+CREATE TABLE entity_section_facts (
+    id INTEGER PRIMARY KEY, repo_id INTEGER NOT NULL, fact_key TEXT NOT NULL, occurrence_id INTEGER NOT NULL,
+    section TEXT NOT NULL, value_json TEXT NOT NULL, literal_status TEXT NOT NULL CHECK(literal_status IN ('literal','dynamic','unsupported')),
+    source_file_id INTEGER NOT NULL, source_path TEXT NOT NULL, source_commit_sha TEXT NOT NULL, source_hash TEXT NOT NULL,
+    source_pointer TEXT NOT NULL, start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, evidence TEXT NOT NULL,
+    extractor TEXT NOT NULL, extractor_version TEXT NOT NULL, resolution_status TEXT NOT NULL CHECK(resolution_status IN ('resolved','unresolved','ambiguous','unsupported')),
+    UNIQUE(repo_id,fact_key), UNIQUE(repo_id,id), FOREIGN KEY(repo_id,occurrence_id) REFERENCES entity_occurrences(repo_id,id),
+    FOREIGN KEY(repo_id,source_file_id) REFERENCES files(repo_id,id)
+);
+CREATE TABLE entity_field_facts (
+    id INTEGER PRIMARY KEY, repo_id INTEGER NOT NULL, fact_key TEXT NOT NULL, occurrence_id INTEGER NOT NULL,
+    section TEXT NOT NULL, field_path TEXT NOT NULL, value_json TEXT NOT NULL, literal_status TEXT NOT NULL CHECK(literal_status IN ('literal','dynamic','unsupported')),
+    source_file_id INTEGER NOT NULL, source_path TEXT NOT NULL, source_commit_sha TEXT NOT NULL, source_hash TEXT NOT NULL,
+    source_pointer TEXT NOT NULL, start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, evidence TEXT NOT NULL,
+    extractor TEXT NOT NULL, extractor_version TEXT NOT NULL, resolution_status TEXT NOT NULL CHECK(resolution_status IN ('resolved','unresolved','ambiguous','unsupported')),
+    UNIQUE(repo_id,fact_key), UNIQUE(repo_id,id), FOREIGN KEY(repo_id,occurrence_id) REFERENCES entity_occurrences(repo_id,id),
+    FOREIGN KEY(repo_id,source_file_id) REFERENCES files(repo_id,id)
+);
+CREATE TABLE entity_schema_mappings (
+    id INTEGER PRIMARY KEY, repo_id INTEGER NOT NULL, fact_key TEXT NOT NULL, occurrence_id INTEGER NOT NULL,
+    entity_field TEXT NOT NULL, target_value_json TEXT NOT NULL, target_kind TEXT NOT NULL,
+    source_file_id INTEGER NOT NULL, source_path TEXT NOT NULL, source_commit_sha TEXT NOT NULL, source_hash TEXT NOT NULL,
+    source_pointer TEXT NOT NULL, start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, evidence TEXT NOT NULL,
+    extractor TEXT NOT NULL, extractor_version TEXT NOT NULL, resolution_status TEXT NOT NULL CHECK(resolution_status IN ('resolved','unresolved','ambiguous','unsupported')),
+    UNIQUE(repo_id,fact_key), UNIQUE(repo_id,id), FOREIGN KEY(repo_id,occurrence_id) REFERENCES entity_occurrences(repo_id,id),
+    FOREIGN KEY(repo_id,source_file_id) REFERENCES files(repo_id,id)
+);
+CREATE TABLE entity_db_table_links (
+    id INTEGER PRIMARY KEY, repo_id INTEGER NOT NULL, fact_key TEXT NOT NULL, occurrence_id INTEGER NOT NULL,
+    db_table_id INTEGER, entity_table TEXT NOT NULL, link_type TEXT NOT NULL,
+    source_file_id INTEGER NOT NULL, source_path TEXT NOT NULL, source_commit_sha TEXT NOT NULL, source_hash TEXT NOT NULL,
+    source_pointer TEXT NOT NULL, start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, evidence TEXT NOT NULL,
+    extractor TEXT NOT NULL, extractor_version TEXT NOT NULL, resolution_status TEXT NOT NULL CHECK(resolution_status IN ('resolved','unresolved','ambiguous','unsupported')),
+    UNIQUE(repo_id,fact_key), UNIQUE(repo_id,id), CHECK((resolution_status='resolved' AND db_table_id IS NOT NULL) OR resolution_status<>'resolved'),
+    FOREIGN KEY(repo_id,occurrence_id) REFERENCES entity_occurrences(repo_id,id), FOREIGN KEY(repo_id,db_table_id) REFERENCES dbschema_tables(repo_id,id),
+    FOREIGN KEY(repo_id,source_file_id) REFERENCES files(repo_id,id)
+);
+CREATE TABLE entity_db_field_links (
+    id INTEGER PRIMARY KEY, repo_id INTEGER NOT NULL, fact_key TEXT NOT NULL, occurrence_id INTEGER NOT NULL,
+    schema_mapping_id INTEGER NOT NULL, db_field_id INTEGER, entity_field TEXT NOT NULL, target_field TEXT NOT NULL,
+    link_type TEXT NOT NULL, source_file_id INTEGER NOT NULL, source_path TEXT NOT NULL, source_commit_sha TEXT NOT NULL, source_hash TEXT NOT NULL,
+    source_pointer TEXT NOT NULL, start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, evidence TEXT NOT NULL,
+    extractor TEXT NOT NULL, extractor_version TEXT NOT NULL, resolution_status TEXT NOT NULL CHECK(resolution_status IN ('resolved','unresolved','ambiguous','unsupported')),
+    UNIQUE(repo_id,fact_key), UNIQUE(repo_id,id), CHECK((resolution_status='resolved' AND db_field_id IS NOT NULL) OR resolution_status<>'resolved'),
+    FOREIGN KEY(repo_id,occurrence_id) REFERENCES entity_occurrences(repo_id,id), FOREIGN KEY(repo_id,schema_mapping_id) REFERENCES entity_schema_mappings(repo_id,id),
+    FOREIGN KEY(repo_id,db_field_id) REFERENCES dbschema_fields(repo_id,id), FOREIGN KEY(repo_id,source_file_id) REFERENCES files(repo_id,id)
+);
+CREATE TABLE repo_v1_database_diagnostics (
+    id INTEGER PRIMARY KEY, repo_id INTEGER NOT NULL, file_id INTEGER NOT NULL, fact_key TEXT,
+    code TEXT NOT NULL, message TEXT NOT NULL, diagnostic_key TEXT NOT NULL, source_file_id INTEGER NOT NULL,
+    source_path TEXT NOT NULL, source_commit_sha TEXT NOT NULL, source_hash TEXT NOT NULL, source_pointer TEXT NOT NULL,
+    start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, evidence TEXT NOT NULL, extractor TEXT NOT NULL,
+    extractor_version TEXT NOT NULL, resolution_status TEXT NOT NULL CHECK(resolution_status IN ('resolved','unresolved','ambiguous','unsupported')),
+    UNIQUE(repo_id,diagnostic_key), UNIQUE(repo_id,id), FOREIGN KEY(repo_id,file_id) REFERENCES files(repo_id,id),
+    FOREIGN KEY(repo_id,source_file_id) REFERENCES files(repo_id,id)
+);
