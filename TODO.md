@@ -1,9 +1,9 @@
 # Pending Work
 
 This is the active backlog for the repo-v1 implementation. Phase 0 through
-Phase 8 acceptance work is complete, and the Phase 9 database-facts extension
-is implemented with current-target repeat-build evidence; formal Phase 9
-closure remains explicitly tracked below.
+Phase 9 acceptance work is complete for the currently defined `ia-main`
+scope. Follow-on PR-impact validation and future priority slices remain
+tracked below.
 
 ## Repository Selection
 

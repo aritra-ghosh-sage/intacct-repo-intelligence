@@ -182,6 +182,12 @@ only as a raw Git diff/path-status parser, never for catalog change-set
 processing, delta planning, delta refresh, or delta builder execution.
 Git diff validation only; no catalog delta processing.
 
+PR reviews must follow the canonical format in
+[docs/review/pr-review-template.md](docs/review/pr-review-template.md). Agents
+and MCP/query review surfaces should use that file as the source template and
+preserve its sections for review summaries, findings, checklist, confidence,
+recommendation, and assumptions.
+
 ## When Editing
 
 - Keep changes evidence-backed and minimal.
