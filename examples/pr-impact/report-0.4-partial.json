@@ -22,35 +22,20 @@
   ],
   "direct_traces": [
     {"surface": "files", "status": "available", "facts": []},
-    {"surface": "tests", "status": "deferred", "facts": [], "warning": "Exact downstream test evidence is unavailable"}
+    {"surface": "tests", "status": "deferred", "facts": [], "warning": "Exact target-revision test evidence is unavailable"}
   ],
   "pr_metadata": {"status": "not_provided"},
-  "downstream_repositories": [
-    {
-      "repository": "intacct/ia-restapi-automation-tests",
-      "repo_key": "ia-restapi-automation-tests",
-      "status": "deferred",
-      "relationships": [
-        {
-          "type": "tests_rest_of",
-          "status": "available",
-          "source_repository": "intacct/ia-restapi-automation-tests",
-          "target_repository": "intacct/ia-app",
-          "facts": [{"fact_key": "manifest:contract:0"}]
-        }
-      ]
-    }
-  ],
+  "downstream_repositories": [],
   "impact_ranking": [],
-  "gaps": ["tests: deferred", "downstream_repositories:intacct/ia-restapi-automation-tests: deferred"],
-  "warnings": ["Exact downstream test evidence is unavailable"],
+  "gaps": ["tests: deferred"],
+  "warnings": ["Exact target-revision test evidence is unavailable"],
   "confidence": {
     "status": "computed",
-    "score": 54,
+    "score": 50,
     "components": {
       "evidence_availability": {"available_surfaces": 1, "total_surfaces": 21, "score": 5},
       "evidence_freshness": {"revision_relation": "exact", "score": 100},
-      "unresolved_gaps": {"count": 2, "downstream_deferred": 1, "score": 80}
+      "unresolved_gaps": {"count": 1, "downstream_deferred": 0, "score": 90}
     },
     "formula": "50% evidence availability + 30% revision freshness + 20% unresolved-gap score"
   },

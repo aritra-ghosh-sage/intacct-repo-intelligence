@@ -4,7 +4,7 @@
   "status": "blocked",
   "error": {
     "code": "catalog_revision_mismatch",
-    "message": "catalog target SHA is not the fixture target or a proven forward revision"
+    "message": "catalog target SHA must equal the fixture target revision"
   },
   "input": {},
   "preflight": {},
