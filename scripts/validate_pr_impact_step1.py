@@ -10,6 +10,23 @@ from pathlib import Path
 
 STATUSES = {"complete", "partial", "blocked"}
 SCHEMA_VERSION = "0.4"
+TOP_LEVEL_KEYS = {
+    "schema_version",
+    "analysis_kind",
+    "status",
+    "error",
+    "input",
+    "preflight",
+    "changed_files",
+    "direct_traces",
+    "pr_metadata",
+    "downstream_repositories",
+    "impact_ranking",
+    "gaps",
+    "warnings",
+    "confidence",
+    "provenance",
+}
 DOWNSTREAM_RELATION_TYPES = {
     "tests_rest_of",
     "validates_gateway_behavior_of",
@@ -55,6 +72,9 @@ def validate(report: object) -> list[str]:
     errors: list[str] = []
     if not isinstance(report, dict):
         return ["report must be a JSON object"]
+    unexpected = sorted(set(report) - TOP_LEVEL_KEYS)
+    if unexpected:
+        errors.append("unexpected top-level sections: " + ", ".join(unexpected))
     if report.get("schema_version") != SCHEMA_VERSION:
         errors.append(f"schema_version must be {SCHEMA_VERSION}")
     if report.get("analysis_kind") != "pr_impact_step_1":
@@ -76,6 +96,19 @@ def validate(report: object) -> list[str]:
     ):
         if key not in report:
             errors.append(f"missing section: {key}")
+    changed_files = report.get("changed_files")
+    if not isinstance(changed_files, list):
+        errors.append("changed_files must be a list")
+    elif report.get("status") != "blocked" and not changed_files:
+        errors.append("changed_files must be non-empty unless blocked")
+    elif isinstance(changed_files, list):
+        for item in changed_files:
+            if not isinstance(item, dict):
+                errors.append("changed file must be an object")
+            elif not isinstance(item.get("path"), str) or not item["path"]:
+                errors.append("changed file requires path")
+            elif not isinstance(item.get("status"), str) or not item["status"]:
+                errors.append("changed file requires status")
     if isinstance(report.get("input"), dict):
         for key in (
             "manifest",
@@ -142,6 +175,12 @@ def validate(report: object) -> list[str]:
                     errors.append(f"confidence component missing: {key}")
     elif confidence.get("score") is not None:
         errors.append("not_computed confidence score must be null")
+    if (
+        isinstance(confidence, dict)
+        and confidence.get("status") == "not_computed"
+        and not isinstance(confidence.get("reason"), str)
+    ):
+        errors.append("not_computed confidence requires reason")
     downstream = report.get("downstream_repositories")
     if not isinstance(downstream, list):
         errors.append("downstream_repositories must be a list")
@@ -188,9 +227,26 @@ def validate(report: object) -> list[str]:
         ):
             if key not in metadata:
                 errors.append(f"available pr_metadata missing {key}")
-    for trace in report.get("direct_traces", []):
-        if not isinstance(trace, dict) or trace.get("status") not in SURFACE_STATUSES:
+    traces = report.get("direct_traces")
+    if not isinstance(traces, list):
+        errors.append("direct_traces must be a list")
+        traces = []
+    seen_surfaces: set[str] = set()
+    for trace in traces:
+        if not isinstance(trace, dict):
+            errors.append("direct trace must be an object")
+            continue
+        surface = trace.get("surface")
+        if not isinstance(surface, str) or surface not in EXPECTED_SURFACES:
+            errors.append("direct trace has unexpected surface")
+        elif surface in seen_surfaces:
+            errors.append("direct traces must contain unique surfaces")
+        else:
+            seen_surfaces.add(surface)
+        if trace.get("status") not in SURFACE_STATUSES:
             errors.append("direct trace has invalid status")
+        if not isinstance(trace.get("facts"), list):
+            errors.append("direct trace facts must be a list")
         if (
             isinstance(trace, dict)
             and trace.get("status") == "empty"

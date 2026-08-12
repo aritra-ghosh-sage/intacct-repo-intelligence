@@ -80,8 +80,12 @@ repository identity, `available`/`deferred` status, optional manifest context,
 and a `relationships` list. Relationship types are limited to
 `tests_rest_of`, `validates_gateway_behavior_of`, and `depends_on_schema_of`.
 Each typed relationship records its status, source and target repository, and
-evidence facts. Missing downstream snapshots remain `deferred`; Step 0
-candidate labels do not become typed evidence.
+evidence facts. A relationship is materialized only when the downstream
+manifest entry declares it under `pr_impact_contracts` with explicit `type`,
+`source_repository`, and `target_repository` values matching the analyzed PR.
+`depends_on` alone is build ordering, not impact evidence. Missing downstream
+snapshots remain `deferred`; Step 0 candidate labels do not become typed
+evidence.
 
 The stable report-level `confidence` object is either `not_computed` with a
 null score for blocked analysis, or `computed` with an integer score from 0 to

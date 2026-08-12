@@ -287,6 +287,154 @@ def test_dirty_checkout_bytes_do_not_change_snapshot_facts(tmp_path: Path) -> No
         conn.close()
 
 
+def test_workflow_schema_refs_link_endpoint_document_from_snapshot_bytes(
+    tmp_path: Path,
+) -> None:
+    schema = b"""workflow-request:
+  type: object
+  x-mappedTo: APAdjustment
+workflow-response:
+  type: object
+  x-mappedTo: APAdjustment
+"""
+    operation_files = {
+        action: f"""paths:
+  /workflows/accounts-payable/adjustment/{action}:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '../models/workflows.s1.schema.yaml#/workflow-request'
+      responses:
+        200:
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ia::result:
+                    $ref: '../models/workflows.s1.schema.yaml#/workflow-response'
+""".encode()
+        for action in ("reclassify", "reverse", "submit")
+    }
+    files = {
+        "app/source/openapispec/ap/models/workflows.s1.schema.yaml": schema,
+        "app/source/ap/apadjustment.ent": b"entity\n",
+        **{
+            f"app/source/openapispec/ap/paths/{action}.api.yaml": content
+            for action, content in operation_files.items()
+        },
+    }
+    conn, snapshot = _fixture(
+        tmp_path, files, (("app/source/ap/apadjustment.ent", "apadjustment"),)
+    )
+    try:
+        stats = extract_snapshot_openapi(conn, repo_id=1, snapshot=snapshot)
+        assert stats.link_count == 3
+        endpoint_links = conn.execute(
+            """SELECT d.path,l.entity_occurrence_id,l.evidence
+               FROM openapi_entity_links l JOIN openapi_documents d ON d.id=l.document_id
+               WHERE d.path LIKE '%/paths/%' ORDER BY d.path"""
+        ).fetchall()
+        assert len(endpoint_links) == 3
+        assert len({row["entity_occurrence_id"] for row in endpoint_links}) == 1
+        for row in endpoint_links:
+            evidence = json.loads(row["evidence"])
+            assert len(evidence["references"]) == 2
+            assert all(
+                reference["target_path"].endswith("workflows.s1.schema.yaml")
+                and reference["target_source_sha256"]
+                == hashlib.sha256(schema).hexdigest()
+                and reference["matched_ent_path"] == "app/source/ap/apadjustment.ent"
+                for reference in evidence["references"]
+            )
+        validate_openapi_candidate(
+            conn, repo_id=1, repo_key="ia-main", target_commit_sha=TARGET
+        )
+    finally:
+        conn.close()
+
+
+def test_workflow_schema_ref_ambiguous_occurrences_are_all_persisted(
+    tmp_path: Path,
+) -> None:
+    files = {
+        "app/source/openapispec/ap/models/workflows.s1.schema.yaml": b"""request:
+  x-mappedTo: adjustment
+""",
+        "app/source/openapispec/ap/paths/workflow.api.yaml": b"""paths:
+  /workflows/ap/adjustment/submit:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '../models/workflows.s1.schema.yaml#/request'
+""",
+        "app/source/ap/one/adjustment.ent": b"entity\n",
+        "app/source/ap/two/adjustment.ent": b"entity\n",
+    }
+    conn, snapshot = _fixture(
+        tmp_path,
+        files,
+        (
+            ("app/source/ap/one/adjustment.ent", "adjustment"),
+            ("app/source/ap/two/adjustment.ent", "adjustment"),
+        ),
+    )
+    try:
+        extract_snapshot_openapi(conn, repo_id=1, snapshot=snapshot)
+        assert (
+            conn.execute(
+                """SELECT COUNT(*) FROM openapi_entity_links l
+                   JOIN openapi_documents d ON d.id=l.document_id
+                   WHERE d.path LIKE '%/paths/%'"""
+            ).fetchone()[0]
+            == 2
+        )
+        validate_openapi_candidate(
+            conn, repo_id=1, repo_key="ia-main", target_commit_sha=TARGET
+        )
+    finally:
+        conn.close()
+
+
+def test_workflow_schema_ref_link_evidence_tampering_rejected(tmp_path: Path) -> None:
+    files = {
+        "app/source/openapispec/ap/models/workflows.s1.schema.yaml": b"request:\n  x-mappedTo: adjustment\n",
+        "app/source/openapispec/ap/paths/workflow.api.yaml": b"""paths:
+  /workflows/ap/adjustment/submit:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '../models/workflows.s1.schema.yaml#/request'
+""",
+        "app/source/ap/adjustment.ent": b"entity\n",
+    }
+    conn, snapshot = _fixture(
+        tmp_path, files, (("app/source/ap/adjustment.ent", "adjustment"),)
+    )
+    try:
+        extract_snapshot_openapi(conn, repo_id=1, snapshot=snapshot)
+        evidence = json.loads(
+            conn.execute("SELECT evidence FROM openapi_entity_links").fetchone()[0]
+        )
+        evidence["references"][0]["target_pointer"] = "/not-real"
+        conn.execute(
+            "UPDATE openapi_entity_links SET evidence=?",
+            (_canonical(evidence),),
+        )
+        with pytest.raises(OpenAPIValidationError, match="target"):
+            validate_openapi_candidate(
+                conn, repo_id=1, repo_key="ia-main", target_commit_sha=TARGET
+            )
+    finally:
+        conn.close()
+
+
 def test_phase6_failure_preserves_active_database(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

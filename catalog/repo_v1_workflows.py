@@ -242,7 +242,7 @@ def extract_snapshot_workflows(
                 1,
                 lines,
                 code,
-                f"workflow endpoint has {len(link_rows)} same-document entity links",
+                f"workflow endpoint has {len(link_rows)} entity links",
                 {"link_count": len(link_rows)},
             )
     return WorkflowStats(

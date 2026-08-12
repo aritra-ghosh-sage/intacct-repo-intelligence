@@ -630,7 +630,7 @@ def test_entity_and_openapi_changes_do_not_duplicate_link(tmp_path: Path) -> Non
     assert len(links["facts"]) == 1
 
 
-def test_absent_onboarding_repositories_are_deferred(tmp_path: Path) -> None:
+def test_uncontracted_downstream_repositories_are_not_inferred(tmp_path: Path) -> None:
     repo, base, target = make_repo(tmp_path)
     manifest = make_manifest(tmp_path, repo)
     report = analyze_fixture(
@@ -639,25 +639,80 @@ def test_absent_onboarding_repositories_are_deferred(tmp_path: Path) -> None:
         make_db(tmp_path, target),
         "ia-main",
     )
-    assert report["downstream_repositories"] == [
+    assert report["downstream_repositories"] == []
+
+
+def test_explicit_downstream_contract_is_resolved(tmp_path: Path) -> None:
+    repo, base, target = make_repo(tmp_path)
+    manifest = tmp_path / "workspace.yaml"
+    manifest.write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "repositories": [
+                    {
+                        "repo_key": "ia-main",
+                        "local_root": str(repo),
+                        "tracked_branch": "main",
+                        "profile": "intacct_app",
+                        "builders": [],
+                    },
+                    {
+                        "repo_key": "ia-restapi-automation-tests",
+                        "local_root": str(repo),
+                        "tracked_branch": "main",
+                        "profile": "rest_automation",
+                        "builders": [],
+                        "pr_impact_contracts": [
+                            {
+                                "type": "tests_rest_of",
+                                "source_repository": "intacct/ia-restapi-automation-tests",
+                                "target_repository": "intacct/ia-app",
+                            }
+                        ],
+                        "rest_automation": {
+                            "coverage_contract_version": 1,
+                            "features_root": ".",
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    report = analyze_fixture(
+        make_fixture(tmp_path, base, target),
+        manifest,
+        make_db(tmp_path, target),
+        "ia-main",
+    )
+    downstream = report["downstream_repositories"]
+    assert len(downstream) == 1
+    assert downstream[0]["repository"] == "intacct/ia-restapi-automation-tests"
+    assert downstream[0]["status"] == "deferred"
+    assert downstream[0]["relationships"] == [
         {
-            "repository": "ia-restapi-automation-tests",
-            "repo_key": "ia-restapi-automation-tests",
-            "status": "deferred",
-            "source_relationship": None,
-            "relationships": [],
-            "manifest": {},
-            "reason": "repository is absent from the workspace manifest",
-        },
-        {
-            "repository": "ia-gwdata-gl",
-            "repo_key": "ia-gwdata-gl",
-            "status": "deferred",
-            "source_relationship": None,
-            "relationships": [],
-            "manifest": {},
-            "reason": "repository is absent from the workspace manifest",
-        },
+            "type": "tests_rest_of",
+            "status": "available",
+            "source_repository": "intacct/ia-restapi-automation-tests",
+            "target_repository": "intacct/ia-app",
+            "facts": [
+                {
+                    "fact_key": "manifest:pr_impact_contracts:ia-restapi-automation-tests:0",
+                    "source_path": str(manifest),
+                    "evidence": {
+                        "contract": {
+                            "type": "tests_rest_of",
+                            "source_repository": "intacct/ia-restapi-automation-tests",
+                            "target_repository": "intacct/ia-app",
+                        },
+                        "manifest_repo_key": "ia-restapi-automation-tests",
+                    },
+                    "extractor": "pr_impact_manifest",
+                    "status": "available",
+                }
+            ],
+        }
     ]
 
 

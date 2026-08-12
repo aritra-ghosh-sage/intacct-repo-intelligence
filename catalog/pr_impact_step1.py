@@ -20,6 +20,7 @@ import yaml
 
 from catalog.pr_impact_manifest import resolve_manifest_repo_root
 from catalog.pr_impact_ranking import rank_direct_traces
+from catalog.repositories import RepositoryError, load_workspace_manifest
 
 ERROR_CODES = {
     "catalog_unavailable",
@@ -651,99 +652,66 @@ def _fixture_surface(
 def _downstream_repositories(
     document: dict[str, Any], config: Path
 ) -> list[dict[str, Any]]:
-    required = ("ia-restapi-automation-tests", "ia-gwdata-gl")
-    related = document.get("related_repositories")
-    related_items = related if isinstance(related, list) else []
-    fixture_repositories = {
-        item.get("repository"): item
-        for item in related_items
-        if isinstance(item, dict) and isinstance(item.get("repository"), str)
-    }
     try:
-        data = yaml.safe_load(config.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, yaml.YAMLError):
-        entries = []
-    else:
-        entries = (
-            data.get("repositories", [])
-            if isinstance(data, dict) and isinstance(data.get("repositories"), list)
-            else []
-        )
+        manifest = load_workspace_manifest(config)
+    except (RepositoryError, OSError, UnicodeError, yaml.YAMLError):
+        return []
 
-    result: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for entry in entries:
-        if not isinstance(entry, dict) or entry.get("repo_key") not in required:
-            continue
-        depends_on = entry.get("depends_on")
-        if not isinstance(depends_on, list) or "ia-main" not in depends_on:
-            continue
-        repo_key = entry.get("repo_key")
-        repository = next(
-            (
-                name
-                for name in fixture_repositories
-                if name == f"intacct/{repo_key}" or name.endswith(f"/{repo_key}")
-            ),
-            repo_key,
-        )
-        if not isinstance(repository, str) or repository in seen:
-            continue
-        seen.add(repository)
-        fixture_item = fixture_repositories.get(repository, {})
-        result.append(
-            {
-                "repository": repository,
-                "repo_key": repo_key,
-                "status": "deferred",
-                "source_relationship": fixture_item.get("relationship"),
-                "relationships": [],
-                "manifest": {
-                    k: entry.get(k)
-                    for k in (
-                        "local_root",
-                        "enabled",
-                        "depends_on",
-                        "profile",
-                        "builders",
-                        "storage",
-                    )
-                    if k in entry
+    target_repository = document.get("pull_request", {}).get("repository")
+    if not isinstance(target_repository, str) or not target_repository:
+        return []
+    result: dict[str, dict[str, Any]] = {}
+    for entry in manifest["repositories"]:
+        repo_key = entry["repo_key"]
+        contracts = entry.get("pr_impact_contracts", [])
+        for index, contract in enumerate(contracts):
+            if contract["target_repository"] != target_repository:
+                continue
+            source_repository = contract["source_repository"]
+            item = result.setdefault(
+                source_repository,
+                {
+                    "repository": source_repository,
+                    "repo_key": repo_key,
+                    "status": "deferred",
+                    "relationships": [],
+                    "manifest": {
+                        k: entry.get(k)
+                        for k in (
+                            "local_root",
+                            "enabled",
+                            "depends_on",
+                            "profile",
+                            "builders",
+                            "storage",
+                        )
+                        if k in entry
+                    },
+                    "reason": "explicit downstream contract resolved; no external snapshot or impact evidence was read",
                 },
-                "reason": "manifest-only feasibility; no external snapshot or impact evidence was read",
-            }
-        )
-    for repository, item in fixture_repositories.items():
-        if repository in seen:
-            continue
-        seen.add(repository)
-        result.append(
-            {
-                "repository": repository,
-                "repo_key": None,
-                "status": "deferred",
-                "source_relationship": item.get("relationship"),
-                "relationships": [],
-                "manifest": {},
-                "reason": "repository is not mapped to a downstream manifest entry",
-            }
-        )
-    for repo_key in required:
-        if repo_key in seen:
-            continue
-        seen.add(repo_key)
-        result.append(
-            {
-                "repository": repo_key,
-                "repo_key": repo_key,
-                "status": "deferred",
-                "source_relationship": None,
-                "relationships": [],
-                "manifest": {},
-                "reason": "repository is absent from the workspace manifest",
-            }
-        )
-    return result
+            )
+            fact_key = f"manifest:pr_impact_contracts:{repo_key}:{index}"
+            item["relationships"].append(
+                {
+                    "type": contract["type"],
+                    "status": "available",
+                    "source_repository": source_repository,
+                    "target_repository": target_repository,
+                    "facts": [
+                        {
+                            "fact_key": fact_key,
+                            "source_path": str(config),
+                            "evidence": {
+                                "contract": contract,
+                                "manifest_repo_key": repo_key,
+                            },
+                            "extractor": "pr_impact_manifest",
+                            "status": "available",
+                        }
+                    ],
+                }
+            )
+    return list(result.values())
 
 
 def _confidence(

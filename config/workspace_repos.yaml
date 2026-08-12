@@ -148,6 +148,10 @@ repositories:
     profile: rest_automation
     depends_on:
       - ia-main
+    pr_impact_contracts:
+      - type: tests_rest_of
+        source_repository: intacct/ia-restapi-automation-tests
+        target_repository: intacct/ia-app
     builders:
       - scan
       - symbols

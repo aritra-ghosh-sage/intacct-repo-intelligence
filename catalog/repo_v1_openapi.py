@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import posixpath
+import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -22,6 +24,7 @@ from yaml.nodes import MappingNode
 from catalog.source_snapshot import SourceSnapshot, SourceSnapshotError
 
 OPENAPI_EXTRACTOR = "repo_v1_openapi_v1"
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 OPENAPI_KINDS = frozenset(
     {
         "history",
@@ -296,6 +299,167 @@ def _pointer_token(value: object) -> str:
     return str(value).replace("~", "~0").replace("/", "~1")
 
 
+def _workflow_route(path: object) -> bool:
+    if not isinstance(path, str):
+        return False
+    parts = path.split("/")
+    return (
+        len(parts) == 5 and not parts[0] and parts[1] == "workflows" and all(parts[2:])
+    )
+
+
+def _workflow_operations(
+    value: dict[Any, Any],
+) -> list[tuple[str, str, dict[Any, Any], str]]:
+    paths = value.get("paths")
+    if not isinstance(paths, dict):
+        return []
+    operations: list[tuple[str, str, dict[Any, Any], str]] = []
+    for raw_path, path_item in paths.items():
+        if not _workflow_route(raw_path) or not isinstance(path_item, dict):
+            continue
+        for raw_method, operation in path_item.items():
+            method = raw_method if isinstance(raw_method, str) else ""
+            if method in HTTP_METHODS and isinstance(operation, dict):
+                operations.append(
+                    (
+                        raw_path,
+                        method,
+                        operation,
+                        f"/paths/{_pointer_token(raw_path)}/{_pointer_token(method)}",
+                    )
+                )
+    return operations
+
+
+def _pointer_tokens(pointer: str) -> list[str]:
+    if pointer == "":
+        return []
+    if not pointer.startswith("/"):
+        raise ValueError("JSON pointer must start with '/'")
+    tokens: list[str] = []
+    for token in pointer[1:].split("/"):
+        if "~" in token:
+            decoded: list[str] = []
+            index = 0
+            while index < len(token):
+                if token[index] != "~":
+                    decoded.append(token[index])
+                    index += 1
+                    continue
+                if index + 1 >= len(token) or token[index + 1] not in "01":
+                    raise ValueError("invalid JSON pointer escape")
+                decoded.append("/" if token[index + 1] == "1" else "~")
+                index += 2
+            token = "".join(decoded)
+        tokens.append(token)
+    return tokens
+
+
+def _json_pointer(value: object, pointer: str) -> object:
+    current = value
+    for token in _pointer_tokens(pointer):
+        if isinstance(current, dict):
+            current = current[token]
+        elif isinstance(current, list):
+            if token == "-" or not token.isdigit():
+                raise ValueError("invalid JSON pointer array index")
+            current = current[int(token)]
+        else:
+            raise TypeError("JSON pointer traverses a scalar")
+    return current
+
+
+def _resolve_local_ref(
+    ref: object,
+    *,
+    source_path: str,
+    documents_by_path: dict[str, _Document],
+) -> tuple[_Document, str, object] | None:
+    location = _ref_location(ref, source_path=source_path)
+    if location is None:
+        return None
+    target_path, pointer = location
+    target = documents_by_path.get(target_path)
+    if target is None:
+        return None
+    try:
+        node = _json_pointer(target.value, pointer)
+    except (KeyError, IndexError, TypeError, ValueError):
+        return None
+    return target, pointer, node
+
+
+def _ref_location(ref: object, *, source_path: str) -> tuple[str, str] | None:
+    if not isinstance(ref, str) or "#" not in ref:
+        return None
+    relative_path, pointer = ref.split("#", 1)
+    if relative_path.startswith("/") or "\\" in relative_path:
+        return None
+    try:
+        _pointer_tokens(pointer)
+    except ValueError:
+        return None
+    target_path = (
+        source_path
+        if not relative_path
+        else posixpath.normpath(
+            posixpath.join(posixpath.dirname(source_path), relative_path)
+        )
+    )
+    if target_path == ".." or target_path.startswith("../"):
+        return None
+    return target_path, pointer
+
+
+def _workflow_refs(operation: dict[Any, Any]) -> list[tuple[str, object]]:
+    refs: list[tuple[str, object]] = []
+    request_body = operation.get("requestBody")
+    if isinstance(request_body, dict):
+        content = request_body.get("content")
+        if isinstance(content, dict):
+            media = content.get("application/json")
+            if isinstance(media, dict) and isinstance(media.get("schema"), dict):
+                refs.append(
+                    (
+                        "requestBody.content.application/json.schema.$ref",
+                        media["schema"].get("$ref"),
+                    )
+                )
+    responses = operation.get("responses")
+    if isinstance(responses, dict):
+        for raw_status, response in responses.items():
+            status = str(raw_status)
+            if (
+                len(status) != 3
+                or not status.isdigit()
+                or not status.startswith("2")
+                or not isinstance(response, dict)
+            ):
+                continue
+            content = response.get("content")
+            if not isinstance(content, dict):
+                continue
+            media = content.get("application/json")
+            if not isinstance(media, dict):
+                continue
+            schema = media.get("schema")
+            if not isinstance(schema, dict):
+                continue
+            properties = schema.get("properties")
+            if not isinstance(properties, dict):
+                continue
+            result = properties.get("ia::result")
+            if isinstance(result, dict):
+                refs.append(
+                    (
+                        f"responses.{status}.content.application/json.schema.properties.ia::result.$ref",
+                        result.get("$ref"),
+                    )
+                )
+    return refs
+
+
 def _parse_documents(
     conn: sqlite3.Connection,
     *,
@@ -396,26 +560,12 @@ def _entity_links(
         by_stem.setdefault(PurePosixPath(str(row["path"])).stem.casefold(), []).append(
             row
         )
+    documents_by_path = {document.path: document for document in documents}
     count = 0
     for document in documents:
         has_mapping = "x-mappedTo" in document.value
         raw = document.value.get("x-mappedTo")
-        if not has_mapping or (isinstance(raw, str) and not raw.strip()):
-            code = "OPENAPI_X_MAPPEDTO_BLANK"
-            message = "top-level x-mappedTo is blank or absent"
-            evidence = _diagnostic_evidence(
-                document.path, pointer="/x-mappedTo", value=None if raw is None else raw
-            )
-        elif not isinstance(raw, str):
-            code = "OPENAPI_X_MAPPEDTO_INVALID"
-            message = "top-level x-mappedTo is not a string scalar"
-            evidence = _diagnostic_evidence(
-                document.path,
-                pointer="/x-mappedTo",
-                value=repr(raw),
-                reason="non-string",
-            )
-        else:
+        if has_mapping and isinstance(raw, str) and raw.strip():
             mapped_value = raw.strip()
             match_key = mapped_value.casefold()
             if match_key == "__custom__":
@@ -488,6 +638,132 @@ def _entity_links(
                     )
                     count += 1
                     continue
+        elif has_mapping:
+            code = "OPENAPI_X_MAPPEDTO_BLANK"
+            message = "top-level x-mappedTo is blank or absent"
+            evidence = _diagnostic_evidence(
+                document.path, pointer="/x-mappedTo", value=None if raw is None else raw
+            )
+        else:
+            workflow_operations = _workflow_operations(document.value)
+            candidate_refs: dict[int, list[dict[str, str]]] = {}
+            if len(workflow_operations) == 1:
+                endpoint_path, method, operation, endpoint_pointer = (
+                    workflow_operations[0]
+                )
+                del method
+                for location, ref in _workflow_refs(operation):
+                    resolved = _resolve_local_ref(
+                        ref,
+                        source_path=document.path,
+                        documents_by_path=documents_by_path,
+                    )
+                    if resolved is None:
+                        continue
+                    target, target_pointer, node = resolved
+                    if not isinstance(node, dict):
+                        continue
+                    target_mapping = node.get("x-mappedTo")
+                    if (
+                        not isinstance(target_mapping, str)
+                        or not target_mapping.strip()
+                        or "/" in target_mapping
+                        or "\\" in target_mapping
+                        or target_mapping.strip().casefold() == "__custom__"
+                    ):
+                        continue
+                    mapped_value = target_mapping.strip()
+                    match_key = mapped_value.casefold()
+                    for occurrence in by_stem.get(match_key, []):
+                        candidate_refs.setdefault(int(occurrence["id"]), []).append(
+                            {
+                                "endpoint_path": endpoint_path,
+                                "endpoint_pointer": endpoint_pointer,
+                                "location": location,
+                                "ref": str(ref),
+                                "target_path": target.path,
+                                "target_pointer": target_pointer,
+                                "target_source_sha256": hashlib.sha256(
+                                    target.source
+                                ).hexdigest(),
+                                "mapped_value": mapped_value,
+                                "matched_ent_path": str(occurrence["path"]),
+                            }
+                        )
+                for occurrence_id in sorted(candidate_refs):
+                    references = sorted(candidate_refs[occurrence_id], key=_canonical)
+                    occurrence = next(
+                        row
+                        for row in occurrence_rows
+                        if int(row["id"]) == occurrence_id
+                    )
+                    mapped_value = references[0]["mapped_value"]
+                    match_key = mapped_value.casefold()
+                    link = _link_key(
+                        repo_key,
+                        document.path,
+                        str(occurrence["path"]),
+                        str(occurrence["source_key"]),
+                        mapped_value,
+                        match_key,
+                    )
+                    conn.execute(
+                        """INSERT INTO openapi_entity_links(
+                               repo_id,document_id,entity_occurrence_id,mapped_value,match_key,
+                               link_key,source_commit_sha,evidence,extractor
+                           ) VALUES(?,?,?,?,?,?,?,?,?)""",
+                        (
+                            repo_id,
+                            document.document_id,
+                            occurrence_id,
+                            mapped_value,
+                            match_key,
+                            link,
+                            document.source_sha,
+                            _source_evidence(
+                                document.path,
+                                document.source,
+                                references=references,
+                            ),
+                            OPENAPI_EXTRACTOR,
+                        ),
+                    )
+                    count += 1
+            code = "OPENAPI_X_MAPPEDTO_BLANK"
+            message = "top-level x-mappedTo is blank or absent"
+            evidence = _diagnostic_evidence(
+                document.path, pointer="/x-mappedTo", value=None
+            )
+        if not has_mapping:
+            _add_diagnostic(
+                conn,
+                repo_id=repo_id,
+                repo_key=repo_key,
+                file_id=document.file_id,
+                document_id=document.document_id,
+                path=document.path,
+                phase="6B",
+                code=code,
+                message=message,
+                source_sha=document.source_sha,
+                evidence=evidence,
+            )
+            continue
+        if not isinstance(raw, str):
+            code = "OPENAPI_X_MAPPEDTO_INVALID"
+            message = "top-level x-mappedTo is not a string scalar"
+            evidence = _diagnostic_evidence(
+                document.path,
+                pointer="/x-mappedTo",
+                value=repr(raw),
+                reason="non-string",
+            )
+        elif isinstance(raw, str) and not raw.strip():
+            code = "OPENAPI_X_MAPPEDTO_BLANK"
+            message = "top-level x-mappedTo is blank or absent"
+            evidence = _diagnostic_evidence(
+                document.path, pointer="/x-mappedTo", value=raw
+            )
         _add_diagnostic(
             conn,
             repo_id=repo_id,
@@ -724,9 +1000,12 @@ def validate_openapi_candidate(
             "candidate OpenAPI document ownership, provenance, or key validation failed"
         )
     invalid_links = conn.execute(
-        """SELECT l.id,l.repo_id,l.source_commit_sha,l.evidence,l.extractor,d.path AS document_path,
-                  d.repo_id AS document_repo,eo.repo_id AS occurrence_repo,f.path AS occurrence_path,
-                      eo.source_key, r.id AS link_repo, r.target_commit_sha
+        """SELECT l.id,l.repo_id,l.source_commit_sha,l.evidence,l.extractor,
+                  d.path AS document_path,d.evidence AS document_evidence,
+                  d.repo_id AS document_repo,eo.repo_id AS occurrence_repo,
+                  eo.source_commit_sha AS occurrence_sha,f.path AS occurrence_path,
+                  f.source_commit_sha AS occurrence_file_sha,eo.source_key,
+                  r.id AS link_repo, r.target_commit_sha
            FROM openapi_entity_links l
            LEFT JOIN openapi_documents d ON d.id=l.document_id
            LEFT JOIN entity_occurrences eo ON eo.id=l.entity_occurrence_id
@@ -735,8 +1014,15 @@ def validate_openapi_candidate(
            WHERE l.repo_id<>? OR d.id IS NULL OR eo.id IS NULL OR d.repo_id<>l.repo_id
               OR eo.repo_id<>l.repo_id OR f.repo_id<>l.repo_id OR l.source_commit_sha<>?
               OR l.source_commit_sha<>d.source_commit_sha OR l.source_commit_sha<>r.target_commit_sha
+              OR eo.source_commit_sha<>? OR f.source_commit_sha<>?
               OR l.mapped_value='' OR l.match_key='' OR l.evidence='' OR l.extractor<>?""",
-        (repo_id, target_commit_sha, OPENAPI_EXTRACTOR),
+        (
+            repo_id,
+            target_commit_sha,
+            target_commit_sha,
+            target_commit_sha,
+            OPENAPI_EXTRACTOR,
+        ),
     ).fetchall()
     if invalid_links:
         raise OpenAPIValidationError(
@@ -751,7 +1037,8 @@ def validate_openapi_candidate(
         )
     ]
     for row in conn.execute(
-        """SELECT l.*,d.path AS document_path,eo.source_key,f.path AS occurrence_path
+        """SELECT l.*,d.path AS document_path,d.evidence AS document_evidence,
+                         eo.source_key,f.path AS occurrence_path
                               FROM openapi_entity_links l JOIN openapi_documents d ON d.id=l.document_id
                               JOIN entity_occurrences eo ON eo.id=l.entity_occurrence_id
                               JOIN files f ON f.id=eo.source_file_id WHERE l.repo_id=?""",
@@ -772,12 +1059,101 @@ def validate_openapi_candidate(
             or occurrence_stems.count(
                 PurePosixPath(str(row["occurrence_path"])).stem.casefold()
             )
-            != 1
+            == 0
             or match_key != PurePosixPath(str(row["occurrence_path"])).stem.casefold()
         ):
             raise OpenAPIValidationError(
                 "candidate OpenAPI entity-link key validation failed"
             )
+        try:
+            evidence = json.loads(str(row["evidence"]))
+            document_evidence = json.loads(str(row["document_evidence"]))
+        except (TypeError, ValueError) as exc:
+            raise OpenAPIValidationError(
+                "candidate OpenAPI entity-link evidence validation failed"
+            ) from exc
+        if (
+            not isinstance(evidence, dict)
+            or _canonical(evidence) != str(row["evidence"])
+            or evidence.get("path") != row["document_path"]
+            or not isinstance(document_evidence, dict)
+            or evidence.get("source_sha256") != document_evidence.get("source_sha256")
+        ):
+            raise OpenAPIValidationError(
+                "candidate OpenAPI entity-link evidence validation failed"
+            )
+        if evidence.get("pointer") == "/x-mappedTo":
+            expected_evidence = {
+                "path": row["document_path"],
+                "source_sha256": evidence.get("source_sha256"),
+                "pointer": "/x-mappedTo",
+                "value": row["mapped_value"],
+                "match_key": row["match_key"],
+            }
+            if evidence != expected_evidence:
+                raise OpenAPIValidationError(
+                    "candidate OpenAPI entity-link evidence validation failed"
+                )
+            continue
+        references = evidence.get("references")
+        if not isinstance(references, list) or not references:
+            raise OpenAPIValidationError(
+                "candidate OpenAPI entity-link evidence validation failed"
+            )
+        for reference in references:
+            if not isinstance(reference, dict):
+                raise OpenAPIValidationError(
+                    "candidate OpenAPI entity-link evidence validation failed"
+                )
+            if (
+                reference.get("matched_ent_path") != row["occurrence_path"]
+                or reference.get("mapped_value") != row["mapped_value"]
+                or not _workflow_route(reference.get("endpoint_path"))
+                or not isinstance(reference.get("endpoint_pointer"), str)
+                or not reference["endpoint_pointer"].startswith("/paths/")
+                or not isinstance(reference.get("location"), str)
+                or not isinstance(reference.get("ref"), str)
+                or not isinstance(reference.get("target_path"), str)
+                or not isinstance(reference.get("target_pointer"), str)
+                or not _SHA256.fullmatch(str(reference.get("target_source_sha256")))
+            ):
+                raise OpenAPIValidationError(
+                    "candidate OpenAPI entity-link evidence validation failed"
+                )
+            target = conn.execute(
+                "SELECT evidence,repo_id FROM openapi_documents WHERE repo_id=? AND path=?",
+                (repo_id, reference["target_path"]),
+            ).fetchone()
+            if target is None:
+                raise OpenAPIValidationError(
+                    "candidate OpenAPI entity-link target validation failed"
+                )
+            try:
+                target_evidence = json.loads(str(target["evidence"]))
+            except (TypeError, ValueError) as exc:
+                raise OpenAPIValidationError(
+                    "candidate OpenAPI entity-link target validation failed"
+                ) from exc
+            expected_location = _ref_location(
+                reference["ref"], source_path=str(row["document_path"])
+            )
+            try:
+                _pointer_tokens(reference["target_pointer"])
+                pointer_valid = True
+            except (TypeError, ValueError):
+                pointer_valid = False
+            if (
+                target["repo_id"] != repo_id
+                or not isinstance(target_evidence, dict)
+                or target_evidence.get("source_sha256")
+                != reference["target_source_sha256"]
+                or not pointer_valid
+                or expected_location
+                != (reference["target_path"], reference["target_pointer"])
+            ):
+                raise OpenAPIValidationError(
+                    "candidate OpenAPI entity-link target validation failed"
+                )
     invalid_endpoints = conn.execute(
         """SELECT e.id,e.repo_id,e.source_commit_sha,e.path_template,e.http_method,e.source_pointer,
                   e.operation_id,e.endpoint_key,e.evidence,e.extractor,d.path AS document_path,

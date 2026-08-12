@@ -1,0 +1,24 @@
+{
+  "schema_version": "0.4",
+  "analysis_kind": "pr_impact_step_1",
+  "status": "blocked",
+  "error": {
+    "code": "catalog_revision_mismatch",
+    "message": "catalog target SHA is not the fixture target or a proven forward revision"
+  },
+  "input": {},
+  "preflight": {},
+  "changed_files": [],
+  "direct_traces": [],
+  "pr_metadata": {"status": "not_provided"},
+  "downstream_repositories": [],
+  "impact_ranking": [],
+  "gaps": [],
+  "warnings": [],
+  "confidence": {
+    "status": "not_computed",
+    "score": null,
+    "reason": "analysis blocked before direct evidence collection"
+  },
+  "provenance": {"read_only": true}
+}

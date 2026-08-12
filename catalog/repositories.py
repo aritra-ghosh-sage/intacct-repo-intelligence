@@ -46,9 +46,18 @@ _REPOSITORY_KEYS = frozenset(
         "ignore_filename_prefixes",
         "ignore_suffixes",
         "rest_automation",
+        "pr_impact_contracts",
         "storage",
     }
 )
+_PR_IMPACT_RELATION_TYPES = frozenset(
+    {
+        "tests_rest_of",
+        "validates_gateway_behavior_of",
+        "depends_on_schema_of",
+    }
+)
+_PR_IMPACT_CONTRACT_KEYS = frozenset({"type", "source_repository", "target_repository"})
 _REST_AUTOMATION_KEYS = frozenset(
     {
         "coverage_contract_version",
@@ -207,7 +216,12 @@ def _normalize_ignore_suffixes(repo_key: str, raw_suffixes: Any) -> list[str]:
                 f"repository {repo_key} ignore_suffixes must contain non-empty strings"
             )
         value = raw_suffix.strip().lower()
-        if not value.startswith(".") or len(value) == 1 or "/" in value or "\\" in value:
+        if (
+            not value.startswith(".")
+            or len(value) == 1
+            or "/" in value
+            or "\\" in value
+        ):
             raise RepositoryError(
                 f"repository {repo_key} ignore_suffixes must contain dot-prefixed suffixes"
             )
@@ -262,14 +276,18 @@ def _normalize_rest_automation(
     # A V1 manifest with the former target-owned files remains a supported
     # compatibility contract.  V1 without them selects the catalog-owned map.
     legacy_v1 = raw_version == CONTRACT_V1 and "object_mapping" in raw_config
-    required_paths = ("features_root", "object_mapping") if raw_version == CONTRACT_V0 else (
-        CONTRACT_V1_PATH_FIELDS if legacy_v1 else ("features_root",)
+    required_paths = (
+        ("features_root", "object_mapping")
+        if raw_version == CONTRACT_V0
+        else (CONTRACT_V1_PATH_FIELDS if legacy_v1 else ("features_root",))
     )
     forbidden_paths = set(_REST_AUTOMATION_KEYS) - {
         "coverage_contract_version",
         *required_paths,
     }
-    present_forbidden = sorted(field for field in forbidden_paths if field in raw_config)
+    present_forbidden = sorted(
+        field for field in forbidden_paths if field in raw_config
+    )
     if present_forbidden:
         raise RepositoryError(
             f"repository {repo_key} rest_automation contract-v0 contains unsupported "
@@ -301,7 +319,9 @@ def _normalize_rest_automation(
         try:
             resolve_contract_v1_paths(config, Path(local_root))
         except RestAutomationContractError as exc:
-            raise RepositoryError(f"repository {repo_key} legacy Contract-V1 input invalid: {exc}") from exc
+            raise RepositoryError(
+                f"repository {repo_key} legacy Contract-V1 input invalid: {exc}"
+            ) from exc
     return config
 
 
@@ -325,10 +345,14 @@ def rest_automation_paths(entry: dict[str, Any], root: Path) -> tuple[Path, Path
             return paths.features_root, paths.object_mapping
         value = config.get("features_root")
         if not isinstance(value, str) or not value.strip():
-            raise RepositoryError(f"repository {entry.get('repo_key')} requires rest_automation.features_root")
+            raise RepositoryError(
+                f"repository {entry.get('repo_key')} requires rest_automation.features_root"
+            )
         resolved = (root / value).resolve()
         if not resolved.is_relative_to(root) or not resolved.is_dir():
-            raise RepositoryError(f"repository {entry.get('repo_key')} rest_automation.features_root directory does not exist: {resolved}")
+            raise RepositoryError(
+                f"repository {entry.get('repo_key')} rest_automation.features_root directory does not exist: {resolved}"
+            )
         # V1 does not use this placeholder; build() selects the static map.
         return resolved, resolved
 
@@ -388,6 +412,36 @@ def _normalize_dependency_list(
         seen.add(dependency_key)
         dependencies.append(dependency_key)
     return dependencies
+
+
+def _normalize_pr_impact_contracts(
+    repo_key: str, raw_contracts: Any
+) -> list[dict[str, str]]:
+    if raw_contracts is None:
+        return []
+    if not isinstance(raw_contracts, list):
+        raise RepositoryError(
+            f"repository {repo_key} pr_impact_contracts must be a list"
+        )
+    contracts: list[dict[str, str]] = []
+    for index, raw_contract in enumerate(raw_contracts):
+        context = f"repository {repo_key} pr_impact_contracts[{index}]"
+        if not isinstance(raw_contract, dict):
+            raise RepositoryError(f"{context} must be a mapping")
+        _reject_unknown_keys(raw_contract, _PR_IMPACT_CONTRACT_KEYS, context)
+        values: dict[str, str] = {}
+        for field in ("type", "source_repository", "target_repository"):
+            value = raw_contract.get(field)
+            if not isinstance(value, str) or not value.strip():
+                raise RepositoryError(f"{context} requires non-empty {field}")
+            values[field] = value.strip()
+        if values["type"] not in _PR_IMPACT_RELATION_TYPES:
+            allowed = ", ".join(sorted(_PR_IMPACT_RELATION_TYPES))
+            raise RepositoryError(f"{context} type must be one of: {allowed}")
+        if values["source_repository"] == values["target_repository"]:
+            raise RepositoryError(f"{context} source and target must differ")
+        contracts.append(values)
+    return contracts
 
 
 def _validate_dependency_cycles(dependencies: dict[str, list[str] | None]) -> None:
@@ -513,6 +567,9 @@ def load_workspace_manifest(path: str | Path) -> dict[str, Any]:
         raw_dependencies = entry.get("depends_on")
         dependencies[repo_key] = _normalize_dependency_list(repo_key, raw_dependencies)
         entry["depends_on"] = dependencies[repo_key]
+        entry["pr_impact_contracts"] = _normalize_pr_impact_contracts(
+            repo_key, entry.get("pr_impact_contracts")
+        )
 
         rest_config = _normalize_rest_automation(
             repo_key, profile, entry["local_root"], entry.get("rest_automation")

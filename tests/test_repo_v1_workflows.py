@@ -106,3 +106,136 @@ def test_workflow_endpoint_binding_and_explicit_null_transition_rejected(
     )
     with pytest.raises(RuntimeError):
         validate_workflow_candidate(conn, repo_id=1, target_commit_sha="a" * 40)
+
+
+def test_workflow_schema_refs_drive_resolved_and_ambiguous_statuses(
+    tmp_path: Path,
+) -> None:
+    files = {
+        "app/source/openapispec/ap/models/workflows.s1.schema.yaml": b"""same-request:
+  x-mappedTo: adjustment
+same-response:
+  x-mappedTo: adjustment
+different-response:
+  x-mappedTo: other
+""",
+        "app/source/openapispec/ap/paths/resolved.api.yaml": b"""paths:
+  /workflows/ap/adjustment/submit:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '../models/workflows.s1.schema.yaml#/same-request'
+      responses:
+        200:
+          content:
+            application/json:
+              schema:
+                properties:
+                  ia::result:
+                    $ref: '../models/workflows.s1.schema.yaml#/same-response'
+""",
+        "app/source/openapispec/ap/paths/ambiguous.api.yaml": b"""paths:
+  /workflows/ap/adjustment/reverse:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '../models/workflows.s1.schema.yaml#/same-request'
+      responses:
+        200:
+          content:
+            application/json:
+              schema:
+                properties:
+                  ia::result:
+                    $ref: '../models/workflows.s1.schema.yaml#/different-response'
+""",
+        "app/source/ap/adjustment.ent": b"entity\n",
+        "app/source/ap/other.ent": b"entity\n",
+    }
+    conn, snapshot = _fixture(
+        tmp_path,
+        files,
+        (
+            ("app/source/ap/adjustment.ent", "adjustment"),
+            ("app/source/ap/other.ent", "other"),
+        ),
+    )
+    try:
+        extract_snapshot_openapi(conn, repo_id=1, snapshot=snapshot)
+        stats = extract_snapshot_workflows(conn, repo_id=1, snapshot=snapshot)
+        assert stats.resolved_entity_link_count == 1
+        assert stats.ambiguous_entity_link_count == 1
+        rows = conn.execute(
+            "SELECT action,entity_link_status,entity_occurrence_id FROM workflow_facts ORDER BY action"
+        ).fetchall()
+        assert [(row[0], row[1]) for row in rows] == [
+            ("reverse", "ambiguous"),
+            ("submit", "resolved"),
+        ]
+        assert rows[1][2] is not None
+        assert all(
+            "same-document" not in row[0]
+            for row in conn.execute("SELECT message FROM workflow_diagnostics")
+        )
+    finally:
+        conn.close()
+
+
+def test_workflow_schema_ref_failures_and_multiple_operations_stay_unresolved(
+    tmp_path: Path,
+) -> None:
+    files = {
+        "app/source/openapispec/ap/models/workflows.s1.schema.yaml": b"request:\n  x-mappedTo: adjustment\n",
+        "app/source/openapispec/ap/paths/missing.api.yaml": b"""paths:
+  /workflows/ap/adjustment/missing:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '../models/not-retained.yaml#/request'
+""",
+        "app/source/openapispec/ap/paths/invalid-pointer.api.yaml": b"""paths:
+  /workflows/ap/adjustment/invalid:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '../models/workflows.s1.schema.yaml#/missing'
+""",
+        "app/source/openapispec/ap/paths/multi.api.yaml": b"""paths:
+  /workflows/ap/adjustment/one:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '../models/workflows.s1.schema.yaml#/request'
+  /workflows/ap/adjustment/two:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '../models/workflows.s1.schema.yaml#/request'
+""",
+        "app/source/ap/adjustment.ent": b"entity\n",
+    }
+    conn, snapshot = _fixture(
+        tmp_path, files, (("app/source/ap/adjustment.ent", "adjustment"),)
+    )
+    try:
+        extract_snapshot_openapi(conn, repo_id=1, snapshot=snapshot)
+        stats = extract_snapshot_workflows(conn, repo_id=1, snapshot=snapshot)
+        assert stats.fact_count == 4
+        assert stats.unresolved_entity_link_count == 4
+        assert (
+            conn.execute("SELECT COUNT(*) FROM openapi_entity_links").fetchone()[0] == 0
+        )
+    finally:
+        conn.close()
