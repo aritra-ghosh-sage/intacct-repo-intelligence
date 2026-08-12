@@ -4,7 +4,7 @@ Step 1 is a read-only, repo-v1-native direct-impact trace over a validated
 Step 0 revision pair. It emits a separate JSON report and never edits the Step
 0 YAML fixture.
 
-The current report schema is `0.3`. It can optionally consume a normalized PR
+The current report schema is `0.4`. It can optionally consume a normalized PR
 metadata JSON artifact produced by `scripts/intake_pr_metadata.py`; metadata is
 context only and never overrides Git or SQLite evidence.
 
@@ -41,7 +41,7 @@ external checkout, or multi-repo extraction is performed.
 
 ## Output
 
-The report has schema version `0.3`, analysis kind `pr_impact_step_1`, and
+The report has schema version `0.4`, analysis kind `pr_impact_step_1`, and
 top-level status `complete`, `partial`, or `blocked`. Direct surfaces use
 `available`, `empty`, `unavailable`, `unresolved`, `ambiguous`, `stale`, or
 `deferred`. `empty` means the repo-v1 table was queried and returned no direct
@@ -74,6 +74,21 @@ retains both the fixture target revision and the catalog revision, plus whether
 the relation is `exact` or `forward_compatible` and the compatibility evidence
 used by preflight. `fieldinfo` `fullname` values are metadata and never create
 database links.
+
+The stable downstream section is `downstream_repositories`. Each entry has a
+repository identity, `available`/`deferred` status, optional manifest context,
+and a `relationships` list. Relationship types are limited to
+`tests_rest_of`, `validates_gateway_behavior_of`, and `depends_on_schema_of`.
+Each typed relationship records its status, source and target repository, and
+evidence facts. Missing downstream snapshots remain `deferred`; Step 0
+candidate labels do not become typed evidence.
+
+The stable report-level `confidence` object is either `not_computed` with a
+null score for blocked analysis, or `computed` with an integer score from 0 to
+100 and components for evidence availability, evidence freshness, and
+unresolved gaps. The current deterministic weighting is 50%, 30%, and 20%,
+respectively. Confidence does not convert deferred or missing evidence into a
+positive fact.
 
 ## Review Markdown
 

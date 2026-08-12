@@ -363,7 +363,7 @@ def test_step0_database_assertion_does_not_make_report_complete(
 
 def test_report_validator_rejects_fixture_only_database_evidence() -> None:
     report = {
-        "schema_version": "0.3",
+        "schema_version": "0.4",
         "analysis_kind": "pr_impact_step_1",
         "status": "partial",
         "input": {
@@ -388,10 +388,14 @@ def test_report_validator_rejects_fixture_only_database_evidence() -> None:
             }
         ],
         "pr_metadata": {"status": "not_provided"},
-        "onboarding_feasibility": [],
+        "downstream_repositories": [],
         "impact_ranking": [],
         "gaps": [],
         "warnings": [],
+        "confidence": {
+            "status": "not_computed",
+            "score": None,
+        },
         "provenance": {},
     }
     assert "available database_consumers requires direct catalog facts" in validate(
@@ -635,18 +639,81 @@ def test_absent_onboarding_repositories_are_deferred(tmp_path: Path) -> None:
         make_db(tmp_path, target),
         "ia-main",
     )
-    assert report["onboarding_feasibility"] == [
+    assert report["downstream_repositories"] == [
         {
             "repository": "ia-restapi-automation-tests",
+            "repo_key": "ia-restapi-automation-tests",
             "status": "deferred",
+            "source_relationship": None,
+            "relationships": [],
+            "manifest": {},
             "reason": "repository is absent from the workspace manifest",
         },
         {
             "repository": "ia-gwdata-gl",
+            "repo_key": "ia-gwdata-gl",
             "status": "deferred",
+            "source_relationship": None,
+            "relationships": [],
+            "manifest": {},
             "reason": "repository is absent from the workspace manifest",
         },
     ]
+
+
+def test_downstream_relationship_contract_accepts_typed_evidence() -> None:
+    report = review_report()
+    report["preflight"] = {
+        "target_revision": "target-sha",
+        "catalog_revision": "target-sha",
+        "revision_relation": "exact",
+        "compatibility_evidence": "catalog target equals fixture target",
+    }
+    report["downstream_repositories"] = [
+        {
+            "repository": "ia-restapi-automation-tests",
+            "status": "available",
+            "relationships": [
+                {
+                    "type": "tests_rest_of",
+                    "status": "available",
+                    "source_repository": "intacct/ia-restapi-automation-tests",
+                    "target_repository": "intacct/ia-app",
+                    "facts": [],
+                }
+            ],
+        },
+    ]
+    report["confidence"] = {
+        "status": "computed",
+        "score": 75,
+        "components": {
+            "evidence_availability": {"score": 80},
+            "evidence_freshness": {"score": 100},
+            "unresolved_gaps": {"count": 2, "score": 80},
+        },
+    }
+    assert validate(report) == []
+
+
+def test_downstream_relationship_contract_rejects_unknown_type() -> None:
+    report = review_report()
+    report["downstream_repositories"] = [
+        {
+            "repository": "intacct/example",
+            "status": "available",
+            "relationships": [
+                {
+                    "type": "candidate_behavior_test_repository",
+                    "status": "available",
+                    "source_repository": "intacct/example",
+                    "target_repository": "intacct/ia-app",
+                    "facts": [],
+                }
+            ],
+        }
+    ]
+    assert "downstream relationship has invalid type" in validate(report)
 
 
 def test_empty_diff_is_blocked(tmp_path: Path) -> None:
@@ -873,7 +940,7 @@ def test_report_validator_and_blocked_envelope() -> None:
 
 def test_report_validator_requires_catalog_revision_compatibility_preflight() -> None:
     report = {
-        "schema_version": "0.3",
+        "schema_version": "0.4",
         "analysis_kind": "pr_impact_step_1",
         "status": "partial",
         "input": {
@@ -887,10 +954,11 @@ def test_report_validator_requires_catalog_revision_compatibility_preflight() ->
         "changed_files": [],
         "direct_traces": [],
         "pr_metadata": {"status": "not_provided"},
-        "onboarding_feasibility": [],
+        "downstream_repositories": [],
         "impact_ranking": [],
         "gaps": [],
         "warnings": [],
+        "confidence": {"status": "not_computed", "score": None},
         "provenance": {},
     }
 
@@ -917,10 +985,11 @@ def test_report_validator_requires_classification_warnings_and_complete_surfaces
         "preflight": {},
         "changed_files": [],
         "direct_traces": [{"surface": "files", "status": "empty", "facts": []}],
-        "onboarding_feasibility": [],
+        "downstream_repositories": [],
         "impact_ranking": [],
         "gaps": [],
         "warnings": [],
+        "confidence": {"status": "not_computed", "score": None},
         "provenance": {},
     }
     assert "empty trace must include a warning" in validate(report)
@@ -940,11 +1009,13 @@ def review_report(
     warnings: list[str] | None = None,
 ) -> dict:
     return {
-        "schema_version": "0.3",
+        "schema_version": "0.4",
         "analysis_kind": "pr_impact_step_1",
         "status": status,
         "input": {
+            "manifest": "manifest.yaml",
             "repo_key": "ia-main",
+            "repo_root": "repo",
             "base_revision": "base-sha",
             "target_revision": "target-sha",
         },
@@ -970,10 +1041,19 @@ def review_report(
             }
         ],
         "pr_metadata": {"status": "not_provided"},
-        "onboarding_feasibility": [],
+        "downstream_repositories": [],
         "impact_ranking": [],
         "gaps": gaps or [],
         "warnings": warnings or [],
+        "confidence": {
+            "status": "computed",
+            "score": 75,
+            "components": {
+                "evidence_availability": {"score": 80},
+                "evidence_freshness": {"score": 100},
+                "unresolved_gaps": {"count": len(gaps or []), "score": 80},
+            },
+        },
         "provenance": {
             "source": "repo-v1 active SQLite and exact Git diff",
             "read_only": True,

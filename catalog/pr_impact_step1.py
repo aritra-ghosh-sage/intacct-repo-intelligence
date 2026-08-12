@@ -51,7 +51,13 @@ SURFACE_STATUSES = {
     "stale",
     "deferred",
 }
-REPORT_SCHEMA_VERSION = "0.3"
+REPORT_SCHEMA_VERSION = "0.4"
+DOWNSTREAM_RELATION_TYPES = {
+    "tests_rest_of",
+    "validates_gateway_behavior_of",
+    "depends_on_schema_of",
+}
+DOWNSTREAM_STATUSES = SURFACE_STATUSES
 SUPPORTED_SURFACES = {
     "files",
     "symbols",
@@ -642,40 +648,56 @@ def _fixture_surface(
     }
 
 
-def _onboarding(config: Path) -> list[dict[str, Any]]:
+def _downstream_repositories(
+    document: dict[str, Any], config: Path
+) -> list[dict[str, Any]]:
     required = ("ia-restapi-automation-tests", "ia-gwdata-gl")
+    related = document.get("related_repositories")
+    related_items = related if isinstance(related, list) else []
+    fixture_repositories = {
+        item.get("repository"): item
+        for item in related_items
+        if isinstance(item, dict) and isinstance(item.get("repository"), str)
+    }
     try:
         data = yaml.safe_load(config.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, yaml.YAMLError):
-        return [
-            {"repository": x, "status": "deferred", "reason": "manifest unavailable"}
-            for x in required
-        ]
-    entries = (
-        {
-            entry.get("repo_key"): entry
-            for entry in data.get("repositories", [])
-            if isinstance(entry, dict) and entry.get("repo_key") in required
-        }
-        if isinstance(data, dict)
-        else {}
-    )
-    result = []
-    for repo_key in required:
-        entry = entries.get(repo_key)
-        if entry is None:
-            result.append(
-                {
-                    "repository": repo_key,
-                    "status": "deferred",
-                    "reason": "repository is absent from the workspace manifest",
-                }
-            )
+        entries = []
+    else:
+        entries = (
+            data.get("repositories", [])
+            if isinstance(data, dict) and isinstance(data.get("repositories"), list)
+            else []
+        )
+
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("repo_key") not in required:
             continue
+        depends_on = entry.get("depends_on")
+        if not isinstance(depends_on, list) or "ia-main" not in depends_on:
+            continue
+        repo_key = entry.get("repo_key")
+        repository = next(
+            (
+                name
+                for name in fixture_repositories
+                if name == f"intacct/{repo_key}" or name.endswith(f"/{repo_key}")
+            ),
+            repo_key,
+        )
+        if not isinstance(repository, str) or repository in seen:
+            continue
+        seen.add(repository)
+        fixture_item = fixture_repositories.get(repository, {})
         result.append(
             {
-                "repository": repo_key,
+                "repository": repository,
+                "repo_key": repo_key,
                 "status": "deferred",
+                "source_relationship": fixture_item.get("relationship"),
+                "relationships": [],
                 "manifest": {
                     k: entry.get(k)
                     for k in (
@@ -691,7 +713,75 @@ def _onboarding(config: Path) -> list[dict[str, Any]]:
                 "reason": "manifest-only feasibility; no external snapshot or impact evidence was read",
             }
         )
+    for repository, item in fixture_repositories.items():
+        if repository in seen:
+            continue
+        seen.add(repository)
+        result.append(
+            {
+                "repository": repository,
+                "repo_key": None,
+                "status": "deferred",
+                "source_relationship": item.get("relationship"),
+                "relationships": [],
+                "manifest": {},
+                "reason": "repository is not mapped to a downstream manifest entry",
+            }
+        )
+    for repo_key in required:
+        if repo_key in seen:
+            continue
+        seen.add(repo_key)
+        result.append(
+            {
+                "repository": repo_key,
+                "repo_key": repo_key,
+                "status": "deferred",
+                "source_relationship": None,
+                "relationships": [],
+                "manifest": {},
+                "reason": "repository is absent from the workspace manifest",
+            }
+        )
     return result
+
+
+def _confidence(
+    direct: list[dict[str, Any]],
+    downstream: list[dict[str, Any]],
+    preflight: dict[str, Any],
+    gaps: list[str],
+) -> dict[str, Any]:
+    total_surfaces = len(SUPPORTED_SURFACES)
+    available_surfaces = sum(item.get("status") == "available" for item in direct)
+    availability_score = round(100 * available_surfaces / max(1, total_surfaces))
+    relation = preflight.get("revision_relation")
+    freshness_score = {"exact": 100, "forward_compatible": 80}.get(relation, 0)
+    gap_score = max(0, 100 - min(100, len(gaps) * 10))
+    score = round(availability_score * 0.5 + freshness_score * 0.3 + gap_score * 0.2)
+    return {
+        "status": "computed",
+        "score": score,
+        "components": {
+            "evidence_availability": {
+                "available_surfaces": available_surfaces,
+                "total_surfaces": total_surfaces,
+                "score": availability_score,
+            },
+            "evidence_freshness": {
+                "revision_relation": relation,
+                "score": freshness_score,
+            },
+            "unresolved_gaps": {
+                "count": len(gaps),
+                "downstream_deferred": sum(
+                    item.get("status") == "deferred" for item in downstream
+                ),
+                "score": gap_score,
+            },
+        },
+        "formula": "50% evidence availability + 30% revision freshness + 20% unresolved-gap score",
+    }
 
 
 def _load_metadata(
@@ -1251,7 +1341,14 @@ def analyze_fixture(
             for x in direct
             if x["status"] == "deferred"
         )
+        downstream = _downstream_repositories(document, Path(manifest))
+        gaps.extend(
+            f"downstream_repositories:{item['repository']}: {item['status']}"
+            for item in downstream
+            if item["status"] != "available"
+        )
         ranking = rank_direct_traces(direct, [x.__dict__ for x in changed])
+        confidence = _confidence(direct, downstream, preflight, gaps)
         return {
             "schema_version": REPORT_SCHEMA_VERSION,
             "analysis_kind": "pr_impact_step_1",
@@ -1269,10 +1366,11 @@ def analyze_fixture(
             "changed_files": [x.__dict__ for x in changed],
             "direct_traces": direct,
             "pr_metadata": metadata_summary,
-            "onboarding_feasibility": _onboarding(Path(manifest)),
+            "downstream_repositories": downstream,
             "impact_ranking": ranking,
             "gaps": sorted(set(gaps)),
             "warnings": [x["warning"] for x in direct if "warning" in x],
+            "confidence": confidence,
             "provenance": {
                 "source": "repo-v1 active SQLite and exact Git diff",
                 "read_only": True,
@@ -1294,10 +1392,15 @@ def blocked_report(error: Step1Error) -> dict[str, Any]:
         "changed_files": [],
         "direct_traces": [],
         "pr_metadata": {"status": "not_provided"},
-        "onboarding_feasibility": [],
+        "downstream_repositories": [],
         "impact_ranking": [],
         "gaps": [],
         "warnings": [],
+        "confidence": {
+            "status": "not_computed",
+            "score": None,
+            "reason": "analysis blocked before direct evidence collection",
+        },
         "provenance": {"read_only": True},
     }
 
@@ -1426,6 +1529,12 @@ def render_review_markdown(report: Mapping[str, Any]) -> str:
         _review_items(report, "changed_files"), key=_review_changed_file_key
     )
     traces = sorted(_review_items(report, "direct_traces"), key=_review_trace_key)
+    downstream = sorted(
+        _review_items(report, "downstream_repositories"),
+        key=lambda item: (
+            str(item.get("repository", "")) if isinstance(item, Mapping) else ""
+        ),
+    )
     reviewed_rows: list[str] = []
     for item in changed_files:
         if not isinstance(item, Mapping):
@@ -1465,6 +1574,32 @@ def render_review_markdown(report: Mapping[str, Any]) -> str:
             reviewed_rows.append(
                 f"| Not available | {surface} | {_review_status_icon(trace.get('status'))} | {note} |"
             )
+    for item in downstream:
+        if not isinstance(item, Mapping):
+            reviewed_rows.append(
+                "| Not available | Downstream repository | ⚠ | Not available |"
+            )
+            continue
+        repository = _review_cell(item.get("repository"), "Not available")
+        status = item.get("status")
+        relationships = item.get("relationships")
+        relation_types = (
+            ",".join(
+                sorted(
+                    str(relation.get("type"))
+                    for relation in relationships
+                    if isinstance(relation, Mapping) and relation.get("type")
+                )
+            )
+            if isinstance(relationships, list)
+            else "Not available"
+        )
+        note = f"status={_review_cell(status)}; typed_relationships={_review_cell(relation_types, 'none')}"
+        if item.get("reason") is not None:
+            note += f"; reason={_review_cell(item.get('reason'))}"
+        reviewed_rows.append(
+            f"| `{repository}` | Downstream repository | {_review_status_icon(status)} | {note} |"
+        )
     if not reviewed_rows:
         reviewed_rows.append("| Not available | Not available | ⚠ | Not available |")
 
@@ -1509,6 +1644,24 @@ def render_review_markdown(report: Mapping[str, Any]) -> str:
     if not assumptions:
         assumptions.append("- Not available")
 
+    confidence = report.get("confidence")
+    if isinstance(confidence, Mapping) and confidence.get("status") == "computed":
+        components = confidence.get("components")
+        if isinstance(components, Mapping):
+            availability = components.get("evidence_availability", {})
+            freshness = components.get("evidence_freshness", {})
+            gaps_component = components.get("unresolved_gaps", {})
+            confidence_text = (
+                f"{_review_cell(confidence.get('score'))}/100 "
+                f"(availability={_review_cell(availability.get('score'))}; "
+                f"freshness={_review_cell(freshness.get('score'))}; "
+                f"unresolved_gaps={_review_cell(gaps_component.get('count'))})"
+            )
+        else:
+            confidence_text = f"{_review_cell(confidence.get('score'))}/100"
+    else:
+        confidence_text = "Not computed"
+
     return "\n".join(
         [
             "## 🔍 Review Summary",
@@ -1524,6 +1677,7 @@ def render_review_markdown(report: Mapping[str, Any]) -> str:
             f"- **Files:** {changed_count} changed, {additions} additions, {deletions} deletions",
             "- **Commits:** Not available (avg. message quality: Not computed)",
             "- **Coverage:** API changes [Not computed] | DB migrations [Not computed] | UI [Not computed]",
+            f"- **Downstream:** {len(downstream)} repositories represented; typed relationship evidence is not inferred.",
             "",
             "---",
             "",
@@ -1565,7 +1719,7 @@ def render_review_markdown(report: Mapping[str, Any]) -> str:
             "",
             "## 🎲 Confidence & Recommendation",
             "",
-            "**Confidence:** Not computed",
+            f"**Confidence:** {confidence_text}",
             f"**Recommendation:** {_review_recommendation(report)}",
             "",
             "**Gaps/Assumptions:**",
