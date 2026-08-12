@@ -21,7 +21,7 @@ and cannot satisfy either direct surface.
 
 Inputs are `--fixture`, `--manifest`, `--active-db`, `--repo-key`, and optional
 `--metadata`. `--manifest` defaults to `config/workspace_repos.yaml`; the
-checkout root is resolved from the selected manifest entry. The fixture's
+checkout root is resolved from the selected `ia-main` manifest entry. The fixture's
 `base_revision` and `target_revision` are authoritative. Step 1 validates the
 exact Git diff between those revisions before reading catalog facts. Git diff
 validation only; no catalog delta processing.
@@ -32,17 +32,17 @@ delta refresh, or delta builder execution.
 
 The active database is opened with SQLite `mode=ro`, `query_only=ON`, and a
 read transaction. Its repo-v1 schema, integrity, foreign keys, active build,
-single `ia-main` repository, and revision compatibility are blocking
-preconditions. The catalog revision must equal the fixture target revision or
-be a Git-proven forward revision whose commit has the fixture target as an
-ancestor. Older and diverged catalog revisions block with
+single `ia-main` repository, and exact target revision are blocking
+preconditions. The catalog revision must equal the fixture target revision.
+Older, forward, and diverged catalog revisions block with
 `catalog_revision_mismatch`. No refresh, promotion, migration, graph, MCP,
 external checkout, or multi-repo extraction is performed.
 
 ## Output
 
 The report has schema version `0.4`, analysis kind `pr_impact_step_1`, and
-top-level status `complete`, `partial`, or `blocked`. Direct surfaces use
+top-level status `complete`, `partial`, or `blocked`. The analysis scope is
+direct `ia-main` evidence only. Direct surfaces use
 `available`, `empty`, `unavailable`, `unresolved`, `ambiguous`, `stale`, or
 `deferred`. `empty` means the repo-v1 table was queried and returned no direct
 rows; it includes a warning and is never proof of no impact. Step 0 assertions
@@ -70,29 +70,21 @@ unexpected direct traces make the materialized report invalid.
 
 Facts are built from committed snapshot bytes only. Dynamic, unresolved, and
 ambiguous source facts remain classified rather than inferred. The report
-retains both the fixture target revision and the catalog revision, plus whether
-the relation is `exact` or `forward_compatible` and the compatibility evidence
-used by preflight. `fieldinfo` `fullname` values are metadata and never create
-database links.
+retains both the fixture target revision and the catalog revision, with an
+exact `revision_relation` and the compatibility evidence used by preflight.
+`fieldinfo` `fullname` values are metadata and never create database links.
 
-The stable downstream section is `downstream_repositories`. Each entry has a
-repository identity, `available`/`deferred` status, optional manifest context,
-and a `relationships` list. Relationship types are limited to
-`tests_rest_of`, `validates_gateway_behavior_of`, and `depends_on_schema_of`.
-Each typed relationship records its status, source and target repository, and
-evidence facts. A relationship is materialized only when the downstream
-manifest entry declares it under `pr_impact_contracts` with explicit `type`,
-`source_repository`, and `target_repository` values matching the analyzed PR.
-`depends_on` alone is build ordering, not impact evidence. Missing downstream
-snapshots remain `deferred`; Step 0 candidate labels do not become typed
-evidence.
+The schema-compatible `downstream_repositories` section is always an empty
+list in this `ia-main`-only scope. Manifest contracts, dependency ordering,
+and Step 0 candidate labels do not become downstream impact evidence.
 
 The stable report-level `confidence` object is either `not_computed` with a
 null score for blocked analysis, or `computed` with an integer score from 0 to
-100 and components for evidence availability, evidence freshness, and
-unresolved gaps. The current deterministic weighting is 50%, 30%, and 20%,
-respectively. Confidence does not convert deferred or missing evidence into a
-positive fact.
+100 and components for direct evidence availability, exact revision freshness,
+and direct unresolved gaps. The current deterministic weighting is 50%, 30%,
+and 20%, respectively. The downstream contribution is always zero/non-
+applicable for schema compatibility. Confidence does not convert deferred or
+missing evidence into a positive fact.
 
 ## Review Markdown
 
@@ -120,10 +112,10 @@ report contains warnings or gaps, and `Approve` only for a clean complete
 report. Direct facts retain their source path, target revision, source
 location, catalog identity, extractor, and evidence in the reviewed table.
 
-## Target-revision or forward-compatible isolated catalog
+## Exact target-revision isolated catalog
 
-Build the target revision, or a Git-proven forward revision, into an alternate
-active database. Step 1 never modifies the canonical database:
+Build the exact fixture target revision into an alternate active database. Step
+1 never modifies the canonical database:
 
 ```bash
 PR_IMPACT_TMP=$(mktemp -d /private/tmp/repo-v1-pr-impact.XXXXXX)
@@ -136,10 +128,8 @@ PYTHONPATH=. ./.venv/bin/python -m catalog.repo_v1 \
   --no-progress
 ```
 
-The isolated database must record its own catalog revision, pass SQLite
-integrity and foreign-key checks, and pass the Step 1 revision-compatibility
-preflight. A forward-compatible catalog is not automatically valid merely
-because it is newer by date; the Git ancestry proof is required.
+The isolated database must record its own exact catalog revision, pass SQLite
+integrity and foreign-key checks, and pass the Step 1 exact-revision preflight.
 
 ### Observed promotion evidence
 
@@ -155,10 +145,9 @@ This is successful repo-v1 promotion evidence, but it is not automatically
 PR-target evidence for the golden fixtures: PR 49156 targets
 `f914d9892a51c1d34eadfd0e4da89f8418ed2c59`, and PR 48706 targets
 `44ff9701e94a69c835063b4fd39e515ff0ae4680`. Because this run used the
-canonical `catalog/catalog.db` path, it must pass the revision-compatibility
-preflight before it can be used for either PR analysis. A PR analysis must
-retain the exact fixture base-to-target Git diff and record whether the catalog
-relation was exact or forward-compatible.
+canonical `catalog/catalog.db` path, it must pass the exact-revision preflight
+before it can be used for either PR analysis. A PR analysis must retain the
+exact fixture base-to-target Git diff and exact catalog-target relation.
 
 ## PR metadata intake
 

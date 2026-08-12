@@ -20,7 +20,6 @@ import yaml
 
 from catalog.pr_impact_manifest import resolve_manifest_repo_root
 from catalog.pr_impact_ranking import rank_direct_traces
-from catalog.repositories import RepositoryError, load_workspace_manifest
 
 ERROR_CODES = {
     "catalog_unavailable",
@@ -53,12 +52,6 @@ SURFACE_STATUSES = {
     "deferred",
 }
 REPORT_SCHEMA_VERSION = "0.4"
-DOWNSTREAM_RELATION_TYPES = {
-    "tests_rest_of",
-    "validates_gateway_behavior_of",
-    "depends_on_schema_of",
-}
-DOWNSTREAM_STATUSES = SURFACE_STATUSES
 SUPPORTED_SURFACES = {
     "files",
     "symbols",
@@ -395,24 +388,14 @@ def _open_catalog(
                 "catalog target SHA is not a full Git commit ID",
             )
         catalog_revision = _revision(source_repo, catalog_revision, "catalog_revision")
-        if catalog_revision == target_sha:
-            revision_relation = "exact"
-        else:
-            ancestor = _git(
-                source_repo,
-                "merge-base",
-                "--is-ancestor",
-                target_sha,
-                catalog_revision,
+        if catalog_revision != target_sha:
+            raise Step1Error(
+                "catalog_revision_mismatch",
+                "catalog target SHA must equal the fixture target revision",
+                target_revision=target_sha,
+                catalog_revision=catalog_revision,
             )
-            if ancestor.returncode != 0:
-                raise Step1Error(
-                    "catalog_revision_mismatch",
-                    "catalog target SHA is not the fixture target or a proven forward revision",
-                    target_revision=target_sha,
-                    catalog_revision=catalog_revision,
-                )
-            revision_relation = "forward_compatible"
+        revision_relation = "exact"
         build_id = int(builds[0]["id"])
         if int(repo["build_id"]) != build_id:
             raise Step1Error(
@@ -443,11 +426,7 @@ def _open_catalog(
                 "target_revision": target_sha,
                 "catalog_revision": catalog_revision,
                 "revision_relation": revision_relation,
-                "compatibility_evidence": (
-                    "catalog target equals fixture target"
-                    if revision_relation == "exact"
-                    else "fixture target is a Git ancestor of catalog target"
-                ),
+                "compatibility_evidence": "catalog target equals fixture target",
                 "integrity_check": "ok",
                 "foreign_key_check": "ok",
             },
@@ -649,74 +628,8 @@ def _fixture_surface(
     }
 
 
-def _downstream_repositories(
-    document: dict[str, Any], config: Path
-) -> list[dict[str, Any]]:
-    try:
-        manifest = load_workspace_manifest(config)
-    except (RepositoryError, OSError, UnicodeError, yaml.YAMLError):
-        return []
-
-    target_repository = document.get("pull_request", {}).get("repository")
-    if not isinstance(target_repository, str) or not target_repository:
-        return []
-    result: dict[str, dict[str, Any]] = {}
-    for entry in manifest["repositories"]:
-        repo_key = entry["repo_key"]
-        contracts = entry.get("pr_impact_contracts", [])
-        for index, contract in enumerate(contracts):
-            if contract["target_repository"] != target_repository:
-                continue
-            source_repository = contract["source_repository"]
-            item = result.setdefault(
-                source_repository,
-                {
-                    "repository": source_repository,
-                    "repo_key": repo_key,
-                    "status": "deferred",
-                    "relationships": [],
-                    "manifest": {
-                        k: entry.get(k)
-                        for k in (
-                            "local_root",
-                            "enabled",
-                            "depends_on",
-                            "profile",
-                            "builders",
-                            "storage",
-                        )
-                        if k in entry
-                    },
-                    "reason": "explicit downstream contract resolved; no external snapshot or impact evidence was read",
-                },
-            )
-            fact_key = f"manifest:pr_impact_contracts:{repo_key}:{index}"
-            item["relationships"].append(
-                {
-                    "type": contract["type"],
-                    "status": "available",
-                    "source_repository": source_repository,
-                    "target_repository": target_repository,
-                    "facts": [
-                        {
-                            "fact_key": fact_key,
-                            "source_path": str(config),
-                            "evidence": {
-                                "contract": contract,
-                                "manifest_repo_key": repo_key,
-                            },
-                            "extractor": "pr_impact_manifest",
-                            "status": "available",
-                        }
-                    ],
-                }
-            )
-    return list(result.values())
-
-
 def _confidence(
     direct: list[dict[str, Any]],
-    downstream: list[dict[str, Any]],
     preflight: dict[str, Any],
     gaps: list[str],
 ) -> dict[str, Any]:
@@ -724,7 +637,7 @@ def _confidence(
     available_surfaces = sum(item.get("status") == "available" for item in direct)
     availability_score = round(100 * available_surfaces / max(1, total_surfaces))
     relation = preflight.get("revision_relation")
-    freshness_score = {"exact": 100, "forward_compatible": 80}.get(relation, 0)
+    freshness_score = {"exact": 100}.get(relation, 0)
     gap_score = max(0, 100 - min(100, len(gaps) * 10))
     score = round(availability_score * 0.5 + freshness_score * 0.3 + gap_score * 0.2)
     return {
@@ -742,9 +655,7 @@ def _confidence(
             },
             "unresolved_gaps": {
                 "count": len(gaps),
-                "downstream_deferred": sum(
-                    item.get("status") == "deferred" for item in downstream
-                ),
+                "downstream_deferred": 0,
                 "score": gap_score,
             },
         },
@@ -1309,14 +1220,8 @@ def analyze_fixture(
             for x in direct
             if x["status"] == "deferred"
         )
-        downstream = _downstream_repositories(document, Path(manifest))
-        gaps.extend(
-            f"downstream_repositories:{item['repository']}: {item['status']}"
-            for item in downstream
-            if item["status"] != "available"
-        )
         ranking = rank_direct_traces(direct, [x.__dict__ for x in changed])
-        confidence = _confidence(direct, downstream, preflight, gaps)
+        confidence = _confidence(direct, preflight, gaps)
         return {
             "schema_version": REPORT_SCHEMA_VERSION,
             "analysis_kind": "pr_impact_step_1",
@@ -1334,7 +1239,7 @@ def analyze_fixture(
             "changed_files": [x.__dict__ for x in changed],
             "direct_traces": direct,
             "pr_metadata": metadata_summary,
-            "downstream_repositories": downstream,
+            "downstream_repositories": [],
             "impact_ranking": ranking,
             "gaps": sorted(set(gaps)),
             "warnings": [x["warning"] for x in direct if "warning" in x],

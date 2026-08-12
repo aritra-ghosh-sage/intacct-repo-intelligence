@@ -27,11 +27,6 @@ TOP_LEVEL_KEYS = {
     "confidence",
     "provenance",
 }
-DOWNSTREAM_RELATION_TYPES = {
-    "tests_rest_of",
-    "validates_gateway_behavior_of",
-    "depends_on_schema_of",
-}
 SURFACE_STATUSES = {
     "available",
     "empty",
@@ -132,23 +127,10 @@ def validate(report: object) -> list[str]:
             ):
                 if key not in preflight:
                     errors.append(f"missing preflight field: {key}")
-            if preflight.get("revision_relation") not in {
-                "exact",
-                "forward_compatible",
-            }:
+            if preflight.get("revision_relation") != "exact":
                 errors.append("invalid preflight revision_relation")
-            if preflight.get("revision_relation") == "exact" and preflight.get(
-                "catalog_revision"
-            ) != preflight.get("target_revision"):
+            if preflight.get("catalog_revision") != preflight.get("target_revision"):
                 errors.append("exact preflight relation requires matching revisions")
-            if preflight.get(
-                "revision_relation"
-            ) == "forward_compatible" and preflight.get(
-                "catalog_revision"
-            ) == preflight.get("target_revision"):
-                errors.append(
-                    "forward-compatible preflight relation requires distinct revisions"
-                )
     confidence = report.get("confidence")
     if not isinstance(confidence, dict):
         errors.append("confidence must be an object")
@@ -182,34 +164,8 @@ def validate(report: object) -> list[str]:
     ):
         errors.append("not_computed confidence requires reason")
     downstream = report.get("downstream_repositories")
-    if not isinstance(downstream, list):
-        errors.append("downstream_repositories must be a list")
-    else:
-        for item in downstream:
-            if not isinstance(item, dict):
-                errors.append("downstream repository must be an object")
-                continue
-            if not isinstance(item.get("repository"), str) or not item["repository"]:
-                errors.append("downstream repository requires repository")
-            if item.get("status") not in SURFACE_STATUSES:
-                errors.append("downstream repository has invalid status")
-            relationships = item.get("relationships")
-            if not isinstance(relationships, list):
-                errors.append("downstream repository relationships must be a list")
-                continue
-            for relation in relationships:
-                if not isinstance(relation, dict):
-                    errors.append("downstream relationship must be an object")
-                    continue
-                if relation.get("type") not in DOWNSTREAM_RELATION_TYPES:
-                    errors.append("downstream relationship has invalid type")
-                if relation.get("status") not in SURFACE_STATUSES:
-                    errors.append("downstream relationship has invalid status")
-                for key in ("source_repository", "target_repository"):
-                    if not isinstance(relation.get(key), str) or not relation[key]:
-                        errors.append(f"downstream relationship requires {key}")
-                if not isinstance(relation.get("facts"), list):
-                    errors.append("downstream relationship facts must be a list")
+    if downstream != []:
+        errors.append("downstream_repositories must be an empty list")
     metadata = report.get("pr_metadata")
     if not isinstance(metadata, dict) or metadata.get("status") not in {
         "not_provided",
@@ -356,8 +312,6 @@ def validate(report: object) -> list[str]:
                     errors.append(
                         "complete report has an invalid unsupported-surface status"
                     )
-            if any(item.get("status") != "available" for item in downstream):
-                errors.append("complete report contains a downstream repository gap")
     if report.get("status") == "blocked":
         if not isinstance(report.get("error"), dict) or not report["error"].get("code"):
             errors.append("blocked report requires error.code")

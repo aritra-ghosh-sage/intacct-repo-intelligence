@@ -18,7 +18,7 @@ from catalog.pr_impact_step1 import (
     render_review_markdown,
 )
 from scripts import trace_pr_impact_step1
-from scripts.validate_pr_impact_step1 import validate
+from scripts.validate_pr_impact_step1 import EXPECTED_SURFACES, validate
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -40,15 +40,6 @@ def make_repo(tmp_path: Path) -> tuple[Path, str, str]:
     )
     git(repo, "commit", "-qam", "target")
     return repo, base, git(repo, "rev-parse", "HEAD")
-
-
-def make_forward_revision(repo: Path) -> str:
-    (repo / "a.php").write_text(
-        "<?php\nfunction old() {}\nfunction newThing() {}\nfunction future() {}\n",
-        encoding="utf-8",
-    )
-    git(repo, "commit", "-qam", "forward catalog revision")
-    return git(repo, "rev-parse", "HEAD")
 
 
 def make_entity_repo(
@@ -234,7 +225,11 @@ def test_valid_diff_traces_exact_rows_and_is_read_only(tmp_path: Path) -> None:
     assert db.read_bytes() == before
     assert fixture.read_bytes() == fixture_before
     assert manifest.read_bytes() == manifest_before
-    assert report == analyze_fixture(fixture, manifest, db, "ia-main")
+    repeat = analyze_fixture(fixture, manifest, db, "ia-main")
+    assert report == repeat
+    assert json.dumps(report, sort_keys=True, separators=(",", ":")) == json.dumps(
+        repeat, sort_keys=True, separators=(",", ":")
+    )
 
 
 def test_workflow_and_permissions_trace_existing_repo_v1_facts(tmp_path: Path) -> None:
@@ -518,28 +513,21 @@ def test_catalog_source_revision_mismatch_blocks(tmp_path: Path) -> None:
         raise AssertionError("source revision mismatch was accepted")
 
 
-def test_forward_catalog_revision_is_accepted_with_provenance(
-    tmp_path: Path,
-) -> None:
+def test_forward_catalog_revision_is_rejected(tmp_path: Path) -> None:
     repo, base, target = make_repo(tmp_path)
-    catalog_revision = make_forward_revision(repo)
+    (repo / "a.php").write_text(
+        "<?php\nfunction old() {}\nfunction newThing() {}\nfunction future() {}\n",
+        encoding="utf-8",
+    )
+    git(repo, "commit", "-qam", "forward catalog revision")
+    catalog_revision = git(repo, "rev-parse", "HEAD")
     fixture = make_fixture(tmp_path, base, target)
     db = make_db(tmp_path, catalog_revision)
 
-    report = analyze_fixture(fixture, make_manifest(tmp_path, repo), db, "ia-main")
+    with pytest.raises(Step1Error, match="must equal") as error:
+        analyze_fixture(fixture, make_manifest(tmp_path, repo), db, "ia-main")
 
-    assert report["preflight"]["target_revision"] == target
-    assert report["preflight"]["catalog_revision"] == catalog_revision
-    assert report["preflight"]["revision_relation"] == "forward_compatible"
-    assert report["preflight"]["compatibility_evidence"] == (
-        "fixture target is a Git ancestor of catalog target"
-    )
-    files = next(
-        trace for trace in report["direct_traces"] if trace["surface"] == "files"
-    )
-    assert files["status"] == "available"
-    assert files["facts"][0]["target_revision"] == target
-    assert files["facts"][0]["catalog_source_revision"] == catalog_revision
+    assert error.value.code == "catalog_revision_mismatch"
 
 
 def test_older_catalog_revision_is_rejected(tmp_path: Path) -> None:
@@ -547,7 +535,7 @@ def test_older_catalog_revision_is_rejected(tmp_path: Path) -> None:
     fixture = make_fixture(tmp_path, base, target)
     db = make_db(tmp_path, base)
 
-    with pytest.raises(Step1Error, match="forward revision") as error:
+    with pytest.raises(Step1Error, match="must equal") as error:
         analyze_fixture(fixture, make_manifest(tmp_path, repo), db, "ia-main")
 
     assert error.value.code == "catalog_revision_mismatch"
@@ -565,7 +553,7 @@ def test_diverged_catalog_revision_is_rejected(tmp_path: Path) -> None:
     fixture = make_fixture(tmp_path, base, target)
     db = make_db(tmp_path, catalog_revision)
 
-    with pytest.raises(Step1Error, match="forward revision") as error:
+    with pytest.raises(Step1Error, match="must equal") as error:
         analyze_fixture(fixture, make_manifest(tmp_path, repo), db, "ia-main")
 
     assert error.value.code == "catalog_revision_mismatch"
@@ -642,81 +630,44 @@ def test_uncontracted_downstream_repositories_are_not_inferred(tmp_path: Path) -
     assert report["downstream_repositories"] == []
 
 
-def test_explicit_downstream_contract_is_resolved(tmp_path: Path) -> None:
+def test_downstream_manifest_and_fixture_data_do_not_affect_output(
+    tmp_path: Path,
+) -> None:
     repo, base, target = make_repo(tmp_path)
-    manifest = tmp_path / "workspace.yaml"
-    manifest.write_text(
-        yaml.safe_dump(
-            {
-                "version": 1,
-                "repositories": [
-                    {
-                        "repo_key": "ia-main",
-                        "local_root": str(repo),
-                        "tracked_branch": "main",
-                        "profile": "intacct_app",
-                        "builders": [],
-                    },
-                    {
-                        "repo_key": "ia-restapi-automation-tests",
-                        "local_root": str(repo),
-                        "tracked_branch": "main",
-                        "profile": "rest_automation",
-                        "builders": [],
-                        "pr_impact_contracts": [
-                            {
-                                "type": "tests_rest_of",
-                                "source_repository": "intacct/ia-restapi-automation-tests",
-                                "target_repository": "intacct/ia-app",
-                            }
-                        ],
-                        "rest_automation": {
-                            "coverage_contract_version": 1,
-                            "features_root": ".",
-                        },
-                    },
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-    report = analyze_fixture(
-        make_fixture(tmp_path, base, target),
-        manifest,
-        make_db(tmp_path, target),
-        "ia-main",
-    )
-    downstream = report["downstream_repositories"]
-    assert len(downstream) == 1
-    assert downstream[0]["repository"] == "intacct/ia-restapi-automation-tests"
-    assert downstream[0]["status"] == "deferred"
-    assert downstream[0]["relationships"] == [
+    manifest = make_manifest(tmp_path, repo)
+    fixture = make_fixture(tmp_path, base, target)
+    db = make_db(tmp_path, target)
+    baseline = analyze_fixture(fixture, manifest, db, "ia-main")
+
+    fixture_data = yaml.safe_load(fixture.read_text(encoding="utf-8"))
+    fixture_data["downstream_repositories"] = [
+        {"repository": "intacct/ia-restapi-automation-tests", "status": "available"}
+    ]
+    fixture.write_text(yaml.safe_dump(fixture_data), encoding="utf-8")
+    manifest_data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+    manifest_data["repositories"].append(
         {
-            "type": "tests_rest_of",
-            "status": "available",
-            "source_repository": "intacct/ia-restapi-automation-tests",
-            "target_repository": "intacct/ia-app",
-            "facts": [
+            "repo_key": "ia-restapi-automation-tests",
+            "local_root": str(repo),
+            "tracked_branch": "main",
+            "builders": [],
+            "pr_impact_contracts": [
                 {
-                    "fact_key": "manifest:pr_impact_contracts:ia-restapi-automation-tests:0",
-                    "source_path": str(manifest),
-                    "evidence": {
-                        "contract": {
-                            "type": "tests_rest_of",
-                            "source_repository": "intacct/ia-restapi-automation-tests",
-                            "target_repository": "intacct/ia-app",
-                        },
-                        "manifest_repo_key": "ia-restapi-automation-tests",
-                    },
-                    "extractor": "pr_impact_manifest",
-                    "status": "available",
+                    "type": "tests_rest_of",
+                    "source_repository": "intacct/ia-restapi-automation-tests",
+                    "target_repository": "intacct/ia-app",
                 }
             ],
         }
-    ]
+    )
+    manifest.write_text(yaml.safe_dump(manifest_data), encoding="utf-8")
+
+    changed = analyze_fixture(fixture, manifest, db, "ia-main")
+    assert changed == baseline
+    assert changed["downstream_repositories"] == []
 
 
-def test_downstream_relationship_contract_accepts_typed_evidence() -> None:
+def test_report_validator_requires_empty_downstream_repositories() -> None:
     report = review_report()
     report["preflight"] = {
         "target_revision": "target-sha",
@@ -725,50 +676,20 @@ def test_downstream_relationship_contract_accepts_typed_evidence() -> None:
         "compatibility_evidence": "catalog target equals fixture target",
     }
     report["downstream_repositories"] = [
-        {
-            "repository": "ia-restapi-automation-tests",
-            "status": "available",
-            "relationships": [
-                {
-                    "type": "tests_rest_of",
-                    "status": "available",
-                    "source_repository": "intacct/ia-restapi-automation-tests",
-                    "target_repository": "intacct/ia-app",
-                    "facts": [],
-                }
-            ],
-        },
+        {"repository": "intacct/ia-restapi-automation-tests"}
     ]
-    report["confidence"] = {
-        "status": "computed",
-        "score": 75,
-        "components": {
-            "evidence_availability": {"score": 80},
-            "evidence_freshness": {"score": 100},
-            "unresolved_gaps": {"count": 2, "score": 80},
-        },
-    }
-    assert validate(report) == []
+    assert "downstream_repositories must be an empty list" in validate(report)
 
 
-def test_downstream_relationship_contract_rejects_unknown_type() -> None:
+def test_report_validator_rejects_forward_compatible_preflight() -> None:
     report = review_report()
-    report["downstream_repositories"] = [
-        {
-            "repository": "intacct/example",
-            "status": "available",
-            "relationships": [
-                {
-                    "type": "candidate_behavior_test_repository",
-                    "status": "available",
-                    "source_repository": "intacct/example",
-                    "target_repository": "intacct/ia-app",
-                    "facts": [],
-                }
-            ],
-        }
-    ]
-    assert "downstream relationship has invalid type" in validate(report)
+    report["preflight"] = {
+        "target_revision": "target-sha",
+        "catalog_revision": "forward-sha",
+        "revision_relation": "forward_compatible",
+        "compatibility_evidence": "fixture target is an ancestor",
+    }
+    assert "invalid preflight revision_relation" in validate(report)
 
 
 def test_empty_diff_is_blocked(tmp_path: Path) -> None:
@@ -1074,6 +995,12 @@ def review_report(
             "base_revision": "base-sha",
             "target_revision": "target-sha",
         },
+        "preflight": {
+            "target_revision": "target-sha",
+            "catalog_revision": "target-sha",
+            "revision_relation": "exact",
+            "compatibility_evidence": "catalog target equals fixture target",
+        },
         "changed_files": [
             {"path": "z.php", "status": "deleted", "old_path": None},
             {"path": "a.php", "status": "added", "old_path": None},
@@ -1117,6 +1044,26 @@ def review_report(
     }
 
 
+def test_schema_04_blocked_partial_and_complete_reports_validate() -> None:
+    assert validate(blocked_report(Step1Error("empty_diff", "none"))) == []
+    assert validate(review_report()) == []
+
+    complete = review_report(status="complete")
+    complete["direct_traces"] = [
+        {
+            "surface": surface,
+            "status": "available",
+            "facts": (
+                [{"catalog_record_id": index + 1}]
+                if surface in {"database_consumers", "entity_metadata"}
+                else []
+            ),
+        }
+        for index, surface in enumerate(sorted(EXPECTED_SURFACES))
+    ]
+    assert validate(complete) == []
+
+
 def test_render_review_markdown_matches_template_order_and_preserves_provenance() -> (
     None
 ):
@@ -1144,6 +1091,14 @@ def test_render_review_markdown_matches_template_order_and_preserves_provenance(
     assert "extractor=test" in markdown
     assert 'evidence={"name":"newThing"}' in markdown
     assert "**Recommendation:** Comment 💬" in markdown
+
+
+def test_render_review_markdown_uses_only_supplied_report_facts() -> None:
+    report = review_report()
+    report["provenance"]["manifest_only_sentinel"] = "must-not-render"
+    markdown = render_review_markdown(report)
+    assert "must-not-render" not in markdown
+    assert "ia-restapi-automation-tests" not in markdown
 
 
 def test_render_review_markdown_uses_required_fallbacks_without_inference() -> None:
