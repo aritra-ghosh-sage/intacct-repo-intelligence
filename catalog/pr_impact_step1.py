@@ -207,7 +207,7 @@ def _safe_path(path: str) -> bool:
 
 
 def _open_catalog(
-    path: Path, target_sha: str, repo_key: str
+    path: Path, target_sha: str, repo_key: str, source_repo: Path
 ) -> tuple[sqlite3.Connection, int, dict[str, Any]]:
     if not path.is_file():
         raise Step1Error("catalog_unavailable", f"catalog does not exist: {path}")
@@ -379,11 +379,33 @@ def _open_catalog(
             raise Step1Error(
                 "repo_not_found", f"repo_key {repo_key!r} is not the active repo"
             )
-        if repo["target_commit_sha"] != target_sha:
+        catalog_revision = repo["target_commit_sha"]
+        if not isinstance(catalog_revision, str) or not re.fullmatch(
+            r"[0-9a-fA-F]{40,64}", catalog_revision
+        ):
             raise Step1Error(
-                "catalog_revision_mismatch",
-                "catalog target SHA differs from fixture target SHA",
+                "catalog_provenance_mismatch",
+                "catalog target SHA is not a full Git commit ID",
             )
+        catalog_revision = _revision(source_repo, catalog_revision, "catalog_revision")
+        if catalog_revision == target_sha:
+            revision_relation = "exact"
+        else:
+            ancestor = _git(
+                source_repo,
+                "merge-base",
+                "--is-ancestor",
+                target_sha,
+                catalog_revision,
+            )
+            if ancestor.returncode != 0:
+                raise Step1Error(
+                    "catalog_revision_mismatch",
+                    "catalog target SHA is not the fixture target or a proven forward revision",
+                    target_revision=target_sha,
+                    catalog_revision=catalog_revision,
+                )
+            revision_relation = "forward_compatible"
         build_id = int(builds[0]["id"])
         if int(repo["build_id"]) != build_id:
             raise Step1Error(
@@ -397,10 +419,13 @@ def _open_catalog(
                 "catalog_provenance_mismatch",
                 "active build source revisions are invalid JSON",
             ) from exc
-        if not isinstance(revisions, dict) or revisions.get(repo_key) != target_sha:
+        if (
+            not isinstance(revisions, dict)
+            or revisions.get(repo_key) != catalog_revision
+        ):
             raise Step1Error(
                 "catalog_provenance_mismatch",
-                "active build source revision differs from fixture target SHA",
+                "active build source revision differs from catalog target SHA",
             )
         return (
             conn,
@@ -409,6 +434,13 @@ def _open_catalog(
                 "build_id": build_id,
                 "repo_key": repo_key,
                 "target_revision": target_sha,
+                "catalog_revision": catalog_revision,
+                "revision_relation": revision_relation,
+                "compatibility_evidence": (
+                    "catalog target equals fixture target"
+                    if revision_relation == "exact"
+                    else "fixture target is a Git ancestor of catalog target"
+                ),
                 "integrity_check": "ok",
                 "foreign_key_check": "ok",
             },
@@ -467,7 +499,11 @@ def _rows(
 
 
 def _surface(
-    name: str, rows: list[dict[str, Any]], supported: bool = True
+    name: str,
+    rows: list[dict[str, Any]],
+    supported: bool = True,
+    *,
+    catalog_revision: str | None = None,
 ) -> dict[str, Any]:
     if not supported:
         return {
@@ -483,14 +519,14 @@ def _surface(
             "facts": [],
             "warning": "No direct repo-v1 rows matched; this is not proof of no impact",
         }
-    if any(
-        row.get("catalog_source_revision") != row.get("target_revision") for row in rows
+    if catalog_revision is not None and any(
+        row.get("catalog_source_revision") != catalog_revision for row in rows
     ):
         return {
             "surface": name,
             "status": "stale",
             "facts": rows,
-            "warning": "Direct repo-v1 rows are not from the fixture target revision",
+            "warning": "Direct repo-v1 rows are not from the active catalog revision",
         }
     if any(
         row.get("resolution_reason") == "ambiguous_project_symbol"
@@ -805,8 +841,19 @@ def analyze_fixture(
             raise Step1Error(
                 "malformed_git_diff", f"unsafe changed path: {change.path}"
             )
-    conn, repo_id, preflight = _open_catalog(Path(active_db), target, repo_key)
+    conn, repo_id, preflight = _open_catalog(Path(active_db), target, repo_key, repo)
     try:
+
+        def direct_surface(
+            name: str, rows: list[dict[str, Any]], supported: bool = True
+        ) -> dict[str, Any]:
+            return _surface(
+                name,
+                rows,
+                supported,
+                catalog_revision=str(preflight["catalog_revision"]),
+            )
+
         paths = [x.path for x in changed]
         marks = ",".join("?" for _ in paths)
         files = {
@@ -969,8 +1016,10 @@ def analyze_fixture(
             )
         )
         direct = [
-            _surface("files", [_evidence(r, "path", target) for r in files.values()]),
-            _surface(
+            direct_surface(
+                "files", [_evidence(r, "path", target) for r in files.values()]
+            ),
+            direct_surface(
                 "symbols",
                 _rows(
                     conn,
@@ -980,7 +1029,7 @@ def analyze_fixture(
                     target,
                 ),
             ),
-            _surface(
+            direct_surface(
                 "outgoing_relationships",
                 _rows(
                     conn,
@@ -990,7 +1039,7 @@ def analyze_fixture(
                     target,
                 ),
             ),
-            _surface(
+            direct_surface(
                 "incoming_relationships",
                 _rows(
                     conn,
@@ -1000,7 +1049,7 @@ def analyze_fixture(
                     target,
                 ),
             ),
-            _surface(
+            direct_surface(
                 "entity_occurrences",
                 _rows(
                     conn,
@@ -1013,7 +1062,7 @@ def analyze_fixture(
                 else [],
                 any(x.endswith(".ent") for x in paths),
             ),
-            _surface(
+            direct_surface(
                 "openapi_documents",
                 _rows(
                     conn,
@@ -1023,7 +1072,7 @@ def analyze_fixture(
                     target,
                 ),
             ),
-            _surface(
+            direct_surface(
                 "openapi_entity_links",
                 _rows(
                     conn,
@@ -1033,7 +1082,7 @@ def analyze_fixture(
                     target,
                 ),
             ),
-            _surface(
+            direct_surface(
                 "rest_endpoints",
                 _rows(
                     conn,
@@ -1043,7 +1092,7 @@ def analyze_fixture(
                     target,
                 ),
             ),
-            _surface(
+            direct_surface(
                 "actionui",
                 _rows(
                     conn,
@@ -1053,7 +1102,7 @@ def analyze_fixture(
                     target,
                 ),
             ),
-            _surface(
+            direct_surface(
                 "actionui_artifacts",
                 _rows(
                     conn,
@@ -1063,7 +1112,7 @@ def analyze_fixture(
                     target,
                 ),
             ),
-            _surface(
+            direct_surface(
                 "actionui_fields",
                 _rows(
                     conn,
@@ -1073,7 +1122,7 @@ def analyze_fixture(
                     target,
                 ),
             ),
-            _surface(
+            direct_surface(
                 "actionui_events",
                 _rows(
                     conn,
@@ -1083,7 +1132,7 @@ def analyze_fixture(
                     target,
                 ),
             ),
-            _surface(
+            direct_surface(
                 "actionui_includes",
                 _rows(
                     conn,
@@ -1093,7 +1142,7 @@ def analyze_fixture(
                     target,
                 ),
             ),
-            _surface(
+            direct_surface(
                 "nextgen",
                 _rows(
                     conn,
@@ -1103,7 +1152,7 @@ def analyze_fixture(
                     target,
                 ),
             ),
-            _surface(
+            direct_surface(
                 "nextgen_artifacts",
                 _rows(
                     conn,
@@ -1113,7 +1162,7 @@ def analyze_fixture(
                     target,
                 ),
             ),
-            _surface(
+            direct_surface(
                 "source_diagnostics",
                 _rows(
                     conn,
@@ -1172,10 +1221,10 @@ def analyze_fixture(
                     target,
                 ),
             ),
-            _surface("database_consumers", database_consumers),
-            _surface("entity_metadata", entity_metadata),
-            _surface("permissions", permissions),
-            _surface(
+            direct_surface("database_consumers", database_consumers),
+            direct_surface("entity_metadata", entity_metadata),
+            direct_surface("permissions", permissions),
+            direct_surface(
                 "workflows",
                 _rows(
                     conn,

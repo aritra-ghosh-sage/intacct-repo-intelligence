@@ -32,9 +32,12 @@ delta refresh, or delta builder execution.
 
 The active database is opened with SQLite `mode=ro`, `query_only=ON`, and a
 read transaction. Its repo-v1 schema, integrity, foreign keys, active build,
-single `ia-main` repository, and target SHA are blocking preconditions. No
-refresh, promotion, migration, graph, MCP, external checkout, or multi-repo
-extraction is performed.
+single `ia-main` repository, and revision compatibility are blocking
+preconditions. The catalog revision must equal the fixture target revision or
+be a Git-proven forward revision whose commit has the fixture target as an
+ancestor. Older and diverged catalog revisions block with
+`catalog_revision_mismatch`. No refresh, promotion, migration, graph, MCP,
+external checkout, or multi-repo extraction is performed.
 
 ## Output
 
@@ -66,8 +69,11 @@ NextGen, diagnostics, permissions, workflow, and test surfaces. Missing or
 unexpected direct traces make the materialized report invalid.
 
 Facts are built from committed snapshot bytes only. Dynamic, unresolved, and
-ambiguous source facts remain classified rather than inferred. `fieldinfo`
-`fullname` values are metadata and never create database links.
+ambiguous source facts remain classified rather than inferred. The report
+retains both the fixture target revision and the catalog revision, plus whether
+the relation is `exact` or `forward_compatible` and the compatibility evidence
+used by preflight. `fieldinfo` `fullname` values are metadata and never create
+database links.
 
 ## Review Markdown
 
@@ -95,10 +101,10 @@ report contains warnings or gaps, and `Approve` only for a clean complete
 report. Direct facts retain their source path, target revision, source
 location, catalog identity, extractor, and evidence in the reviewed table.
 
-## Target-revision isolated catalog
+## Target-revision or forward-compatible isolated catalog
 
-Build the target revision into an alternate active database. Do not use the
-canonical `catalog/catalog.db` path:
+Build the target revision, or a Git-proven forward revision, into an alternate
+active database. Step 1 never modifies the canonical database:
 
 ```bash
 PR_IMPACT_TMP=$(mktemp -d /private/tmp/repo-v1-pr-impact.XXXXXX)
@@ -111,8 +117,10 @@ PYTHONPATH=. ./.venv/bin/python -m catalog.repo_v1 \
   --no-progress
 ```
 
-The isolated database must record the fixture target SHA, pass SQLite
-integrity and foreign-key checks, and leave the canonical database unchanged.
+The isolated database must record its own catalog revision, pass SQLite
+integrity and foreign-key checks, and pass the Step 1 revision-compatibility
+preflight. A forward-compatible catalog is not automatically valid merely
+because it is newer by date; the Git ancestry proof is required.
 
 ### Observed promotion evidence
 
@@ -124,13 +132,14 @@ promote a 23,874-file catalog at commit
 {"active_db":"/Users/aritra.ghosh/projects/intacct-repo-intelligence/catalog/catalog.db","build_token":"ebf4c59b6d214bc39c08ebf642900e77","file_count":23874,"promoted":true,"target_commit_sha":"776d1ffe49efb9189d022912e23aaef065bda1a6"}
 ```
 
-This is successful repo-v1 promotion evidence, but it is not PR-target
-evidence for the golden fixtures: PR 49156 targets
+This is successful repo-v1 promotion evidence, but it is not automatically
+PR-target evidence for the golden fixtures: PR 49156 targets
 `f914d9892a51c1d34eadfd0e4da89f8418ed2c59`, and PR 48706 targets
 `44ff9701e94a69c835063b4fd39e515ff0ae4680`. Because this run used the
-canonical `catalog/catalog.db` path, it must not be used as the isolated
-database for either PR analysis. A PR analysis requires a promoted database
-at the fixture's exact target SHA under an alternate path.
+canonical `catalog/catalog.db` path, it must pass the revision-compatibility
+preflight before it can be used for either PR analysis. A PR analysis must
+retain the exact fixture base-to-target Git diff and record whether the catalog
+relation was exact or forward-compatible.
 
 ## PR metadata intake
 

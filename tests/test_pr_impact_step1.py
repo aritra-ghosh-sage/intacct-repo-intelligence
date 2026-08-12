@@ -42,6 +42,15 @@ def make_repo(tmp_path: Path) -> tuple[Path, str, str]:
     return repo, base, git(repo, "rev-parse", "HEAD")
 
 
+def make_forward_revision(repo: Path) -> str:
+    (repo / "a.php").write_text(
+        "<?php\nfunction old() {}\nfunction newThing() {}\nfunction future() {}\n",
+        encoding="utf-8",
+    )
+    git(repo, "commit", "-qam", "forward catalog revision")
+    return git(repo, "rev-parse", "HEAD")
+
+
 def make_entity_repo(
     tmp_path: Path, *, change_entity: bool = True, change_openapi: bool = False
 ) -> tuple[Path, str, str]:
@@ -505,6 +514,59 @@ def test_catalog_source_revision_mismatch_blocks(tmp_path: Path) -> None:
         raise AssertionError("source revision mismatch was accepted")
 
 
+def test_forward_catalog_revision_is_accepted_with_provenance(
+    tmp_path: Path,
+) -> None:
+    repo, base, target = make_repo(tmp_path)
+    catalog_revision = make_forward_revision(repo)
+    fixture = make_fixture(tmp_path, base, target)
+    db = make_db(tmp_path, catalog_revision)
+
+    report = analyze_fixture(fixture, make_manifest(tmp_path, repo), db, "ia-main")
+
+    assert report["preflight"]["target_revision"] == target
+    assert report["preflight"]["catalog_revision"] == catalog_revision
+    assert report["preflight"]["revision_relation"] == "forward_compatible"
+    assert report["preflight"]["compatibility_evidence"] == (
+        "fixture target is a Git ancestor of catalog target"
+    )
+    files = next(
+        trace for trace in report["direct_traces"] if trace["surface"] == "files"
+    )
+    assert files["status"] == "available"
+    assert files["facts"][0]["target_revision"] == target
+    assert files["facts"][0]["catalog_source_revision"] == catalog_revision
+
+
+def test_older_catalog_revision_is_rejected(tmp_path: Path) -> None:
+    repo, base, target = make_repo(tmp_path)
+    fixture = make_fixture(tmp_path, base, target)
+    db = make_db(tmp_path, base)
+
+    with pytest.raises(Step1Error, match="forward revision") as error:
+        analyze_fixture(fixture, make_manifest(tmp_path, repo), db, "ia-main")
+
+    assert error.value.code == "catalog_revision_mismatch"
+
+
+def test_diverged_catalog_revision_is_rejected(tmp_path: Path) -> None:
+    repo, base, target = make_repo(tmp_path)
+    git(repo, "checkout", "-qb", "diverged", base)
+    (repo / "a.php").write_text(
+        "<?php\nfunction old() {}\nfunction unrelated() {}\n",
+        encoding="utf-8",
+    )
+    git(repo, "commit", "-qam", "diverged catalog revision")
+    catalog_revision = git(repo, "rev-parse", "HEAD")
+    fixture = make_fixture(tmp_path, base, target)
+    db = make_db(tmp_path, catalog_revision)
+
+    with pytest.raises(Step1Error, match="forward revision") as error:
+        analyze_fixture(fixture, make_manifest(tmp_path, repo), db, "ia-main")
+
+    assert error.value.code == "catalog_revision_mismatch"
+
+
 def test_changed_entity_returns_reverse_openapi_link(tmp_path: Path) -> None:
     repo, base, target = make_entity_repo(tmp_path)
     fixture = make_fixture(
@@ -807,6 +869,35 @@ def test_report_validator_and_blocked_envelope() -> None:
     report = blocked_report(Step1Error("empty_diff", "none"))
     assert validate(report) == []
     assert report["error"]["code"] == "empty_diff"
+
+
+def test_report_validator_requires_catalog_revision_compatibility_preflight() -> None:
+    report = {
+        "schema_version": "0.3",
+        "analysis_kind": "pr_impact_step_1",
+        "status": "partial",
+        "input": {
+            "manifest": "m",
+            "repo_key": "ia-main",
+            "repo_root": "r",
+            "base_revision": "b",
+            "target_revision": "target",
+        },
+        "preflight": {},
+        "changed_files": [],
+        "direct_traces": [],
+        "pr_metadata": {"status": "not_provided"},
+        "onboarding_feasibility": [],
+        "impact_ranking": [],
+        "gaps": [],
+        "warnings": [],
+        "provenance": {},
+    }
+
+    errors = validate(report)
+
+    assert "missing preflight field: catalog_revision" in errors
+    assert "missing preflight field: revision_relation" in errors
 
 
 def test_report_validator_requires_classification_warnings_and_complete_surfaces() -> (
