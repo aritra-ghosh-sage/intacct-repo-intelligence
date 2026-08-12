@@ -440,10 +440,31 @@ def validate(report: object) -> list[str]:
                 errors.append(f"{label} target does not match its frontier hop")
             if label == "transitive edge" and edge.get("source_symbol_id") is None:
                 errors.append("transitive edge requires source_symbol_id")
-            if label == "transitive edge" and edge.get("source_symbol_id") not in (
-                seed_ids | set(minimum_hops)
-            ):
-                errors.append("transitive edge source is not a reached symbol")
+            if label == "transitive edge":
+                source_id = edge.get("source_symbol_id")
+                source_hop = 0 if source_id in seed_ids else minimum_hops.get(source_id)
+                if source_hop is None:
+                    errors.append("transitive edge source is not a reached symbol")
+                elif source_hop > hop:
+                    errors.append(
+                        "transitive edge source was first reached after its edge hop"
+                    )
+                elif source_hop == hop:
+                    reached = next(
+                        (
+                            item
+                            for item in reached_symbols
+                            if isinstance(item, dict)
+                            and item.get("symbol_id") == source_id
+                        ),
+                        None,
+                    )
+                    if not isinstance(reached, dict) or edge.get(
+                        "relationship_id"
+                    ) not in reached.get("contributing_edge_ids", []):
+                        errors.append(
+                            "newly reached source must list the edge as contributing"
+                        )
     if isinstance(reached_symbols, list):
         by_id = {
             item.get("symbol_id"): item

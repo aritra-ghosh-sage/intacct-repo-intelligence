@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import sqlite3
@@ -250,6 +251,18 @@ def test_max_hops_one_excludes_second_hop(tmp_path: Path) -> None:
     assert [item["symbol_id"] for item in report["reached_symbols"]] == [2]
     assert [item["hop"] for item in report["transitive_edges"]] == [1, 1]
     assert validate(report) == []
+
+
+def test_validator_rejects_source_first_reached_after_edge_hop(
+    tmp_path: Path,
+) -> None:
+    report = run(tmp_path)
+    malformed = copy.deepcopy(report)
+    # Edge 3 claims a hop-1 caller that the report says was first reached at hop 2.
+    malformed["transitive_edges"][-1]["source_symbol_id"] = 3
+    malformed["reached_symbols"][0]["contributing_edge_ids"] = [1]
+    errors = validate(malformed)
+    assert "transitive edge source was first reached after its edge hop" in errors
 
 
 def test_outgoing_non_call_and_unresolved_rows_are_not_traversed(
