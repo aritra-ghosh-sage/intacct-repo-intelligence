@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from collections.abc import Mapping
 from pathlib import Path
@@ -40,6 +41,7 @@ SEED_FILE_STATES = {
     "missing_target_file",
 }
 ALLOWED_RELATIONSHIP_TYPES = {"CALLS", "STATIC_CALLS"}
+ENTITY_MAPPING_GAP = "entity_context:repo_v1_symbol_entity_mapping_not_modelled"
 SKIP_REASONS = {
     "non_call_relationship",
     "unresolved_resolution",
@@ -49,6 +51,44 @@ SKIP_REASONS = {
 
 def _is_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _nonempty_text(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _has_evidence(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (dict, list)):
+        return bool(value)
+    return True
+
+
+def _normalized_symbol_kind(value: Any) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if normalized in {"", "unknown"}:
+        return None
+    if normalized in {"cqry", "qry"}:
+        return "query"
+    return str(value)
+
+
+def _validate_declaration_range(value: Any, errors: list[str], label: str) -> None:
+    if value is None:
+        return
+    if not isinstance(value, dict):
+        errors.append(f"{label} must be an object or null")
+        return
+    start, end = value.get("start_line"), value.get("end_line")
+    if start is None and end is None:
+        return
+    if not _is_int(start) or not _is_int(end) or start <= 0 or end < start:
+        errors.append(f"{label} has invalid declaration range")
 
 
 def _ids(items: Any, key: str, errors: list[str], label: str) -> set[int]:
@@ -77,17 +117,21 @@ def _validate_revision_fields(
     label: str,
 ) -> None:
     target = input_data.get("target_revision")
-    if item.get("catalog_source_revision") != target:
+    if not _nonempty_text(item.get("catalog_source_revision")):
+        errors.append(f"{label} requires catalog_source_revision")
+    elif item.get("catalog_source_revision") != target:
         errors.append(f"{label} has a stale catalog source revision")
-    if item.get("fixture_target_revision") != target:
+    if not _nonempty_text(item.get("fixture_target_revision")):
+        errors.append(f"{label} requires fixture_target_revision")
+    elif item.get("fixture_target_revision") != target:
         errors.append(f"{label} has a mismatched fixture target revision")
     if not _is_int(item.get("repository_id")) or item.get("repository_id") <= 0:
         errors.append(f"{label} requires repository_id")
     if not _is_int(item.get("file_id")) or item.get("file_id") <= 0:
         errors.append(f"{label} requires file_id")
-    if not isinstance(item.get("file_path"), str) or not item["file_path"]:
+    if not _nonempty_text(item.get("file_path")):
         errors.append(f"{label} requires file_path")
-    if not isinstance(item.get("blob_object_id"), str) or not item["blob_object_id"]:
+    if not _nonempty_text(item.get("blob_object_id")):
         errors.append(f"{label} requires blob_object_id")
 
 
@@ -105,10 +149,14 @@ def _validate_symbol(
         "language",
         "stable_key",
     ):
-        if key not in item or (
-            key.endswith("_id") and (not _is_int(item[key]) or item[key] <= 0)
-        ):
+        if key not in item:
             errors.append(f"{label} requires {key}")
+        elif key.endswith("_id") and (not _is_int(item[key]) or item[key] <= 0):
+            errors.append(f"{label} requires {key}")
+        elif key in {"name", "kind", "language", "stable_key"} and not _nonempty_text(
+            item[key]
+        ):
+            errors.append(f"{label} requires non-empty {key}")
     _validate_revision_fields(item, input_data, errors, label)
     declaration = item.get("declaration_range")
     if (
@@ -117,6 +165,15 @@ def _validate_symbol(
         or declaration.get("end_line") != item.get("end_line")
     ):
         errors.append(f"{label} has invalid declaration_range")
+    _validate_declaration_range(declaration, errors, f"{label} declaration_range")
+    if (item.get("start_line") is None) != (item.get("end_line") is None):
+        errors.append(f"{label} has incomplete declaration range")
+    elif item.get("start_line") is not None:
+        _validate_declaration_range(
+            {"start_line": item.get("start_line"), "end_line": item.get("end_line")},
+            errors,
+            f"{label} declaration range",
+        )
 
 
 def _validate_edge(
@@ -146,12 +203,24 @@ def _validate_edge(
             "catalog_source_revision",
         ):
             field = f"{prefix}_{key}"
-            if item.get(field) in (None, ""):
+            value = item.get(field)
+            if key == "file_id" and (not _is_int(value) or value <= 0):
+                errors.append(f"{label} requires {field}")
+            elif key != "file_id" and not _nonempty_text(value):
                 errors.append(f"{label} requires {field}")
         if item.get(f"{prefix}_catalog_source_revision") != input_data.get(
             "target_revision"
         ):
             errors.append(f"{label} has stale {prefix} symbol provenance")
+        if not _nonempty_text(item.get(f"{prefix}_symbol_name")):
+            errors.append(f"{label} requires {prefix}_symbol_name")
+        if not _nonempty_text(item.get(f"{prefix}_symbol_kind")):
+            errors.append(f"{label} requires {prefix}_symbol_kind")
+        _validate_declaration_range(
+            item.get(f"{prefix}_declaration_range"),
+            errors,
+            f"{label} {prefix}_declaration_range",
+        )
     if (
         not isinstance(item.get("relationship_type"), str)
         or not item["relationship_type"]
@@ -168,6 +237,21 @@ def _validate_edge(
         errors.append(f"{label} has invalid traversed resolution_class")
     elif item["resolution_class"] not in {"project_resolved", "project_unresolved"}:
         errors.append(f"{label} has invalid resolution_class")
+    if not _nonempty_text(item.get("resolution_reason")):
+        errors.append(f"{label} requires resolution_reason")
+    if not _nonempty_text(item.get("extractor")):
+        errors.append(f"{label} requires extractor")
+    confidence = item.get("confidence")
+    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+        valid_confidence = False
+    elif isinstance(confidence, int):
+        valid_confidence = 0 <= confidence <= 1
+    else:
+        valid_confidence = math.isfinite(confidence) and 0 <= confidence <= 1
+    if not valid_confidence:
+        errors.append(f"{label} requires confidence between 0 and 1")
+    if not _has_evidence(item.get("evidence")):
+        errors.append(f"{label} requires evidence")
     if not _is_int(item.get("target_symbol_id")) or item["target_symbol_id"] <= 0:
         errors.append(f"{label} requires target_symbol_id")
     if item.get("source_symbol_id") is not None and (
@@ -204,6 +288,38 @@ def _validate_edge(
             )
     elif item.get("edge_status") != "traversed":
         errors.append(f"{label} must have edge_status traversed")
+
+
+def _validate_edge_symbol_identity(
+    edge: Mapping[str, Any],
+    symbols_by_id: Mapping[int, Mapping[str, Any]],
+    errors: list[str],
+    label: str,
+) -> None:
+    for prefix in ("source", "target"):
+        symbol_id = edge.get(f"{prefix}_symbol_id")
+        if not _is_int(symbol_id):
+            continue
+        symbol = symbols_by_id.get(symbol_id)
+        if symbol is None:
+            continue
+        comparisons = {
+            f"{prefix}_symbol_name": symbol.get("name"),
+            f"{prefix}_symbol_kind": (
+                _normalized_symbol_kind(symbol.get("kind"))
+                if prefix == "target"
+                else symbol.get("kind")
+            ),
+            f"{prefix}_file_id": symbol.get("file_id"),
+            f"{prefix}_file_path": symbol.get("file_path"),
+            f"{prefix}_blob_object_id": symbol.get("blob_object_id"),
+            f"{prefix}_catalog_source_revision": symbol.get("catalog_source_revision"),
+        }
+        for field, expected in comparisons.items():
+            if edge.get(field) != expected:
+                errors.append(f"{label} {field} does not match symbol provenance")
+        if edge.get(f"{prefix}_declaration_range") != symbol.get("declaration_range"):
+            errors.append(f"{label} {prefix} declaration range does not match symbol")
 
 
 def validate(report: object) -> list[str]:
@@ -348,6 +464,15 @@ def validate(report: object) -> list[str]:
             ):
                 if key not in item:
                     errors.append(f"available seed file requires {key}")
+            for key in ("catalog_record_id", "file_id"):
+                if not _is_int(item.get(key)) or item[key] <= 0:
+                    errors.append(f"available seed file requires positive {key}")
+            if not _nonempty_text(item.get("blob_object_id")):
+                errors.append("available seed file requires blob_object_id")
+            if not _nonempty_text(item.get("catalog_source_revision")):
+                errors.append("available seed file requires catalog_source_revision")
+            if not _nonempty_text(item.get("fixture_target_revision")):
+                errors.append("available seed file requires fixture_target_revision")
             if item.get("catalog_record_id") != item.get("file_id"):
                 errors.append("seed file catalog_record_id must equal file_id")
             if item.get("catalog_source_revision") != input_data.get("target_revision"):
@@ -391,9 +516,10 @@ def validate(report: object) -> list[str]:
             if (
                 not isinstance(edge_ids, list)
                 or not edge_ids
-                or len(edge_ids) != len(set(edge_ids))
                 or any(not _is_int(value) or value <= 0 for value in edge_ids)
             ):
+                errors.append("reached symbol has invalid contributing_edge_ids")
+            elif len(edge_ids) != len(set(edge_ids)):
                 errors.append("reached symbol has invalid contributing_edge_ids")
 
     transitive = report.get("transitive_edges")
@@ -465,6 +591,22 @@ def validate(report: object) -> list[str]:
                         errors.append(
                             "newly reached source must list the edge as contributing"
                         )
+    symbols_by_id = {
+        item.get("symbol_id"): item
+        for item in [
+            *(seed_symbols if isinstance(seed_symbols, list) else []),
+            *(reached_symbols if isinstance(reached_symbols, list) else []),
+        ]
+        if isinstance(item, dict) and _is_int(item.get("symbol_id"))
+    }
+    for edge_list, label in (
+        (transitive, "transitive edge"),
+        (skipped, "skipped edge"),
+    ):
+        if isinstance(edge_list, list):
+            for edge in edge_list:
+                if isinstance(edge, dict):
+                    _validate_edge_symbol_identity(edge, symbols_by_id, errors, label)
     if isinstance(reached_symbols, list):
         by_id = {
             item.get("symbol_id"): item
@@ -508,6 +650,8 @@ def validate(report: object) -> list[str]:
             not isinstance(item, str) for item in report[key]
         ):
             errors.append(f"{key} must be a list of strings")
+    if status != "blocked" and ENTITY_MAPPING_GAP not in report.get("gaps", []):
+        errors.append("non-blocked reports require the entity mapping gap")
     provenance = report.get("provenance")
     if not isinstance(provenance, dict) or provenance.get("read_only") is not True:
         errors.append("provenance.read_only must be true")

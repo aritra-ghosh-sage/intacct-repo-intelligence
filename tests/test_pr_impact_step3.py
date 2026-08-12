@@ -253,6 +253,202 @@ def test_max_hops_one_excludes_second_hop(tmp_path: Path) -> None:
     assert validate(report) == []
 
 
+def test_entity_context_is_explicitly_unavailable_for_seed_and_reached_symbols(
+    tmp_path: Path,
+) -> None:
+    report = run(tmp_path)
+    symbol_ids = {
+        item["symbol_id"]
+        for item in [*report["seed_symbols"], *report["reached_symbols"]]
+    }
+    assert report["status"] == "complete"
+    assert report["entity_context"] == {
+        "status": "unavailable",
+        "reason": "repo_v1_symbol_entity_mapping_not_modelled",
+        "mappings": [],
+        "unavailable_symbol_ids": sorted(symbol_ids),
+    }
+    assert "entity_context:repo_v1_symbol_entity_mapping_not_modelled" in report["gaps"]
+    assert validate(report) == []
+
+
+def test_same_file_entity_occurrence_does_not_infer_symbol_mapping(
+    tmp_path: Path,
+) -> None:
+    repo, base, target = make_repo(tmp_path)
+    db = make_db(tmp_path, repo, target)
+    add_symbols_and_edges(db)
+    conn = sqlite3.connect(db)
+    conn.execute("INSERT INTO entity_nodes(name) VALUES('SameFileEntity')")
+    conn.execute(
+        """INSERT INTO entity_occurrences(
+            repo_id,entity_id,source_file_id,source_key,source_commit_sha,evidence,extractor
+        ) VALUES(1,1,1,'same-file',?,'fixture','test')""",
+        (target,),
+    )
+    conn.commit()
+    conn.close()
+    report = analyze_fixture(
+        fixture(tmp_path, base, target), manifest(tmp_path, repo), db, "ia-main"
+    )
+    assert report["entity_context"]["mappings"] == []
+    assert validate(report) == []
+
+
+def test_same_name_entity_does_not_infer_symbol_mapping(tmp_path: Path) -> None:
+    repo, base, target = make_repo(tmp_path)
+    db = make_db(tmp_path, repo, target)
+    add_symbols_and_edges(db)
+    conn = sqlite3.connect(db)
+    conn.execute("INSERT INTO entity_nodes(name) VALUES('target')")
+    conn.execute(
+        """INSERT INTO entity_occurrences(
+            repo_id,entity_id,source_file_id,source_key,source_commit_sha,evidence,extractor
+        ) VALUES(1,1,1,'same-name',?,'fixture','test')""",
+        (target,),
+    )
+    conn.commit()
+    conn.close()
+    report = analyze_fixture(
+        fixture(tmp_path, base, target), manifest(tmp_path, repo), db, "ia-main"
+    )
+    assert report["entity_context"]["mappings"] == []
+    assert validate(report) == []
+
+
+def test_non_call_relationship_is_retained_as_skipped(tmp_path: Path) -> None:
+    repo, base, target = make_repo(tmp_path)
+    db = make_db(tmp_path, repo, target)
+    add_symbols_and_edges(db)
+    conn = sqlite3.connect(db)
+    conn.execute(
+        """INSERT INTO relationships(
+            repo_id,source_symbol_id,source_name,source_kind,target_symbol_id,target_name,
+            target_kind,relationship_type,file_id,file_path,language,confidence,evidence,
+            resolution_class,resolution_reason,extractor
+        ) VALUES(1,2,'caller','function',1,'target','function','USES',2,'b.php','php',1.0,
+                 'non-call','project_resolved','target_symbol_id_present','test')"""
+    )
+    conn.commit()
+    conn.close()
+    report = analyze_fixture(
+        fixture(tmp_path, base, target), manifest(tmp_path, repo), db, "ia-main"
+    )
+    assert any(
+        item["skip_reason"] == "non_call_relationship"
+        and item["relationship_type"] == "USES"
+        for item in report["skipped_edges"]
+    )
+    assert validate(report) == []
+
+
+def test_normalized_query_target_kind_is_accepted(tmp_path: Path) -> None:
+    repo, base, target = make_repo(tmp_path)
+    db = make_db(tmp_path, repo, target)
+    add_symbols_and_edges(db)
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE symbols SET kind='cqry' WHERE id=1")
+    conn.execute(
+        "UPDATE relationships SET target_kind='query' WHERE target_symbol_id=1"
+    )
+    conn.commit()
+    conn.close()
+    report = analyze_fixture(
+        fixture(tmp_path, base, target), manifest(tmp_path, repo), db, "ia-main"
+    )
+    assert report["status"] == "complete"
+    assert [item["symbol_id"] for item in report["reached_symbols"]] == [2, 3]
+    assert validate(report) == []
+
+
+def test_edge_evidence_is_required_by_validator(tmp_path: Path) -> None:
+    report = run(tmp_path)
+    report["transitive_edges"][0]["evidence"] = ""
+    errors = validate(report)
+    assert "transitive edge requires evidence" in errors
+
+
+def test_edge_extractor_and_confidence_are_required_by_validator(
+    tmp_path: Path,
+) -> None:
+    report = run(tmp_path)
+    report["transitive_edges"][0]["extractor"] = ""
+    report["transitive_edges"][1]["confidence"] = 2
+    errors = validate(report)
+    assert "transitive edge requires extractor" in errors
+    assert "transitive edge requires confidence between 0 and 1" in errors
+
+
+def test_oversized_confidence_is_rejected_without_validator_crash(
+    tmp_path: Path,
+) -> None:
+    report = run(tmp_path)
+    report["transitive_edges"][0]["confidence"] = 10**1000
+    errors = validate(report)
+    assert "transitive edge requires confidence between 0 and 1" in errors
+
+
+@pytest.mark.parametrize(
+    ("table", "column", "value"),
+    [
+        ("relationships", "source_name", "tampered"),
+        ("relationships", "target_kind", "tampered"),
+        ("relationships", "file_path", "tampered.php"),
+        ("files", "source_commit_sha", "0" * 40),
+    ],
+)
+def test_source_and_target_identity_tampering_is_rejected(
+    tmp_path: Path, table: str, column: str, value: str
+) -> None:
+    repo, base, target = make_repo(tmp_path)
+    db = make_db(tmp_path, repo, target)
+    add_symbols_and_edges(db)
+    conn = sqlite3.connect(db)
+    if table == "relationships":
+        conn.execute(f"UPDATE relationships SET {column}=? WHERE id=1", (value,))
+    else:
+        conn.execute(f"UPDATE files SET {column}=? WHERE path='b.php'", (value,))
+    conn.commit()
+    conn.close()
+    with pytest.raises(Exception, match="identity|file path|revision|target revision"):
+        analyze_fixture(
+            fixture(tmp_path, base, target), manifest(tmp_path, repo), db, "ia-main"
+        )
+
+
+def test_cross_repository_edge_provenance_is_rejected(tmp_path: Path) -> None:
+    repo, base, target = make_repo(tmp_path)
+    db = make_db(tmp_path, repo, target)
+    add_symbols_and_edges(db)
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE relationships SET repo_id=2 WHERE id=1")
+    conn.commit()
+    conn.close()
+    with pytest.raises(Exception, match="foreign.?key|repository|ownership"):
+        analyze_fixture(
+            fixture(tmp_path, base, target), manifest(tmp_path, repo), db, "ia-main"
+        )
+
+
+def test_entity_gap_does_not_change_complete_no_caller_status(tmp_path: Path) -> None:
+    repo, base, target = make_repo(tmp_path)
+    db = make_db(tmp_path, repo, target)
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO symbols(repo_id,file_id,name,kind,start_line,end_line,language,stable_key) VALUES(1,1,'target','function',1,1,'php','target')"
+    )
+    conn.commit()
+    conn.close()
+    report = analyze_fixture(
+        fixture(tmp_path, base, target), manifest(tmp_path, repo), db, "ia-main"
+    )
+    assert report["status"] == "complete"
+    assert report["reached_symbols"] == []
+    assert report["transitive_edges"] == []
+    assert "entity_context:repo_v1_symbol_entity_mapping_not_modelled" in report["gaps"]
+    assert validate(report) == []
+
+
 def test_validator_rejects_source_first_reached_after_edge_hop(
     tmp_path: Path,
 ) -> None:
@@ -356,6 +552,8 @@ def test_missing_target_file_blocks_without_traversal(tmp_path: Path) -> None:
     assert report["status"] == "blocked"
     assert report["error"]["code"] == "catalog_provenance_mismatch"
     assert report["transitive_edges"] == []
+    assert report["entity_context"]["mappings"] == []
+    assert report["entity_context"]["unavailable_symbol_ids"] == []
     assert report["seed_files"][0]["state"] == "missing_target_file"
     assert validate(report) == []
 
@@ -389,6 +587,7 @@ def test_repeated_reports_are_deterministic_and_read_only(tmp_path: Path) -> Non
     first = analyze_fixture(fixture_path, manifest_path, db, "ia-main")
     second = analyze_fixture(fixture_path, manifest_path, db, "ia-main")
     assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
+    assert "entity_context:repo_v1_symbol_entity_mapping_not_modelled" in first["gaps"]
     assert (fixture_path.read_bytes(), manifest_path.read_bytes(), db.read_bytes()) == (
         before_fixture,
         before_manifest,

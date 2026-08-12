@@ -9,6 +9,10 @@ It does not run Step 1, consume a Step 1 report or hash, refresh a catalog,
 process deltas, write SQLite, build a graph, call MCP, traverse another
 repository, or infer entity ownership/business impact.
 
+The manifest-resolved `ia-main` source root for this analysis is
+`/Users/aritra.ghosh/projects/main`. Step 3 is bounded to persisted incoming
+symbol relationships; it does not add a symbol-to-entity ownership source.
+
 ## Command
 
 ```bash
@@ -56,6 +60,19 @@ Relationship evidence is not presented as a call-site line range.
 `entity_context` is always unavailable with reason
 `repo_v1_symbol_entity_mapping_not_modelled`. `business_impact` is always
 deferred because verified caller evidence is not a business-impact mapping.
+Every non-blocked report includes the deterministic gap
+`entity_context:repo_v1_symbol_entity_mapping_not_modelled`; consumers must not
+interpret unavailable entity mappings or zero callers as no business impact.
+Entity occurrences in the same file, matching entity names, matching
+filenames, modules, basenames, and legacy mapping tables do not create a
+symbol-to-entity mapping.
+
+The report preserves relationship IDs, repository/file/blob identity, target
+and source symbol identity, target-revision provenance, evidence, confidence,
+resolution class and reason, extractor, and hop. The validator rejects empty
+or invalid evidence/provenance fields and identity mismatches. Non-call rows
+remain explicit in `skipped_edges`; unresolved or missing-source rows remain
+explicit and can make the report `partial`.
 
 ## Statuses and failures
 
@@ -66,3 +83,13 @@ does not lower status. `complete` permits zero callers: no callers is valid
 evidence, not proof of no business impact. Fixture, Git, schema, SQLite,
 ownership, target-revision, and provenance failures are `blocked`.
 
+Run the focused and regression checks from the repository root after confirming
+the source root above:
+
+```bash
+PYTHONPATH=. ./.venv/bin/pytest -q tests/test_pr_impact_step3.py
+PYTHONPATH=. ./.venv/bin/pytest -q \
+  tests/test_pr_impact_step1.py \
+  tests/test_pr_impact_step2.py \
+  tests/test_pr_impact_step3.py
+```

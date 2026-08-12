@@ -27,6 +27,7 @@ REPORT_SCHEMA_VERSION = "0.1"
 ANALYSIS_KIND = "pr_impact_step_3"
 SEED_BASIS = "target_file_all_symbols"
 ALLOWED_RELATIONSHIP_TYPES = {"CALLS", "STATIC_CALLS"}
+ENTITY_MAPPING_GAP = "entity_context:repo_v1_symbol_entity_mapping_not_modelled"
 SEED_FILE_STATES = {
     "available",
     "deleted",
@@ -44,6 +45,18 @@ _SQL_BATCH_SIZE = 400
 
 class Step3Error(Step1Error):
     """A fail-closed Step 3 analysis error."""
+
+
+def _normalized_symbol_kind(value: Any) -> str | None:
+    """Match the repo-v1 relationship extractor's persisted kind normalization."""
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if normalized in {"", "unknown"}:
+        return None
+    if normalized in {"cqry", "qry"}:
+        return "query"
+    return str(value)
 
 
 def _error(code: str, message: str, **extra: Any) -> Step3Error:
@@ -251,7 +264,7 @@ def _base_report(
             "reason": "transitive callers are verified code evidence only",
             "facts": [],
         },
-        "gaps": sorted(set(gaps)),
+        "gaps": sorted({*gaps, ENTITY_MAPPING_GAP}),
         "warnings": sorted(set(warnings)),
         "provenance": {
             "source": "repo-v1 active SQLite and exact Git diff",
@@ -385,17 +398,36 @@ def _check_edge_provenance(row: Mapping[str, Any], repo_id: int, target: str) ->
             "catalog_provenance_mismatch",
             "relationship file repository ownership mismatch",
         )
+    if (
+        not isinstance(row["relationship_file_path"], str)
+        or not row["relationship_file_path"]
+        or not isinstance(row["actual_file_path"], str)
+        or not row["actual_file_path"]
+    ):
+        raise _error(
+            "catalog_provenance_mismatch",
+            "relationship evidence file identity is incomplete",
+        )
     if str(row["actual_file_path"]) != str(row["relationship_file_path"]):
         raise _error(
             "catalog_provenance_mismatch",
             "relationship file path does not match its catalog file",
         )
-    if str(row["file_source_commit_sha"]) != target:
+    if (
+        not isinstance(row["blob_object_id"], str)
+        or not row["blob_object_id"]
+        or str(row["file_source_commit_sha"]) != target
+    ):
         raise _error(
             "catalog_provenance_mismatch",
             "relationship evidence is not from the fixture target revision",
         )
-    if row["target_repo_id"] is None or int(row["target_repo_id"]) != repo_id:
+    if (
+        row["target_symbol_id"] is None
+        or row["target_repo_id"] is None
+        or row["target_file_id"] is None
+        or int(row["target_repo_id"]) != repo_id
+    ):
         raise _error(
             "catalog_provenance_mismatch",
             "relationship target symbol repository mismatch",
@@ -405,13 +437,19 @@ def _check_edge_provenance(row: Mapping[str, Any], repo_id: int, target: str) ->
             "catalog_provenance_mismatch",
             "relationship target file repository mismatch",
         )
-    if str(row["target_file_source_commit_sha"]) != target:
+    if (
+        not isinstance(row["target_actual_file_path"], str)
+        or not row["target_actual_file_path"]
+        or not isinstance(row["target_blob_object_id"], str)
+        or not row["target_blob_object_id"]
+        or str(row["target_file_source_commit_sha"]) != target
+    ):
         raise _error(
             "catalog_provenance_mismatch",
             "relationship target symbol is not from the fixture target revision",
         )
-    if row["source_symbol_id"] is not None and row["source_repo_id"] is not None:
-        if int(row["source_repo_id"]) != repo_id:
+    if row["source_symbol_id"] is not None:
+        if row["source_repo_id"] is None or int(row["source_repo_id"]) != repo_id:
             raise _error(
                 "catalog_provenance_mismatch",
                 "relationship source symbol repository mismatch",
@@ -424,13 +462,24 @@ def _check_edge_provenance(row: Mapping[str, Any], repo_id: int, target: str) ->
                 "catalog_provenance_mismatch",
                 "relationship source file repository mismatch",
             )
-        if str(row["source_file_source_commit_sha"]) != target:
+        if (
+            row["source_file_id"] is None
+            or not isinstance(row["source_actual_file_path"], str)
+            or not row["source_actual_file_path"]
+            or not isinstance(row["source_blob_object_id"], str)
+            or not row["source_blob_object_id"]
+            or str(row["source_file_source_commit_sha"]) != target
+        ):
             raise _error(
                 "catalog_provenance_mismatch",
                 "relationship source symbol is not from the fixture target revision",
             )
         if (
-            row["source_db_name"] != row["source_name"]
+            not isinstance(row["source_db_name"], str)
+            or not row["source_db_name"]
+            or not isinstance(row["source_db_kind"], str)
+            or not row["source_db_kind"]
+            or row["source_db_name"] != row["source_name"]
             or row["source_db_kind"] != row["source_kind"]
         ):
             raise _error(
@@ -438,8 +487,10 @@ def _check_edge_provenance(row: Mapping[str, Any], repo_id: int, target: str) ->
                 "relationship source symbol identity does not match its catalog symbol",
             )
     if (
-        row["target_db_name"] != row["target_name"]
-        or row["target_db_kind"] != row["target_kind"]
+        not isinstance(row["target_db_name"], str)
+        or not row["target_db_name"]
+        or row["target_db_name"] != row["target_name"]
+        or _normalized_symbol_kind(row["target_db_kind"]) != row["target_kind"]
     ):
         raise _error(
             "catalog_provenance_mismatch",
