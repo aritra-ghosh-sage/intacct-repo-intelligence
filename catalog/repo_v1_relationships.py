@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 import sqlite3
 from dataclasses import replace
 from pathlib import PurePosixPath
@@ -12,7 +13,9 @@ from tqdm import tqdm
 from catalog.source_snapshot import SourceSnapshot, SourceSnapshotError
 from parser.extract_relationships import (
     EXTRACTORS,
+    REL_STATIC_CALLS,
     RELATIONSHIP_EXTRACTOR,
+    RESOLUTION_CLASS_PROJECT_RESOLVED,
     RESOLUTION_CLASS_PROJECT_UNRESOLVED,
     FileRow,
     Relationship,
@@ -135,12 +138,117 @@ def _resolution_candidates(
     return symbols_by_name.get(short_name, [])
 
 
+_STATIC_CALL_EVIDENCE = re.compile(
+    r"\b(?P<class>[A-Za-z_][A-Za-z0-9_]*)::"
+    r"(?P<method>[A-Za-z_][A-Za-z0-9_]*)\s*\("
+)
+
+
+def _static_call_parts(relationship: Relationship) -> tuple[str, str] | None:
+    if relationship.relationship_type != REL_STATIC_CALLS:
+        return None
+    match = _STATIC_CALL_EVIDENCE.search(relationship.evidence)
+    if match is None or match.group("method") != relationship.target_name:
+        return None
+    return match.group("class"), match.group("method")
+
+
+def _method_candidates(candidates: list[SymbolRow]) -> list[SymbolRow]:
+    return [
+        candidate
+        for candidate in candidates
+        if str(candidate.kind).strip().lower() == "method"
+    ]
+
+
+def _source_parent_class(source_text: str, source_name: str | None) -> str | None:
+    if not source_name:
+        return None
+    match = re.search(
+        rf"\bclass\s+{re.escape(source_name)}\b"
+        r"(?:\s+extends\s+([\\A-Za-z_][\\A-Za-z0-9_]*))?",
+        source_text,
+    )
+    return match.group(1) if match and match.group(1) else None
+
+
+def _qualified_static_call_candidates(
+    relationship: Relationship,
+    symbols_by_qualified_name: dict[str, list[SymbolRow]],
+    source_text: str,
+) -> list[SymbolRow] | None:
+    """Return exact class-qualified candidates for a PHP static call.
+
+    ``Relationship.target_name`` stores the resolved symbol's short name, so
+    the class qualifier must be recovered from the committed call evidence.
+    ``self`` and ``parent`` calls are resolved only from the current class or
+    its committed ``extends`` declaration. ``static`` is late-static-bound and
+    remains unresolved because runtime subclass dispatch is not proven here.
+    """
+
+    parts = _static_call_parts(relationship)
+    if parts is None:
+        return None
+    class_name, method_name = parts
+    if class_name == "static":
+        return None
+    if class_name == "self":
+        class_name = relationship.source_name or ""
+    elif class_name == "parent":
+        class_name = _source_parent_class(source_text, relationship.source_name) or ""
+    if not class_name:
+        return []
+    return _method_candidates(
+        symbols_by_qualified_name.get(f"{class_name}::{method_name}", [])
+    )
+
+
 def _clear_ambiguous_target(
     relationship: Relationship,
     *,
     symbols_by_name: dict[str, list[SymbolRow]],
     symbols_by_qualified_name: dict[str, list[SymbolRow]],
+    source_text: str,
 ) -> Relationship:
+    static_call_parts = _static_call_parts(relationship)
+    if static_call_parts is not None and static_call_parts[0] == "static":
+        return replace(
+            relationship,
+            target_symbol_id=None,
+            target_kind=None,
+            resolution_class=RESOLUTION_CLASS_PROJECT_UNRESOLVED,
+            resolution_reason="dynamic_static_dispatch",
+        )
+    qualified_candidates = _qualified_static_call_candidates(
+        relationship, symbols_by_qualified_name, source_text
+    )
+    if qualified_candidates is not None:
+        candidates_by_id = {
+            candidate.id: candidate for candidate in qualified_candidates
+        }
+        if len(candidates_by_id) == 1:
+            candidate = next(iter(candidates_by_id.values()))
+            return replace(
+                relationship,
+                target_symbol_id=candidate.id,
+                target_name=candidate.name,
+                target_kind=candidate.kind,
+                resolution_class=RESOLUTION_CLASS_PROJECT_RESOLVED,
+                resolution_reason="target_symbol_id_present",
+            )
+        reason = (
+            "ambiguous_project_symbol"
+            if candidates_by_id
+            else "unresolved_project_symbol"
+        )
+        return replace(
+            relationship,
+            target_symbol_id=None,
+            target_kind=None,
+            resolution_class=RESOLUTION_CLASS_PROJECT_UNRESOLVED,
+            resolution_reason=reason,
+        )
+
     if relationship.target_symbol_id is None:
         return relationship
     candidates = _resolution_candidates(
@@ -273,6 +381,7 @@ def extract_snapshot_relationships(
                     relationship,
                     symbols_by_name=symbols_by_name,
                     symbols_by_qualified_name=symbols_by_qualified_name,
+                    source_text=text,
                 )
                 for relationship in relationships
             ]

@@ -112,6 +112,132 @@ def test_relationships_resolve_and_preserve_unresolved_targets(tmp_path: Path) -
         conn.close()
 
 
+def test_qualified_static_call_resolution_beats_duplicate_method_names(
+    tmp_path: Path,
+) -> None:
+    root, manifest, _target = _fixture(tmp_path)
+    (root / "qualified_owner.php").write_text(
+        "<?php class QualifiedOwner { public static function sharedCall() {} }\n",
+        encoding="utf-8",
+    )
+    (root / "other_owner.php").write_text(
+        "<?php class OtherOwner { public static function sharedCall() {} }\n",
+        encoding="utf-8",
+    )
+    (root / "static_caller.php").write_text(
+        "<?php class StaticCaller { public function go() { QualifiedOwner::sharedCall(); } }\n",
+        encoding="utf-8",
+    )
+    (root / "duplicate_owner_one.php").write_text(
+        "<?php class DuplicateOwner { public static function duplicateCall() {} }\n",
+        encoding="utf-8",
+    )
+    (root / "duplicate_owner_two.php").write_text(
+        "<?php class DuplicateOwner { public static function duplicateCall() {} }\n",
+        encoding="utf-8",
+    )
+    (root / "ambiguous_static_caller.php").write_text(
+        "<?php class AmbiguousStaticCaller { public function go() { DuplicateOwner::duplicateCall(); } }\n",
+        encoding="utf-8",
+    )
+    (root / "alias_parent.php").write_text(
+        "<?php class AliasParent { public static function aliasCall() {} }\n",
+        encoding="utf-8",
+    )
+    (root / "alias_other.php").write_text(
+        "<?php class AliasOther { public static function aliasCall() {} public static function missingAlias() {} }\n",
+        encoding="utf-8",
+    )
+    (root / "alias_child.php").write_text(
+        "<?php class AliasChild extends AliasParent {\n"
+        "    public static function aliasCall() {}\n"
+        "    public function go() { self::aliasCall(); static::aliasCall(); parent::aliasCall(); self::missingAlias(); }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-qm", "qualified static call relationships")
+    target = _git(root, "rev-parse", "HEAD")
+    db = tmp_path / "catalog.db"
+    build_ia_main(manifest_path=manifest, active_db=db, target_sha=target)
+
+    conn = sqlite3.connect(db)
+    try:
+        resolved = conn.execute(
+            """SELECT r.target_symbol_id,r.target_name,r.resolution_class,
+                      r.resolution_reason,s.id,s.parent_symbol
+               FROM relationships r
+               LEFT JOIN symbols s ON s.id=r.target_symbol_id
+               WHERE r.file_path='static_caller.php'
+                 AND r.relationship_type='STATIC_CALLS'"""
+        ).fetchone()
+        assert resolved is not None
+        assert resolved == (
+            resolved[4],
+            "sharedCall",
+            "project_resolved",
+            "target_symbol_id_present",
+            resolved[4],
+            "QualifiedOwner",
+        )
+
+        ambiguous = conn.execute(
+            """SELECT target_symbol_id,target_name,resolution_class,
+                      resolution_reason
+               FROM relationships
+               WHERE file_path='ambiguous_static_caller.php'
+                 AND relationship_type='STATIC_CALLS'"""
+        ).fetchone()
+        assert ambiguous == (
+            None,
+            "duplicateCall",
+            "project_unresolved",
+            "ambiguous_project_symbol",
+        )
+
+        aliases = conn.execute(
+            """SELECT r.evidence,r.target_name,r.resolution_class,
+                      r.resolution_reason,s.parent_symbol
+               FROM relationships r
+               LEFT JOIN symbols s ON s.id=r.target_symbol_id
+               WHERE r.file_path='alias_child.php'
+                 AND r.relationship_type='STATIC_CALLS'
+               ORDER BY r.evidence"""
+        ).fetchall()
+        assert aliases == [
+            (
+                "parent::aliasCall(",
+                "aliasCall",
+                "project_resolved",
+                "target_symbol_id_present",
+                "AliasParent",
+            ),
+            (
+                "self::aliasCall(",
+                "aliasCall",
+                "project_resolved",
+                "target_symbol_id_present",
+                "AliasChild",
+            ),
+            (
+                "self::missingAlias(",
+                "self::missingAlias",
+                "project_unresolved",
+                "unresolved_project_symbol",
+                None,
+            ),
+            (
+                "static::aliasCall(",
+                "aliasCall",
+                "project_unresolved",
+                "dynamic_static_dispatch",
+                None,
+            ),
+        ]
+    finally:
+        conn.close()
+
+
 def test_relationships_are_snapshot_provenance_and_repetition_stable(
     tmp_path: Path,
 ) -> None:
