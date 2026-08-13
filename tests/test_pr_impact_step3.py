@@ -438,7 +438,43 @@ def test_classification_precedes_confidence_for_skipped_edges(tmp_path: Path) ->
     assert reasons["non_call_relationship"]["relationship_type"] == "USES"
     assert reasons["unresolved_resolution"]["relationship_type"] == "CALLS"
     assert "skipped_edge:unresolved_resolution" in report["gaps"]
+    assert "skipped_edge:unresolved_resolution:target" in report["gaps"]
     assert "skipped_edge:below_confidence" not in report["gaps"]
+    assert validate(report) == []
+
+
+def test_unresolved_edge_warning_is_emitted_above_threshold(tmp_path: Path) -> None:
+    repo, base, target = make_repo(tmp_path)
+    db = make_db(tmp_path, repo, target)
+    add_symbols_and_edges(db, max_hop_fixture=False)
+    conn = sqlite3.connect(db)
+    conn.executemany(
+        """INSERT INTO relationships(
+            repo_id,source_symbol_id,source_name,source_kind,target_symbol_id,target_name,
+            target_kind,relationship_type,file_id,file_path,language,confidence,evidence,
+            resolution_class,resolution_reason,extractor
+        ) VALUES(1,NULL,?,'function',1,'target','function','CALLS',2,'b.php','php',1.0,
+                 'unresolved','project_unresolved','unresolved_project_symbol','test')""",
+        [(f"ambiguous_{index}",) for index in range(6)],
+    )
+    conn.commit()
+    conn.close()
+
+    report = analyze_fixture(
+        fixture(tmp_path, base, target), manifest(tmp_path, repo), db, "ia-main"
+    )
+
+    assert (
+        len(
+            [
+                item
+                for item in report["skipped_edges"]
+                if item["skip_reason"] == "unresolved_resolution"
+            ]
+        )
+        == 6
+    )
+    assert "6 unresolved relationship edges were skipped" in report["warnings"]
     assert validate(report) == []
 
 

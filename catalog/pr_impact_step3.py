@@ -42,6 +42,7 @@ SKIP_REASONS = {
     "source_symbol_missing",
     "below_confidence",
 }
+UNRESOLVED_EDGE_WARNING_THRESHOLD = 5
 _SQL_BATCH_SIZE = 400
 
 
@@ -831,6 +832,15 @@ def analyze_fixture(
             if item["state"] != "available"
         ]
         gaps.extend(f"skipped_edge:{reason}" for reason in sorted(set(partial_reasons)))
+        unresolved_edges = [
+            item
+            for item in skipped_edges
+            if item.get("skip_reason") == "unresolved_resolution"
+        ]
+        gaps.extend(
+            f"skipped_edge:unresolved_resolution:{item['target_symbol_name']}"
+            for item in unresolved_edges
+        )
         warnings = [
             "non_call_relationship rows were intentionally excluded"
             if any(
@@ -839,6 +849,10 @@ def analyze_fixture(
             )
             else ""
         ]
+        if len(unresolved_edges) > UNRESOLVED_EDGE_WARNING_THRESHOLD:
+            warnings.append(
+                f"{len(unresolved_edges)} unresolved relationship edges were skipped"
+            )
         warnings = [item for item in warnings if item]
         return _base_report(
             status=status,
