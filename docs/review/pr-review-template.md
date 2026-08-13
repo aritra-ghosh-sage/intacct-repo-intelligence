@@ -53,12 +53,11 @@
 
 ## 🎲 Confidence & Recommendation
 
-**Confidence:** 87/100
+**Confidence:** [score or `Not computed`; describe evidence scope, not business risk]
 **Recommendation:** Approve ✓ / Request Changes ⚠ / Comment 💬
 
 **Gaps/Assumptions:**
-- Assumed DB value format is 'T'/'F' based on grep of related code
-- Didn't trace all call sites for provider transitions
+- [Explicit unresolved, unavailable, stale, or deferred evidence]
+- [Evidence scope and target revision limitation]
 
 **Next Reviewer:** @team-compliance (domain experts for e-invoicing logic)
-

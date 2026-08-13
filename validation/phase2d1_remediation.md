@@ -20,10 +20,11 @@ authoritative when prose and data disagree.
 ## Builder boundary
 
 - Exact delta is limited to scan, symbols, and relationships.
-- PR impact Step 1 performs Git diff validation only; no catalog delta
-  processing. `catalog.delta.collect_changed_paths`, if reused, is only a raw
-  Git diff/path-status parser and never a catalog change-set, planner, refresh,
-  or builder input.
+- PR-impact Steps 0–3 perform Git diff validation and read-only repo-v1
+  analysis only; no catalog delta processing. `catalog.delta.collect_changed_paths`,
+  if reused, is only a raw Git diff/path-status parser and never a catalog
+  change-set, planner, refresh, or builder input. See the individual PR-impact
+  contracts and [the current repo-v1 contract](../docs/design/repo_v1_current_contract.md).
 Git diff validation only; no catalog delta processing.
 - Reset-style builders run in full only when a declared direct input or upstream
   evidence edge is invalidated.

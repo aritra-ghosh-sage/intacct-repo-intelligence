@@ -1,5 +1,10 @@
 # PR Impact Step 0
 
+Step 0 is an input/context package, not an impact conclusion. Related
+repositories, obligations, affected surfaces, and test expectations recorded
+in the fixture are hypotheses or reviewed context until later source,
+catalog, or contract evidence proves them.
+
 Step 0 is the smallest reproducible input for PR impact analysis. It captures
 the PR revision pair, the exact source change, initial affected surfaces,
 related repositories, test obligations, review evidence, and unresolved

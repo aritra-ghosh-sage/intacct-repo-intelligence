@@ -5,6 +5,18 @@ Phase 9 acceptance work is complete for the currently defined `ia-main`
 scope. Follow-on PR-impact validation and future priority slices remain
 tracked below.
 
+## Active PR-impact backlog
+
+- [ ] Add an explicit, provenance-backed `symbol -> entity occurrence` mapping;
+      same-file, same-name, filename, module, and semantic similarity are not
+      ownership evidence.
+- [ ] Improve Step 3 seed precision by mapping changed diff hunks to symbol
+      declaration ranges, with an explicit file-level fallback.
+- [ ] Compose Steps 1–3 into one deterministic PR-review result.
+- [ ] Add repository-local test discovery and target-revision coverage evidence.
+- [ ] Add reviewed cross-repository contracts and downstream test obligations
+      after the `ia-main` proving path is complete.
+
 ## Repository Selection
 
 - [ ] Make repository selection manifest-driven when V1 expands beyond

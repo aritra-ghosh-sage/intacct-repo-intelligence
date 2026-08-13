@@ -1,5 +1,11 @@
 # Repo Intelligence V1 Phase Closure
 
+> Historical acceptance record. Counts, hashes, build tokens, target commits,
+> and test totals below are valid only for the explicitly recorded evidence
+> runs. They are not current branch or active-catalog status. See
+> [repo_v1_current_contract.md](repo_v1_current_contract.md) for current
+> repo-v1 status and gaps.
+
 Reviewer: Codex (automated acceptance), 2026-08-06
 
 Implementation commits:
@@ -657,9 +663,10 @@ workflow endpoint re-parenting, explicit-null transition drift, incomplete
 security evidence, invalid diagnostic keys, invalid reference targets, and
 dynamic policy identities inferred as ordinals.
 
-## Current post-Phase-9 evidence — 2026-08-11
+## Historical post-Phase-9 evidence — 2026-08-11
 
-The current repo-v1 implementation commit is `9bcaaac04c6fde4b2c75451a51d3265b7a860139`.
+The repo-v1 implementation commit for this historical evidence is
+`9bcaaac04c6fde4b2c75451a51d3265b7a860139`.
 The resolved `ia-main` source checkout and canonical active database both target
 `17b67923a2b45b8b0732e0464797319a2f6b510d`. The canonical database was inspected
 read-only and returned `PRAGMA integrity_check = ok` with zero foreign-key
@@ -736,7 +743,8 @@ entity_db_field_links=3d4dd815fcdc1e7c689b31e95d9f3bd08e2b8ac2173f1c9a5dc0291e05
 repo_v1_database_diagnostics=6045e9ebff8af95c6077050e753b984650f3caab4564168ea5f4d823be1c91b8
 ```
 
-Phase 9 acceptance is **accepted** for the defined database-facts scope.
+Phase 9 acceptance was **accepted** for the defined database-facts scope at
+the recorded historical target.
 
 The focused database test command passed with `4 passed, 2 warnings`:
 

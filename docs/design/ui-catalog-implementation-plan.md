@@ -1,5 +1,9 @@
 # UI Catalog Implementation Plan
 
+> Historical implementation plan. The accepted repo-v1 UI fact boundaries are
+> recorded in the phase closure and current contract. This document should not
+> be used as the current repo-v1 execution or PR-impact contract.
+
 ## Purpose
 
 Add deterministic, source-provenanced UI evidence to the catalog for both

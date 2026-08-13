@@ -1,5 +1,10 @@
 # PR 49156 Step 2 Sign-off Record
 
+> Historical, target-specific acceptance artifact for PR 49156. The seven
+> ambiguity rows and all counts below describe this exact run; they are not a
+> general current-catalog status. Ambiguity remains fail-closed whenever it is
+> reproduced in a current target revision.
+
 ## Disposition
 
 **Accepted as a partial, read-only Step 2 direct-surface audit.**

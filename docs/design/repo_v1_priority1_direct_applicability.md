@@ -1,4 +1,4 @@
-# Repo-v1 Priority 1: Direct Database Applicability
+# Repo-v1 Direct Database Applicability
 
 Status: implementation and operations contract
 
@@ -234,8 +234,10 @@ unresolved.
 
 ## Scope boundaries and deferred work
 
-This Priority 1 contract does not change or consume the PR-impact report
-contract. PR-impact validation and bounded evidence work remain a later phase.
+This inspection contract does not itself produce a PR-impact report. Its
+persisted entity/database facts are current inputs to repo-v1 PR-impact
+analysis, while symbol-to-entity ownership and composed PR reporting remain
+open implementation work.
 
 The following are explicitly deferred and must not be added as part of this
 document:

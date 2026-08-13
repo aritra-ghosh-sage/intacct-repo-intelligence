@@ -176,11 +176,14 @@ assert the affected fact; those rows do not alone make a candidate invalid.
 Snapshot, source-read, provenance, ownership, integrity, and candidate
 validation failures remain fail-closed promotion errors.
 
-PR impact Step 1 is read-only and repo-v1-only. Git diff validation only; no
-catalog delta processing. `catalog.delta.collect_changed_paths` may be used
-only as a raw Git diff/path-status parser, never for catalog change-set
-processing, delta planning, delta refresh, or delta builder execution.
-Git diff validation only; no catalog delta processing.
+PR-impact Steps 0–3 are read-only and repo-v1-only: Step 0 captures the exact
+revision-pinned fixture, Step 1 performs direct tracing, Step 2 audits Step 1
+evidence availability, and Step 3 performs bounded incoming-caller tracing.
+Git diff validation only; no catalog delta processing. `catalog.delta.collect_changed_paths`
+may be used only as a raw Git diff/path-status parser, never for catalog
+change-set processing, delta planning, delta refresh, or delta builder
+execution. See [docs/design/repo_v1_current_contract.md](docs/design/repo_v1_current_contract.md)
+for the current repo-v1 status and gaps.
 
 PR reviews must follow the canonical format in
 [docs/review/pr-review-template.md](docs/review/pr-review-template.md). Agents

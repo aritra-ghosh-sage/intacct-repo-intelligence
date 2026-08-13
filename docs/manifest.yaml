@@ -1,5 +1,7 @@
 project: intacct-repo-intelligence
 version: 0.1.0
+# Historical benchmark manifest; not the current repo-v1 phase-status source.
+# See design/repo_v1_current_contract.md for current status.
 snapshot_ts: 2026-07-08T10:23:36+05:30
 commit_sha: 1dab60764e2ecd131f409616196c5a32155d1055
 fix_pr_refs:

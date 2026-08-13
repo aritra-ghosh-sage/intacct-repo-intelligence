@@ -1,5 +1,10 @@
 # Workflow Design Analysis
 
+> **Scope notice:** This is general/legacy catalog workflow documentation. It
+> is not the repo-v1 execution or PR-impact acceptance contract. Repo-v1 uses
+> committed Git snapshots, full SQLite candidates, and explicit provenance;
+> it does not use this document's legacy refresh, delta, or Ladybug workflow.
+
 ## Current State
 
 ### Model Structure

@@ -2,6 +2,12 @@
 
 ## Decision
 
+This is the architectural and phase-delivery plan. Phase-specific commits,
+target revisions, counts, hashes, and test totals later in this document are
+historical acceptance evidence, not current branch status. See
+[repo_v1_current_contract.md](repo_v1_current_contract.md) for the current
+repo-v1 and PR-impact contract.
+
 Build on the `repo-v1` branch as a bounded refactor of the existing repository.
 Reuse proven leaf components, but introduce a new explicit full-refresh path
 and a fresh development database/schema. The existing `main` branch and its
@@ -44,10 +50,11 @@ UI-specific exception and not a generic stale-data mechanism.
 - cross-repository link extraction;
 - Ladybug graph construction and promotion.
 
-PR impact Step 1 follows the same boundary: Git diff validation only; no
-catalog delta processing. It is a read-only trace over the active repo-v1
-snapshot and does not add delta planning or execution to the full-rebuild
-path.
+PR-impact Steps 0–3 follow the same boundary: Git diff validation and
+read-only repo-v1 analysis only; no catalog delta processing. Step 1 performs
+direct tracing, Step 2 audits Step 1 evidence availability, and Step 3 performs
+bounded incoming-caller tracing. They do not add delta planning or execution
+to the full-rebuild path.
 Git diff validation only; no catalog delta processing.
 
 ## Reusable existing components
@@ -430,7 +437,9 @@ four new OpenAPI/REST tables; the workflow builds a complete current-schema
 candidate and atomically promotes it while preserving the old file as
 `catalog.db.previous`. No in-place migration or broad schema bypass is used.
 
-Do not add entity mappings, entity roots, companion/OpenAPI/REST/workflow/UI
+The following was the boundary for the historical Phase 5 slice; later phases
+accepted several of these fact families. Do not add entity mappings, entity
+roots, companion/OpenAPI/REST/workflow/UI
 facts, graph, MCP/query compatibility, delta refresh, migrations,
 multi-repository support, JSONL intermediates, or legacy entity-builder
 orchestration in this phase.

@@ -1,5 +1,9 @@
 # Repo-v1 PR-impact Session 4 sign-off
 
+> Target-specific acceptance record for PR 49156. This document records a
+> completed evidence run; current repo-v1 scope and open implementation gaps
+> are maintained in [repo_v1_current_contract.md](repo_v1_current_contract.md).
+
 ## Decision and scope
 
 Session 4 was executed for `intacct/ia-app` PR 49156 using the existing

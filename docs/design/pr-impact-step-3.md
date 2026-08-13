@@ -1,5 +1,10 @@
 # PR Impact Step 3
 
+This is the current bounded traversal contract. The intended composed review
+will later combine Steps 1–3 with explicit symbol-to-entity ownership, test
+discovery, and reviewed downstream contracts; those integrations are not
+silently implied by this standalone report.
+
 Step 3 is a standalone, read-only repo-v1 analysis for `ia-main`. It validates
 the fixture's exact committed Git diff, opens the active repo-v1 SQLite file
 through one `mode=ro`, `query_only=ON` connection, and traces incoming callers

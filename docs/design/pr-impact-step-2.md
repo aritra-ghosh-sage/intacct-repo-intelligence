@@ -1,9 +1,13 @@
 # PR Impact Step 2
 
-Step 2 is a read-only evidence-availability audit for PR 49156. It consumes a
-newly generated Step 1 report in-process and emits a separate schema `0.1`
-report. Step 1 remains frozen at schema `0.4`; Step 2 does not duplicate its
-direct facts, re-query SQLite, or infer semantic impact.
+Step 2 is a read-only evidence-availability audit for a valid Step 0 fixture.
+PR 49156 is the acceptance example below. It consumes a newly generated Step
+1 report in-process and emits a separate schema `0.1` report. Step 1 remains
+frozen at schema `0.4`; Step 2 does not duplicate its direct facts, re-query
+SQLite, or infer semantic impact.
+
+The exact revisions and changed source below are example-run evidence, not
+general input requirements. The CLI accepts any valid exact-target fixture.
 
 The proving slice is restricted to `ia-main` and the exact revision pair:
 

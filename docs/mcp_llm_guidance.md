@@ -1,5 +1,10 @@
 # LLM Guidance for the Intacct Catalog MCP
 
+> **Scope notice:** This guidance describes the general MCP/catalog query
+> surface. It is not repo-v1 acceptance guidance and does not replace the
+> read-only SQLite PR-impact contracts in
+> [repo_v1_current_contract.md](design/repo_v1_current_contract.md).
+
 Use [the generated MCP Tool Inventory](mcp_tool_inventory.md) as the
 authoritative list of public names, annotations, descriptions, and input JSON
 schemas. It is rendered from the live FastMCP registration and is checked in

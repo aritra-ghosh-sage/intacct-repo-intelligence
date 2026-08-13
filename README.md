@@ -2,7 +2,9 @@
 
 ## Overview
 
-Intacct Repository Intelligence is a code intelligence and knowledge graph platform for the Sage Intacct codebase.
+Intacct Repository Intelligence is an evidence-backed repository intelligence
+platform for the Sage Intacct codebase. A rebuildable knowledge graph is a
+broader projection, not the authoritative repo-v1 evidence store.
 
 The project transforms source code, metadata, configuration assets, and extracted relationships into a structured, queryable representation of the system.
 
@@ -23,6 +25,8 @@ The repository is designed to provide an evidence-based understanding of the Int
 The broader product purpose, PM feasibility workflow, agentic use cases,
 current boundary, and first practical product slice are documented in
 [docs/project-purpose.md](docs/project-purpose.md).
+The current repo-v1 implementation and PR-impact boundary are documented in
+[docs/design/repo_v1_current_contract.md](docs/design/repo_v1_current_contract.md).
 
 ---
 
@@ -84,6 +88,10 @@ Examples:
 
 ### Goal 2: Build a Knowledge Graph
 
+This is the broader product direction. Repo-v1 currently prioritizes
+immutable, source-backed SQLite evidence and read-only PR-impact analysis;
+graph construction and promotion remain deferred for that path.
+
 Transform extracted information into a graph containing:
 
 - business entities
@@ -94,7 +102,8 @@ Transform extracted information into a graph containing:
 - APIs
 - configuration artifacts
 
-The graph becomes the primary navigation layer over the codebase.
+In the broader product direction, the graph may become a navigation layer over
+the codebase. Repo-v1 SQLite remains authoritative for evidence and review.
 
 ---
 
@@ -238,6 +247,10 @@ AI systems should use Ladybug for traversal and SQLite for evidence and
 provenance.
 
 ### Graph Projection Workflow
+
+This section describes the general/legacy catalog projection workflow. It is
+not part of the repo-v1 build or PR-impact acceptance path. Repo-v1 does not
+build or promote Ladybug and uses SQLite as its authoritative review surface.
 
 The rebuild flow captures a consistent SQLite backup, builds a uniquely named
 candidate Ladybug graph from that snapshot, and validates every projected node,

@@ -8,6 +8,9 @@ Repository Intelligence. It is intentionally broader than the current
 implementation boundary; this document defines why the project exists and what
 it should eventually enable.
 
+For the current repo-v1 operating contract and implementation status, see
+[docs/design/repo_v1_current_contract.md](design/repo_v1_current_contract.md).
+
 ## Problem
 
 Intacct functionality is distributed across many repositories, technologies,
@@ -215,12 +218,14 @@ Feature idea
 
 ## Current state and boundary
 
-The current `repo-v1` implementation is an evidence substrate, not yet the
-complete multi-repository product described above. Its accepted direction is a
-deterministic, immutable, Git-backed SQLite build with source provenance,
-candidate validation, and atomic promotion. It currently provides substantial
-`ia-main` inventory and source-backed extraction, with later slices for API and
-UI evidence.
+The current `repo-v1` implementation is an evidence substrate and deterministic
+`ia-main` PR-impact proving path, not yet the complete multi-repository product
+described above. Its accepted direction is a deterministic, immutable,
+Git-backed SQLite build with source provenance, candidate validation, and
+atomic promotion. It now extracts source-backed API, UI, workflow, security,
+and database facts in addition to files, symbols, relationships, and entities.
+PR-level symbol-to-entity ownership, composed impact reporting, test discovery,
+and downstream repository consumption remain incomplete.
 
 The following remain broader product work or explicit boundaries rather than
 assumptions:
@@ -231,7 +236,8 @@ assumptions:
 - complete workflow and security evidence;
 - UI-to-entity and dynamic handler resolution;
 - test semantic coverage across Gateway, REST, UI, and API systems;
-- PR impact orchestration across multiple repositories;
+- composed PR impact and test-gap reporting beyond the current Steps 0–3
+  `ia-main` proving path;
 - PM feasibility and requirements-document generation;
 - freshness, ownership, and evidence contracts for every repository.
 
@@ -241,7 +247,7 @@ building speculative generic infrastructure.
 
 ## First practical product slice
 
-Start with one bounded workflow across:
+The broader product target is one bounded workflow across:
 
 - `ia-app`;
 - `ia-restapi-automation-tests`;
@@ -261,6 +267,10 @@ report that identifies:
 
 Add `ia-test-automation` after its repository ownership and integration
 contracts are explicitly onboarded.
+
+The current repo-v1 proving slice is narrower: exact-target, read-only PR
+analysis for `ia-main`. Downstream repositories remain empty or deferred until
+their reviewed contracts and target-revision evidence are onboarded.
 
 ## Fallback when evidence is incomplete
 
