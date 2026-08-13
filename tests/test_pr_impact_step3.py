@@ -349,6 +349,10 @@ def test_reviewed_entity_mapping_is_reported_by_symbol_identity(tmp_path: Path) 
     assert mapping["symbol_id"] == 1
     assert mapping["entity_name"] == "ReviewedEntity"
     assert mapping["resolution_status"] == "resolved"
+    assert (
+        "entity_context:repo_v1_symbol_entity_mapping_not_modelled"
+        not in report["gaps"]
+    )
     assert validate(report) == []
 
 
@@ -396,6 +400,45 @@ def test_non_call_relationship_is_retained_as_skipped(tmp_path: Path) -> None:
         and item["relationship_type"] == "USES"
         for item in report["skipped_edges"]
     )
+    assert validate(report) == []
+
+
+def test_classification_precedes_confidence_for_skipped_edges(tmp_path: Path) -> None:
+    repo, base, target = make_repo(tmp_path)
+    db = make_db(tmp_path, repo, target)
+    add_symbols_and_edges(db, max_hop_fixture=False)
+    conn = sqlite3.connect(db)
+    conn.execute(
+        """INSERT INTO relationships(
+            repo_id,source_symbol_id,source_name,source_kind,target_symbol_id,target_name,
+            target_kind,relationship_type,file_id,file_path,language,confidence,evidence,
+            resolution_class,resolution_reason,extractor
+        ) VALUES(1,2,'caller','function',1,'target','function','USES',2,'b.php','php',0.1,
+                 'low-confidence-non-call','project_resolved','target_symbol_id_present','test')"""
+    )
+    conn.execute(
+        """INSERT INTO relationships(
+            repo_id,source_symbol_id,source_name,source_kind,target_symbol_id,target_name,
+            target_kind,relationship_type,file_id,file_path,language,confidence,evidence,
+            resolution_class,resolution_reason,extractor
+        ) VALUES(1,2,'caller','function',1,'target','function','CALLS',2,'b.php','php',0.1,
+                 'low-confidence-unresolved','project_unresolved','unresolved_project_symbol','test')"""
+    )
+    conn.commit()
+    conn.close()
+
+    report = analyze_fixture(
+        fixture(tmp_path, base, target),
+        manifest(tmp_path, repo),
+        db,
+        "ia-main",
+        min_confidence=0.7,
+    )
+    reasons = {item["skip_reason"]: item for item in report["skipped_edges"]}
+    assert reasons["non_call_relationship"]["relationship_type"] == "USES"
+    assert reasons["unresolved_resolution"]["relationship_type"] == "CALLS"
+    assert "skipped_edge:unresolved_resolution" in report["gaps"]
+    assert "skipped_edge:below_confidence" not in report["gaps"]
     assert validate(report) == []
 
 

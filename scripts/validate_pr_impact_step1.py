@@ -311,9 +311,8 @@ def validate(report: object) -> list[str]:
                     errors.append(
                         "complete report has an invalid unsupported-surface status"
                     )
-    if report.get("status") == "blocked":
-        if not isinstance(report.get("error"), dict) or not report["error"].get("code"):
-            errors.append("blocked report requires error.code")
+    if report.get("status") == "blocked" and (not isinstance(report.get("error"), dict) or not report["error"].get("code")):
+        errors.append("blocked report requires error.code")
     return errors
 
 

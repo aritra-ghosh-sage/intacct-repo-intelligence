@@ -232,6 +232,64 @@ def test_valid_diff_traces_exact_rows_and_is_read_only(tmp_path: Path) -> None:
     )
 
 
+def test_reviewed_entity_link_uses_target_revision_for_freshness(
+    tmp_path: Path,
+) -> None:
+    repo, base, target = make_repo(tmp_path)
+    fixture = make_fixture(tmp_path, base, target)
+    manifest = make_manifest(tmp_path, repo)
+    db = make_db(tmp_path, target)
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO files(repo_id,path,blob_object_id,file_mode,size_bytes,language,source_commit_sha) VALUES(1,'thing.ent','entity',100644,1,'php',?)",
+        (target,),
+    )
+    entity_file_id = conn.execute(
+        "SELECT id FROM files WHERE path='thing.ent'"
+    ).fetchone()[0]
+    entity_id = conn.execute("INSERT INTO entity_nodes(name) VALUES('Thing')").lastrowid
+    occurrence_id = conn.execute(
+        """INSERT INTO entity_occurrences(
+            repo_id,entity_id,source_file_id,source_key,source_commit_sha,evidence,extractor
+        ) VALUES(?,?,?,?,?,?,?)""",
+        (1, entity_id, entity_file_id, "thing", target, "entity", "test"),
+    ).lastrowid
+    conn.execute(
+        """INSERT INTO symbol_entity_links(
+            repo_id,build_id,symbol_id,entity_occurrence_id,symbol_file_path,symbol_stable_key,
+            entity_source_path,entity_source_key,mapping_type,resolution_status,resolution_reason,
+            mapping_contract_path,mapping_contract_sha256,target_revision,contract_entry_key,evidence,extractor
+        ) VALUES(1,1,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            occurrence_id,
+            "a.php",
+            "new",
+            "thing.ent",
+            "thing",
+            "reviewed_explicit",
+            "resolved",
+            "exact_contract_identity",
+            "contract.yaml",
+            "a" * 64,
+            target,
+            "mapping:1",
+            "review",
+            "test",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    report = analyze_fixture(fixture, manifest, db, "ia-main")
+    trace = next(
+        item
+        for item in report["direct_traces"]
+        if item["surface"] == "entity_symbol_links"
+    )
+    assert trace["status"] == "available"
+    assert trace["facts"][0]["catalog_source_revision"] == target
+
+
 def test_workflow_and_permissions_trace_existing_repo_v1_facts(tmp_path: Path) -> None:
     repo, base, target = make_repo(tmp_path)
     fixture = make_fixture(tmp_path, base, target)
