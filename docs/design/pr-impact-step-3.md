@@ -16,7 +16,10 @@ repository, or infer entity ownership/business impact.
 
 The manifest-resolved `ia-main` source root for this analysis is
 `/Users/aritra.ghosh/projects/main`. Step 3 is bounded to persisted incoming
-symbol relationships; it does not add a symbol-to-entity ownership source.
+symbol relationships. When the repo-v1 candidate contains reviewed
+`symbol_entity_links`, Step 3 joins them by persisted `symbol_id` only and
+reports the linked entity occurrence plus existing entity metadata, database,
+OpenAPI, and workflow facts. It never infers ownership from names or paths.
 
 ## Command
 
@@ -26,7 +29,8 @@ PYTHONPATH=. ./.venv/bin/python -m scripts.trace_pr_impact_step3 \
   --manifest config/workspace_repos.yaml \
   --active-db catalog/catalog.db \
   --repo-key ia-main \
-  --max-hops 2
+  --max-hops 2 \
+  --min-confidence 0.7
 ```
 
 JSON is the only output. Exit status is `0` for `complete`, `partial`, or
@@ -51,10 +55,12 @@ it cannot be proven from target-revision evidence.
 For each frontier symbol, Step 3 queries rows where
 `relationships.target_symbol_id` is exactly that persisted ID. Only exact,
 case-sensitive `CALLS` and `STATIC_CALLS` rows with
-`resolution_class='project_resolved'` are traversed. Every persisted matching
-relationship row is retained either in `transitive_edges` or in
-`skipped_edges`; null-target rows are never name-matched. Batches stay below
-SQLite's variable limit and fan-out is never truncated.
+`resolution_class='project_resolved'` and `confidence > min_confidence` are
+traversed. Every persisted matching relationship row is retained either in
+`transitive_edges` or in `skipped_edges`; null-target rows are never
+name-matched. Batches stay below SQLite's variable limit and fan-out is never
+truncated. The default threshold is `0.7`; equality is skipped with reason
+`below_confidence`.
 
 Seeds and reached symbols retain catalog IDs, repository/file/blob identity,
 declaration ranges, symbol identity, and source revisions. Edges retain both
@@ -62,10 +68,12 @@ symbol IDs and names/kinds, relationship evidence, confidence, resolution,
 extractor, file/blob identity, hop, and both catalog and fixture revisions.
 Relationship evidence is not presented as a call-site line range.
 
-`entity_context` is always unavailable with reason
-`repo_v1_symbol_entity_mapping_not_modelled`. `business_impact` is always
+Without reviewed links, `entity_context` remains unavailable with reason
+`repo_v1_symbol_entity_mapping_not_modelled`. With links, it reports resolved,
+unresolved, ambiguous, stale, or missing mapping states and their contract
+provenance. `business_impact` is always
 deferred because verified caller evidence is not a business-impact mapping.
-Every non-blocked report includes the deterministic gap
+Reports without reviewed links include the deterministic gap
 `entity_context:repo_v1_symbol_entity_mapping_not_modelled`; consumers must not
 interpret unavailable entity mappings or zero callers as no business impact.
 Entity occurrences in the same file, matching entity names, matching

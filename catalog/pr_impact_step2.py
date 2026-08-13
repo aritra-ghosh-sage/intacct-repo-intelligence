@@ -215,6 +215,13 @@ def _audit_rows(step1_report: Mapping[str, Any]) -> list[dict[str, Any]]:
             "disposition": SURFACE_DISPOSITIONS[status],
             "fact_count": len(facts),
         }
+        if surface == "entity_symbol_links":
+            counts: dict[str, int] = {}
+            for fact in facts:
+                if isinstance(fact, Mapping):
+                    key = str(fact.get("resolution_status") or "missing")
+                    counts[key] = counts.get(key, 0) + 1
+            row["link_status_counts"] = dict(sorted(counts.items()))
         if trace.get("warning") is not None:
             row["warning"] = trace["warning"]
         rows.append(row)

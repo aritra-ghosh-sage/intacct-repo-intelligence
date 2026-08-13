@@ -43,38 +43,41 @@ The accepted fact families include:
 - ActionUI and NextGen UI facts;
 - workflow and security facts;
 - database tables, fields, entity metadata, and direct database links.
+- reviewed symbol-to-entity links, including exact contract identity,
+  resolution status/reason, contract hash, target revision, and evidence.
 
 ## Current PR-impact slices
 
 - **Step 0:** exact PR/revision fixture and review context.
 - **Step 1:** read-only direct `ia-main` tracing over an exact target-revision
-  SQLite catalog; report schema `0.4`.
+  SQLite catalog; report schema `0.4`, with an `entity_symbol_links` surface
+  when changed symbols have reviewed mappings.
 - **Step 2:** read-only availability audit over the Step 1 report; report
   schema `0.1`; it does not re-query SQLite or infer impact.
 - **Step 3:** read-only incoming `CALLS`/`STATIC_CALLS` traversal for one or
-  two hops; report schema `0.1`.
+  two hops; report schema `0.1`. Traversal requires `project_resolved` and
+  strict `confidence > min_confidence` (default `0.7`); lower-confidence rows
+  remain explicit skipped edges.
 - **Step 4:** current sign-off documentation, not a separate analysis engine.
 
 Steps 1–3 remain separately testable, but the intended product output is one
 composed review containing direct facts, bounded callers, entity context,
 test evidence, downstream obligations, and explicit gaps.
 
-## Immediate gaps
+## Bounded follow-up gaps
 
-These are the next repo-v1 implementation slices:
+These remain separate bounded slices:
 
-1. Add an explicit, provenance-backed `symbol -> entity occurrence` mapping.
-   Same-file, same-name, filename, module, and semantic similarity do not
-   establish ownership.
-2. Improve Step 3 seed precision by mapping changed diff hunks to symbol
+1. Improve Step 3 seed precision by mapping changed diff hunks to symbol
    declaration ranges, with an explicit file-level fallback.
-3. Compose Steps 1–3 into one deterministic PR-review result.
+2. Compose Steps 1–3 into one deterministic PR-review result.
 
 ## Deferred follow-up
 
 - repository-local test discovery and target-revision coverage;
 - reviewed cross-repository contracts and downstream test obligations;
 - API, workflow, UI, permission, and data propagation beyond direct facts;
+- cross-repository integration contracts and exact test discovery/coverage;
 - broader semantic business-impact interpretation;
 - graph/Ladybug, MCP compatibility, delta refresh, and legacy orchestration.
 

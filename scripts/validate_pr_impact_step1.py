@@ -39,6 +39,7 @@ SURFACE_STATUSES = {
 SUPPORTED_SURFACES = {
     "files",
     "symbols",
+    "entity_symbol_links",
     "outgoing_relationships",
     "incoming_relationships",
     "entity_occurrences",
@@ -226,25 +227,23 @@ def validate(report: object) -> list[str]:
             if (
                 trace.get("surface") == "database_consumers"
                 and trace.get("status") == "available"
-            ):
-                if not trace.get("facts") or any(
-                    not isinstance(fact, dict) or fact.get("catalog_record_id") is None
-                    for fact in trace.get("facts", [])
-                ):
-                    errors.append(
-                        "available database_consumers requires direct catalog facts"
-                    )
+            ) and (not trace.get("facts") or any(
+                not isinstance(fact, dict) or fact.get("catalog_record_id") is None
+                for fact in trace.get("facts", [])
+            )):
+                errors.append(
+                    "available database_consumers requires direct catalog facts"
+                )
             if (
                 trace.get("surface") == "entity_metadata"
                 and trace.get("status") == "available"
-            ):
-                if not trace.get("facts") or any(
-                    not isinstance(fact, dict) or fact.get("catalog_record_id") is None
-                    for fact in trace.get("facts", [])
-                ):
-                    errors.append(
-                        "available entity_metadata requires direct catalog facts"
-                    )
+            ) and (not trace.get("facts") or any(
+                not isinstance(fact, dict) or fact.get("catalog_record_id") is None
+                for fact in trace.get("facts", [])
+            )):
+                errors.append(
+                    "available entity_metadata requires direct catalog facts"
+                )
     ranking = report.get("impact_ranking")
     if not isinstance(ranking, list):
         errors.append("impact_ranking must be a list")

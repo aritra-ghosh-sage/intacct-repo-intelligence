@@ -151,6 +151,15 @@ def validate(report: object) -> list[str]:
                 errors.append("surface audit fact_count must be a non-negative integer")
             if "facts" in row:
                 errors.append("surface audit must not duplicate Step 1 facts")
+            if surface == "entity_symbol_links":
+                counts = row.get("link_status_counts")
+                if not isinstance(counts, dict) or any(
+                    not isinstance(key, str) or not isinstance(value, int) or value < 0
+                    for key, value in counts.items()
+                ):
+                    errors.append(
+                        "entity_symbol_links audit requires link_status_counts"
+                    )
 
         if isinstance(summary, dict):
             if summary.get("surface_count") != len(EXPECTED_SURFACES):

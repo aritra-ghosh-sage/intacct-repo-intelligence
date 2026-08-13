@@ -21,6 +21,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--active-db", required=True)
     parser.add_argument("--repo-key", required=True)
     parser.add_argument("--max-hops", type=int, choices=(1, 2), default=2)
+    parser.add_argument("--min-confidence", type=float, default=0.7)
     args = parser.parse_args(argv)
     try:
         report = analyze_fixture(
@@ -29,6 +30,7 @@ def main(argv: list[str] | None = None) -> int:
             args.active_db,
             args.repo_key,
             args.max_hops,
+            args.min_confidence,
         )
     except Step1Error as exc:
         report = blocked_report(exc)

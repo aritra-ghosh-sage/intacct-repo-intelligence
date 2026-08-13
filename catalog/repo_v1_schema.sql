@@ -125,6 +125,42 @@ CREATE TABLE symbols (
 
 CREATE INDEX idx_repo_v1_symbols_repo_file ON symbols(repo_id, file_id);
 
+CREATE TABLE symbol_entity_links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL,
+    build_id INTEGER NOT NULL,
+    symbol_id INTEGER,
+    entity_occurrence_id INTEGER,
+    symbol_file_path TEXT NOT NULL CHECK(symbol_file_path <> ''),
+    symbol_stable_key TEXT NOT NULL CHECK(symbol_stable_key <> ''),
+    entity_source_path TEXT NOT NULL CHECK(entity_source_path <> ''),
+    entity_source_key TEXT NOT NULL CHECK(entity_source_key <> ''),
+    mapping_type TEXT NOT NULL CHECK(mapping_type <> ''),
+    resolution_status TEXT NOT NULL CHECK(resolution_status IN (
+        'resolved','unresolved','ambiguous','stale','missing'
+    )),
+    resolution_reason TEXT NOT NULL CHECK(resolution_reason <> ''),
+    mapping_contract_path TEXT NOT NULL CHECK(mapping_contract_path <> ''),
+    mapping_contract_sha256 TEXT NOT NULL CHECK(length(mapping_contract_sha256)=64),
+    target_revision TEXT NOT NULL CHECK(target_revision <> ''),
+    contract_entry_key TEXT NOT NULL UNIQUE,
+    evidence TEXT NOT NULL CHECK(evidence <> ''),
+    extractor TEXT NOT NULL CHECK(extractor <> ''),
+    FOREIGN KEY (repo_id) REFERENCES repos(id) ON DELETE CASCADE,
+    FOREIGN KEY (build_id) REFERENCES catalog_builds(id) ON DELETE CASCADE,
+    FOREIGN KEY (symbol_id) REFERENCES symbols(id) ON DELETE CASCADE,
+    FOREIGN KEY (entity_occurrence_id) REFERENCES entity_occurrences(id) ON DELETE CASCADE,
+    CHECK((resolution_status='resolved' AND symbol_id IS NOT NULL AND entity_occurrence_id IS NOT NULL)
+          OR resolution_status<>'resolved')
+);
+
+CREATE INDEX idx_repo_v1_symbol_entity_links_repo_symbol
+    ON symbol_entity_links(repo_id, symbol_id);
+CREATE INDEX idx_repo_v1_symbol_entity_links_entity
+    ON symbol_entity_links(entity_occurrence_id);
+CREATE INDEX idx_repo_v1_symbol_entity_links_status
+    ON symbol_entity_links(repo_id, resolution_status);
+
 CREATE TABLE relationships (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     repo_id INTEGER NOT NULL,

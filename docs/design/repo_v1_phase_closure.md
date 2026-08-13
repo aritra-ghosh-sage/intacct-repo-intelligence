@@ -764,3 +764,18 @@ PYTHONPATH=. ./.venv/bin/pytest -q tests/test_repo_v1*.py tests/test_pr_impact_s
 The remaining warning is the existing Tree-sitter deprecation warning. Legacy
 catalog refresh, mapping, graph, MCP, delta, and retirement behavior remain
 unchanged and deferred according to the KISS/YAGNI boundaries.
+# Phase 10: Reviewed Symbol-to-Entity Links
+
+The repo-v1 schema includes the additive `symbol_entity_links` table. It is
+populated only from an operator-supplied YAML contract with schema version
+`1`, repository `ia-main`, and an exact target revision. Every entry names an
+exact persisted symbol `(file_path, stable_key)` and entity occurrence
+`(source_path, source_key)`; no wildcard, basename, module, class-name, or
+similarity matching is permitted. The table retains unresolved, ambiguous,
+stale, and missing states with contract SHA-256 and review evidence.
+
+Candidate validation checks build/repository ownership, target revision,
+foreign keys, contract provenance, and resolved-link identity. Step 1 exposes
+these rows as `entity_symbol_links`; Step 2 audits their status without a
+second SQLite query engine; Step 3 joins resolved rows by persisted symbol ID
+and keeps business impact deferred.

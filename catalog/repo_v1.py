@@ -25,8 +25,11 @@ from catalog.refresh_transaction import (
     promote_catalog_candidate,
     refresh_lock,
 )
+from catalog.repo_v1_database import (
+    extract_snapshot_database_facts,
+    validate_database_candidate,
+)
 from catalog.repo_v1_entities import ENTITY_DIAGNOSTIC_CODES
-from catalog.repo_v1_database import extract_snapshot_database_facts, validate_database_candidate
 from catalog.repo_v1_nextgen import (
     extract_snapshot_nextgen,
     validate_nextgen_candidate,
@@ -39,6 +42,10 @@ from catalog.repo_v1_openapi import (
 from catalog.repo_v1_security import (
     extract_snapshot_security,
     validate_security_candidate,
+)
+from catalog.repo_v1_symbol_entity import (
+    SymbolEntityMappingError,
+    materialize_symbol_entity_links,
 )
 from catalog.repo_v1_ui import extract_snapshot_ui, validate_ui_candidate
 from catalog.repo_v1_workflows import (
@@ -92,11 +99,17 @@ PHASE8B_ADDITIVE_TABLES = frozenset(
 )
 PHASE9_DATABASE_ADDITIVE_TABLES = frozenset(
     {
-        "dbschema_tables", "dbschema_fields", "entity_section_facts", "entity_field_facts",
-        "entity_schema_mappings", "entity_db_table_links", "entity_db_field_links",
+        "dbschema_tables",
+        "dbschema_fields",
+        "entity_section_facts",
+        "entity_field_facts",
+        "entity_schema_mappings",
+        "entity_db_table_links",
+        "entity_db_field_links",
         "repo_v1_database_diagnostics",
     }
 )
+PHASE10_SYMBOL_ENTITY_ADDITIVE_TABLES = frozenset({"symbol_entity_links"})
 # Existing Phase 5 -> Phase 6 upgrades remain valid; Phase 7A adds its own
 # complete table family on top of that accepted boundary.
 _REPO_V1_ADDITIVE_TABLES = (
@@ -106,6 +119,7 @@ _REPO_V1_ADDITIVE_TABLES = (
     | PHASE8A_ADDITIVE_TABLES
     | PHASE8B_ADDITIVE_TABLES
     | PHASE9_DATABASE_ADDITIVE_TABLES
+    | PHASE10_SYMBOL_ENTITY_ADDITIVE_TABLES
 )
 
 
@@ -294,6 +308,7 @@ def _build_inventory(
     target_commit_sha: str,
     build_token: str,
     show_progress: bool,
+    mapping_contract: Path | None,
 ) -> int:
     conn = _connect_candidate(candidate)
     try:
@@ -382,6 +397,14 @@ def _build_inventory(
                 snapshot=snapshot,
                 show_progress=show_progress,
             )
+            mapping_stats = materialize_symbol_entity_links(
+                conn,
+                repo_id=repo_id,
+                build_id=build_id,
+                repository=REPO_KEY,
+                target_revision=target_commit_sha,
+                contract_path=mapping_contract,
+            )
             openapi_stats = extract_snapshot_openapi(
                 conn,
                 repo_id=repo_id,
@@ -468,6 +491,16 @@ def _build_inventory(
                         "entity_db_table_link_count": database_stats.table_link_count,
                         "entity_db_field_link_count": database_stats.field_link_count,
                         "database_diagnostic_count": database_stats.diagnostic_count,
+                        "symbol_entity_link_count": mapping_stats["mapping_count"],
+                        "symbol_entity_resolved_link_count": mapping_stats[
+                            "resolved_count"
+                        ],
+                        "symbol_entity_unresolved_link_count": mapping_stats[
+                            "unresolved_count"
+                        ],
+                        "symbol_entity_mapping_contract_path": mapping_stats[
+                            "contract_path"
+                        ],
                     },
                     sort_keys=True,
                 ),
@@ -476,7 +509,13 @@ def _build_inventory(
         )
         conn.commit()
         return file_count
-    except (OSError, SourceSnapshotError, sqlite3.Error, RuntimeError) as exc:
+    except (
+        OSError,
+        SourceSnapshotError,
+        sqlite3.Error,
+        RuntimeError,
+        SymbolEntityMappingError,
+    ) as exc:
         conn.rollback()
         raise RepoV1Error(str(exc)) from exc
     finally:
@@ -672,6 +711,25 @@ def _validate_candidate(
             raise RepoV1Error(
                 "candidate entity ownership, provenance, or diagnostic validation failed"
             )
+        invalid_symbol_entity_links = conn.execute(
+            """SELECT COUNT(*) FROM symbol_entity_links l
+               LEFT JOIN repos r ON r.id=l.repo_id
+               LEFT JOIN catalog_builds b ON b.id=l.build_id
+               LEFT JOIN symbols s ON s.id=l.symbol_id
+               LEFT JOIN entity_occurrences eo ON eo.id=l.entity_occurrence_id
+               WHERE r.id IS NULL OR b.id IS NULL OR l.repo_id<>?
+                  OR l.build_id<>r.build_id OR b.id<>r.build_id
+                  OR l.target_revision<>r.target_commit_sha
+                  OR l.mapping_contract_sha256='' OR length(l.mapping_contract_sha256)<>64
+                  OR l.mapping_contract_path='' OR l.evidence='' OR l.extractor<>'repo_v1_symbol_entity_v1'
+                  OR (l.resolution_status='resolved' AND
+                      (s.id IS NULL OR eo.id IS NULL OR s.repo_id<>l.repo_id OR eo.repo_id<>l.repo_id))
+                  OR (l.resolution_status<>'resolved' AND l.symbol_id IS NOT NULL
+                      AND (s.id IS NULL OR s.repo_id<>l.repo_id))""",
+            (repo["id"],),
+        ).fetchone()[0]
+        if invalid_symbol_entity_links:
+            raise RepoV1Error("candidate symbol-to-entity link validation failed")
         try:
             validate_openapi_candidate(
                 conn,
@@ -734,6 +792,7 @@ def build_ia_main(
     target_sha: str | None = None,
     promote: bool = True,
     show_progress: bool = False,
+    mapping_contract: str | Path | None = None,
 ) -> BuildResult:
     """Build and optionally promote a full immutable ``ia-main`` inventory."""
 
@@ -764,6 +823,11 @@ def build_ia_main(
                 target_commit_sha=resolved_sha,
                 build_token=token,
                 show_progress=show_progress,
+                mapping_contract=(
+                    Path(mapping_contract).expanduser().resolve()
+                    if mapping_contract is not None
+                    else None
+                ),
             )
             _validate_candidate(
                 candidate, target_commit_sha=resolved_sha, build_token=token
@@ -810,6 +874,7 @@ def _assert_phase_parent_boundary(active: Path) -> None:
         PHASE8A_ADDITIVE_TABLES,
         PHASE8B_ADDITIVE_TABLES,
         PHASE9_DATABASE_ADDITIVE_TABLES,
+        PHASE10_SYMBOL_ENTITY_ADDITIVE_TABLES,
     )
     states = []
     invalid = False
@@ -835,7 +900,9 @@ def _assert_phase_parent_boundary(active: Path) -> None:
             message = "partial NextGen table set"
         elif PHASE6_ADDITIVE_TABLES & tables and not (PHASE6_ADDITIVE_TABLES <= tables):
             message = "partial OpenAPI table set"
-        elif PHASE9_DATABASE_ADDITIVE_TABLES & tables and not (PHASE9_DATABASE_ADDITIVE_TABLES <= tables):
+        elif PHASE9_DATABASE_ADDITIVE_TABLES & tables and not (
+            PHASE9_DATABASE_ADDITIVE_TABLES <= tables
+        ):
             message = "partial database table set"
         else:
             message = "active catalog schema has an incomplete or out-of-order Phase 6-8 family"
@@ -851,6 +918,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--manifest", type=Path, default=Path("config/workspace_repos.yaml")
+    )
+    parser.add_argument(
+        "--mapping-contract",
+        type=Path,
+        help="Reviewed exact symbol-to-entity YAML contract",
     )
     parser.add_argument("--active-db", type=Path, default=DEFAULT_ACTIVE_DB)
     parser.add_argument(
@@ -869,6 +941,7 @@ def main() -> int:
         target_sha=args.target_sha,
         promote=not args.no_promote,
         show_progress=not args.no_progress,
+        mapping_contract=args.mapping_contract,
     )
     print(json.dumps(result.__dict__, default=str, sort_keys=True))
     return 0

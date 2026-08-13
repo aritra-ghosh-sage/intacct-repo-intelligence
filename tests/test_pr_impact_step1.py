@@ -972,7 +972,7 @@ def test_report_validator_requires_classification_warnings_and_complete_surfaces
     report["direct_traces"][0]["warning"] = "not proof"
     errors = validate(report)
     assert (
-        "complete report is missing direct traces: actionui, actionui_artifacts, actionui_events, actionui_fields, actionui_includes, database_consumers, entity_metadata, entity_occurrences, incoming_relationships, nextgen, nextgen_artifacts, openapi_documents, openapi_entity_links, outgoing_relationships, permissions, rest_endpoints, source_diagnostics, symbols, tests, workflows"
+        "complete report is missing direct traces: actionui, actionui_artifacts, actionui_events, actionui_fields, actionui_includes, database_consumers, entity_metadata, entity_occurrences, entity_symbol_links, incoming_relationships, nextgen, nextgen_artifacts, openapi_documents, openapi_entity_links, outgoing_relationships, permissions, rest_endpoints, source_diagnostics, symbols, tests, workflows"
         in errors
     )
     assert "complete report contains a supported direct-trace gap" in errors

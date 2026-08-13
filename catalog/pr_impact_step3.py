@@ -22,6 +22,7 @@ from catalog.pr_impact_step1 import (
     _revision,
     _safe_path,
 )
+from catalog.repo_v1_symbol_entity import entity_impact_facts, mapping_rows_for_symbols
 
 REPORT_SCHEMA_VERSION = "0.1"
 ANALYSIS_KIND = "pr_impact_step_3"
@@ -39,6 +40,7 @@ SKIP_REASONS = {
     "non_call_relationship",
     "unresolved_resolution",
     "source_symbol_missing",
+    "below_confidence",
 }
 _SQL_BATCH_SIZE = 400
 
@@ -205,6 +207,7 @@ def _input(
     base: str,
     target: str,
     max_hops: int,
+    min_confidence: float,
 ) -> dict[str, Any]:
     return {
         "fixture": str(fixture),
@@ -215,6 +218,7 @@ def _input(
         "base_revision": base,
         "target_revision": target,
         "max_hops": max_hops,
+        "min_confidence": min_confidence,
         "seed_basis": SEED_BASIS,
     }
 
@@ -232,15 +236,9 @@ def _base_report(
     skipped_edges: list[dict[str, Any]],
     gaps: list[str],
     warnings: list[str],
+    entity_context: dict[str, Any],
 ) -> dict[str, Any]:
     target = str(input_data.get("target_revision", ""))
-    all_symbol_ids = sorted(
-        {
-            int(item["symbol_id"])
-            for item in [*seed_symbols, *reached_symbols]
-            if isinstance(item.get("symbol_id"), int)
-        }
-    )
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
         "analysis_kind": ANALYSIS_KIND,
@@ -253,18 +251,22 @@ def _base_report(
         "reached_symbols": reached_symbols,
         "transitive_edges": transitive_edges,
         "skipped_edges": skipped_edges,
-        "entity_context": {
-            "status": "unavailable",
-            "reason": "repo_v1_symbol_entity_mapping_not_modelled",
-            "mappings": [],
-            "unavailable_symbol_ids": all_symbol_ids,
-        },
+        "entity_context": entity_context,
         "business_impact": {
             "status": "deferred",
             "reason": "transitive callers are verified code evidence only",
             "facts": [],
         },
-        "gaps": sorted({*gaps, ENTITY_MAPPING_GAP}),
+        "gaps": sorted(
+            {
+                *gaps,
+                *(
+                    [ENTITY_MAPPING_GAP]
+                    if entity_context.get("status") == "unavailable"
+                    else []
+                ),
+            }
+        ),
         "warnings": sorted(set(warnings)),
         "provenance": {
             "source": "repo-v1 active SQLite and exact Git diff",
@@ -383,6 +385,66 @@ def _edge_rows(conn: sqlite3.Connection, frontier: list[int]) -> list[sqlite3.Ro
              ORDER BY r.id""",
         tuple(frontier),
     ).fetchall()
+
+
+def _entity_context(
+    conn: sqlite3.Connection, repo_id: int, symbol_ids: list[int]
+) -> dict[str, Any]:
+    rows = mapping_rows_for_symbols(conn, repo_id, symbol_ids)
+    if not rows:
+        return {
+            "status": "unavailable",
+            "reason": "repo_v1_symbol_entity_mapping_not_modelled",
+            "mappings": [],
+            "unavailable_symbol_ids": sorted(symbol_ids),
+        }
+    mappings: list[dict[str, Any]] = []
+    mapped_ids: set[int] = set()
+    resolved_count = 0
+    for row in rows:
+        symbol_id = int(row["symbol_id"])
+        mapped_ids.add(symbol_id)
+        item: dict[str, Any] = {
+            "symbol_id": symbol_id,
+            "symbol_name": row["symbol_name"],
+            "symbol_file_path": row["symbol_file_path"],
+            "symbol_stable_key": row["symbol_stable_key"],
+            "entity_source_path": row["entity_source_path"],
+            "entity_source_key": row["entity_source_key"],
+            "mapping_type": row["mapping_type"],
+            "resolution_status": row["resolution_status"],
+            "resolution_reason": row["resolution_reason"],
+            "mapping_contract_path": row["mapping_contract_path"],
+            "mapping_contract_sha256": row["mapping_contract_sha256"],
+            "target_revision": row["target_revision"],
+            "contract_entry_key": row["contract_entry_key"],
+            "evidence": _json_value(row["evidence"]),
+            "extractor": row["extractor"],
+        }
+        if row["resolution_status"] == "resolved":
+            resolved_count += 1
+            item["entity_occurrence_id"] = int(row["entity_occurrence_id"])
+            item["entity_id"] = int(row["entity_id"])
+            item["entity_name"] = row["entity_name"]
+            item["entity_impact_facts"] = entity_impact_facts(
+                conn, repo_id, int(row["entity_occurrence_id"])
+            )
+        else:
+            item["entity_occurrence_id"] = None
+            item["entity_id"] = None
+            item["entity_impact_facts"] = {}
+        mappings.append(item)
+    unavailable = sorted(set(symbol_ids) - mapped_ids)
+    return {
+        "status": "available"
+        if resolved_count
+        and not unavailable
+        and all(item["resolution_status"] == "resolved" for item in mappings)
+        else "partial",
+        "reason": "reviewed_symbol_entity_mapping_contract",
+        "mappings": mappings,
+        "unavailable_symbol_ids": unavailable,
+    }
 
 
 def _check_edge_provenance(row: Mapping[str, Any], repo_id: int, target: str) -> None:
@@ -504,10 +566,21 @@ def analyze_fixture(
     active_db: str | Path,
     repo_key: str,
     max_hops: int = 2,
+    min_confidence: float = 0.7,
 ) -> dict[str, Any]:
     """Run deterministic, read-only incoming traversal for one fixture."""
     if max_hops not in (1, 2):
         raise _error("malformed_fixture", "max_hops must be 1 or 2", max_hops=max_hops)
+    if (
+        isinstance(min_confidence, bool)
+        or not isinstance(min_confidence, (int, float))
+        or not 0 <= min_confidence <= 1
+    ):
+        raise _error(
+            "malformed_fixture",
+            "min_confidence must be between 0 and 1",
+            min_confidence=min_confidence,
+        )
     fixture_path, manifest_path, db_path = (
         Path(fixture),
         Path(manifest),
@@ -547,7 +620,15 @@ def analyze_fixture(
         raise _error("malformed_git_diff", "changed path is unsafe")
 
     input_data = _input(
-        fixture_path, manifest_path, db_path, repo_key, repo, base, target, max_hops
+        fixture_path,
+        manifest_path,
+        db_path,
+        repo_key,
+        repo,
+        base,
+        target,
+        max_hops,
+        float(min_confidence),
     )
     changed_files = [item.__dict__ for item in changed]
     conn, repo_id, preflight = _open_catalog(db_path, target, repo_key, repo)
@@ -679,6 +760,12 @@ def analyze_fixture(
                         skipped_edges.append(edge)
                         partial_reasons.append("source_symbol_missing")
                         continue
+                    confidence = float(row["confidence"])
+                    if confidence <= float(min_confidence):
+                        edge["skip_reason"] = "below_confidence"
+                        skipped_edges.append(edge)
+                        partial_reasons.append("below_confidence")
+                        continue
                     source_record = _symbol_record(
                         {
                             "symbol_id": source_id,
@@ -726,6 +813,8 @@ def analyze_fixture(
         reached_symbols = sorted(
             reached_by_id.values(), key=lambda item: int(item["symbol_id"])
         )
+        all_symbol_ids = sorted(seed_ids | set(reached_by_id))
+        entity_context = _entity_context(conn, repo_id, all_symbol_ids)
         file_states = {str(item["state"]) for item in seed_files}
         if not seed_symbols and file_states and file_states <= {"symbol_less"}:
             status = "empty"
@@ -763,6 +852,7 @@ def analyze_fixture(
             skipped_edges=skipped_edges,
             gaps=gaps,
             warnings=warnings,
+            entity_context=entity_context,
         )
     finally:
         conn.close()

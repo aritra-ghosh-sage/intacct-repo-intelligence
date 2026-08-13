@@ -253,6 +253,29 @@ def test_max_hops_one_excludes_second_hop(tmp_path: Path) -> None:
     assert validate(report) == []
 
 
+def test_min_confidence_is_strict_and_retains_below_threshold_edges(
+    tmp_path: Path,
+) -> None:
+    repo, base, target = make_repo(tmp_path)
+    db = make_db(tmp_path, repo, target)
+    add_symbols_and_edges(db, max_hop_fixture=False)
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE relationships SET confidence=0.7 WHERE id=1")
+    conn.commit()
+    conn.close()
+    report = analyze_fixture(
+        fixture(tmp_path, base, target),
+        manifest(tmp_path, repo),
+        db,
+        "ia-main",
+        min_confidence=0.7,
+    )
+    assert report["status"] == "partial"
+    assert report["reached_symbols"] == []
+    assert report["skipped_edges"][0]["skip_reason"] == "below_confidence"
+    assert validate(report) == []
+
+
 def test_entity_context_is_explicitly_unavailable_for_seed_and_reached_symbols(
     tmp_path: Path,
 ) -> None:
@@ -292,6 +315,40 @@ def test_same_file_entity_occurrence_does_not_infer_symbol_mapping(
         fixture(tmp_path, base, target), manifest(tmp_path, repo), db, "ia-main"
     )
     assert report["entity_context"]["mappings"] == []
+    assert validate(report) == []
+
+
+def test_reviewed_entity_mapping_is_reported_by_symbol_identity(tmp_path: Path) -> None:
+    repo, base, target = make_repo(tmp_path)
+    db = make_db(tmp_path, repo, target)
+    add_symbols_and_edges(db)
+    conn = sqlite3.connect(db)
+    conn.execute("INSERT INTO entity_nodes(name) VALUES('ReviewedEntity')")
+    conn.execute(
+        """INSERT INTO entity_occurrences(
+            repo_id,entity_id,source_file_id,source_key,source_commit_sha,evidence,extractor
+        ) VALUES(1,1,1,'reviewed',?,'fixture','test')""",
+        (target,),
+    )
+    conn.execute(
+        """INSERT INTO symbol_entity_links(
+            repo_id,build_id,symbol_id,entity_occurrence_id,symbol_file_path,symbol_stable_key,
+            entity_source_path,entity_source_key,mapping_type,resolution_status,resolution_reason,
+            mapping_contract_path,mapping_contract_sha256,target_revision,contract_entry_key,evidence,extractor
+        ) VALUES(1,1,1,1,'a.php','a-target','a.php','reviewed','reviewed_explicit',
+                 'resolved','exact_contract_identity','contract.yaml',?,?,'mapping:1','review','test')""",
+        ("a" * 64, target),
+    )
+    conn.commit()
+    conn.close()
+    report = analyze_fixture(
+        fixture(tmp_path, base, target), manifest(tmp_path, repo), db, "ia-main"
+    )
+    assert report["entity_context"]["status"] == "partial"
+    mapping = report["entity_context"]["mappings"][0]
+    assert mapping["symbol_id"] == 1
+    assert mapping["entity_name"] == "ReviewedEntity"
+    assert mapping["resolution_status"] == "resolved"
     assert validate(report) == []
 
 

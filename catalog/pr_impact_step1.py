@@ -55,6 +55,7 @@ REPORT_SCHEMA_VERSION = "0.4"
 SUPPORTED_SURFACES = {
     "files",
     "symbols",
+    "entity_symbol_links",
     "outgoing_relationships",
     "incoming_relationships",
     "entity_occurrences",
@@ -113,6 +114,7 @@ _REQUIRED_TABLES = {
     "entity_db_table_links",
     "entity_db_field_links",
     "repo_v1_database_diagnostics",
+    "symbol_entity_links",
 }
 
 
@@ -341,16 +343,15 @@ def _open_catalog(
                 if (
                     "check" in str(expected_sql).lower()
                     or "check" in str(actual_sql).lower()
+                ) and (
+                    " ".join(str(actual_sql).split()).lower()
+                    != " ".join(str(expected_sql).split()).lower()
                 ):
-                    if (
-                        " ".join(str(actual_sql).split()).lower()
-                        != " ".join(str(expected_sql).split()).lower()
-                    ):
-                        raise Step1Error(
-                            "catalog_schema_mismatch",
-                            f"CHECK constraints do not match repo-v1 schema for {table}",
-                            table=table,
-                        )
+                    raise Step1Error(
+                        "catalog_schema_mismatch",
+                        f"CHECK constraints do not match repo-v1 schema for {table}",
+                        table=table,
+                    )
         finally:
             expected.close()
         if conn.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
@@ -954,6 +955,23 @@ def analyze_fixture(
                 target,
             )
         )
+        entity_symbol_links = _rows(
+            conn,
+            f"""SELECT l.*, s.id AS linked_symbol_id, l.symbol_file_path AS source_path,
+                         l.target_revision AS source_commit_sha
+                  FROM symbol_entity_links l
+                  LEFT JOIN symbols s ON s.id=l.symbol_id
+                  LEFT JOIN files f ON f.id=s.file_id
+                 WHERE l.repo_id=? AND (
+                    l.symbol_id IN (SELECT id FROM symbols WHERE repo_id=? AND file_id IN ({ids}))
+                    OR EXISTS (SELECT 1 FROM symbols sx JOIN files fx ON fx.id=sx.file_id
+                               WHERE sx.repo_id=? AND fx.path=l.symbol_file_path
+                                 AND sx.stable_key=l.symbol_stable_key AND sx.file_id IN ({ids}))
+                 ) ORDER BY l.id""",
+            (repo_id, repo_id, *file_ids, repo_id, *file_ids),
+            "source_path",
+            target,
+        )
         database_consumers = (
             _rows(
                 conn,
@@ -1008,6 +1026,7 @@ def analyze_fixture(
                     target,
                 ),
             ),
+            direct_surface("entity_symbol_links", entity_symbol_links),
             direct_surface(
                 "incoming_relationships",
                 _rows(

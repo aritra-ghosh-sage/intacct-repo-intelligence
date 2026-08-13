@@ -46,6 +46,7 @@ SKIP_REASONS = {
     "non_call_relationship",
     "unresolved_resolution",
     "source_symbol_missing",
+    "below_confidence",
 }
 
 
@@ -149,9 +150,7 @@ def _validate_symbol(
         "language",
         "stable_key",
     ):
-        if key not in item:
-            errors.append(f"{label} requires {key}")
-        elif key.endswith("_id") and (not _is_int(item[key]) or item[key] <= 0):
+        if key not in item or key.endswith("_id") and (not _is_int(item[key]) or item[key] <= 0):
             errors.append(f"{label} requires {key}")
         elif key in {"name", "kind", "language", "stable_key"} and not _nonempty_text(
             item[key]
@@ -204,9 +203,7 @@ def _validate_edge(
         ):
             field = f"{prefix}_{key}"
             value = item.get(field)
-            if key == "file_id" and (not _is_int(value) or value <= 0):
-                errors.append(f"{label} requires {field}")
-            elif key != "file_id" and not _nonempty_text(value):
+            if (key == "file_id" and (not _is_int(value) or value <= 0)) or (key != "file_id" and not _nonempty_text(value)):
                 errors.append(f"{label} requires {field}")
         if item.get(f"{prefix}_catalog_source_revision") != input_data.get(
             "target_revision"
@@ -250,6 +247,13 @@ def _validate_edge(
         valid_confidence = math.isfinite(confidence) and 0 <= confidence <= 1
     if not valid_confidence:
         errors.append(f"{label} requires confidence between 0 and 1")
+    elif skipped and item.get("skip_reason") == "below_confidence":
+        threshold = input_data.get("min_confidence")
+        if isinstance(threshold, (int, float)) and float(confidence) > float(threshold):
+            errors.append(f"{label} below_confidence does not meet min_confidence")
+    elif not skipped and isinstance(input_data.get("min_confidence"), (int, float)):
+        if float(confidence) <= float(input_data["min_confidence"]):
+            errors.append(f"{label} does not exceed min_confidence")
     if not _has_evidence(item.get("evidence")):
         errors.append(f"{label} requires evidence")
     if not _is_int(item.get("target_symbol_id")) or item["target_symbol_id"] <= 0:
@@ -380,6 +384,14 @@ def validate(report: object) -> list[str]:
             or input_data["max_hops"] not in (1, 2)
         ):
             errors.append("input.max_hops must be 1 or 2")
+        confidence = input_data.get("min_confidence")
+        if (
+            isinstance(confidence, bool)
+            or not isinstance(confidence, (int, float))
+            or not math.isfinite(float(confidence))
+            or not 0 <= float(confidence) <= 1
+        ):
+            errors.append("input.min_confidence must be between 0 and 1")
     preflight = report.get("preflight")
     if status != "blocked":
         if not isinstance(preflight, dict):
@@ -517,9 +529,7 @@ def validate(report: object) -> list[str]:
                 not isinstance(edge_ids, list)
                 or not edge_ids
                 or any(not _is_int(value) or value <= 0 for value in edge_ids)
-            ):
-                errors.append("reached symbol has invalid contributing_edge_ids")
-            elif len(edge_ids) != len(set(edge_ids)):
+            ) or len(edge_ids) != len(set(edge_ids)):
                 errors.append("reached symbol has invalid contributing_edge_ids")
 
     transitive = report.get("transitive_edges")
@@ -631,13 +641,65 @@ def validate(report: object) -> list[str]:
                         )
 
     entity = report.get("entity_context")
-    if entity != {
+    old_entity = {
         "status": "unavailable",
         "reason": "repo_v1_symbol_entity_mapping_not_modelled",
         "mappings": [],
         "unavailable_symbol_ids": sorted(seed_ids | reached_ids),
-    }:
-        errors.append("entity_context does not match the fixed unavailable shape")
+    }
+    if entity != old_entity:
+        if not isinstance(entity, dict) or entity.get("status") not in {
+            "available",
+            "partial",
+        }:
+            errors.append("entity_context does not match the reviewed mapping shape")
+        else:
+            if not _nonempty_text(entity.get("reason")) or not isinstance(
+                entity.get("mappings"), list
+            ):
+                errors.append("entity_context requires reason and mappings")
+            unavailable = entity.get("unavailable_symbol_ids")
+            if not isinstance(unavailable, list) or any(
+                not _is_int(value) for value in unavailable
+            ):
+                errors.append(
+                    "entity_context unavailable_symbol_ids must be integer list"
+                )
+            for mapping in entity.get("mappings", []):
+                if not isinstance(mapping, dict):
+                    errors.append("entity mapping must be an object")
+                    continue
+                for key in (
+                    "symbol_id",
+                    "mapping_type",
+                    "resolution_status",
+                    "resolution_reason",
+                    "mapping_contract_path",
+                    "mapping_contract_sha256",
+                    "target_revision",
+                    "contract_entry_key",
+                    "extractor",
+                ):
+                    if key == "symbol_id" and (
+                        not _is_int(mapping.get(key)) or mapping[key] <= 0
+                    ):
+                        errors.append("entity mapping requires positive symbol_id")
+                    elif key != "symbol_id" and not _nonempty_text(mapping.get(key)):
+                        errors.append(f"entity mapping requires {key}")
+                if mapping.get("target_revision") != input_data.get("target_revision"):
+                    errors.append("entity mapping target revision is stale")
+                if mapping.get("resolution_status") == "resolved":
+                    for key in ("entity_occurrence_id", "entity_id", "entity_name"):
+                        if key.endswith("_id") and (
+                            not _is_int(mapping.get(key)) or mapping[key] <= 0
+                        ):
+                            errors.append(f"resolved entity mapping requires {key}")
+                        elif key == "entity_name" and not _nonempty_text(
+                            mapping.get(key)
+                        ):
+                            errors.append(
+                                "resolved entity mapping requires entity_name"
+                            )
     business = report.get("business_impact")
     if business != {
         "status": "deferred",
@@ -650,7 +712,11 @@ def validate(report: object) -> list[str]:
             not isinstance(item, str) for item in report[key]
         ):
             errors.append(f"{key} must be a list of strings")
-    if status != "blocked" and ENTITY_MAPPING_GAP not in report.get("gaps", []):
+    if (
+        status != "blocked"
+        and entity == old_entity
+        and ENTITY_MAPPING_GAP not in report.get("gaps", [])
+    ):
         errors.append("non-blocked reports require the entity mapping gap")
     provenance = report.get("provenance")
     if not isinstance(provenance, dict) or provenance.get("read_only") is not True:

@@ -84,7 +84,7 @@ def test_exact_target_partial_audits_all_surfaces_without_facts(monkeypatch) -> 
     report = pr_impact_step2.analyze_fixture("fixture", "manifest", "db", "ia-main")
 
     assert report["status"] == "partial"
-    assert len(report["surface_audit"]) == 21
+    assert len(report["surface_audit"]) == len(pr_impact_step2.EXPECTED_SURFACES)
     assert report["step1_summary"]["status"] == "partial"
     assert report["step1_summary"]["fact_count"] == 4
     assert all("facts" not in row for row in report["surface_audit"])

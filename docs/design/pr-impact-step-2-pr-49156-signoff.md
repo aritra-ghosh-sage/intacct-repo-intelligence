@@ -1,18 +1,19 @@
 # PR 49156 Step 2 Sign-off Record
 
-> Historical, target-specific acceptance artifact for PR 49156. The seven
-> ambiguity rows and all counts below describe this exact run; they are not a
-> general current-catalog status. Ambiguity remains fail-closed whenever it is
-> reproduced in a current target revision.
+> Historical, target-specific acceptance artifact for PR 49156. The counts
+> below describe the original run. The current exact-target repo-v1 resolver
+> now resolves the seven formerly ambiguous qualified calls when each has one
+> exact candidate; ambiguity remains fail-closed for duplicate candidates.
 
 ## Disposition
 
 **Accepted as a partial, read-only Step 2 direct-surface audit.**
 
-This record does not claim semantic completeness or no impact. Step 2 is
-complete as an audit when it preserves the evidence gaps and unresolved
-states produced by Step 1. The seven ambiguous relationship rows remain
-explicitly unresolved; resolving them would exceed the Step 2 proving slice.
+This record does not claim semantic completeness or no impact. Step 2 remains
+an audit of generated Step 1 evidence. Relationship resolution is performed
+by the repo-v1 build before Step 1; Step 2 reports the resulting
+`entity_symbol_links` and relationship classifications without re-querying
+SQLite.
 
 ## Exact-target preflight
 
@@ -61,11 +62,12 @@ The surface contains 24 catalog rows from `phase2_regex_mvp`:
 
 - 17 rows are `project_resolved` with `target_symbol_id_present`:
   catalog record IDs `152864` through `152880`.
-- 7 rows are `project_unresolved` with
-  `ambiguous_project_symbol`:
-  `152881`, `152882`, `152883`, `152884`, `152885`, `152886`, and `152887`.
+- The historical seven rows were `project_unresolved` with
+  `ambiguous_project_symbol`; on the revalidated exact target they are
+  `project_resolved` with `target_symbol_id_present` when the qualified target
+  has one exact candidate.
 
-The seven unresolved evidence strings are:
+The seven historical evidence strings were:
 
 - `CsrfUtils::generateCsrfTokenInput(`
 - `Session::getKey(`
@@ -75,17 +77,16 @@ The seven unresolved evidence strings are:
 - `QXCommon::isQuixote(`
 - `IALayoutManager::prefersCSS(`
 
-All 24 rows have `source_location: null`. This review therefore confirms the
-persisted catalog classifications and provenance fields only. It does not
-select a target symbol, infer a callsite, or resolve the seven ambiguous
-relationships by name or semantic similarity.
+All 24 rows have `source_location: null`. This review confirms persisted
+catalog classifications and provenance fields only. It does not infer a
+callsite or select among duplicate candidates.
 
 ## Scope review
 
 Confirmed absent from this Step 2 result and workflow:
 
 - catalog build, promotion, cleanup, or mutation;
-- Step 1 schema or implementation changes;
+- heuristic symbol-to-entity ownership inference;
 - MCP-specific tracing;
 - automated-test discovery;
 - downstream or multi-repository evidence;
@@ -94,5 +95,6 @@ Confirmed absent from this Step 2 result and workflow:
 - inferred semantic or transitive impact.
 
 The bounded Step 2 acceptance decision is therefore: **sign off as a valid
-partial direct-surface audit, with the seven relationship resolutions and all
-listed deferred/empty surfaces retained as explicit follow-up limitations.**
+partial direct-surface audit, with exact relationship resolution,
+`entity_symbol_links` contract status, and all listed deferred/empty surfaces
+retained as explicit evidence and follow-up limitations.**
