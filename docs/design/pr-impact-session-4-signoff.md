@@ -1,146 +1,234 @@
-# PR Impact Session 4 Sign-off
+# Repo-v1 PR-impact Session 4 sign-off
 
-## Disposition
+## Decision and scope
 
-Session 4 is complete as a bounded end-to-end validation of PR 49156 through
-Steps 0–3. The result validates exact Git, SQLite, provenance, direct-surface,
-and incoming-caller evidence. It does not claim semantic business-impact
-completeness or implement symbol-to-entity mapping.
+Session 4 was executed for `intacct/ia-app` PR 49156 using the existing
+repo-v1 Steps 0–3 contracts. The result is accepted as deterministic evidence
+coverage for the exact target revision, with explicit partial and deferred
+surfaces. It is not a claim of semantic business-impact completeness.
 
-Open and unavailable surfaces remain explicit findings below.
+No semantic layer, schema, mapper, risk engine, graph, MCP integration, delta
+processing, legacy refresh, cross-repository traversal, or source-code change
+was added.
 
-## Run identity
+## Fixed inputs and isolated evidence
 
-- Repository: `ia-main`
-- Source root: `/Users/aritra.ghosh/projects/main`
-- Pull request fixture: `examples/pr-impact/ia-app-pr-49156.yaml`
-- Base revision: `e33954d66e7823303fa24087950d3306c547e0b7`
-- Target revision: `f914d9892a51c1d34eadfd0e4da89f8418ed2c59`
-- Catalog implementation commit: `0b6d4d70e3af81fbec6fc784931dddb305529368`
-- Source checkout HEAD observed during run: `6c517a36d82b1b5d28773242dd5e944fa684cfba`
-- Fixture SHA-256: `2fa2aa22d9ba5ef4494d1ae5f5a6f0bd9e54a8cb5632ddcf9278bd9cb17d17f6`
-- Manifest SHA-256: `e67feecbd725060cb9ee15d431d907d23356677e14cef10af5b017d2d26a463c`
-- Isolated evidence bundle: `/private/tmp/pr-impact-session4.32PXLe/`
-- Catalog build token: `6c2a1d58f45a44848536d4446e1d4654`
+| Item | Value |
+| --- | --- |
+| PR | `intacct/ia-app#49156` |
+| Base revision | `e33954d66e7823303fa24087950d3306c547e0b7` |
+| Target revision | `f914d9892a51c1d34eadfd0e4da89f8418ed2c59` |
+| Resolved source root | `/Users/aritra.ghosh/projects/main` |
+| Repository key | `ia-main` |
+| Evidence directory | `/private/tmp/repo-v1-pr-impact.uv6VeA` |
+| Build token | `7aefdf0dfd134f42b73b09ea1af037eb` |
+| Build id | `1` |
+| Catalog file count | `23,874` |
+| Catalog SHA-256 | `c87dba9b895d200a09e99076637899a7029aa4ec285a7a0160cb1868454fbe99` |
 
-The catalog was built at the exact target revision in the isolated evidence
-bundle. The canonical `catalog/catalog.db` was not refreshed or modified.
+The catalog was built only with the exact target revision into the isolated
+database. Its active repository row records `ia-main` and the exact target
+SHA; `source_revisions_json` is `{"ia-main":"f914d9892a51c1d34eadfd0e4da89f8418ed2c59"}`.
 
-## Build and validation gates
+External artifacts:
 
-- Isolated catalog promotion: passed
-- Catalog files: `23,874`
-- Catalog symbols: `166,173`
-- Catalog relationships: `174,492`
-- `PRAGMA integrity_check`: `ok`
-- Foreign-key violations: `0`
-- Repository ownership: one `ia-main` repository at the manifest source root
-- Step 0 fixture validation: `pass`, 0 errors, 7 warnings
-- Step 1 validator: `valid`
-- Step 2 validator: `valid`
-- Step 3 validator: `valid`
-- Focused Step 3 tests: `25 passed`
-- Combined Step 1–3 regression tests: `84 passed`
+- `catalog.db`
+- `step0-validation.json`
+- `step1.json`
+- `step2.json`
+- `step3.json`
+- `checksums.sha256`
+- `commands.txt`
 
-The seven Step 0 warnings preserve fixture-level uncertainty: unavailable
-permissions evidence, unknown downstream test coverage, unresolved assessment
-items, missing external review references, and review evidence recorded at a
-different revision.
+## Execution results
 
-## Step results
+| Step | Report status | Validator | Result |
+| --- | --- | --- | --- |
+| 0 | `pass` | `validate_pr_impact_step0` | exit 0; no errors |
+| 1 | `partial` | `validate_pr_impact_step1` | exit 0; `valid` |
+| 2 | `partial` | `validate_pr_impact_step2` | exit 0; `valid` |
+| 3 | `complete` | `validate_pr_impact_step3` | exit 0; `valid` |
 
-### Step 1: direct impact
+Step 0 warnings are preserved, not promoted to errors. They identify the
+fixture's unavailable permissions evidence, unknown related-repository
+coverage, unresolved assessment items, and incomplete external review
+references/revision freshness.
 
-Status: `partial`.
+The isolated SQLite checks passed:
 
-Available direct facts were:
+- exactly one active build;
+- repository `ia-main`;
+- catalog target revision equals the fixture target revision;
+- `PRAGMA integrity_check` returned `ok`;
+- `PRAGMA foreign_key_check` returned zero rows.
 
-- one changed file;
-- two target-revision symbols; and
-- 24 outgoing relationship rows.
-
-The following surfaces were empty or unavailable and are not interpreted as no
-impact: database consumers, entity metadata, incoming relationships, OpenAPI,
-REST, ActionUI, NextGen, permissions, source diagnostics, workflows, and
-entity occurrences. Test evidence remained deferred because exact target-
-revision test evidence was unavailable.
-
-### Step 2: evidence availability
-
-Status: `partial`.
-
-Covered surfaces were `files` (1 fact), `symbols` (2 facts), and
-`outgoing_relationships` (24 facts). The remaining supported surfaces were
-deferred or not modelled; tests were deferred with 10 explicit facts. Empty
-surfaces retain the contract warning that no direct rows do not prove no
-impact.
-
-### Step 3: incoming caller trace
-
-Status: `complete` for the bounded Step 3 contract.
-
-- Seed file: `app/source/purchasing/POProcessTransactions.phtml`
-- Seed symbols: `GetFilterParams` (ID `144503`) and `LookupAppPrecision` (ID
-  `144504`)
-- Reached symbols: `0`
-- Transitive edges: `0`
-- Skipped edges: `0`
-- Incoming relationship rows for both seed symbols: `0`
-
-The zero-caller result is valid repository evidence, not proof of no business
-impact. `entity_context` remains unavailable because repo-v1 symbol-to-entity
-mapping is not modelled. `business_impact` remains deferred because verified
-caller evidence is not semantic business-impact evidence.
-
-## Manual accuracy spot-check
-
-The deterministic bounded review passed:
-
-- The exact Git diff contains one modified file and the target blob contains
-  `$_filterparams['ismcpenabled'] = IsMCPEnabled('po');` at line 1382; the old
-  request-derived expression is absent.
-- The Step 1 file fact has the exact changed path and target revision.
-- Both Step 1/Step 3 symbol IDs resolve to the target catalog with the reported
-  names and declaration ranges.
-- All 24 Step 1 relationship facts have matching SQLite rows and their
-  evidence strings occur in the target source blob.
-- All 24 outgoing rows are `project_resolved`, with relationship types
-  `REFERENCES`, `STATIC_CALLS`, or `USES`; source locations are not persisted
-  for these rows.
-- Both Step 3 seed symbols have zero incoming relationship rows in SQLite.
-
-## Historical evidence drift
-
-The earlier `docs/design/pr-impact-step-2-pr-49156-signoff.md` records seven
-unresolved outgoing relationships. That result did not reproduce in this fresh
-exact-target build at implementation commit `0b6d4d7`: the same current run
-materialized 24 `project_resolved` outgoing rows. The earlier artifact is
-therefore retained as historical evidence, not used as the current result.
-This difference is documented rather than resolved by inference.
-
-## Systematic gaps and boundaries
-
-- No deep semantic layer or symbol-to-entity mapping was added.
-- No business-impact inference was added.
-- Step 3 is a standalone incoming-caller analysis; Steps 1–3 share the exact
-  target-revision catalog but do not form a serialized fact pipeline.
-- Step 3 traverses only exact `CALLS` and `STATIC_CALLS` relationships. Step 1
-  outgoing evidence also exposes `REFERENCES` and `USES`, which Step 3 does
-  not traverse by contract.
-- Empty direct surfaces remain evidence gaps, not negative findings.
-- Exact automated-test, downstream-repository, permissions, UI, graph, MCP,
-  and cross-repository coverage remains unavailable or deferred where reported.
-- The manual review is a bounded accuracy check, not exhaustive semantic
-  review of all possible runtime behavior.
-
-## Evidence hashes
-
-All hashes below are SHA-256 file hashes from the external evidence bundle:
+Report SHA-256 values:
 
 | Artifact | SHA-256 |
 | --- | --- |
-| `catalog.db` | `d1a592e395f1e06e732a1cd986c158e2bc0eb6d6db1537e7b6e236f03bf40f45` |
 | `step0-validation.json` | `8e19b981b95abaacd309faca1d0cd460dec98928847d096b430227b991850b35` |
-| `step1.json` | `7dc9eee7786c7d43f3dbfb94046ffc3d8b658ca196669feae9bc22dd9e40e004` |
-| `step2.json` | `efc8d8814843e3eb30a342be70c4b7c8a4548040cf10ca99a70903541ab25c0e` |
-| `step3.json` | `3a117254b3a13d27f3e09483a3044b0a83c09d37168f1eb3144d21c476ed2813` |
+| `step1.json` | `4a1e38ca9af7b3e44047e31ff76a099720bd84356a8267f38ecdf4849574bc9b` |
+| `step2.json` | `58178733c77fb0bad80d4e45a7a28a496a622db201bd12c476fd3a45e59eb6b7` |
+| `step3.json` | `02e57dd6c1bbc9395f8167e3a5fefde9f072f0846f6cafe676474f0a84762ade` |
+
+Step 2's `step1_report_sha256` is
+`6eefef7cbb37d81a126919f8efa93de61f69d0e96fca1e818b602b2396584957`.
+Recomputing the canonical JSON hash of the materialized `step1.json` produced
+the same value.
+
+## Step 1 and Step 2 surface audit
+
+The following is the complete parity check between Step 1 direct traces and
+Step 2 `surface_audit`.
+
+| Surface | Step 1 status | Fact count | Step 2 disposition |
+| --- | --- | ---: | --- |
+| `files` | available | 1 | covered |
+| `symbols` | available | 2 | covered |
+| `outgoing_relationships` | available | 24 | covered |
+| `incoming_relationships` | empty | 0 | defer_no_direct_rows |
+| `entity_occurrences` | unavailable | 0 | not_modelled |
+| `openapi_documents` | empty | 0 | defer_no_direct_rows |
+| `openapi_entity_links` | empty | 0 | defer_no_direct_rows |
+| `rest_endpoints` | empty | 0 | defer_no_direct_rows |
+| `actionui` | empty | 0 | defer_no_direct_rows |
+| `actionui_artifacts` | empty | 0 | defer_no_direct_rows |
+| `actionui_fields` | empty | 0 | defer_no_direct_rows |
+| `actionui_events` | empty | 0 | defer_no_direct_rows |
+| `actionui_includes` | empty | 0 | defer_no_direct_rows |
+| `nextgen` | empty | 0 | defer_no_direct_rows |
+| `nextgen_artifacts` | empty | 0 | defer_no_direct_rows |
+| `source_diagnostics` | empty | 0 | defer_no_direct_rows |
+| `database_consumers` | empty | 0 | defer_no_direct_rows |
+| `entity_metadata` | empty | 0 | defer_no_direct_rows |
+| `permissions` | empty | 0 | defer_no_direct_rows |
+| `workflows` | empty | 0 | defer_no_direct_rows |
+| `tests` | deferred | 10 | defer_missing_target_evidence |
+
+Step 1 reported 37 direct facts across 3 available surfaces and computed a
+deterministic evidence-coverage score of 37/100. The score reflects evidence
+availability and exact revision freshness; it is not a business-risk score.
+Empty means no direct repo-v1 rows were found and never means no impact.
+
+## Bounded manual spot-checks
+
+1. Git diff and target blob
+
+   The exact diff contains one modified file:
+   `app/source/purchasing/POProcessTransactions.phtml`. At target line 1382,
+   `GetFilterParams` assigns:
+
+   ```php
+   $_filterparams['ismcpenabled']   = IsMCPEnabled('po');
+   ```
+
+   The base blob assigns `Request::$r->_mcpEnabled` at the same line. The
+   fixture assertion identifies the same path, method, parameter, and
+   request-value-to-server-calculation change. The target blob SHA is
+   `b0a33f1939bb57c65eb57d9481c845c21e75e2e9`.
+
+2. Changed-file and first-symbol evidence
+
+   Step 1's changed-file fact has catalog record/file id `21264`, the exact
+   path, and target revision. SQLite row `files.id=21264` has the same path,
+   blob SHA, size `61425`, and `source_commit_sha` equal to the target SHA.
+
+   The first symbol ordered by catalog id is `GetFilterParams`, symbol id
+   `144503`, function range 1376–1394. SQLite row `symbols.id=144503` matches
+   the report's name, kind, file id, language, and declaration range. The
+   second target symbol is `LookupAppPrecision`, id `144504`, range 1399–1404.
+
+3. First outgoing relationship and unresolved check
+
+   The first outgoing relationship ordered by catalog id is SQLite row
+   `relationships.id=152864`: source symbol `144503` (`GetFilterParams`),
+   target symbol `144451` (`POProcessTransactions`), relationship type `USES`,
+   evidence `new POProcessTransactions(`, resolution class
+   `project_resolved`, reason `target_symbol_id_present`, confidence `0.75`,
+   and extractor `phase2_regex_mvp`. The Step 1 fact retains the same catalog
+   id, path, evidence, resolution, extractor, and target revision.
+
+   A target-symbol query for unresolved or ambiguous outgoing rows returned no
+   rows. No unresolved or ambiguous relationship was relabeled or inferred.
+
+4. Step 3 bounded incoming-call review
+
+   Step 3 used `target_file_all_symbols` with `max_hops=2`. Its first seed is
+   `GetFilterParams` id `144503`; the seed row records the target blob, file
+   id `21264`, declaration range 1376–1394, and exact catalog/fixture target
+   revisions. The second seed is id `144504`.
+
+   No persisted incoming `CALLS` or `STATIC_CALLS` edge was traversed, and no
+   skipped edge or skip reason was observed. Therefore there was no edge to
+   inspect at a hop and no skipped-edge sample to verify. This is bounded
+   caller evidence, not proof of no business impact.
+
+5. Step 3 fixed boundary
+
+   The report preserves:
+
+   ```json
+   "entity_context": {
+     "status": "unavailable",
+     "reason": "repo_v1_symbol_entity_mapping_not_modelled"
+   },
+   "business_impact": {
+     "status": "deferred"
+   }
+   ```
+
+## Systematic-gap register
+
+All rows below refer to target revision
+`f914d9892a51c1d34eadfd0e4da89f8418ed2c59`.
+
+| Gap | Status | Evidence source | Target revision | Scope reason | Classification |
+| --- | --- | --- | --- | --- | --- |
+| Symbol-to-entity context | unavailable | `step3.json.entity_context`; gap `repo_v1_symbol_entity_mapping_not_modelled` | `f914d9892a51c1d34eadfd0e4da89f8418ed2c59` | Current Step 3 contract does not model arbitrary symbol ownership | Intentional boundary |
+| Business impact | deferred | `step3.json.business_impact` | `f914d9892a51c1d34eadfd0e4da89f8418ed2c59` | Verified caller rows are code evidence, not semantic business mappings | Intentional boundary |
+| Entity occurrences | unavailable; `not_modelled` | Step 1 `entity_occurrences`; Step 2 audit | `f914d9892a51c1d34eadfd0e4da89f8418ed2c59` | This direct surface is not modeled for this trace | Intentional boundary; no catalog defect established |
+| Incoming relationships | empty; `defer_no_direct_rows` | Step 1/2 surface audit, 0 facts | `f914d9892a51c1d34eadfd0e4da89f8418ed2c59` | No direct target-revision rows matched the changed symbols | Intentional boundary; no catalog defect established |
+| OpenAPI documents and entity links | empty; `defer_no_direct_rows` | Step 1/2 surface audit, 0 facts each | `f914d9892a51c1d34eadfd0e4da89f8418ed2c59` | No direct rows matched this changed file/symbol set | Intentional boundary; no catalog defect established |
+| REST endpoints | empty; `defer_no_direct_rows` | Step 1/2 surface audit, 0 facts | `f914d9892a51c1d34eadfd0e4da89f8418ed2c59` | No direct repo-v1 endpoint row matched | Intentional boundary; no catalog defect established |
+| ActionUI surfaces, artifacts, fields, events, and includes | empty; `defer_no_direct_rows` | Step 1/2 surface audit, 0 facts each | `f914d9892a51c1d34eadfd0e4da89f8418ed2c59` | No direct rows matched | Intentional boundary; no catalog defect established |
+| NextGen surfaces and artifacts | empty; `defer_no_direct_rows` | Step 1/2 surface audit, 0 facts each | `f914d9892a51c1d34eadfd0e4da89f8418ed2c59` | No direct rows matched | Intentional boundary; no catalog defect established |
+| Source diagnostics | empty; `defer_no_direct_rows` | Step 1/2 surface audit, 0 facts | `f914d9892a51c1d34eadfd0e4da89f8418ed2c59` | No direct diagnostic row matched | Intentional boundary; no catalog defect established |
+| Database consumers and entity metadata | empty; `defer_no_direct_rows` | Step 1/2 surface audit, 0 facts each | `f914d9892a51c1d34eadfd0e4da89f8418ed2c59` | No direct target-revision database/entity metadata row matched | Intentional boundary; no catalog defect established |
+| Permissions and workflows | empty; `defer_no_direct_rows` | Step 1/2 surface audit, 0 facts each | `f914d9892a51c1d34eadfd0e4da89f8418ed2c59` | No direct row matched | Intentional boundary; no catalog defect established |
+| Exact target-revision test evidence | deferred; `defer_missing_target_evidence` | Step 1/2 `tests`: 10 fixture-context facts, warning exact target test evidence unavailable | `f914d9892a51c1d34eadfd0e4da89f8418ed2c59` | Automated-test discovery is outside this proving slice | Intentional boundary |
+| Downstream repositories | deferred; always `[]` in this scope | Step 1 report and Step 2 deferred provenance | `f914d9892a51c1d34eadfd0e4da89f8418ed2c59` | `ia-main` only; no downstream materialization | Intentional boundary |
+| Graph and MCP analysis | deferred | Step 2 provenance | `f914d9892a51c1d34eadfd0e4da89f8418ed2c59` | Explicitly excluded from Steps 0–3 | Intentional boundary |
+| Delta processing and legacy workflow | deferred | Step 1/2 provenance and execution commands | `f914d9892a51c1d34eadfd0e4da89f8418ed2c59` | Repo-v1 exact snapshot only | Intentional boundary |
+| Cross-repository traversal | deferred | Step 2 provenance | `f914d9892a51c1d34eadfd0e4da89f8418ed2c59` | The run is restricted to `ia-main` | Intentional boundary |
+
+No parser-failed, missing-source, unresolved, ambiguous, stale, or skipped-edge
+case was observed in this run. Those statuses remain valid contract states and
+would require documentation if a future target produces them; they were not
+invented for this sign-off.
+
+## Verification gate
+
+The required focused test command passed:
+
+```text
+104 passed in 33.62s
+```
+
+`git diff --check` and final worktree status are part of the acceptance check.
+The intended final worktree contains only this document as the approved
+repository change. The catalog, reports, checksums, and command log remain
+outside the repository under `/private/tmp/repo-v1-pr-impact.uv6VeA`.
+
+## Confidence and recommendation
+
+Confidence in the execution evidence is high: the exact target build,
+revision, SQLite integrity, report validators, canonical Step 1 hash, Git
+diff, target blob, and focused tests all agree. The Step 1 deterministic
+evidence-coverage score is 37/100 because only 3 of 21 direct surfaces are
+available; it must not be interpreted as a risk or business-impact score.
+
+Recommendation: sign off this run as a valid, revision-pinned deterministic
+evidence-coverage artifact with a `partial` direct-surface result. Retain the
+documented gaps and require human or later bounded analysis for semantic
+business impact, entity ownership, downstream tests, and any empty surface.
+Do not relabel this result as complete business-impact analysis or no impact.
