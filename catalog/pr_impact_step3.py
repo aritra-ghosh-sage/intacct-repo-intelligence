@@ -561,13 +561,14 @@ def _check_edge_provenance(row: Mapping[str, Any], repo_id: int, target: str) ->
         )
 
 
-def analyze_fixture(
-    fixture: str | Path,
+def analyze_document(
+    document: Mapping[str, Any],
     manifest: str | Path,
     active_db: str | Path,
     repo_key: str,
     max_hops: int = 2,
     min_confidence: float = 0.7,
+    fixture_label: str = "<in-memory>",
 ) -> dict[str, Any]:
     """Run deterministic, read-only incoming traversal for one fixture."""
     if max_hops not in (1, 2):
@@ -582,12 +583,9 @@ def analyze_fixture(
             "min_confidence must be between 0 and 1",
             min_confidence=min_confidence,
         )
-    fixture_path, manifest_path, db_path = (
-        Path(fixture),
-        Path(manifest),
-        Path(active_db),
-    )
-    document = _fixture(fixture_path)
+    manifest_path, db_path = Path(manifest), Path(active_db)
+    if not isinstance(document, dict) or not isinstance(document.get("pull_request"), dict):
+        raise _error("malformed_fixture", "fixture must contain pull_request")
     pr = document["pull_request"]
     try:
         repo = resolve_manifest_repo_root(manifest_path, repo_key)
@@ -621,7 +619,7 @@ def analyze_fixture(
         raise _error("malformed_git_diff", "changed path is unsafe")
 
     input_data = _input(
-        fixture_path,
+        Path(fixture_label),
         manifest_path,
         db_path,
         repo_key,
@@ -870,3 +868,25 @@ def analyze_fixture(
         )
     finally:
         conn.close()
+
+
+def analyze_fixture(
+    fixture: str | Path,
+    manifest: str | Path,
+    active_db: str | Path,
+    repo_key: str,
+    max_hops: int = 2,
+    min_confidence: float = 0.7,
+) -> dict[str, Any]:
+    """Load a YAML Step 0 fixture and run the in-memory analyzer."""
+
+    fixture_path = Path(fixture)
+    return analyze_document(
+        _fixture(fixture_path),
+        manifest,
+        active_db,
+        repo_key,
+        max_hops=max_hops,
+        min_confidence=min_confidence,
+        fixture_label=str(fixture_path),
+    )

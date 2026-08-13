@@ -767,14 +767,16 @@ def _load_metadata(
     }
 
 
-def analyze_fixture(
-    fixture: str | Path,
+def analyze_document(
+    document: Mapping[str, Any],
     manifest: str | Path,
     active_db: str | Path,
     repo_key: str,
     metadata: str | Path | None = None,
+    fixture_label: str = "<in-memory>",
 ) -> dict[str, Any]:
-    document = _fixture(Path(fixture))
+    if not isinstance(document, dict) or not isinstance(document.get("pull_request"), dict):
+        raise Step1Error("malformed_fixture", "fixture must contain pull_request")
     pr = document["pull_request"]
     try:
         repo = resolve_manifest_repo_root(manifest, repo_key)
@@ -1246,7 +1248,7 @@ def analyze_fixture(
             "analysis_kind": "pr_impact_step_1",
             "status": "partial" if gaps else "complete",
             "input": {
-                "fixture": str(Path(fixture)),
+                "fixture": fixture_label,
                 "manifest": str(Path(manifest)),
                 "repo_root": str(repo),
                 "active_db": str(Path(active_db)),
@@ -1271,6 +1273,26 @@ def analyze_fixture(
         }
     finally:
         conn.close()
+
+
+def analyze_fixture(
+    fixture: str | Path,
+    manifest: str | Path,
+    active_db: str | Path,
+    repo_key: str,
+    metadata: str | Path | None = None,
+) -> dict[str, Any]:
+    """Load a YAML Step 0 fixture and run the in-memory analyzer."""
+
+    fixture_path = Path(fixture)
+    return analyze_document(
+        _fixture(fixture_path),
+        manifest,
+        active_db,
+        repo_key,
+        metadata=metadata,
+        fixture_label=str(fixture_path),
+    )
 
 
 def blocked_report(error: Step1Error) -> dict[str, Any]:

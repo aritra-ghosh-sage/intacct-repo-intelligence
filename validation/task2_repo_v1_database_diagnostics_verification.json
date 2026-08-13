@@ -1,0 +1,21 @@
+{
+  "verification_schema": "repo_v1_database_diagnostics_task2_v1",
+  "input_handoff": "validation/task1_repo_v1_database_diagnostics_handoff.json",
+  "scope": {"repo_key": "ia-main", "repo_id": 1, "target_commit_sha": "6c517a36d82b1b5d28773242dd5e944fa684cfba", "extractor": "repo_v1_database_v1", "extractor_version": "1"},
+  "checks": {"pragma_integrity_check": "ok", "foreign_key_check_row_count": 0, "validate_database_candidate": "pass", "diagnostic_source_hashes_match_committed_git_blobs": true, "diagnostic_file_ownership_matches": true, "diagnostic_evidence_matches_first_200_source_chars": true, "diagnostic_line_spans_valid": true, "diagnostic_keys_valid": true, "repo_v1_database_tests": "10 passed"},
+  "findings": {
+    "total_diagnostics": 45,
+    "provenance_or_database_corruption": 0,
+    "entity_section_unsupported": {"count": 2, "diagnostic_ids": [1, 2], "paths": ["app/source/common/globals.ent", "app/source/common/stdrepeat.ent"], "actual_issue": false, "reason": "Both are shared support files. globals defines helper globals; stdrepeat defines $stdrepeatinfo and references $kSchemas only in documentation. Neither contains a static $kSchemas entity assignment accepted by this extractor."},
+    "entity_schema_mapping_missing_db_field": {
+      "count": 43,
+      "diagnostic_ids": [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45],
+      "resolver_reproduction": "all 43 reproduce from the current exact table/field resolver",
+      "actual_catalog_gap": true,
+      "source_defect_proven": false,
+      "subclasses": {"exact_target_absent_from_selected_table": {"count": 33}, "case_insensitive_only_match": {"count": 2, "diagnostic_ids": [13, 35], "examples": [{"id": 13, "table": "entityusecode", "target": "code", "stored_field": "Code"}, {"id": 35, "table": "imsofflinepackages", "target": "CONTEXT", "stored_field": "context"}]}, "dotted_target_without_static_child_table": {"count": 6, "diagnostic_ids": [4, 10, 26, 36, 37, 39]}, "nested_mapping_shape": {"count": 2, "diagnostic_ids": [6, 15]}},
+      "meaning": "The 43 rows are unresolved entity-to-database-field links. They are applicability-coverage gaps, not proof of source defects. Do not resolve by global field-name or entity-name inference."
+    }
+  },
+  "task2_conclusion": {"actual_issue": "43 unresolved entity-to-database-field links remain in the catalog; the database itself is valid and provenance is valid.", "not_issues": ["The 2 unsupported rows are expected shared support-file inputs.", "No invalid source hashes, stale commit provenance, duplicate diagnostic keys, SQLite integrity failures, or FK failures were found."], "safe_next_action": "Keep all 43 links unresolved downstream. Any repair requires separate source-grounded authorization for case normalization, dotted child-table resolution, or nested mapping traversal."}
+}

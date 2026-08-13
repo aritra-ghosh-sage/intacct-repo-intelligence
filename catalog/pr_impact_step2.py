@@ -286,8 +286,8 @@ def _successful_report(step1_report: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def analyze_fixture(
-    fixture: str | Path,
+def analyze_document(
+    document: Mapping[str, Any],
     manifest: str | Path,
     active_db: str | Path,
     repo_key: str,
@@ -295,8 +295,8 @@ def analyze_fixture(
     """Run Step 1 in-process and produce the Step 2 audit report."""
 
     try:
-        step1_report = pr_impact_step1.analyze_fixture(
-            fixture, manifest, active_db, repo_key
+        step1_report = pr_impact_step1.analyze_document(
+            document, manifest, active_db, repo_key
         )
     except pr_impact_step1.Step1Error as exc:
         step1_report = pr_impact_step1.blocked_report(exc)
@@ -330,6 +330,56 @@ def analyze_fixture(
             Step2Error(
                 "step1_report_invalid", "blocked Step 1 report requires error.code"
             ),
+        )
+    try:
+        return _successful_report(step1_report)
+    except Step2Error as exc:
+        return _blocked_report(step1_report, exc)
+
+
+def analyze_fixture(
+    fixture: str | Path,
+    manifest: str | Path,
+    active_db: str | Path,
+    repo_key: str,
+) -> dict[str, Any]:
+    """Load a YAML Step 0 fixture and run the in-memory analyzer."""
+
+    # Keep the historical call boundary so callers/tests that substitute the
+    # Step 1 fixture analyzer continue to work.  The prompt surface uses the
+    # new analyze_document entry point directly.
+    try:
+        step1_report = pr_impact_step1.analyze_fixture(
+            fixture, manifest, active_db, repo_key
+        )
+    except pr_impact_step1.Step1Error as exc:
+        step1_report = pr_impact_step1.blocked_report(exc)
+    except Exception as exc:  # noqa: BLE001 - stable operator report envelope
+        step1_report = pr_impact_step1.blocked_report(
+            pr_impact_step1.Step1Error("step1_failure", str(exc))
+        )
+    if not isinstance(step1_report, Mapping):
+        return blocked_report(
+            Step2Error("step1_report_invalid", "Step 1 analyzer did not return an object")
+        )
+    if step1_report.get("status") == "blocked":
+        error = step1_report.get("error")
+        if isinstance(error, Mapping) and isinstance(error.get("code"), str):
+            return _blocked_report(
+                step1_report,
+                Step2Error(
+                    error["code"],
+                    str(error.get("message", "Step 1 analysis blocked")),
+                    **{
+                        str(key): value
+                        for key, value in error.items()
+                        if key not in {"code", "message"}
+                    },
+                ),
+            )
+        return _blocked_report(
+            step1_report,
+            Step2Error("step1_report_invalid", "blocked Step 1 report requires error.code"),
         )
     try:
         return _successful_report(step1_report)
