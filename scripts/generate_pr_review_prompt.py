@@ -13,7 +13,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from catalog.github_pr_metadata import GitHubPrMetadataError
 from catalog.pr_review_catalog import PrReviewCatalogError
-from catalog.pr_review_prompt import PromptBuildError, generate_prompt
+from catalog.pr_review_prompt import (
+    PromptBuildError,
+    compact_envelope,
+    generate_prompt,
+)
 
 
 def _pr_number(value: str) -> int:
@@ -45,10 +49,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo-key", default="ia-main")
     parser.add_argument("--max-hops", type=int, choices=(1, 2), default=2)
     parser.add_argument("--min-confidence", type=float, default=0.7)
-    parser.add_argument(
+    output_group = parser.add_mutually_exclusive_group()
+    output_group.add_argument(
         "--prompt-only",
         action="store_true",
         help="Print only prompt_text instead of the JSON envelope",
+    )
+    output_group.add_argument(
+        "--compact-json",
+        action="store_true",
+        help="Print evidence/provenance JSON without duplicated prompt_text",
     )
     parser.add_argument(
         "--progress",
@@ -86,7 +96,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.prompt_only:
         print(envelope["prompt_text"])
     else:
-        print(json.dumps(envelope, ensure_ascii=False, indent=2))
+        output = compact_envelope(envelope) if args.compact_json else envelope
+        print(json.dumps(output, ensure_ascii=False, indent=2))
     return 0
 
 

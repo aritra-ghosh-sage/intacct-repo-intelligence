@@ -24,7 +24,9 @@ PYTHONPATH=. ./.venv/bin/python scripts/generate_pr_review_prompt.py \
 Required inputs are `--pr` (a PR number or GitHub URL) and `--request`. The
 optional bounded controls are `--manifest`, `--repo-key`, `--max-hops` (`1` or
 `2`), and `--min-confidence`; `--prompt-only` changes the output mode and
-`--progress` changes only diagnostics routing.
+`--compact-json` selects the evidence-only JSON result; `--progress` changes
+only diagnostics routing. `--prompt-only` and `--compact-json` are mutually
+exclusive.
 
 Without `--prompt-only`, successful execution writes one JSON envelope to
 stdout. The envelope contains the normalized input, Step 0 and Step 0
@@ -34,13 +36,24 @@ valid evidence-preserving results and still return exit code `0` when the
 required source/catalog prerequisites were resolved. With `--prompt-only`,
 stdout contains only `prompt_text` followed by a newline.
 
+`--compact-json` writes a separate `pr_review_result` JSON schema. It retains
+`status`, exact input revisions and resolution, Step 0 evidence, validation,
+task contracts, all Step 1--3 reports, and provenance. It omits only the
+derived `prompt_text` and CI check-run records; use `--prompt-only` when the
+rendered prompt is needed.
+The full `pr_review_prompt` envelope remains the compatibility output for MCP
+and callers that require both machine evidence and rendered prompt text.
+CI check-run records are intentionally omitted from `review_evidence.automated`
+and the rendered prompt; they are not verified as source evidence. Human
+reviews and comments remain available with revision and source metadata.
+
 Progress and operator diagnostics are written to stderr, including exact-SHA
 resolution, isolated-catalog build, and cache-hit milestones. Prerequisite
 failures return exit code `1` with a stable coded error and remediation; they do
 not emit a misleading review envelope.
 
-The command fetches PR files, reviews, inline comments, issue comments, and
-check runs through the existing `gh`-first metadata intake. It builds and
+The command fetches PR files, reviews, inline comments, and issue comments
+through the existing `gh`-first metadata intake. It builds and
 validates Step 0 in memory, obtains the exact PR head SHA, discovers or builds
 an isolated repo-v1 catalog for that SHA in the internal `.cache/pr-review`
 area, runs the current Step 1, Step 2, and Step 3 analyzers in bounded task
@@ -84,8 +97,8 @@ block analysis. The final LLM response must use
 `docs/review/pr-review-template.md` exactly.
 
 Missing required CLI values, PR metadata, changed files, source revisions,
-Git objects, comments/check-run collections, or exact catalog prerequisites
-stop the command before analysis. Errors identify the failed prerequisite and
+Git objects, or comment collections stop the command before analysis. Errors
+identify the failed prerequisite and
 give a concrete remediation. Evidence gaps discovered after successful
 resolution remain explicit in the Step 1--3 reports and prompt.
 

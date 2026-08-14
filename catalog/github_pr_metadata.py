@@ -321,6 +321,7 @@ def fetch_pr_metadata(
     repo_key: str,
     manifest_path: str | Path,
     pr_number: int,
+    include_check_runs: bool = True,
 ) -> dict[str, Any]:
     if isinstance(pr_number, bool) or not isinstance(pr_number, int) or pr_number <= 0:
         raise GitHubPrMetadataError("PR number must be a positive integer")
@@ -358,18 +359,23 @@ def fetch_pr_metadata(
     target = _required_mapping(pull_request, "pull_request").get("head", {}).get("sha")
     if not isinstance(target, str) or not target:
         raise GitHubPrMetadataError("pull request target revision is missing")
-    checks_endpoint = f"repos/{repository}/commits/{target}/check-runs"
-    check_runs, checks_provider = _provider_call(
-        checks_endpoint, collection=True, collection_key="check_runs"
-    )
+    check_runs: list[dict[str, Any]] = []
+    checks_endpoint: str | None = None
+    checks_provider: str | None = None
+    if include_check_runs:
+        checks_endpoint = f"repos/{repository}/commits/{target}/check-runs"
+        check_runs, checks_provider = _provider_call(
+            checks_endpoint, collection=True, collection_key="check_runs"
+        )
     providers = {
         provider,
         files_provider,
         reviews_provider,
         comments_provider,
         issue_provider,
-        checks_provider,
     }
+    if checks_provider is not None:
+        providers.add(checks_provider)
     if len(providers) != 1:
         provider = "mixed:" + ",".join(sorted(providers))
     return normalize_pr_metadata(
@@ -382,5 +388,5 @@ def fetch_pr_metadata(
         issue_comments=issue_comments,
         check_runs=check_runs,
         provider=provider,
-        endpoints=endpoints + [checks_endpoint],
+        endpoints=endpoints + ([checks_endpoint] if checks_endpoint else []),
     )

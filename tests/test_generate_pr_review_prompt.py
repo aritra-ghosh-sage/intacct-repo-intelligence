@@ -59,6 +59,48 @@ def test_cli_prompt_only_prints_only_prompt(monkeypatch, capsys) -> None:
     assert captured.err == ""
 
 
+def test_cli_compact_json_omits_prompt_text(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        cli,
+        "generate_prompt",
+        lambda **_kwargs: {
+            "schema_version": "0.1",
+            "analysis_kind": "pr_review_prompt",
+            "status": "partial",
+            "input": {"target_revision": "b" * 40},
+            "step0": {"changed_files": []},
+            "step0_validation": {"status": "pass", "errors": []},
+            "task_plan": [],
+            "reports": {"step1": {"status": "partial"}},
+            "provenance": {"catalog_revision": "b" * 40},
+            "prompt_text": "rendered prompt",
+        },
+    )
+
+    assert cli.main(["--pr", "49156", "--request", "Review", "--compact-json"]) == 0
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["analysis_kind"] == "pr_review_result"
+    assert output["reports"] == {"step1": {"status": "partial"}}
+    assert "prompt_text" not in output
+
+
+def test_cli_rejects_compact_json_with_prompt_only() -> None:
+    with pytest.raises(SystemExit) as caught:
+        cli.main(
+            [
+                "--pr",
+                "49156",
+                "--request",
+                "Review",
+                "--prompt-only",
+                "--compact-json",
+            ]
+        )
+
+    assert caught.value.code == 2
+
+
 def test_cli_progress_is_forwarded_without_changing_stdout(monkeypatch, capsys) -> None:
     captured_kwargs: dict[str, object] = {}
 

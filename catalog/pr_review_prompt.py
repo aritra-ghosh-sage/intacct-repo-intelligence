@@ -25,7 +25,9 @@ from catalog.pr_impact_step3 import blocked_report as blocked_step3
 from catalog.pr_review_catalog import CatalogResolution, resolve_exact_catalog
 
 PROMPT_SCHEMA_VERSION = "0.1"
+RESULT_SCHEMA_VERSION = "0.1"
 ANALYSIS_KIND = "pr_review_prompt"
+RESULT_ANALYSIS_KIND = "pr_review_result"
 REVIEW_TEMPLATE = (
     Path(__file__).resolve().parents[1] / "docs/review/pr-review-template.md"
 )
@@ -58,7 +60,10 @@ def _as_list(value: object) -> list[Any]:
 def _prompt_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
     """Copy metadata and mark comment bodies as quoted, untrusted data."""
 
-    context = dict(metadata)
+    # Check-run records are CI context, not source-grounded PR-impact
+    # evidence. Keep lower-level metadata intake compatible, but do not carry
+    # them into the review prompt output.
+    context = {key: value for key, value in metadata.items() if key != "check_runs"}
     for section in ("reviews", "inline_comments", "issue_comments"):
         rows: list[dict[str, Any]] = []
         for item in _as_list(metadata.get(section)):
@@ -119,20 +124,7 @@ def _review_evidence(metadata: Mapping[str, Any]) -> dict[str, list[dict[str, An
                 "url": item.get("html_url"),
             }
         )
-    automated = [
-        {
-            "type": "check_run",
-            "object_id": item.get("id"),
-            "url": item.get("html_url"),
-            "name": item.get("name"),
-            "status": item.get("status"),
-            "conclusion": item.get("conclusion"),
-            "head_revision": item.get("head_sha"),
-        }
-        for item in _as_list(metadata.get("check_runs"))
-        if isinstance(item, Mapping)
-    ]
-    return {"automated": automated, "human": human}
+    return {"automated": [], "human": human}
 
 
 def _validate_request_args(pr_number: int, request: str) -> None:
@@ -183,7 +175,7 @@ def _validate_prompt_inputs(
                 code="required_pr_value_missing",
                 fix="verify GitHub access and retry",
             )
-    for key in ("reviews", "inline_comments", "issue_comments", "check_runs"):
+    for key in ("reviews", "inline_comments", "issue_comments"):
         if not isinstance(metadata.get(key), list):
             raise PromptBuildError(
                 f"GitHub PR metadata is missing the {key} collection",
@@ -388,7 +380,7 @@ def build_step0(metadata: Mapping[str, Any], repo_key: str) -> dict[str, Any]:
             "generated_from": [
                 "GitHub PR metadata via gh api",
                 "GitHub changed-files metadata",
-                "GitHub reviews, comments, and check runs",
+                "GitHub reviews and comments",
             ],
         },
     }
@@ -626,6 +618,7 @@ def generate_prompt(
         repo_key=repo_key,
         manifest_path=manifest,
         pr_number=pr_number,
+        include_check_runs=False,
     )
     _validate_prompt_inputs(metadata, pr_number, request)
     step0 = build_step0(metadata, repo_key)
@@ -678,4 +671,36 @@ def generate_prompt(
             "source_resolution": resolution.source_resolution,
             "catalog_path_exposed": False,
         },
+    }
+
+
+def compact_envelope(envelope: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the machine-readable result without duplicated prompt rendering.
+
+    The full prompt envelope remains the compatibility contract for MCP and
+    callers that need ``prompt_text``.  Compact CLI output retains all
+    revision-pinned evidence, reports, task contracts, and provenance while
+    omitting only the derived Markdown prompt.
+    """
+
+    required = (
+        "status",
+        "input",
+        "step0",
+        "step0_validation",
+        "task_plan",
+        "reports",
+        "provenance",
+    )
+    missing = [key for key in required if key not in envelope]
+    if missing:
+        raise PromptBuildError(
+            "cannot compact an incomplete PR-review envelope: " + ", ".join(missing),
+            code="result_envelope_invalid",
+            fix="use the complete PR-review envelope and retry",
+        )
+    return {
+        "schema_version": RESULT_SCHEMA_VERSION,
+        "analysis_kind": RESULT_ANALYSIS_KIND,
+        **{key: envelope[key] for key in required},
     }

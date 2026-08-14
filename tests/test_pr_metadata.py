@@ -108,6 +108,40 @@ def test_fetch_metadata_normalizes_provider_collections(
     assert calls[-1][1:] == (True, "check_runs")
 
 
+def test_fetch_metadata_can_skip_check_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    values = iter(
+        [
+            _pull_request(),
+            [{"filename": "app/a.php", "status": "modified"}],
+            [{"id": 1, "state": "approved"}],
+            [{"id": 2, "path": "app/a.php"}],
+            [{"id": 3, "body": "comment"}],
+        ]
+    )
+    calls = []
+
+    def provider(endpoint, collection, collection_key=None):
+        calls.append((endpoint, collection, collection_key))
+        return next(values), "gh_api"
+
+    monkeypatch.setattr(metadata, "_provider_call", provider)
+    value = fetch_pr_metadata(
+        repo_key="ia-main",
+        manifest_path=_manifest(tmp_path),
+        pr_number=49156,
+        include_check_runs=False,
+    )
+
+    assert value["check_runs"] == []
+    assert len(calls) == 5
+    assert all("check-runs" not in call[0] for call in calls)
+    assert all(
+        "check-runs" not in endpoint for endpoint in value["provenance"]["endpoints"]
+    )
+
+
 def test_gh_check_run_pages_are_flattened(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(metadata.shutil, "which", lambda name: "/usr/bin/gh")
     result = SimpleNamespace(
