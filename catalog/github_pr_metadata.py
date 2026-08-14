@@ -1,19 +1,22 @@
 """Read-only GitHub pull-request metadata intake."""
+
 from __future__ import annotations
 
 import json
 import os
 import shutil
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
-from catalog.repository_lifecycle import normalized_github_identity
 from catalog.pr_impact_manifest import resolve_manifest_repo_root
+from catalog.repository_lifecycle import normalized_github_identity
+
+_GITHUB_OPERATION_TIMEOUT_SECONDS = 120
 
 
 class GitHubPrMetadataError(RuntimeError):
@@ -24,7 +27,9 @@ def _json_bytes(raw: bytes, context: str) -> Any:
     try:
         return json.loads(raw.decode("utf-8"))
     except (UnicodeError, json.JSONDecodeError) as exc:
-        raise GitHubPrMetadataError(f"github metadata response is not JSON: {context}") from exc
+        raise GitHubPrMetadataError(
+            f"github metadata response is not JSON: {context}"
+        ) from exc
 
 
 def _flatten_pages(value: Any, context: str) -> list[Any]:
@@ -32,31 +37,52 @@ def _flatten_pages(value: Any, context: str) -> list[Any]:
         flattened: list[Any] = []
         for page in value:
             if not isinstance(page, list):
-                raise GitHubPrMetadataError(f"github metadata page is not an array: {context}")
+                raise GitHubPrMetadataError(
+                    f"github metadata page is not an array: {context}"
+                )
             flattened.extend(page)
         return flattened
-    raise GitHubPrMetadataError(f"github metadata collection is not an array: {context}")
+    raise GitHubPrMetadataError(
+        f"github metadata collection is not an array: {context}"
+    )
 
 
 def _flatten_keyed_pages(value: Any, key: str, context: str) -> list[Any]:
     if not isinstance(value, list):
-        raise GitHubPrMetadataError(f"github metadata pages are not an array: {context}")
+        raise GitHubPrMetadataError(
+            f"github metadata pages are not an array: {context}"
+        )
     flattened: list[Any] = []
     for page in value:
         if not isinstance(page, dict) or not isinstance(page.get(key), list):
-            raise GitHubPrMetadataError(f"github metadata page is missing array {key}: {context}")
+            raise GitHubPrMetadataError(
+                f"github metadata page is missing array {key}: {context}"
+            )
         flattened.extend(page[key])
     return flattened
 
 
-def _gh_json(endpoint: str, *, collection: bool, collection_key: str | None = None) -> Any:
+def _gh_json(
+    endpoint: str, *, collection: bool, collection_key: str | None = None
+) -> Any:
     if shutil.which("gh") is None:
         raise GitHubPrMetadataError("gh executable is unavailable")
     args = ["gh", "api", "--hostname", "github.com", endpoint]
     if collection:
         args.extend(["--paginate", "--slurp"])
     try:
-        result = subprocess.run(args, capture_output=True, check=False)
+        result = subprocess.run(
+            args,
+            capture_output=True,
+            check=False,
+            timeout=_GITHUB_OPERATION_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise GitHubPrMetadataError(
+            "gh api timed out after "
+            f"{_GITHUB_OPERATION_TIMEOUT_SECONDS} seconds for {endpoint}; "
+            "verify GitHub access and retry"
+        ) from exc
     except OSError as exc:
         raise GitHubPrMetadataError(f"gh api could not run: {exc}") from exc
     if result.returncode:
@@ -65,10 +91,16 @@ def _gh_json(endpoint: str, *, collection: bool, collection_key: str | None = No
     value = _json_bytes(result.stdout, endpoint)
     if not collection:
         return value
-    return _flatten_keyed_pages(value, collection_key, endpoint) if collection_key else _flatten_pages(value, endpoint)
+    return (
+        _flatten_keyed_pages(value, collection_key, endpoint)
+        if collection_key
+        else _flatten_pages(value, endpoint)
+    )
 
 
-def _http_json(endpoint: str, *, token: str, collection: bool, collection_key: str | None = None) -> Any:
+def _http_json(
+    endpoint: str, *, token: str, collection: bool, collection_key: str | None = None
+) -> Any:
     url = f"https://api.github.com/{endpoint.lstrip('/')}"
     values: list[Any] = []
     while url:
@@ -82,35 +114,55 @@ def _http_json(endpoint: str, *, token: str, collection: bool, collection_key: s
             },
         )
         try:
-            with urlopen(request) as response:
+            with urlopen(
+                request, timeout=_GITHUB_OPERATION_TIMEOUT_SECONDS
+            ) as response:
                 raw = response.read()
                 next_url = response.headers.get("Link", "")
+        except TimeoutError as exc:
+            raise GitHubPrMetadataError(
+                "GitHub HTTP API timed out after "
+                f"{_GITHUB_OPERATION_TIMEOUT_SECONDS} seconds for {endpoint}; "
+                "verify GitHub access and retry"
+            ) from exc
         except (HTTPError, URLError, OSError) as exc:
             raise GitHubPrMetadataError(f"GitHub HTTP API failed: {endpoint}") from exc
         value = _json_bytes(raw, endpoint)
         if not collection:
             return value
         if collection_key:
-            if not isinstance(value, dict) or not isinstance(value.get(collection_key), list):
-                raise GitHubPrMetadataError(f"GitHub HTTP collection is missing array {collection_key}: {endpoint}")
+            if not isinstance(value, dict) or not isinstance(
+                value.get(collection_key), list
+            ):
+                raise GitHubPrMetadataError(
+                    f"GitHub HTTP collection is missing array {collection_key}: {endpoint}"
+                )
             values.extend(value[collection_key])
         else:
             if not isinstance(value, list):
-                raise GitHubPrMetadataError(f"GitHub HTTP collection is not an array: {endpoint}")
+                raise GitHubPrMetadataError(
+                    f"GitHub HTTP collection is not an array: {endpoint}"
+                )
             values.extend(value)
         url = ""
         for link in next_url.split(","):
             if 'rel="next"' in link and "<" in link and ">" in link:
-                url = urljoin("https://api.github.com/", link.split("<", 1)[1].split(">", 1)[0])
+                url = urljoin(
+                    "https://api.github.com/", link.split("<", 1)[1].split(">", 1)[0]
+                )
                 break
     return values
 
 
-def _provider_call(endpoint: str, *, collection: bool, collection_key: str | None = None) -> tuple[Any, str]:
+def _provider_call(
+    endpoint: str, *, collection: bool, collection_key: str | None = None
+) -> tuple[Any, str]:
     gh_error: Exception | None = None
     if shutil.which("gh") is not None:
         try:
-            return _gh_json(endpoint, collection=collection, collection_key=collection_key), "gh_api"
+            return _gh_json(
+                endpoint, collection=collection, collection_key=collection_key
+            ), "gh_api"
         except GitHubPrMetadataError as exc:
             gh_error = exc
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
@@ -118,7 +170,9 @@ def _provider_call(endpoint: str, *, collection: bool, collection_key: str | Non
         detail = f"; gh error: {gh_error}" if gh_error else ""
         raise GitHubPrMetadataError(f"no GitHub provider is available{detail}")
     try:
-        return _http_json(endpoint, token=token, collection=collection, collection_key=collection_key), "github_http_api"
+        return _http_json(
+            endpoint, token=token, collection=collection, collection_key=collection_key
+        ), "github_http_api"
     except GitHubPrMetadataError as exc:
         detail = f"; gh error: {gh_error}" if gh_error else ""
         raise GitHubPrMetadataError(f"GitHub providers failed: {exc}{detail}") from exc
@@ -126,7 +180,9 @@ def _provider_call(endpoint: str, *, collection: bool, collection_key: str | Non
 
 def _required_mapping(value: Any, context: str) -> dict[str, Any]:
     if not isinstance(value, dict):
-        raise GitHubPrMetadataError(f"required GitHub response is not an object: {context}")
+        raise GitHubPrMetadataError(
+            f"required GitHub response is not an object: {context}"
+        )
     return value
 
 
@@ -173,32 +229,89 @@ def normalize_pr_metadata(
             "target_revision": head["sha"],
             "base_branch": base.get("ref"),
             "target_branch": head.get("ref"),
-            "labels": [label.get("name") for label in pull_request.get("labels", []) if isinstance(label, dict)],
+            "labels": [
+                label.get("name")
+                for label in pull_request.get("labels", [])
+                if isinstance(label, dict)
+            ],
         },
         "changed_files": [
-            _record(item, ("filename", "status", "previous_filename", "additions", "deletions", "changes", "blob_url", "contents_url"))
+            _record(
+                item,
+                (
+                    "filename",
+                    "status",
+                    "previous_filename",
+                    "additions",
+                    "deletions",
+                    "changes",
+                    "blob_url",
+                    "contents_url",
+                ),
+            )
             for item in files
         ],
         "reviews": [
-            _record(item, ("id", "user", "state", "submitted_at", "commit_id", "html_url", "body"))
+            _record(
+                item,
+                (
+                    "id",
+                    "user",
+                    "state",
+                    "submitted_at",
+                    "commit_id",
+                    "html_url",
+                    "body",
+                ),
+            )
             for item in reviews
         ],
         "inline_comments": [
-            _record(item, ("id", "path", "line", "start_line", "side", "body", "user", "created_at", "updated_at", "commit_id", "html_url", "diff_hunk"))
+            _record(
+                item,
+                (
+                    "id",
+                    "path",
+                    "line",
+                    "start_line",
+                    "side",
+                    "body",
+                    "user",
+                    "created_at",
+                    "updated_at",
+                    "commit_id",
+                    "html_url",
+                    "diff_hunk",
+                ),
+            )
             for item in inline_comments
         ],
         "issue_comments": [
-            _record(item, ("id", "user", "created_at", "updated_at", "html_url", "body"))
+            _record(
+                item, ("id", "user", "created_at", "updated_at", "html_url", "body")
+            )
             for item in issue_comments
         ],
         "check_runs": [
-            _record(item, ("id", "name", "status", "conclusion", "started_at", "completed_at", "html_url", "head_sha"))
+            _record(
+                item,
+                (
+                    "id",
+                    "name",
+                    "status",
+                    "conclusion",
+                    "started_at",
+                    "completed_at",
+                    "html_url",
+                    "head_sha",
+                ),
+            )
             for item in check_runs
         ],
         "provenance": {
             "provider": provider,
             "endpoints": endpoints,
-            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "fetched_at": datetime.now(UTC).isoformat(),
         },
     }
 
@@ -218,7 +331,10 @@ def fetch_pr_metadata(
     from catalog.repositories import load_workspace_manifest
 
     manifest = load_workspace_manifest(Path(manifest_path))
-    entry = next((item for item in manifest["repositories"] if item.get("repo_key") == repo_key), None)
+    entry = next(
+        (item for item in manifest["repositories"] if item.get("repo_key") == repo_key),
+        None,
+    )
     if entry is None:
         raise GitHubPrMetadataError(f"repository not found in manifest: {repo_key}")
     identity = normalized_github_identity(entry.get("remote_url"))
@@ -243,8 +359,17 @@ def fetch_pr_metadata(
     if not isinstance(target, str) or not target:
         raise GitHubPrMetadataError("pull request target revision is missing")
     checks_endpoint = f"repos/{repository}/commits/{target}/check-runs"
-    check_runs, checks_provider = _provider_call(checks_endpoint, collection=True, collection_key="check_runs")
-    providers = {provider, files_provider, reviews_provider, comments_provider, issue_provider, checks_provider}
+    check_runs, checks_provider = _provider_call(
+        checks_endpoint, collection=True, collection_key="check_runs"
+    )
+    providers = {
+        provider,
+        files_provider,
+        reviews_provider,
+        comments_provider,
+        issue_provider,
+        checks_provider,
+    }
     if len(providers) != 1:
         provider = "mixed:" + ",".join(sorted(providers))
     return normalize_pr_metadata(

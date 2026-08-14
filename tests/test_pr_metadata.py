@@ -7,7 +7,11 @@ from types import SimpleNamespace
 import pytest
 
 import catalog.github_pr_metadata as metadata
-from catalog.github_pr_metadata import GitHubPrMetadataError, fetch_pr_metadata, normalize_pr_metadata
+from catalog.github_pr_metadata import (
+    GitHubPrMetadataError,
+    fetch_pr_metadata,
+    normalize_pr_metadata,
+)
 
 
 def _manifest(tmp_path: Path) -> Path:
@@ -15,13 +19,13 @@ def _manifest(tmp_path: Path) -> Path:
     root.mkdir()
     path = tmp_path / "manifest.yaml"
     path.write_text(
-        """version: 1
+        f"""version: 1
 repositories:
   - repo_key: ia-main
     remote_url: git@github.com:intacct/ia-app.git
-    local_root: %s
+    local_root: {root}
     tracked_branch: main
-""" % root,
+""",
         encoding="utf-8",
     )
     return path
@@ -65,26 +69,39 @@ def test_metadata_rejects_missing_required_fields() -> None:
             repository="intacct/ia-app",
             repo_key="ia-main",
             pull_request=pull,
-            files=[], reviews=[], inline_comments=[], issue_comments=[], check_runs=[],
-            provider="gh_api", endpoints=[],
+            files=[],
+            reviews=[],
+            inline_comments=[],
+            issue_comments=[],
+            check_runs=[],
+            provider="gh_api",
+            endpoints=[],
         )
 
 
-def test_fetch_metadata_normalizes_provider_collections(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    values = iter([
-        _pull_request(),
-        [{"filename": "app/a.php", "status": "modified"}],
-        [{"id": 1, "state": "approved"}],
-        [{"id": 2, "path": "app/a.php"}],
-        [{"id": 3, "body": "comment"}],
-        [{"id": 4, "name": "tests"}, {"id": 5, "name": "lint"}],
-    ])
+def test_fetch_metadata_normalizes_provider_collections(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    values = iter(
+        [
+            _pull_request(),
+            [{"filename": "app/a.php", "status": "modified"}],
+            [{"id": 1, "state": "approved"}],
+            [{"id": 2, "path": "app/a.php"}],
+            [{"id": 3, "body": "comment"}],
+            [{"id": 4, "name": "tests"}, {"id": 5, "name": "lint"}],
+        ]
+    )
     calls = []
+
     def provider(endpoint, collection, collection_key=None):
         calls.append((endpoint, collection, collection_key))
         return next(values), "gh_api"
+
     monkeypatch.setattr(metadata, "_provider_call", provider)
-    value = fetch_pr_metadata(repo_key="ia-main", manifest_path=_manifest(tmp_path), pr_number=49156)
+    value = fetch_pr_metadata(
+        repo_key="ia-main", manifest_path=_manifest(tmp_path), pr_number=49156
+    )
     assert value["pull_request"]["number"] == 49156
     assert len(value["changed_files"]) == 1
     assert len(value["check_runs"]) == 2
@@ -95,14 +112,34 @@ def test_gh_check_run_pages_are_flattened(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(metadata.shutil, "which", lambda name: "/usr/bin/gh")
     result = SimpleNamespace(
         returncode=0,
-        stdout=json.dumps([
-            {"check_runs": [{"id": 1}]},
-            {"check_runs": [{"id": 2}]},
-        ]).encode(),
+        stdout=json.dumps(
+            [
+                {"check_runs": [{"id": 1}]},
+                {"check_runs": [{"id": 2}]},
+            ]
+        ).encode(),
         stderr=b"",
     )
     monkeypatch.setattr(metadata.subprocess, "run", lambda *args, **kwargs: result)
-    assert metadata._gh_json("repos/intacct/ia-app/commits/a/check-runs", collection=True, collection_key="check_runs") == [{"id": 1}, {"id": 2}]
+    assert metadata._gh_json(
+        "repos/intacct/ia-app/commits/a/check-runs",
+        collection=True,
+        collection_key="check_runs",
+    ) == [{"id": 1}, {"id": 2}]
+
+
+def test_gh_timeout_is_a_metadata_error_with_remediation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(metadata.shutil, "which", lambda name: "/usr/bin/gh")
+
+    def timeout(*args, **kwargs):
+        assert kwargs["timeout"] == metadata._GITHUB_OPERATION_TIMEOUT_SECONDS
+        raise metadata.subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+
+    monkeypatch.setattr(metadata.subprocess, "run", timeout)
+    with pytest.raises(GitHubPrMetadataError, match="timed out.*verify GitHub access"):
+        metadata._gh_json("repos/intacct/ia-app/pulls/49156", collection=False)
 
 
 def test_http_check_run_pages_follow_next_link(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -110,19 +147,56 @@ def test_http_check_run_pages_follow_next_link(monkeypatch: pytest.MonkeyPatch) 
         def __init__(self, payload, link=""):
             self.payload = payload
             self.headers = {"Link": link}
-        def __enter__(self): return self
-        def __exit__(self, *args): return False
-        def read(self): return json.dumps(self.payload).encode()
 
-    responses = iter([
-        Response({"check_runs": [{"id": 1}]}, '<https://api.github.com/repos/intacct/ia-app/commits/a/check-runs?page=2>; rel="next"'),
-        Response({"check_runs": [{"id": 2}]}),
-    ])
-    monkeypatch.setattr(metadata, "urlopen", lambda request: next(responses))
-    assert metadata._http_json("repos/intacct/ia-app/commits/a/check-runs", token="token", collection=True, collection_key="check_runs") == [{"id": 1}, {"id": 2}]
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps(self.payload).encode()
+
+    responses = iter(
+        [
+            Response(
+                {"check_runs": [{"id": 1}]},
+                '<https://api.github.com/repos/intacct/ia-app/commits/a/check-runs?page=2>; rel="next"',
+            ),
+            Response({"check_runs": [{"id": 2}]}),
+        ]
+    )
+
+    def open_response(request, *, timeout):
+        assert timeout == metadata._GITHUB_OPERATION_TIMEOUT_SECONDS
+        return next(responses)
+
+    monkeypatch.setattr(metadata, "urlopen", open_response)
+    assert metadata._http_json(
+        "repos/intacct/ia-app/commits/a/check-runs",
+        token="token",
+        collection=True,
+        collection_key="check_runs",
+    ) == [{"id": 1}, {"id": 2}]
 
 
-def test_provider_failure_does_not_return_partial_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_http_timeout_is_a_metadata_error_with_remediation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def timeout(request, *, timeout):
+        assert timeout == metadata._GITHUB_OPERATION_TIMEOUT_SECONDS
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(metadata, "urlopen", timeout)
+    with pytest.raises(GitHubPrMetadataError, match="timed out.*verify GitHub access"):
+        metadata._http_json(
+            "repos/intacct/ia-app/pulls/49156", token="token", collection=False
+        )
+
+
+def test_provider_failure_does_not_return_partial_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(metadata.shutil, "which", lambda name: None)
     monkeypatch.delenv("GH_TOKEN", raising=False)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)

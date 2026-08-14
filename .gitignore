@@ -12,6 +12,7 @@ wheels/
 .venv
 .python-version
 uv.lock
+.cache/
 
 # Local catalog database
 all_tables_row_count.txt

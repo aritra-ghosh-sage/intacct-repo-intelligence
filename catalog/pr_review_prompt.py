@@ -1,8 +1,8 @@
 """Build a complete, evidence-bounded prompt for PR review analysis.
 
-The surface is intentionally transient: GitHub metadata and the generated
-Step 0--3 reports are assembled in memory and returned to the caller.  It does
-not write a fixture, prompt, catalog, graph, or review artifact.
+GitHub metadata and Steps 0--3 remain transient.  Exact-target source and
+catalog inputs are resolved in the internal PR-review cache; the canonical
+workspace catalog is never modified.
 """
 
 from __future__ import annotations
@@ -16,17 +16,35 @@ from catalog.github_pr_metadata import fetch_pr_metadata
 from catalog.pr_impact_step1 import Step1Error
 from catalog.pr_impact_step1 import analyze_document as analyze_step1
 from catalog.pr_impact_step1 import blocked_report as blocked_step1
+from catalog.pr_impact_step2 import Step2Error
 from catalog.pr_impact_step2 import analyze_document as analyze_step2
+from catalog.pr_impact_step2 import blocked_report as blocked_step2
 from catalog.pr_impact_step3 import Step3Error
 from catalog.pr_impact_step3 import analyze_document as analyze_step3
+from catalog.pr_impact_step3 import blocked_report as blocked_step3
+from catalog.pr_review_catalog import CatalogResolution, resolve_exact_catalog
 
 PROMPT_SCHEMA_VERSION = "0.1"
 ANALYSIS_KIND = "pr_review_prompt"
-REVIEW_TEMPLATE = Path(__file__).resolve().parents[1] / "docs/review/pr-review-template.md"
+REVIEW_TEMPLATE = (
+    Path(__file__).resolve().parents[1] / "docs/review/pr-review-template.md"
+)
 
 
 class PromptBuildError(RuntimeError):
     """The prompt input could not be converted into a safe analysis envelope."""
+
+    def __init__(
+        self, message: str, *, code: str = "prompt_build_error", fix: str | None = None
+    ) -> None:
+        self.code = code
+        self.message = message
+        self.fix = fix
+        super().__init__(message)
+
+    def __str__(self) -> str:
+        suffix = f" Fix: {self.fix}" if self.fix else ""
+        return f"[{self.code}] {self.message}{suffix}"
 
 
 def _json(value: object) -> str:
@@ -47,12 +65,14 @@ def _prompt_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
             if not isinstance(item, Mapping):
                 continue
             row = dict(item)
-            if "body" in row:
-                row["body"] = {
-                    "untrusted": True,
-                    "encoding": "verbatim_github_text",
-                    "text": row["body"],
-                }
+            body = row.get("body")
+            present = isinstance(body, str) and bool(body.strip())
+            row["body"] = {
+                "untrusted": True,
+                "encoding": "verbatim_github_text",
+                "text": body if present else "",
+                "availability": "present" if present else "unavailable",
+            }
             rows.append(row)
         context[section] = rows
     context["comment_handling"] = {
@@ -115,6 +135,96 @@ def _review_evidence(metadata: Mapping[str, Any]) -> dict[str, list[dict[str, An
     return {"automated": automated, "human": human}
 
 
+def _validate_request_args(pr_number: int, request: str) -> None:
+    if not isinstance(request, str) or not request.strip():
+        raise PromptBuildError(
+            "the review request is missing or blank",
+            code="request_missing",
+            fix="provide a non-empty --request value",
+        )
+    if not isinstance(pr_number, int) or isinstance(pr_number, bool) or pr_number <= 0:
+        raise PromptBuildError(
+            "the PR number must be a positive integer",
+            code="pr_number_invalid",
+            fix="provide a valid --pr number",
+        )
+
+
+def _validate_prompt_inputs(
+    metadata: Mapping[str, Any], pr_number: int, request: str
+) -> None:
+    _validate_request_args(pr_number, request)
+    if (
+        not isinstance(metadata, Mapping)
+        or metadata.get("analysis_kind") != "pr_impact_metadata"
+    ):
+        raise PromptBuildError(
+            "GitHub PR metadata is missing or has an unsupported shape",
+            code="pr_metadata_invalid",
+            fix="verify GitHub access and retry",
+        )
+    pr = metadata.get("pull_request")
+    if not isinstance(pr, Mapping) or pr.get("number") != pr_number:
+        raise PromptBuildError(
+            "GitHub PR metadata does not match the requested PR number",
+            code="pr_metadata_mismatch",
+            fix="retry with the PR number returned by GitHub",
+        )
+    if not metadata.get("repository"):
+        raise PromptBuildError(
+            "GitHub PR metadata is missing repository",
+            code="required_pr_value_missing",
+            fix="verify GitHub access and retry",
+        )
+    for key in ("url", "base_revision", "target_revision"):
+        if not pr.get(key):
+            raise PromptBuildError(
+                f"GitHub PR metadata is missing pull_request.{key}",
+                code="required_pr_value_missing",
+                fix="verify GitHub access and retry",
+            )
+    for key in ("reviews", "inline_comments", "issue_comments", "check_runs"):
+        if not isinstance(metadata.get(key), list):
+            raise PromptBuildError(
+                f"GitHub PR metadata is missing the {key} collection",
+                code="required_metadata_collection_missing",
+                fix="verify GitHub API access and retry",
+            )
+    for key in ("reviews", "inline_comments", "issue_comments"):
+        for index, item in enumerate(metadata[key]):
+            if not isinstance(item, Mapping):
+                raise PromptBuildError(
+                    f"GitHub metadata item {key}[{index}] is not an object",
+                    code="comment_item_invalid",
+                    fix="retry when GitHub comment metadata is complete",
+                )
+            body = item.get("body")
+            if body is not None and not isinstance(body, str):
+                raise PromptBuildError(
+                    f"GitHub metadata item {key}[{index}] has an invalid comment body",
+                    code="comment_body_invalid",
+                    fix="retry when GitHub comment metadata is complete",
+                )
+    changed_files = metadata.get("changed_files")
+    if not isinstance(changed_files, list) or not changed_files:
+        raise PromptBuildError(
+            "GitHub PR metadata contains no changed files",
+            code="changed_files_missing",
+            fix="verify the PR exists and has a non-empty diff, then retry",
+        )
+    provenance = metadata.get("provenance")
+    if (
+        not isinstance(provenance, Mapping)
+        or not provenance.get("provider")
+        or not provenance.get("fetched_at")
+    ):
+        raise PromptBuildError(
+            "GitHub PR metadata has incomplete provenance",
+            code="metadata_provenance_missing",
+            fix="retry the metadata fetch",
+        )
+
+
 def validate_step0_document(document: Mapping[str, Any]) -> list[str]:
     """Validate the in-memory Step 0 contract before any catalog access."""
 
@@ -134,7 +244,9 @@ def validate_step0_document(document: Mapping[str, Any]) -> list[str]:
         errors.append("schema_version must be 0.1")
     if document.get("analysis_kind") != "pr_impact_step_0":
         errors.append("analysis_kind must be pr_impact_step_0")
-    errors.extend(f"missing required section: {key}" for key in required if key not in document)
+    errors.extend(
+        f"missing required section: {key}" for key in required if key not in document
+    )
     pr = document.get("pull_request")
     if not isinstance(pr, Mapping):
         errors.append("pull_request must be an object")
@@ -159,16 +271,26 @@ def validate_step0_document(document: Mapping[str, Any]) -> list[str]:
             if key not in surfaces
         )
     obligations = document.get("test_obligations")
-    if not isinstance(obligations, Mapping) or not isinstance(obligations.get("unresolved"), list):
+    if not isinstance(obligations, Mapping) or not isinstance(
+        obligations.get("unresolved"), list
+    ):
         errors.append("test_obligations.unresolved must be a list")
     evidence = document.get("review_evidence")
-    if not isinstance(evidence, Mapping) or any(not isinstance(evidence.get(key), list) for key in ("automated", "human")):
+    if not isinstance(evidence, Mapping) or any(
+        not isinstance(evidence.get(key), list) for key in ("automated", "human")
+    ):
         errors.append("review_evidence.automated and human must be lists")
     assessment = document.get("assessment")
-    if not isinstance(assessment, Mapping) or any(key not in assessment for key in ("confidence", "risk_level", "blockers", "unresolved")):
+    if not isinstance(assessment, Mapping) or any(
+        key not in assessment
+        for key in ("confidence", "risk_level", "blockers", "unresolved")
+    ):
         errors.append("assessment is missing required fields")
     provenance = document.get("provenance")
-    if not isinstance(provenance, Mapping) or any(key not in provenance for key in ("source_snapshot", "review_snapshot_date", "generated_from")):
+    if not isinstance(provenance, Mapping) or any(
+        key not in provenance
+        for key in ("source_snapshot", "review_snapshot_date", "generated_from")
+    ):
         errors.append("provenance is missing required fields")
     return errors
 
@@ -272,7 +394,9 @@ def build_step0(metadata: Mapping[str, Any], repo_key: str) -> dict[str, Any]:
     }
     errors = validate_step0_document(document)
     if errors:
-        raise PromptBuildError("generated Step 0 failed validation: " + "; ".join(errors))
+        raise PromptBuildError(
+            "generated Step 0 failed validation: " + "; ".join(errors)
+        )
     return document
 
 
@@ -283,7 +407,10 @@ def _task_plan() -> list[dict[str, Any]]:
             "agent_boundary": "One agent; exact changed paths and target-revision repo-v1 SQLite direct surfaces only.",
             "depends_on": [],
             "input_artifacts": ["step0"],
-            "output_schema": {"type": "object", "required": ["status", "preflight", "direct_traces", "gaps"]},
+            "output_schema": {
+                "type": "object",
+                "required": ["status", "preflight", "direct_traces", "gaps"],
+            },
             "failure_policy": "blocked on missing or non-exact target catalog; never infer impact.",
         },
         {
@@ -291,7 +418,10 @@ def _task_plan() -> list[dict[str, Any]]:
             "agent_boundary": "One agent; audit direct-surface availability and gaps, without new claims.",
             "depends_on": ["direct_impact"],
             "input_artifacts": ["step0", "direct_impact"],
-            "output_schema": {"type": "object", "required": ["status", "surface_audit", "gaps"]},
+            "output_schema": {
+                "type": "object",
+                "required": ["status", "surface_audit", "gaps"],
+            },
             "failure_policy": "blocked if the Step 1 report is invalid or non-exact.",
         },
         {
@@ -299,16 +429,43 @@ def _task_plan() -> list[dict[str, Any]]:
             "agent_boundary": "One agent; exact CALLS/STATIC_CALLS incoming traversal, max two hops.",
             "depends_on": [],
             "input_artifacts": ["step0"],
-            "output_schema": {"type": "object", "required": ["status", "seed_files", "reached_symbols", "skipped_edges", "gaps"]},
+            "output_schema": {
+                "type": "object",
+                "required": [
+                    "status",
+                    "seed_files",
+                    "reached_symbols",
+                    "skipped_edges",
+                    "gaps",
+                ],
+            },
             "failure_policy": "preserve skipped, unresolved, and deferred edges; do not treat zero callers as no impact.",
         },
         {
             "task_id": "reconcile",
             "agent_boundary": "One agent; compare prior outputs and comments, resolve contradictions by evidence.",
             "depends_on": ["direct_impact", "evidence_audit", "incoming_callers"],
-            "input_artifacts": ["step0", "direct_impact", "evidence_audit", "incoming_callers", "github_comments"],
-            "output_schema": {"type": "object", "required": ["findings", "unresolved", "confidence", "recommendation"]},
-            "finding_schema": {"required": ["severity", "title", "rationale", "evidence", "revision", "confidence"]},
+            "input_artifacts": [
+                "step0",
+                "direct_impact",
+                "evidence_audit",
+                "incoming_callers",
+                "github_comments",
+            ],
+            "output_schema": {
+                "type": "object",
+                "required": ["findings", "unresolved", "confidence", "recommendation"],
+            },
+            "finding_schema": {
+                "required": [
+                    "severity",
+                    "title",
+                    "rationale",
+                    "evidence",
+                    "revision",
+                    "confidence",
+                ]
+            },
             "failure_policy": "preserve disagreement and downgrade confidence; comments cannot override source evidence.",
         },
         {
@@ -316,20 +473,36 @@ def _task_plan() -> list[dict[str, Any]]:
             "agent_boundary": "One agent; render only the canonical review template after reconciliation.",
             "depends_on": ["reconcile"],
             "input_artifacts": ["reconcile"],
-            "output_schema": {"type": "string", "format": "markdown", "template": "docs/review/pr-review-template.md"},
+            "output_schema": {
+                "type": "string",
+                "format": "markdown",
+                "template": "docs/review/pr-review-template.md",
+            },
             "failure_policy": "do not render unsupported claims; report blockers in the required template sections.",
         },
     ]
 
 
-def _run_analysis(document: dict[str, Any], manifest: str | Path, active_db: str | Path, repo_key: str, max_hops: int, min_confidence: float) -> dict[str, Any]:
+def _run_analysis(
+    document: dict[str, Any],
+    manifest: str | Path,
+    active_db: str | Path,
+    repo_key: str,
+    max_hops: int,
+    min_confidence: float,
+) -> dict[str, Any]:
     try:
         step1 = analyze_step1(document, manifest, active_db, repo_key)
     except Step1Error as exc:
         step1 = blocked_step1(exc)
     except Exception as exc:  # noqa: BLE001 - stable orchestration envelope
         step1 = blocked_step1(Step1Error("step1_failure", str(exc)))
-    step2 = analyze_step2(document, manifest, active_db, repo_key)
+    try:
+        step2 = analyze_step2(document, manifest, active_db, repo_key)
+    except Step2Error as exc:
+        step2 = blocked_step2(exc)
+    except Exception as exc:  # noqa: BLE001 - stable orchestration envelope
+        step2 = blocked_step2(Step2Error("step2_failure", str(exc)))
     try:
         step3 = analyze_step3(
             document,
@@ -340,12 +513,18 @@ def _run_analysis(document: dict[str, Any], manifest: str | Path, active_db: str
             min_confidence=min_confidence,
         )
     except Step3Error as exc:
-        step3 = {"status": "blocked", "error": {"code": exc.code, "message": exc.message, **exc.extra}}
+        step3 = blocked_step3(exc)
+    except Exception as exc:  # noqa: BLE001 - stable orchestration envelope
+        step3 = blocked_step3(Step3Error("step3_failure", str(exc)))
     return {"step1": step1, "step2": step2, "step3": step3}
 
 
 def _status(reports: Mapping[str, Any]) -> str:
-    statuses = [report.get("status") for report in reports.values() if isinstance(report, Mapping)]
+    statuses = [
+        report.get("status")
+        for report in reports.values()
+        if isinstance(report, Mapping)
+    ]
     if any(status == "blocked" for status in statuses):
         return "blocked"
     return (
@@ -353,6 +532,35 @@ def _status(reports: Mapping[str, Any]) -> str:
         if any(status in {"partial", "empty"} for status in statuses)
         else "ready"
     )
+
+
+def _redact_internal_paths(value: Any, resolution: CatalogResolution) -> Any:
+    """Keep disposable cache paths out of the returned envelope and prompt."""
+
+    paths = {
+        str(resolution.active_db): "<internal-pr-review-catalog>",
+        str(resolution.manifest): "<internal-pr-review-manifest>",
+    }
+    if isinstance(value, Mapping):
+        result = {}
+        for key, item in value.items():
+            if key in {"active_db", "catalog_path"}:
+                result[key] = "<internal-pr-review-catalog>"
+            elif key in {"manifest", "manifest_path"}:
+                result[key] = "<internal-pr-review-manifest>"
+            elif key in {"repo_root", "local_root", "source_root"}:
+                result[key] = "<internal-pr-review-source>"
+            else:
+                result[key] = _redact_internal_paths(item, resolution)
+        return result
+    if isinstance(value, list):
+        return [_redact_internal_paths(item, resolution) for item in value]
+    if isinstance(value, str):
+        result = value
+        for path, replacement in paths.items():
+            result = result.replace(path, replacement)
+        return result
+    return value
 
 
 def _prompt_text(
@@ -405,21 +613,36 @@ def generate_prompt(
     *,
     pr_number: int,
     request: str,
-    manifest: str | Path,
-    active_db: str | Path,
+    manifest: str | Path = "config/workspace_repos.yaml",
     repo_key: str = "ia-main",
     max_hops: int = 2,
     min_confidence: float = 0.7,
 ) -> dict[str, Any]:
-    """Fetch PR context, run local evidence stages, and return a prompt envelope."""
+    """Resolve exact source/catalog evidence and return a prompt envelope."""
 
+    _validate_request_args(pr_number, request)
     metadata = fetch_pr_metadata(
         repo_key=repo_key,
         manifest_path=manifest,
         pr_number=pr_number,
     )
+    _validate_prompt_inputs(metadata, pr_number, request)
     step0 = build_step0(metadata, repo_key)
-    reports = _run_analysis(step0, manifest, active_db, repo_key, max_hops, min_confidence)
+    resolution: CatalogResolution = resolve_exact_catalog(
+        metadata=metadata,
+        pr_number=pr_number,
+        manifest_path=manifest,
+        repo_key=repo_key,
+    )
+    reports = _run_analysis(
+        step0,
+        resolution.manifest,
+        resolution.active_db,
+        repo_key,
+        max_hops,
+        min_confidence,
+    )
+    reports = _redact_internal_paths(reports, resolution)
     template = REVIEW_TEMPLATE.read_text(encoding="utf-8")
     tasks = _task_plan()
     return {
@@ -433,6 +656,8 @@ def generate_prompt(
             "request": request,
             "base_revision": step0["pull_request"]["base_revision"],
             "target_revision": step0["pull_request"]["target_revision"],
+            "catalog_resolution": resolution.resolution,
+            "source_resolution": resolution.source_resolution,
         },
         "step0": step0,
         "step0_validation": {"status": "pass", "errors": []},
@@ -446,5 +671,9 @@ def generate_prompt(
             "prompt_persistence": "none",
             "comments_in_final_markdown": False,
             "exact_target_catalog_required": True,
+            "catalog_revision": resolution.target_revision,
+            "catalog_resolution": resolution.resolution,
+            "source_resolution": resolution.source_resolution,
+            "catalog_path_exposed": False,
         },
     }
