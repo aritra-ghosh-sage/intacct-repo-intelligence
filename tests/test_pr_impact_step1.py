@@ -42,6 +42,27 @@ def make_repo(tmp_path: Path) -> tuple[Path, str, str]:
     return repo, base, git(repo, "rev-parse", "HEAD")
 
 
+def make_multi_file_repo(tmp_path: Path) -> tuple[Path, str, str]:
+    repo = tmp_path / "multi-file-repo"
+    repo.mkdir()
+    git(repo, "init", "-q")
+    git(repo, "config", "user.email", "test@example.com")
+    git(repo, "config", "user.name", "Test")
+    (repo / "a.php").write_text("<?php\nfunction old() {}\n", encoding="utf-8")
+    (repo / "b.php").write_text("<?php\nfunction other() {}\n", encoding="utf-8")
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "base")
+    base = git(repo, "rev-parse", "HEAD")
+    (repo / "a.php").write_text(
+        "<?php\nfunction old() {}\nfunction newThing() {}\n", encoding="utf-8"
+    )
+    (repo / "b.php").write_text(
+        "<?php\nfunction other() {}\nfunction changed() {}\n", encoding="utf-8"
+    )
+    git(repo, "commit", "-qam", "target")
+    return repo, base, git(repo, "rev-parse", "HEAD")
+
+
 def make_entity_repo(
     tmp_path: Path, *, change_entity: bool = True, change_openapi: bool = False
 ) -> tuple[Path, str, str]:
@@ -229,6 +250,36 @@ def test_valid_diff_traces_exact_rows_and_is_read_only(tmp_path: Path) -> None:
     assert report == repeat
     assert json.dumps(report, sort_keys=True, separators=(",", ":")) == json.dumps(
         repeat, sort_keys=True, separators=(",", ":")
+    )
+
+
+def test_multi_file_diff_uses_path_bindings_for_entity_lookup(tmp_path: Path) -> None:
+    repo, base, target = make_multi_file_repo(tmp_path)
+    fixture = make_fixture(
+        tmp_path,
+        base,
+        target,
+        changed=[
+            {"path": "a.php", "status": "modified"},
+            {"path": "b.php", "status": "modified"},
+        ],
+    )
+    db = make_db(tmp_path, target)
+
+    report = analyze_fixture(fixture, make_manifest(tmp_path, repo), db, "ia-main")
+
+    assert report["status"] == "partial"
+    assert report["changed_files"] == [
+        {"path": "a.php", "status": "modified", "old_path": None},
+        {"path": "b.php", "status": "modified", "old_path": None},
+    ]
+    assert (
+        next(
+            trace
+            for trace in report["direct_traces"]
+            if trace["surface"] == "workflows"
+        )["status"]
+        == "empty"
     )
 
 

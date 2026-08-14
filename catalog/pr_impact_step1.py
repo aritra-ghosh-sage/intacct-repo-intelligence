@@ -827,11 +827,11 @@ def analyze_document(
             )
 
         paths = [x.path for x in changed]
-        marks = ",".join("?" for _ in paths)
+        path_marks = ",".join("?" for _ in paths)
         files = {
             str(r["path"]): r
             for r in conn.execute(
-                f"SELECT * FROM files WHERE repo_id=? AND path IN ({marks}) ORDER BY path",
+                f"SELECT * FROM files WHERE repo_id=? AND path IN ({path_marks}) ORDER BY path",
                 (repo_id, *paths),
             ).fetchall()
         }
@@ -840,7 +840,7 @@ def analyze_document(
         entity_file_ids = [
             int(row[0])
             for row in conn.execute(
-                f"SELECT id FROM files WHERE repo_id=? AND path IN ({ids}) AND lower(path) LIKE '%.ent'",
+                f"SELECT id FROM files WHERE repo_id=? AND path IN ({path_marks}) AND lower(path) LIKE '%.ent'",
                 (repo_id, *paths),
             ).fetchall()
         ]
