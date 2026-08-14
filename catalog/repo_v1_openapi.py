@@ -755,7 +755,7 @@ def _entity_links(
             evidence = _diagnostic_evidence(
                 document.path,
                 pointer="/x-mappedTo",
-                value=repr(raw),
+                value=raw,
                 reason="non-string",
             )
         elif isinstance(raw, str) and not raw.strip():

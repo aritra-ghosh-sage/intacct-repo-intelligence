@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = "0.1"
+SCHEMA_VERSION = "0.2"
 ANALYSIS_KIND = "pr_impact_step_3"
 STATUSES = {"complete", "partial", "empty", "blocked"}
 TOP_LEVEL_KEYS = {
@@ -27,6 +27,7 @@ TOP_LEVEL_KEYS = {
     "reached_symbols",
     "transitive_edges",
     "skipped_edges",
+    "caller_evidence",
     "entity_context",
     "business_impact",
     "gaps",
@@ -47,6 +48,11 @@ SKIP_REASONS = {
     "unresolved_resolution",
     "source_symbol_missing",
     "below_confidence",
+}
+CALLER_EVIDENCE_REVIEW_REASONS = {
+    "below_confidence",
+    "unresolved_resolution",
+    "source_symbol_missing",
 }
 
 
@@ -334,7 +340,7 @@ def validate(report: object) -> list[str]:
     if unexpected:
         errors.append("unexpected top-level keys: " + ", ".join(unexpected))
     if report.get("schema_version") != SCHEMA_VERSION:
-        errors.append("schema_version must be 0.1")
+        errors.append("schema_version must be 0.2")
     if report.get("analysis_kind") != ANALYSIS_KIND:
         errors.append("invalid analysis_kind")
     status = report.get("status")
@@ -546,6 +552,51 @@ def validate(report: object) -> list[str]:
     if isinstance(skipped, list):
         for item in skipped:
             _validate_edge(item, input_data, errors, "skipped edge", skipped=True)
+    caller_evidence = report.get("caller_evidence")
+    if not isinstance(caller_evidence, dict):
+        errors.append("caller_evidence must be an object")
+    else:
+        caller_status = caller_evidence.get("status")
+        if caller_status not in {"complete", "needs_review", "empty", "blocked"}:
+            errors.append("caller_evidence has invalid status")
+        if caller_evidence.get("traversed_edge_count") != len(
+            transitive if isinstance(transitive, list) else []
+        ):
+            errors.append("caller_evidence traversed_edge_count is inconsistent")
+        if caller_evidence.get("reached_symbol_count") != len(
+            reached_symbols if isinstance(reached_symbols, list) else []
+        ):
+            errors.append("caller_evidence reached_symbol_count is inconsistent")
+        counts = caller_evidence.get("skipped_edge_counts")
+        if not isinstance(counts, dict):
+            errors.append("caller_evidence skipped_edge_counts must be an object")
+            counts = {}
+        for reason, count in counts.items():
+            if reason not in SKIP_REASONS:
+                errors.append("caller_evidence has an invalid skipped edge reason")
+            if not _is_int(count) or count <= 0:
+                errors.append("caller_evidence skipped edge counts must be positive integers")
+        actual_counts: dict[str, int] = {}
+        for edge in skipped if isinstance(skipped, list) else []:
+            if isinstance(edge, dict) and isinstance(edge.get("skip_reason"), str):
+                reason = edge["skip_reason"]
+                actual_counts[reason] = actual_counts.get(reason, 0) + 1
+        if counts != actual_counts:
+            errors.append("caller_evidence skipped_edge_counts is inconsistent")
+        review_required = bool(
+            CALLER_EVIDENCE_REVIEW_REASONS & set(actual_counts)
+        )
+        expected_status = (
+            "blocked"
+            if status == "blocked"
+            else "empty"
+            if status == "empty"
+            else "needs_review"
+            if review_required
+            else "complete"
+        )
+        if caller_status != expected_status:
+            errors.append("caller_evidence status does not reflect skipped evidence")
     all_edge_ids = transitive_ids | skipped_ids
     minimum_hops = {
         item.get("symbol_id"): item.get("minimum_hop")

@@ -87,6 +87,15 @@ or invalid evidence/provenance fields and identity mismatches. Non-call rows
 remain explicit in `skipped_edges`; unresolved or missing-source rows remain
 explicit and can make the report `partial`.
 
+The report schema is `0.2`. In addition to `transitive_edges` and
+`skipped_edges`, it contains `caller_evidence` with traversed-edge and
+reached-symbol counts plus skipped-edge counts by reason. Its status is
+`needs_review` whenever below-confidence, unresolved, or missing-source edges
+were retained. Non-call relationships remain excluded from traversal and are
+reported in full; they do not imply caller absence. A zero reached-symbol
+count is therefore evidence of the bounded traversal result, never a claim of
+no callers or no impact.
+
 ## Statuses and failures
 
 `empty` means every changed target file is `symbol_less` and there are no

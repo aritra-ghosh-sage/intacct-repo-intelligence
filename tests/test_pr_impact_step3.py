@@ -186,6 +186,12 @@ def test_two_hop_incoming_traversal_preserves_parallel_edges(tmp_path: Path) -> 
     assert [item["symbol_id"] for item in report["reached_symbols"]] == [2, 3]
     assert len(report["transitive_edges"]) == 3
     assert report["reached_symbols"][0]["contributing_edge_ids"] == [1, 3]
+    assert report["caller_evidence"] == {
+        "status": "complete",
+        "traversed_edge_count": 3,
+        "reached_symbol_count": 2,
+        "skipped_edge_counts": {},
+    }
     assert validate(report) == []
 
 
@@ -273,6 +279,12 @@ def test_min_confidence_is_strict_and_retains_below_threshold_edges(
     assert report["status"] == "partial"
     assert report["reached_symbols"] == []
     assert report["skipped_edges"][0]["skip_reason"] == "below_confidence"
+    assert report["caller_evidence"] == {
+        "status": "needs_review",
+        "traversed_edge_count": 0,
+        "reached_symbol_count": 0,
+        "skipped_edge_counts": {"below_confidence": 1},
+    }
     assert validate(report) == []
 
 

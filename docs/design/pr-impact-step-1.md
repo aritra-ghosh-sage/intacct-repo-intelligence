@@ -4,7 +4,7 @@ Step 1 is a read-only, repo-v1-native direct-impact trace over a validated
 Step 0 revision pair. It emits a separate JSON report and never edits the Step
 0 YAML fixture.
 
-The current report schema is `0.4`. It can optionally consume a normalized PR
+The current report schema is `0.5`. It can optionally consume a normalized PR
 metadata JSON artifact produced by `scripts/intake_pr_metadata.py`; metadata is
 context only and never overrides Git or SQLite evidence.
 
@@ -40,7 +40,7 @@ external checkout, or multi-repo extraction is performed.
 
 ## Output
 
-The report has schema version `0.4`, analysis kind `pr_impact_step_1`, and
+The report has schema version `0.5`, analysis kind `pr_impact_step_1`, and
 top-level status `complete`, `partial`, or `blocked`. The analysis scope is
 direct `ia-main` evidence only. Direct surfaces use
 `available`, `empty`, `unavailable`, `unresolved`, `ambiguous`, `stale`, or
@@ -77,6 +77,19 @@ exact `revision_relation` and the compatibility evidence used by preflight.
 The schema-compatible `downstream_repositories` section is always an empty
 list in this `ia-main`-only scope. Manifest contracts, dependency ordering,
 and Step 0 candidate labels do not become downstream impact evidence.
+
+Relationship surfaces retain the exact persisted relationship ID, source and
+target symbol IDs/names/kinds, relationship type, confidence, resolution class
+and reason, extractor, and the existing source/evidence/revision provenance.
+The outgoing-relationship surface also includes deterministic `resolution_counts`
+grouped by `(resolution_class, resolution_reason)`; no fallback identity is
+introduced. OpenAPI diagnostic facts retain their diagnostic ID/key, code,
+severity, phase, message, source path/pointer, raw evidence, extractor, and
+source revisions. Their `classification` is `expected`, `actionable`, or
+`unclassified`; only the exact history-file pattern already known to omit
+`x-mappedTo` is classified as expected. Known invalid, zero-match, and
+multiple-match mapping diagnostics are actionable; all other cases remain
+unclassified.
 
 The stable report-level `confidence` object is either `not_computed` with a
 null score for blocked analysis, or `computed` with an integer score from 0 to

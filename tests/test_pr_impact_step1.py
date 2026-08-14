@@ -227,6 +227,35 @@ def test_valid_diff_traces_exact_rows_and_is_read_only(tmp_path: Path) -> None:
     ]
     assert report["direct_traces"][1]["facts"][0]["source_path"] == "a.php"
     assert report["direct_traces"][2]["facts"]
+    relationship = next(
+        trace
+        for trace in report["direct_traces"]
+        if trace["surface"] == "outgoing_relationships"
+    )
+    fact = relationship["facts"][0]
+    assert {
+        "relationship_id",
+        "source_symbol_id",
+        "source_name",
+        "source_kind",
+        "target_symbol_id",
+        "target_name",
+        "target_kind",
+        "relationship_type",
+        "confidence",
+        "resolution_class",
+        "resolution_reason",
+        "extractor",
+    } <= fact.keys()
+    assert fact["source_symbol_id"] == 1
+    assert fact["target_symbol_id"] is None
+    assert relationship["resolution_counts"] == [
+        {
+            "resolution_class": "project_unresolved",
+            "resolution_reason": "fixture",
+            "count": 1,
+        }
+    ]
     assert (
         next(
             trace
@@ -467,7 +496,7 @@ def test_step0_database_assertion_does_not_make_report_complete(
 
 def test_report_validator_rejects_fixture_only_database_evidence() -> None:
     report = {
-        "schema_version": "0.4",
+        "schema_version": "0.5",
         "analysis_kind": "pr_impact_step_1",
         "status": "partial",
         "input": {
@@ -1025,7 +1054,7 @@ def test_report_validator_and_blocked_envelope() -> None:
 
 def test_report_validator_requires_catalog_revision_compatibility_preflight() -> None:
     report = {
-        "schema_version": "0.4",
+        "schema_version": "0.5",
         "analysis_kind": "pr_impact_step_1",
         "status": "partial",
         "input": {
@@ -1094,7 +1123,7 @@ def review_report(
     warnings: list[str] | None = None,
 ) -> dict:
     return {
-        "schema_version": "0.4",
+        "schema_version": "0.5",
         "analysis_kind": "pr_impact_step_1",
         "status": status,
         "input": {
@@ -1166,6 +1195,11 @@ def test_schema_04_blocked_partial_and_complete_reports_validate() -> None:
                 [{"catalog_record_id": index + 1}]
                 if surface in {"database_consumers", "entity_metadata"}
                 else []
+            ),
+            **(
+                {"resolution_counts": []}
+                if surface == "outgoing_relationships"
+                else {}
             ),
         }
         for index, surface in enumerate(sorted(EXPECTED_SURFACES))

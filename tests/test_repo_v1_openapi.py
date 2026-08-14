@@ -216,6 +216,7 @@ def test_non_string_mapping_and_invalid_path_operation_emit_diagnostics(
 ) -> None:
     files = {
         "app/source/openapispec/ap/object.schema.yaml": b"x-mappedTo:\n  nested: true\n",
+        "app/source/openapispec/ap/null.schema.yaml": b"x-mappedTo: null\n",
         "app/source/openapispec/ap/paths/bad.api.yaml": b"paths:\n  bills:\n    get: []\n  /bad:\n    get: []\n  /ok:\n    get: {}\n",
     }
     conn, snapshot = _fixture(tmp_path, files)
@@ -229,6 +230,14 @@ def test_non_string_mapping_and_invalid_path_operation_emit_diagnostics(
             "OPENAPI_PATH_KEY_INVALID",
             "OPENAPI_OPERATION_INVALID",
         } <= codes
+        evidence = conn.execute(
+            "SELECT evidence FROM openapi_diagnostics WHERE code='OPENAPI_X_MAPPEDTO_INVALID' AND file_id=(SELECT id FROM files WHERE path='app/source/openapispec/ap/object.schema.yaml')"
+        ).fetchone()[0]
+        assert '"value":{"nested":true}' in evidence
+        null_evidence = conn.execute(
+            "SELECT evidence FROM openapi_diagnostics WHERE file_id=(SELECT id FROM files WHERE path='app/source/openapispec/ap/null.schema.yaml')"
+        ).fetchone()[0]
+        assert '"value":null' in null_evidence
     finally:
         conn.close()
 

@@ -51,7 +51,7 @@ SURFACE_STATUSES = {
     "stale",
     "deferred",
 }
-REPORT_SCHEMA_VERSION = "0.4"
+REPORT_SCHEMA_VERSION = "0.5"
 SUPPORTED_SURFACES = {
     "files",
     "symbols",
@@ -451,6 +451,13 @@ def _evidence(
     for key in ("start_line", "end_line", "source_line", "source_pointer"):
         if key in keys and row[key] is not None:
             location[key] = row[key]
+    if (
+        "source_pointer" not in location
+        and {"phase", "code"} <= keys
+        and isinstance(evidence, dict)
+        and evidence.get("pointer") is not None
+    ):
+        location["source_pointer"] = evidence["pointer"]
     source_key = (
         "source_path"
         if "source_path" in keys
@@ -466,6 +473,46 @@ def _evidence(
     }
     if "source_commit_sha" in keys:
         result["catalog_source_revision"] = row["source_commit_sha"]
+    if "relationship_type" in keys:
+        result.update(
+            {
+                "relationship_id": int(row["id"]),
+                "source_symbol_id": row["source_symbol_id"],
+                "source_name": row["source_name"],
+                "source_kind": row["source_kind"],
+                "target_symbol_id": row["target_symbol_id"],
+                "target_name": row["target_name"],
+                "target_kind": row["target_kind"],
+                "relationship_type": row["relationship_type"],
+                "confidence": row["confidence"],
+            }
+        )
+        if "source_commit_sha" in keys:
+            result["source_commit_sha"] = row["source_commit_sha"]
+    if {"phase", "code"} <= keys:
+        result.update(
+            {
+                "diagnostic_id": int(row["id"]),
+                "diagnostic_key": row["diagnostic_key"],
+                "severity": row["severity"],
+                "phase": row["phase"],
+                "code": row["code"],
+                "message": row["message"],
+                "source_pointer": (
+                    row["source_pointer"]
+                    if "source_pointer" in keys and row["source_pointer"] is not None
+                    else (result["source_location"] or {}).get("source_pointer")
+                ),
+                "source_commit_sha": row["source_commit_sha"]
+                if "source_commit_sha" in keys
+                else None,
+            }
+        )
+        classification, reason = _classify_openapi_diagnostic(
+            str(row["source_path"]), str(row["code"])
+        )
+        result["classification"] = classification
+        result["classification_reason"] = reason
     for key in (
         "resolution_class",
         "resolution_reason",
@@ -475,6 +522,29 @@ def _evidence(
         if key in keys:
             result[key] = row[key]
     return result
+
+
+def _classify_openapi_diagnostic(path: str, code: str) -> tuple[str, str]:
+    """Classify only diagnostic cases covered by exact source-backed rules."""
+
+    normalized = path.casefold()
+    parts = PurePosixPath(path).parts
+    is_history = normalized.startswith("app/source/openapispec/") and (
+        "history" in {part.casefold() for part in parts}
+        or PurePosixPath(path).name.casefold().endswith(".schema.history.yaml")
+    )
+    if code == "OPENAPI_X_MAPPEDTO_BLANK" and is_history:
+        return (
+            "expected",
+            "exact history-file pattern intentionally lacks top-level x-mappedTo",
+        )
+    if code in {
+        "OPENAPI_X_MAPPEDTO_INVALID",
+        "OPENAPI_X_MAPPEDTO_ZERO_MATCHES",
+        "OPENAPI_X_MAPPEDTO_MULTIPLE_MATCHES",
+    }:
+        return "actionable", "known x-mappedTo validation or exact-match failure"
+    return "unclassified", "no exact repository classification rule applies"
 
 
 def _rows(
@@ -492,53 +562,75 @@ def _surface(
     *,
     catalog_revision: str | None = None,
 ) -> dict[str, Any]:
+    resolution_counts = None
+    if name == "outgoing_relationships":
+        grouped: dict[tuple[Any, Any], int] = {}
+        for row in rows:
+            key = (row.get("resolution_class"), row.get("resolution_reason"))
+            grouped[key] = grouped.get(key, 0) + 1
+        resolution_counts = [
+            {
+                "resolution_class": key[0],
+                "resolution_reason": key[1],
+                "count": count,
+            }
+            for key, count in sorted(
+                grouped.items(), key=lambda item: (str(item[0][0]), str(item[0][1]))
+            )
+        ]
+
+    def result(**fields: Any) -> dict[str, Any]:
+        if resolution_counts is not None:
+            fields["resolution_counts"] = resolution_counts
+        return fields
+
     if not supported:
-        return {
-            "surface": name,
-            "status": "unavailable",
-            "facts": [],
-            "warning": "repo-v1 does not model this surface",
-        }
+        return result(
+            surface=name,
+            status="unavailable",
+            facts=[],
+            warning="repo-v1 does not model this surface",
+        )
     if not rows:
-        return {
-            "surface": name,
-            "status": "empty",
-            "facts": [],
-            "warning": "No direct repo-v1 rows matched; this is not proof of no impact",
-        }
+        return result(
+            surface=name,
+            status="empty",
+            facts=[],
+            warning="No direct repo-v1 rows matched; this is not proof of no impact",
+        )
     if catalog_revision is not None and any(
         row.get("catalog_source_revision") != catalog_revision for row in rows
     ):
-        return {
-            "surface": name,
-            "status": "stale",
-            "facts": rows,
-            "warning": "Direct repo-v1 rows are not from the active catalog revision",
-        }
+        return result(
+            surface=name,
+            status="stale",
+            facts=rows,
+            warning="Direct repo-v1 rows are not from the active catalog revision",
+        )
     if any(
         row.get("resolution_reason") == "ambiguous_project_symbol"
         or row.get("entity_link_status") == "ambiguous"
         for row in rows
     ):
-        return {
-            "surface": name,
-            "status": "ambiguous",
-            "facts": rows,
-            "warning": "Direct relationship rows include ambiguous catalog resolutions",
-        }
+        return result(
+            surface=name,
+            status="ambiguous",
+            facts=rows,
+            warning="Direct relationship rows include ambiguous catalog resolutions",
+        )
     if any(
         row.get("resolution_class") not in (None, "project_resolved")
         or row.get("resolution_status") not in (None, "resolved")
         or row.get("entity_link_status") not in (None, "resolved")
         for row in rows
     ):
-        return {
-            "surface": name,
-            "status": "unresolved",
-            "facts": rows,
-            "warning": "Direct relationship rows include unresolved catalog resolutions",
-        }
-    return {"surface": name, "status": "available", "facts": rows}
+        return result(
+            surface=name,
+            status="unresolved",
+            facts=rows,
+            warning="Direct relationship rows include unresolved catalog resolutions",
+        )
+    return result(surface=name, status="available", facts=rows)
 
 
 def _fixture_fact(

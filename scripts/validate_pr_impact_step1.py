@@ -8,8 +8,10 @@ import json
 import sys
 from pathlib import Path
 
+from catalog.pr_impact_step1 import _classify_openapi_diagnostic
+
 STATUSES = {"complete", "partial", "blocked"}
-SCHEMA_VERSION = "0.4"
+SCHEMA_VERSION = "0.5"
 TOP_LEVEL_KEYS = {
     "schema_version",
     "analysis_kind",
@@ -62,6 +64,140 @@ SUPPORTED_SURFACES = {
 }
 UNSUPPORTED_SURFACES: set[str] = set()
 EXPECTED_SURFACES = SUPPORTED_SURFACES | UNSUPPORTED_SURFACES
+
+
+def _positive_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _validate_relationship_fact(
+    fact: object, errors: list[str], surface: str
+) -> None:
+    if not isinstance(fact, dict):
+        return
+    label = f"{surface} relationship fact"
+    for key in (
+        "relationship_id",
+        "source_symbol_id",
+        "source_name",
+        "source_kind",
+        "target_symbol_id",
+        "target_name",
+        "target_kind",
+        "relationship_type",
+        "confidence",
+        "resolution_class",
+        "resolution_reason",
+        "extractor",
+        "source_path",
+        "source_location",
+        "target_revision",
+        "catalog_source_revision",
+        "evidence",
+    ):
+        if key not in fact:
+            errors.append(f"{label} requires {key}")
+    if not _positive_int(fact.get("relationship_id")):
+        errors.append(f"{label} requires positive relationship_id")
+    if fact.get("catalog_record_id") != fact.get("relationship_id"):
+        errors.append(f"{label} catalog_record_id must equal relationship_id")
+    if not isinstance(fact.get("relationship_type"), str) or not fact.get(
+        "relationship_type"
+    ):
+        errors.append(f"{label} requires relationship_type")
+    confidence = fact.get("confidence")
+    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+        errors.append(f"{label} requires numeric confidence")
+    elif not 0 <= float(confidence) <= 1:
+        errors.append(f"{label} confidence must be between 0 and 1")
+    for key in ("resolution_class", "resolution_reason", "extractor", "source_path"):
+        if not isinstance(fact.get(key), str) or not fact[key]:
+            errors.append(f"{label} requires non-empty {key}")
+
+
+def _validate_resolution_counts(
+    trace: object, facts: list[object], errors: list[str]
+) -> None:
+    if not isinstance(trace, dict):
+        return
+    counts = trace.get("resolution_counts")
+    if not isinstance(counts, list):
+        errors.append("relationship trace resolution_counts must be a list")
+        return
+    total = 0
+    seen: set[tuple[object, object]] = set()
+    for item in counts:
+        if not isinstance(item, dict):
+            errors.append("resolution_counts item must be an object")
+            continue
+        key = (item.get("resolution_class"), item.get("resolution_reason"))
+        if key in seen:
+            errors.append("resolution_counts must not duplicate class/reason pairs")
+        seen.add(key)
+        count = item.get("count")
+        if not _positive_int(count):
+            errors.append("resolution_counts count must be positive")
+        else:
+            total += count
+    if total != len(facts):
+        errors.append("resolution_counts must account for every relationship fact")
+
+
+def _validate_openapi_diagnostic_fact(fact: object, errors: list[str]) -> None:
+    if not isinstance(fact, dict) or "diagnostic_key" not in fact:
+        return
+    for key in (
+        "diagnostic_id",
+        "diagnostic_key",
+        "code",
+        "severity",
+        "phase",
+        "message",
+        "source_path",
+        "source_pointer",
+        "evidence",
+        "extractor",
+        "source_commit_sha",
+        "catalog_source_revision",
+        "target_revision",
+        "classification",
+        "classification_reason",
+    ):
+        if key not in fact:
+            errors.append(f"openapi diagnostic fact requires {key}")
+    if not _positive_int(fact.get("diagnostic_id")):
+        errors.append("openapi diagnostic fact requires positive diagnostic_id")
+    if fact.get("catalog_record_id") != fact.get("diagnostic_id"):
+        errors.append("openapi diagnostic catalog_record_id must equal diagnostic_id")
+    for key in (
+        "diagnostic_key",
+        "code",
+        "severity",
+        "phase",
+        "message",
+        "extractor",
+        "source_commit_sha",
+        "catalog_source_revision",
+        "target_revision",
+    ):
+        if not isinstance(fact.get(key), str) or not fact[key]:
+            errors.append(f"openapi diagnostic fact requires non-empty {key}")
+    if fact.get("classification") not in {"actionable", "expected", "unclassified"}:
+        errors.append("openapi diagnostic classification is invalid")
+    if not isinstance(fact.get("classification_reason"), str) or not fact.get(
+        "classification_reason"
+    ):
+        errors.append("openapi diagnostic classification_reason is required")
+    elif isinstance(fact.get("source_path"), str) and isinstance(
+        fact.get("code"), str
+    ):
+        expected, expected_reason = _classify_openapi_diagnostic(
+            fact["source_path"], fact["code"]
+        )
+        if fact.get("classification") != expected:
+            errors.append("openapi diagnostic classification is not conservative")
+        if fact.get("classification_reason") != expected_reason:
+            errors.append("openapi diagnostic classification_reason is not canonical")
 
 
 def validate(report: object) -> list[str]:
@@ -224,6 +360,12 @@ def validate(report: object) -> list[str]:
                     errors.append(
                         "direct trace fact needs catalog_record_id or fact_key"
                     )
+                if surface in {"outgoing_relationships", "incoming_relationships"}:
+                    _validate_relationship_fact(fact, errors, surface)
+                if surface == "source_diagnostics":
+                    _validate_openapi_diagnostic_fact(fact, errors)
+            if surface == "outgoing_relationships":
+                _validate_resolution_counts(trace, trace.get("facts", []), errors)
             if (
                 trace.get("surface") == "database_consumers"
                 and trace.get("status") == "available"

@@ -153,7 +153,7 @@ def test_compact_envelope_preserves_evidence_and_omits_rendering() -> None:
 
     compact = pr_review_prompt.compact_envelope(envelope)
 
-    assert compact["schema_version"] == "0.1"
+    assert compact["schema_version"] == "0.2"
     assert compact["analysis_kind"] == "pr_review_result"
     assert compact["status"] == envelope["status"]
     assert compact["input"] == envelope["input"]

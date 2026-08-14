@@ -25,7 +25,7 @@ from catalog.pr_impact_step3 import blocked_report as blocked_step3
 from catalog.pr_review_catalog import CatalogResolution, resolve_exact_catalog
 
 PROMPT_SCHEMA_VERSION = "0.1"
-RESULT_SCHEMA_VERSION = "0.1"
+RESULT_SCHEMA_VERSION = "0.2"
 ANALYSIS_KIND = "pr_review_prompt"
 RESULT_ANALYSIS_KIND = "pr_review_result"
 REVIEW_TEMPLATE = (

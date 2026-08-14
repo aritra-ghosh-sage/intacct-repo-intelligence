@@ -13,6 +13,8 @@ def step1_report(*, status: str = "partial") -> dict:
     surfaces = []
     for index, surface in enumerate(pr_impact_step2.EXPECTED_SURFACES):
         row = {"surface": surface, "status": "available", "facts": []}
+        if surface == "outgoing_relationships":
+            row["resolution_counts"] = []
         if surface == "symbols":
             row["facts"] = [{"catalog_record_id": 7, "source_path": "a.php"}]
         if surface in {"database_consumers", "entity_metadata"}:
@@ -36,7 +38,7 @@ def step1_report(*, status: str = "partial") -> dict:
             if row["surface"] in {"database_consumers", "entity_metadata"}:
                 row["facts"] = [{"catalog_record_id": 1}]
     return {
-        "schema_version": "0.4",
+        "schema_version": "0.5",
         "analysis_kind": "pr_impact_step_1",
         "status": status,
         "input": {

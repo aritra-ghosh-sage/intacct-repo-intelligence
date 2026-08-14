@@ -24,7 +24,7 @@ from catalog.pr_impact_step1 import (
 )
 from catalog.repo_v1_symbol_entity import entity_impact_facts, mapping_rows_for_symbols
 
-REPORT_SCHEMA_VERSION = "0.1"
+REPORT_SCHEMA_VERSION = "0.2"
 ANALYSIS_KIND = "pr_impact_step_3"
 SEED_BASIS = "target_file_all_symbols"
 ALLOWED_RELATIONSHIP_TYPES = {"CALLS", "STATIC_CALLS"}
@@ -44,6 +44,9 @@ SKIP_REASONS = {
 }
 UNRESOLVED_EDGE_WARNING_THRESHOLD = 5
 _SQL_BATCH_SIZE = 400
+CALLER_EVIDENCE_REVIEW_REASONS = frozenset(
+    {"below_confidence", "unresolved_resolution", "source_symbol_missing"}
+)
 
 
 class Step3Error(Step1Error):
@@ -240,6 +243,19 @@ def _base_report(
     entity_context: dict[str, Any],
 ) -> dict[str, Any]:
     target = str(input_data.get("target_revision", ""))
+    skipped_edge_counts: dict[str, int] = {}
+    for edge in skipped_edges:
+        reason = edge.get("skip_reason")
+        if isinstance(reason, str):
+            skipped_edge_counts[reason] = skipped_edge_counts.get(reason, 0) + 1
+    review_required = bool(
+        CALLER_EVIDENCE_REVIEW_REASONS & set(skipped_edge_counts)
+    )
+    caller_status = (
+        "needs_review"
+        if review_required
+        else ("empty" if status == "empty" else "complete")
+    )
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
         "analysis_kind": ANALYSIS_KIND,
@@ -252,6 +268,12 @@ def _base_report(
         "reached_symbols": reached_symbols,
         "transitive_edges": transitive_edges,
         "skipped_edges": skipped_edges,
+        "caller_evidence": {
+            "status": caller_status,
+            "traversed_edge_count": len(transitive_edges),
+            "reached_symbol_count": len(reached_symbols),
+            "skipped_edge_counts": dict(sorted(skipped_edge_counts.items())),
+        },
         "entity_context": entity_context,
         "business_impact": {
             "status": "deferred",
@@ -294,6 +316,12 @@ def blocked_report(error: Step1Error) -> dict[str, Any]:
         "reached_symbols": [],
         "transitive_edges": [],
         "skipped_edges": [],
+        "caller_evidence": {
+            "status": "blocked",
+            "traversed_edge_count": 0,
+            "reached_symbol_count": 0,
+            "skipped_edge_counts": {},
+        },
         "entity_context": {
             "status": "unavailable",
             "reason": "repo_v1_symbol_entity_mapping_not_modelled",

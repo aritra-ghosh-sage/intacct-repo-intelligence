@@ -50,18 +50,18 @@ The accepted fact families include:
 
 - **Step 0:** exact PR/revision fixture and review context.
 - **Step 1:** read-only direct `ia-main` tracing over an exact target-revision
-  SQLite catalog; report schema `0.4`, with an `entity_symbol_links` surface
+  SQLite catalog; report schema `0.5`, with an `entity_symbol_links` surface
   when changed symbols have reviewed mappings.
 - **Step 2:** read-only availability audit over the Step 1 report; report
   schema `0.1`; it does not re-query SQLite or infer impact.
 - **Step 3:** read-only incoming `CALLS`/`STATIC_CALLS` traversal for one or
-  two hops; report schema `0.1`. Traversal requires `project_resolved` and
+  two hops; report schema `0.2`. Traversal requires `project_resolved` and
   strict `confidence > min_confidence` (default `0.7`); lower-confidence rows
   remain explicit skipped edges.
 - **Step 4:** current sign-off documentation, not a separate analysis engine.
 - **CLI orchestration:** `catalog.pr_review_prompt` and
   `scripts/generate_pr_review_prompt.py` compose Steps 0--3 into one
-  read-only JSON/prompt surface. The CLI resolves the exact PR head into an
+  read-only JSON/prompt surface (top-level result schema `0.2`). The CLI resolves the exact PR head into an
   isolated repo-v1 catalog before analysis and preserves `blocked` and
   `partial` evidence states.
 
