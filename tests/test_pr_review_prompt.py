@@ -70,18 +70,20 @@ def test_build_step0_normalizes_github_removed_status() -> None:
 def test_generate_prompt_accepts_review_without_a_body(monkeypatch) -> None:
     source = metadata()
     source["reviews"][0]["body"] = None
+    resolution_kwargs: dict[str, object] = {}
     monkeypatch.setattr(pr_review_prompt, "fetch_pr_metadata", lambda **_: source)
-    monkeypatch.setattr(
-        pr_review_prompt,
-        "resolve_exact_catalog",
-        lambda **_: CatalogResolution(
+
+    def resolve(**kwargs):
+        resolution_kwargs.update(kwargs)
+        return CatalogResolution(
             target_revision=TARGET,
             active_db=Path("catalog.db"),
             manifest=Path("manifest"),
             resolution="cache_hit",
             source_resolution="configured_checkout",
-        ),
-    )
+        )
+
+    monkeypatch.setattr(pr_review_prompt, "resolve_exact_catalog", resolve)
     monkeypatch.setattr(
         pr_review_prompt,
         "_run_analysis",
@@ -96,10 +98,12 @@ def test_generate_prompt_accepts_review_without_a_body(monkeypatch) -> None:
         pr_number=48480,
         request="Review this PR accurately.",
         manifest="manifest",
+        show_progress=True,
     )
 
     assert envelope["status"] == "blocked"
     assert '"text": ""' in envelope["prompt_text"]
+    assert resolution_kwargs["show_progress"] is True
 
 
 def test_prompt_metadata_marks_blank_comment_body_unavailable() -> None:

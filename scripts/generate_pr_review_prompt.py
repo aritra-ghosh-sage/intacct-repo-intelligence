@@ -50,6 +50,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Print only prompt_text instead of the JSON envelope",
     )
+    parser.add_argument(
+        "--progress",
+        action="store_true",
+        help="Print source/catalog progress to stderr",
+    )
     args = parser.parse_args(argv)
     try:
         envelope = generate_prompt(
@@ -59,6 +64,7 @@ def main(argv: list[str] | None = None) -> int:
             repo_key=args.repo_key,
             max_hops=args.max_hops,
             min_confidence=args.min_confidence,
+            show_progress=args.progress,
         )
     except GitHubPrMetadataError as exc:
         print(

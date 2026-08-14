@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from catalog.github_pr_metadata import GitHubPrMetadataError
@@ -55,6 +57,21 @@ def test_cli_prompt_only_prints_only_prompt(monkeypatch, capsys) -> None:
     captured = capsys.readouterr()
     assert captured.out == "review prompt\n"
     assert captured.err == ""
+
+
+def test_cli_progress_is_forwarded_without_changing_stdout(monkeypatch, capsys) -> None:
+    captured_kwargs: dict[str, object] = {}
+
+    def generate(**kwargs):
+        captured_kwargs.update(kwargs)
+        return _envelope()
+
+    monkeypatch.setattr(cli, "generate_prompt", generate)
+
+    assert cli.main(["--pr", "49156", "--request", "Review", "--progress"]) == 0
+
+    assert captured_kwargs["show_progress"] is True
+    assert json.loads(capsys.readouterr().out) == _envelope()
 
 
 def test_cli_reports_github_error_with_remediation(monkeypatch, capsys) -> None:

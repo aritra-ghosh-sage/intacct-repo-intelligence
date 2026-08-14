@@ -617,6 +617,7 @@ def generate_prompt(
     repo_key: str = "ia-main",
     max_hops: int = 2,
     min_confidence: float = 0.7,
+    show_progress: bool = False,
 ) -> dict[str, Any]:
     """Resolve exact source/catalog evidence and return a prompt envelope."""
 
@@ -633,6 +634,7 @@ def generate_prompt(
         pr_number=pr_number,
         manifest_path=manifest,
         repo_key=repo_key,
+        show_progress=show_progress,
     )
     reports = _run_analysis(
         step0,

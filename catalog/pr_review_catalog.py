@@ -10,8 +10,10 @@ import fcntl
 import json
 import os
 import re
+import signal
 import sqlite3
 import subprocess
+import sys
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -63,35 +65,171 @@ def _run_git(
 ) -> str:
     environment = os.environ.copy()
     environment["GIT_TERMINAL_PROMPT"] = "0"
+    command = ["git", "-C", str(root), *args]
+    popen_kwargs: dict[str, object] = {
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "text": True,
+        "env": environment,
+    }
+    if os.name == "posix":
+        popen_kwargs["start_new_session"] = True
+    process: subprocess.Popen[str] | None = None
     try:
-        result = subprocess.run(
-            ["git", "-C", str(root), *args],
-            capture_output=True,
-            text=True,
-            check=False,
-            env=environment,
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise PrReviewCatalogError(
-            "git_timeout",
-            f"Git did not complete within {timeout:g} seconds while preparing the exact PR revision",
-            "verify repository access and GitHub authentication, then retry",
-        ) from exc
+        process = subprocess.Popen(command, **popen_kwargs)
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            if os.name == "posix":
+                for signum in (signal.SIGTERM, signal.SIGKILL):
+                    try:
+                        os.killpg(process.pid, signum)
+                    except ProcessLookupError:
+                        break
+                    try:
+                        process.wait(timeout=1)
+                    except subprocess.TimeoutExpired:
+                        continue
+            else:
+                process.kill()
+            try:
+                process.communicate(timeout=1)
+            except subprocess.TimeoutExpired:
+                for stream in (process.stdout, process.stderr):
+                    if stream is not None:
+                        stream.close()
+            raise PrReviewCatalogError(
+                "git_timeout",
+                f"Git did not complete within {timeout:g} seconds while preparing the exact PR revision",
+                "verify repository access and GitHub authentication, then retry",
+            ) from exc
     except OSError as exc:
         raise PrReviewCatalogError(
             "git_unavailable",
             f"Git could not run while preparing the exact PR revision: {exc}",
             "install Git and retry the PR review command",
         ) from exc
-    if result.returncode:
-        detail = result.stderr.strip() or result.stdout.strip() or "command failed"
+    assert process is not None
+    if process.returncode:
+        detail = stderr.strip() or stdout.strip() or "command failed"
         raise PrReviewCatalogError(
             "git_source_unavailable",
             f"Git could not obtain the required PR revision: {detail}",
             "verify repository access and GitHub authentication, then retry",
         )
-    return result.stdout.strip()
+    return stdout.strip()
+
+
+def _configure_reference_objects(source_root: Path, reference_root: Path) -> None:
+    """Make an isolated bare cache reuse the configured checkout's Git objects."""
+
+    object_dir = (
+        Path(
+            _run_git(
+                reference_root,
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-path",
+                "objects",
+            )
+        )
+        .expanduser()
+        .resolve()
+    )
+    if not object_dir.is_dir():
+        raise PrReviewCatalogError(
+            "source_object_store_unavailable",
+            "The configured checkout Git object store is unavailable",
+            "verify the configured ia-main checkout and retry",
+        )
+    alternates = source_root / "objects" / "info" / "alternates"
+    try:
+        alternates.parent.mkdir(parents=True, exist_ok=True)
+        current = (
+            alternates.read_text(encoding="utf-8").splitlines()
+            if alternates.is_file()
+            else []
+        )
+        if str(object_dir) not in current:
+            alternates.write_text(
+                "\n".join([*current, str(object_dir)]) + "\n",
+                encoding="utf-8",
+            )
+    except OSError as exc:
+        raise PrReviewCatalogError(
+            "source_cache_unavailable",
+            "The internal PR source cache cannot configure the reference object store",
+            "verify workspace permissions and available disk space, then retry",
+        ) from exc
+
+
+def _clear_incomplete_packs(source_root: Path) -> None:
+    """Remove only unindexed temporary packs left by an interrupted fetch."""
+
+    pack_dir = source_root / "objects" / "pack"
+    if not pack_dir.is_dir():
+        return
+    for path in pack_dir.glob("tmp_pack_*"):
+        if path.is_file() or path.is_symlink():
+            try:
+                path.unlink()
+            except OSError as exc:
+                raise PrReviewCatalogError(
+                    "source_cache_unavailable",
+                    "The internal PR source cache contains an incomplete pack that cannot be removed",
+                    "verify workspace permissions and retry",
+                ) from exc
+
+
+def _validate_configured_checkout_identity(
+    configured_root: Path, expected_remote: str
+) -> None:
+    try:
+        actual_remote = _run_git(configured_root, "remote", "get-url", "origin")
+    except PrReviewCatalogError as exc:
+        raise PrReviewCatalogError(
+            "source_checkout_identity_unavailable",
+            "The configured checkout origin cannot be verified before reference reuse",
+            "verify the ia-main checkout origin and retry",
+        ) from exc
+    if normalized_github_identity(actual_remote) != normalized_github_identity(
+        expected_remote
+    ):
+        raise PrReviewCatalogError(
+            "source_checkout_identity_mismatch",
+            "The configured checkout origin does not match the PR repository",
+            "correct the ia-main checkout origin or disable reference reuse, then retry",
+        )
+
+
+def _cached_manifest_matches(
+    manifest_path: Path,
+    *,
+    repo_key: str,
+    expected_remote: str,
+    source_root: Path,
+    target_sha: str,
+) -> bool:
+    try:
+        document = load_workspace_manifest(manifest_path)
+    except (RepositoryError, OSError):
+        return False
+    matches = [
+        entry for entry in document["repositories"] if entry.get("repo_key") == repo_key
+    ]
+    if len(matches) != 1:
+        return False
+    entry = matches[0]
+    try:
+        local_root = Path(str(entry["local_root"])).expanduser().resolve()
+    except (KeyError, OSError, RuntimeError):
+        return False
+    return (
+        normalized_github_identity(entry.get("remote_url"))
+        == normalized_github_identity(expected_remote)
+        and local_root == source_root.expanduser().resolve()
+        and str(entry.get("tracked_branch", "")).lower() == target_sha
+    )
 
 
 def _full_sha(value: object, field: str) -> str:
@@ -193,6 +331,7 @@ def _fetch_source(
     base_sha: str,
     target_sha: str,
     base_branch: str,
+    reference_root: Path | None = None,
 ) -> None:
     source_root.parent.mkdir(parents=True, exist_ok=True)
     if not source_root.exists():
@@ -203,6 +342,24 @@ def _fetch_source(
             "The internal PR source cache is not a valid bare Git repository",
             "remove the internal PR-review cache and retry",
         )
+    if reference_root is not None:
+        _configure_reference_objects(source_root, reference_root)
+    try:
+        if _run_git(source_root, "rev-parse", "--is-bare-repository") != "true":
+            raise PrReviewCatalogError(
+                "source_cache_invalid",
+                "The internal PR source cache is not a bare Git repository",
+                "remove the internal PR-review cache and retry",
+            )
+    except PrReviewCatalogError as exc:
+        if exc.code == "source_cache_invalid":
+            raise
+        raise PrReviewCatalogError(
+            "source_cache_invalid",
+            "The internal PR source cache cannot be validated as a bare Git repository",
+            "remove the internal PR-review cache and retry",
+        ) from exc
+    _clear_incomplete_packs(source_root)
     try:
         actual_remote = _run_git(source_root, "remote", "get-url", "origin")
     except PrReviewCatalogError:
@@ -310,6 +467,7 @@ def _prepare_source(
     entry = _manifest_entry(manifest_path, repo_key)
     _validate_manifest_identity(entry, repository)
     configured_root = Path(str(entry["local_root"])).expanduser().resolve()
+    _validate_configured_checkout_identity(configured_root, str(entry["remote_url"]))
     if _source_has_commits(configured_root, base_sha, target_sha):
         return manifest_path, "configured_checkout"
     source_root = target_dir / "source.git"
@@ -319,15 +477,20 @@ def _prepare_source(
             cached_remote = _run_git(source_root, "remote", "get-url", "origin")
         except PrReviewCatalogError:
             cached_remote = ""
-        if cached_remote and normalized_github_identity(
+        if (
             cached_remote
-        ) == normalized_github_identity(str(entry["remote_url"])):
-            return (
-                cached_manifest
-                if cached_manifest.is_file()
-                else _write_manifest(target_dir, entry, source_root, target_sha),
-                "internal_cache",
+            and normalized_github_identity(cached_remote)
+            == normalized_github_identity(str(entry["remote_url"]))
+            and cached_manifest.is_file()
+            and _cached_manifest_matches(
+                cached_manifest,
+                repo_key=repo_key,
+                expected_remote=str(entry["remote_url"]),
+                source_root=source_root,
+                target_sha=target_sha,
             )
+        ):
+            return cached_manifest, "internal_cache"
     _fetch_source(
         source_root,
         remote_url=str(entry["remote_url"]),
@@ -335,6 +498,7 @@ def _prepare_source(
         base_sha=base_sha,
         target_sha=target_sha,
         base_branch=base_branch,
+        reference_root=configured_root,
     )
     return _write_manifest(target_dir, entry, source_root, target_sha), "internal_fetch"
 
@@ -472,6 +636,7 @@ def resolve_exact_catalog(
     manifest_path: str | Path = "config/workspace_repos.yaml",
     repo_key: str = REPO_V1_KEY,
     cache_root: Path = DEFAULT_CACHE_ROOT,
+    show_progress: bool = False,
 ) -> CatalogResolution:
     """Discover or build an exact-target catalog in the internal cache."""
 
@@ -492,6 +657,12 @@ def resolve_exact_catalog(
             "verify workspace permissions and available disk space, then retry",
         ) from exc
     with _target_lock(target_dir / "build.lock"):
+        if show_progress:
+            print(
+                f"[pr-review] resolving exact source for {target_sha}",
+                file=sys.stderr,
+                flush=True,
+            )
         manifest, source_resolution = _prepare_source(
             manifest_path=Path(manifest_path).expanduser().resolve(),
             repo_key=repo_key,
@@ -516,12 +687,18 @@ def resolve_exact_catalog(
             }:
                 raise
             try:
+                if show_progress:
+                    print(
+                        f"[pr-review] building isolated catalog for {target_sha}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
                 build = build_ia_main(
                     manifest_path=manifest,
                     active_db=active_db,
                     target_sha=target_sha,
                     promote=True,
-                    show_progress=False,
+                    show_progress=show_progress,
                 )
             except (
                 CatalogPromotionError,
@@ -542,6 +719,12 @@ def resolve_exact_catalog(
                 )
             verify_catalog(active_db, repo_key=repo_key, target_sha=target_sha)
             resolution = "built"
+        if show_progress:
+            print(
+                f"[pr-review] exact catalog ready ({resolution})",
+                file=sys.stderr,
+                flush=True,
+            )
     return CatalogResolution(
         target_revision=target_sha,
         active_db=active_db,

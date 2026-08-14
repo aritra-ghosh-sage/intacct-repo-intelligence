@@ -9,6 +9,16 @@ PYTHONPATH=. ./.venv/bin/python scripts/generate_pr_review_prompt.py \
   --request "Review this PR for correctness and regressions."
 ```
 
+Use `--progress` for long-running operator runs. Progress is written to stderr;
+JSON output remains clean on stdout:
+
+```bash
+PYTHONPATH=. ./.venv/bin/python scripts/generate_pr_review_prompt.py \
+  --pr 48480 \
+  --request "Review this PR for correctness and regressions." \
+  --progress > /tmp/pr-review.json
+```
+
 The command fetches PR files, reviews, inline comments, issue comments, and
 check runs through the existing `gh`-first metadata intake. It builds and
 validates Step 0 in memory, obtains the exact PR head SHA, discovers or builds
@@ -23,6 +33,11 @@ ownership, integrity, source provenance, and `ia-main` target SHA exactly
 match the PR head SHA. If the configured checkout lacks the exact base/head
 objects, the command fetches them into an isolated internal bare Git cache;
 the normal source checkout and canonical catalog are not changed.
+The isolated bare cache reference-links the configured checkout's Git object
+store, so an exact PR fetch transfers only objects absent from that checkout;
+the cache still validates the remote identity and exact base/head commit IDs
+before catalog construction. A timed-out Git operation terminates its child
+process group so partial SSH or index-pack processes are not retained.
 
 Comments are included in the LLM prompt as analysis context, with their
 revision and source metadata where available. The prompt explicitly forbids
