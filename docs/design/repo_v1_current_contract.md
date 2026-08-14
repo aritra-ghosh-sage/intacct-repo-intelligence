@@ -2,8 +2,8 @@
 
 **Status:** current operating contract
 **Branch:** `repo-v1`
-**Implementation reference:** `4346ea3` (`Step 4 PR sign off`)
-**Last reviewed:** 2026-08-13
+**Implementation reference:** `f4a71e8` (CLI PR-review orchestration)
+**Last reviewed:** 2026-08-14
 
 This document is the short current-status reference for repo-v1. Phase
 closure records, PR-specific sign-offs, and validation reports retain their
@@ -59,10 +59,15 @@ The accepted fact families include:
   strict `confidence > min_confidence` (default `0.7`); lower-confidence rows
   remain explicit skipped edges.
 - **Step 4:** current sign-off documentation, not a separate analysis engine.
+- **CLI orchestration:** `catalog.pr_review_prompt` and
+  `scripts/generate_pr_review_prompt.py` compose Steps 0--3 into one
+  read-only JSON/prompt surface. The CLI resolves the exact PR head into an
+  isolated repo-v1 catalog before analysis and preserves `blocked` and
+  `partial` evidence states.
 
-Steps 1–3 remain separately testable, but the intended product output is one
-composed review containing direct facts, bounded callers, entity context,
-test evidence, downstream obligations, and explicit gaps.
+Steps 1–3 remain separately testable, and the CLI composition is the current
+product output: one review containing direct facts, bounded callers, entity
+context, test evidence, downstream obligations, and explicit gaps.
 
 ## Bounded follow-up gaps
 
@@ -70,7 +75,6 @@ These remain separate bounded slices:
 
 1. Improve Step 3 seed precision by mapping changed diff hunks to symbol
    declaration ranges, with an explicit file-level fallback.
-2. Compose Steps 1–3 into one deterministic PR-review result.
 
 ## Deferred follow-up
 
@@ -100,4 +104,5 @@ These remain separate bounded slices:
 - [PR Impact Step 1](pr-impact-step-1.md)
 - [PR Impact Step 2](pr-impact-step-2.md)
 - [PR Impact Step 3](pr-impact-step-3.md)
+- [PR review prompt surface](pr-review-prompt-surface.md)
 - [PR review template](../review/pr-review-template.md)

@@ -27,6 +27,8 @@ current boundary, and first practical product slice are documented in
 [docs/project-purpose.md](docs/project-purpose.md).
 The current repo-v1 implementation and PR-impact boundary are documented in
 [docs/design/repo_v1_current_contract.md](docs/design/repo_v1_current_contract.md).
+The CLI PR-review orchestration contract is documented in
+[docs/design/pr-review-prompt-surface.md](docs/design/pr-review-prompt-surface.md).
 
 ---
 
