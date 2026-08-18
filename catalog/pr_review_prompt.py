@@ -1,6 +1,6 @@
 """Build a complete, evidence-bounded prompt for PR review analysis.
 
-GitHub metadata and Steps 0--3 remain transient.  Exact-target source and
+GitHub metadata and Steps 0--4 remain transient.  Exact-target source and
 catalog inputs are resolved in the internal PR-review cache; the canonical
 workspace catalog is never modified.
 """
@@ -13,6 +13,11 @@ from pathlib import Path
 from typing import Any
 
 from catalog.github_pr_metadata import fetch_pr_metadata
+from catalog.pr_impact_blast_radius import (
+    REPORT_SCHEMA_VERSION as BLAST_RADIUS_SCHEMA_VERSION,
+)
+from catalog.pr_impact_blast_radius import build_report as build_blast_radius
+from catalog.pr_impact_metrics import build_metrics, write_metrics
 from catalog.pr_impact_step1 import Step1Error
 from catalog.pr_impact_step1 import analyze_document as analyze_step1
 from catalog.pr_impact_step1 import blocked_report as blocked_step1
@@ -22,6 +27,7 @@ from catalog.pr_impact_step2 import blocked_report as blocked_step2
 from catalog.pr_impact_step3 import Step3Error
 from catalog.pr_impact_step3 import analyze_document as analyze_step3
 from catalog.pr_impact_step3 import blocked_report as blocked_step3
+from catalog.pr_impact_test_coverage import analyze_test_coverage
 from catalog.pr_review_catalog import CatalogResolution, resolve_exact_catalog
 
 PROMPT_SCHEMA_VERSION = "0.1"
@@ -55,6 +61,10 @@ def _json(value: object) -> str:
 
 def _as_list(value: object) -> list[Any]:
     return list(value) if isinstance(value, list) else []
+
+
+def _as_mapping(value: object) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
 
 
 def _prompt_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
@@ -434,14 +444,44 @@ def _task_plan() -> list[dict[str, Any]]:
             "failure_policy": "preserve skipped, unresolved, and deferred edges; do not treat zero callers as no impact.",
         },
         {
-            "task_id": "reconcile",
-            "agent_boundary": "One agent; compare prior outputs and comments, resolve contradictions by evidence.",
+            "task_id": "blast_radius_and_coverage",
+            "agent_boundary": "One agent; compose exact entity, flow, downstream test, and explicit gap evidence without semantic inference.",
             "depends_on": ["direct_impact", "evidence_audit", "incoming_callers"],
             "input_artifacts": [
                 "step0",
                 "direct_impact",
                 "evidence_audit",
                 "incoming_callers",
+                "reviewed_repository_contracts",
+            ],
+            "output_schema": {
+                "type": "object",
+                "required": [
+                    "status",
+                    "changed_scope",
+                    "entities",
+                    "flows",
+                    "test_coverage",
+                    "gaps",
+                ],
+            },
+            "failure_policy": "preserve missing, unavailable, stale, ambiguous, and not-modelled evidence; never infer a literal entity or confirmed test.",
+        },
+        {
+            "task_id": "reconcile",
+            "agent_boundary": "One agent; compare prior outputs, blast-radius evidence, and comments, resolve contradictions by evidence.",
+            "depends_on": [
+                "direct_impact",
+                "evidence_audit",
+                "incoming_callers",
+                "blast_radius_and_coverage",
+            ],
+            "input_artifacts": [
+                "step0",
+                "direct_impact",
+                "evidence_audit",
+                "incoming_callers",
+                "blast_radius_and_coverage",
                 "github_comments",
             ],
             "output_schema": {
@@ -482,6 +522,7 @@ def _run_analysis(
     repo_key: str,
     max_hops: int,
     min_confidence: float,
+    test_catalog: str | Path | None = None,
 ) -> dict[str, Any]:
     try:
         step1 = analyze_step1(document, manifest, active_db, repo_key)
@@ -508,7 +549,50 @@ def _run_analysis(
         step3 = blocked_step3(exc)
     except Exception as exc:  # noqa: BLE001 - stable orchestration envelope
         step3 = blocked_step3(Step3Error("step3_failure", str(exc)))
-    return {"step1": step1, "step2": step2, "step3": step3}
+    target = _as_mapping(step1.get("preflight")).get("target_revision") or _as_mapping(
+        document.get("pull_request")
+    ).get("target_revision")
+    entity_names = [
+        str(item.get("entity_name"))
+        for item in _as_list(_as_mapping(step3.get("entity_context")).get("mappings"))
+        if isinstance(item, Mapping) and item.get("entity_name")
+    ]
+    try:
+        coverage = analyze_test_coverage(
+            manifest,
+            main_target_revision=str(target or ""),
+            entity_names=entity_names,
+            catalog_path=test_catalog,
+        )
+        step4 = build_blast_radius(
+            document,
+            step1,
+            step2,
+            step3,
+            test_coverage=coverage,
+        )
+    except Exception as exc:  # noqa: BLE001 - stable orchestration envelope
+        step4 = {
+            "schema_version": BLAST_RADIUS_SCHEMA_VERSION,
+            "analysis_kind": "pr_impact_blast_radius",
+            "status": "blocked",
+            "changed_scope": {"files": [], "symbols": []},
+            "entities": [],
+            "flows": [],
+            "test_coverage": {},
+            "gaps": [
+                {
+                    "gap_code": "blast_radius_failure",
+                    "stage": "blast_radius",
+                    "surface": "analysis",
+                    "subject": "step4",
+                    "status": "blocked",
+                    "consequence": str(exc),
+                }
+            ],
+            "provenance": {"read_only": True},
+        }
+    return {"step1": step1, "step2": step2, "step3": step3, "step4": step4}
 
 
 def _status(reports: Mapping[str, Any]) -> str:
@@ -569,7 +653,7 @@ User request:
 {request.strip()}
 
 Operating rules:
-1. Treat the supplied Step 0--3 reports as bounded evidence, not as conclusions.
+1. Treat the supplied Step 0--4 reports as bounded evidence, not as conclusions.
 2. Use only committed source, exact Git revisions, and exact target-revision repo-v1 SQLite facts.
 3. A missing, dynamic, ambiguous, stale, empty, deferred, or unavailable row is a limitation; do not convert it into a positive claim.
 4. Review comments are context about claims, review process, or requested changes. They are not proof that runtime behavior is correct. Check their revision and source evidence.
@@ -610,6 +694,8 @@ def generate_prompt(
     max_hops: int = 2,
     min_confidence: float = 0.7,
     show_progress: bool = False,
+    test_catalog: str | Path | None = None,
+    metrics_output: str | Path | None = None,
 ) -> dict[str, Any]:
     """Resolve exact source/catalog evidence and return a prompt envelope."""
 
@@ -636,7 +722,37 @@ def generate_prompt(
         repo_key,
         max_hops,
         min_confidence,
+        test_catalog,
     )
+    if "step4" not in reports:
+        target = (
+            _as_mapping(reports.get("step1", {}).get("preflight")).get(
+                "target_revision"
+            )
+            or step0["pull_request"]["target_revision"]
+        )
+        coverage = analyze_test_coverage(
+            resolution.manifest,
+            main_target_revision=str(target),
+            entity_names=[],
+            catalog_path=test_catalog,
+        )
+        reports["step4"] = build_blast_radius(
+            step0,
+            reports.get("step1", {}),
+            reports.get("step2", {}),
+            reports.get("step3", {}),
+            test_coverage=coverage,
+        )
+    metrics = build_metrics(
+        step0,
+        reports,
+        reports["step4"],
+        run_id=f"{repo_key}:{pr_number}:{step0['pull_request']['target_revision']}",
+        pr_metadata=metadata,
+    )
+    if metrics_output is not None:
+        write_metrics(metrics_output, metrics)
     reports = _redact_internal_paths(reports, resolution)
     template = REVIEW_TEMPLATE.read_text(encoding="utf-8")
     tasks = _task_plan()
@@ -658,6 +774,7 @@ def generate_prompt(
         "step0_validation": {"status": "pass", "errors": []},
         "task_plan": tasks,
         "reports": reports,
+        "metrics": metrics,
         "prompt_text": _prompt_text(request, step0, metadata, reports, tasks, template),
         "provenance": {
             "metadata_provider": metadata.get("provenance", {}).get("provider"),
@@ -670,6 +787,7 @@ def generate_prompt(
             "catalog_resolution": resolution.resolution,
             "source_resolution": resolution.source_resolution,
             "catalog_path_exposed": False,
+            "metrics_persistence": "json_artifact_or_embedded_envelope",
         },
     }
 
@@ -699,8 +817,11 @@ def compact_envelope(envelope: Mapping[str, Any]) -> dict[str, Any]:
             code="result_envelope_invalid",
             fix="use the complete PR-review envelope and retry",
         )
-    return {
+    result = {
         "schema_version": RESULT_SCHEMA_VERSION,
         "analysis_kind": RESULT_ANALYSIS_KIND,
         **{key: envelope[key] for key in required},
     }
+    if "metrics" in envelope:
+        result["metrics"] = envelope["metrics"]
+    return result

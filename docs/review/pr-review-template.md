@@ -14,12 +14,37 @@
 
 ---
 
+## 🧭 Blast Radius & Use-Case Flows
+
+| Evidence class | Surface | Entity `.ent` file / flow | Status | Evidence |
+|---------------|---------|---------------------------|--------|----------|
+| Confirmed | [API/workflow/database/permission] | `path/to/entity.ent` or flow path | Confirmed | [catalog record/revision] |
+| Candidate | Caller chain | `path/to/caller.cls` | Candidate | [relationship/revision] |
+
+**Explicit gaps:**
+
+- [Missing, unavailable, stale, ambiguous, not-modelled, or not-recorded-in-PR evidence]
+
+---
+
 ## ✅ Reviewed
 
 | File | Type | Status | Notes |
 |------|------|--------|-------|
 | `path/to/file1.cls` | Logic | ✓ | [brief comment] |
 | `path/to/file2.js` | UI | ⚠ | [specific concern] |
+
+---
+
+## 🧪 Test Coverage & Obligations
+
+| Test repository | Suite / scenario | Coverage status | Required action | Evidence |
+|-----------------|------------------|-----------------|-----------------|----------|
+| `repo/key` | `feature > scenario` | Confirmed / Candidate / Uncovered | Keep / Update / Add / Review | [revision and lines] |
+
+**Coverage gaps:**
+
+- [Exact missing, stale, unavailable, or weak coverage]
 
 ---
 

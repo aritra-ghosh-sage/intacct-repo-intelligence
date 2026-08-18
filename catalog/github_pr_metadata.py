@@ -220,6 +220,7 @@ def normalize_pr_metadata(
             "number": pull_request["number"],
             "url": pull_request["html_url"],
             "title": pull_request.get("title"),
+            "body": pull_request.get("body"),
             "state": pull_request.get("state"),
             "draft": pull_request.get("draft"),
             "merged": pull_request.get("merged"),

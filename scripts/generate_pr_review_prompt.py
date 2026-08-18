@@ -49,6 +49,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo-key", default="ia-main")
     parser.add_argument("--max-hops", type=int, choices=(1, 2), default=2)
     parser.add_argument("--min-confidence", type=float, default=0.7)
+    parser.add_argument(
+        "--test-catalog",
+        type=Path,
+        help="Optional read-only catalog containing exact downstream test coverage",
+    )
+    parser.add_argument(
+        "--metrics-out",
+        type=Path,
+        help="Optional JSON artifact path for per-run analysis metrics",
+    )
     output_group = parser.add_mutually_exclusive_group()
     output_group.add_argument(
         "--prompt-only",
@@ -75,6 +85,8 @@ def main(argv: list[str] | None = None) -> int:
             max_hops=args.max_hops,
             min_confidence=args.min_confidence,
             show_progress=args.progress,
+            test_catalog=args.test_catalog,
+            metrics_output=args.metrics_out,
         )
     except GitHubPrMetadataError as exc:
         print(

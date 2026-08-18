@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -113,6 +114,39 @@ def test_cli_progress_is_forwarded_without_changing_stdout(monkeypatch, capsys) 
     assert cli.main(["--pr", "49156", "--request", "Review", "--progress"]) == 0
 
     assert captured_kwargs["show_progress"] is True
+    assert json.loads(capsys.readouterr().out) == _envelope()
+
+
+def test_cli_forwards_test_catalog_and_metrics_output(
+    monkeypatch, capsys, tmp_path
+) -> None:
+    captured_kwargs: dict[str, object] = {}
+
+    def generate(**kwargs):
+        captured_kwargs.update(kwargs)
+        return _envelope()
+
+    monkeypatch.setattr(cli, "generate_prompt", generate)
+    metrics = tmp_path / "metrics.json"
+
+    assert (
+        cli.main(
+            [
+                "--pr",
+                "49156",
+                "--request",
+                "Review",
+                "--test-catalog",
+                "tests.db",
+                "--metrics-out",
+                str(metrics),
+            ]
+        )
+        == 0
+    )
+
+    assert captured_kwargs["test_catalog"] == Path("tests.db")
+    assert captured_kwargs["metrics_output"] == metrics
     assert json.loads(capsys.readouterr().out) == _envelope()
 
 

@@ -215,6 +215,7 @@ def test_generate_prompt_is_transient_and_includes_comments_without_review_markd
         "direct_impact",
         "evidence_audit",
         "incoming_callers",
+        "blast_radius_and_coverage",
         "reconcile",
         "render_review",
     ]

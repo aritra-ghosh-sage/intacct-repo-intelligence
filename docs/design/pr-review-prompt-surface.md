@@ -28,9 +28,21 @@ optional bounded controls are `--manifest`, `--repo-key`, `--max-hops` (`1` or
 only diagnostics routing. `--prompt-only` and `--compact-json` are mutually
 exclusive.
 
+`--test-catalog` optionally supplies a read-only catalog for exact downstream
+REST coverage. `--metrics-out` optionally writes the generated per-run metrics
+JSON; metrics are always embedded in the returned envelope.
+
+Step 4 downstream coverage is repository-scoped: REST endpoint facts come from
+the `tests_rest_of` target repository in the manifest, while test cases and
+diagnostics come from the selected suite repository. It reports `partial` or
+`deferred` for missing, stale, unavailable, or unscoped evidence. `conditional`
+test cases are weak/manual-review coverage and do not trigger an automatic
+add-test conclusion.
+
 Without `--prompt-only`, successful execution writes one JSON envelope to
 stdout. The envelope contains the normalized input, Step 0 and Step 0
-validation, Step 1--3 reports, task contracts, provenance, and `status`.
+validation, Step 1--4 reports, task contracts, per-run metrics, provenance,
+and `status`.
 `status` may be `ready`, `partial`, or `blocked`; `partial` and `blocked` are
 valid evidence-preserving results and still return exit code `0` when the
 required source/catalog prerequisites were resolved. With `--prompt-only`,
@@ -38,7 +50,7 @@ stdout contains only `prompt_text` followed by a newline.
 
 `--compact-json` writes a separate `pr_review_result` JSON schema. It retains
 `status`, exact input revisions and resolution, Step 0 evidence, validation,
-task contracts, all Step 1--3 reports, and provenance. It omits only the
+task contracts, all Step 1--4 reports, metrics, and provenance. It omits only the
 derived `prompt_text` and CI check-run records; use `--prompt-only` when the
 rendered prompt is needed.
 The full `pr_review_prompt` envelope remains the compatibility output for MCP
@@ -84,7 +96,7 @@ Resolution is reported in the JSON envelope without exposing internal paths:
 
 The CLI stops before analysis for metadata, source, or catalog prerequisite
 failures and returns a structured error with a remediation. Once exact source
-and catalog resolution succeeds, Step 1--3 extraction failures are retained
+and catalog resolution succeeds, Step 1--4 extraction failures are retained
 as `blocked`, while unavailable or incomplete evidence is retained as
 `partial`; neither state is presented as no impact. The process exit status is
 therefore separate from the analysis status in the JSON envelope.
@@ -100,7 +112,7 @@ Missing required CLI values, PR metadata, changed files, source revisions,
 Git objects, or comment collections stop the command before analysis. Errors
 identify the failed prerequisite and
 give a concrete remediation. Evidence gaps discovered after successful
-resolution remain explicit in the Step 1--3 reports and prompt.
+resolution remain explicit in the Step 1--4 reports and prompt.
 
 ## CLI validation snapshot
 
@@ -132,11 +144,12 @@ PYTHONPATH=. ./.venv/bin/python -m repo_v1_mcp.server
 
 The invoking agent supplies only a PR number and request to
 `pr_review_prepare`. The server returns an opaque `analysis_id`, exact target
-and catalog revisions, bounded counts, and Step 1--3 statuses. It does not
+and catalog revisions, bounded counts, Step 1--4 statuses, and metrics. It does not
 return private cache, manifest, checkout, or database paths.
 
 The agent retrieves bounded evidence through `pr_review_evidence` using the
-sections `summary`, `step0`, `comments`, `step1`, `step2`, and `step3`. Results
+sections `summary`, `step0`, `comments`, `step1`, `step2`, `step3`, `step4`, and
+`metrics`. Results
 use opaque cursors and a maximum page size of 100. Empty report lists are
 returned explicitly as `{"field": "…", "value": []}`, never omitted.
 Comment bodies are returned as explicitly untrusted, normalized data; null,

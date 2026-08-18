@@ -58,9 +58,16 @@ The accepted fact families include:
   two hops; report schema `0.2`. Traversal requires `project_resolved` and
   strict `confidence > min_confidence` (default `0.7`); lower-confidence rows
   remain explicit skipped edges.
-- **Step 4:** current sign-off documentation, not a separate analysis engine.
+- **Step 4:** read-only composition of exact entity, use-case-flow, downstream
+  test-coverage, and explicit-gap evidence over Steps 0--3. The analyzer is
+  vendor-neutral and does not mutate repo-v1 or downstream catalogs. Its
+  `0.2` report is `ready` only when all evaluated evidence is complete and the
+  report has no gaps. Downstream REST coverage scopes endpoint facts to the
+  configured target repository and test cases/diagnostics to the contracted
+  suite repository; empty entity scope is `deferred`, pagination is complete,
+  and `conditional` test cases are preserved as weak/manual-review coverage.
 - **CLI orchestration:** `catalog.pr_review_prompt` and
-  `scripts/generate_pr_review_prompt.py` compose Steps 0--3 into one
+  `scripts/generate_pr_review_prompt.py` compose Steps 0--4 into one
   read-only JSON/prompt surface (top-level result schema `0.2`). The CLI resolves the exact PR head into an
   isolated repo-v1 catalog before analysis and preserves `blocked` and
   `partial` evidence states.
@@ -78,7 +85,8 @@ These remain separate bounded slices:
 
 ## Deferred follow-up
 
-- repository-local test discovery and target-revision coverage;
+- repository-local test discovery beyond the first REST coverage adapter and
+  target-revision coverage artifacts;
 - reviewed cross-repository contracts and downstream test obligations;
 - API, workflow, UI, permission, and data propagation beyond direct facts;
 - cross-repository integration contracts and exact test discovery/coverage;

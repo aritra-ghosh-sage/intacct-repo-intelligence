@@ -36,6 +36,7 @@ def _pull_request() -> dict:
         "number": 49156,
         "html_url": "https://github.com/intacct/ia-app/pull/49156",
         "title": "Example",
+        "body": "PR description",
         "base": {"sha": "b" * 40, "ref": "main"},
         "head": {"sha": "a" * 40, "ref": "feature"},
         "labels": [{"name": "risk"}],
@@ -57,6 +58,7 @@ def test_metadata_normalizes_pr_identity_and_revisions() -> None:
     )
     assert value["repository"] == "intacct/ia-app"
     assert value["pull_request"]["target_revision"] == "a" * 40
+    assert value["pull_request"]["body"] == "PR description"
     assert value["reviews"][0]["id"] == 1
     assert value["provenance"]["provider"] == "gh_api"
 

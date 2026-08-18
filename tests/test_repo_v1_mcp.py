@@ -413,7 +413,16 @@ def test_template_resource_and_server_registrations() -> None:
     assert "pr_review_prepare" in mcp._tool_manager._tools
     assert "pr_review_evidence" in mcp._tool_manager._tools
     assert "pr_review" in mcp._prompt_manager._prompts
-    assert set(SECTIONS) == {"summary", "step0", "comments", "step1", "step2", "step3"}
+    assert set(SECTIONS) == {
+        "summary",
+        "step0",
+        "comments",
+        "step1",
+        "step2",
+        "step3",
+        "step4",
+        "metrics",
+    }
 
 
 def test_preparation_timeout_is_structured_and_not_claimed_as_cancellation(
