@@ -18,6 +18,7 @@ from typing import Any
 
 import yaml
 
+from catalog.github_pr_metadata import evidence_fingerprint
 from catalog.pr_impact_manifest import resolve_manifest_repo_root
 from catalog.pr_impact_ranking import rank_direct_traces
 
@@ -39,8 +40,11 @@ ERROR_CODES = {
     "metadata_unavailable",
     "metadata_malformed",
     "metadata_repository_mismatch",
+    "metadata_pr_mismatch",
     "metadata_revision_mismatch",
     "metadata_changed_path_mismatch",
+    "metadata_evidence_mismatch",
+    "metadata_check_revision_mismatch",
 }
 SURFACE_STATUSES = {
     "available",
@@ -773,12 +777,18 @@ def _load_metadata(
         ) from exc
     if (
         not isinstance(metadata, dict)
-        or metadata.get("schema_version") != "0.1"
         or metadata.get("analysis_kind") != "pr_impact_metadata"
     ):
         raise Step1Error(
             "metadata_malformed",
             "metadata artifact has an unsupported shape",
+            path=str(metadata_path),
+        )
+    schema_version = metadata.get("schema_version")
+    if schema_version not in {"0.1", "0.2"}:
+        raise Step1Error(
+            "metadata_malformed",
+            "metadata artifact has an unsupported schema version",
             path=str(metadata_path),
         )
     pr = metadata.get("pull_request")
@@ -796,6 +806,11 @@ def _load_metadata(
         raise Step1Error(
             "metadata_repository_mismatch",
             "metadata repository differs from fixture repository",
+        )
+    if pr.get("number") != fixture_pr.get("number"):
+        raise Step1Error(
+            "metadata_pr_mismatch",
+            "metadata PR number differs from fixture PR number",
         )
     if pr.get("base_revision") != base or pr.get("target_revision") != target:
         raise Step1Error(
@@ -833,6 +848,116 @@ def _load_metadata(
             "metadata_changed_path_mismatch",
             "metadata changed files differ from the exact Git diff",
         )
+    if schema_version == "0.2":
+        provenance = metadata.get("provenance")
+        if not isinstance(provenance, dict):
+            raise Step1Error(
+                "metadata_malformed", "metadata artifact has no provenance object"
+            )
+        expected_hash = provenance.get("evidence_sha256")
+        if (
+            not isinstance(expected_hash, str)
+            or len(expected_hash) != 64
+            or evidence_fingerprint(metadata) != expected_hash
+        ):
+            raise Step1Error(
+                "metadata_evidence_mismatch",
+                "metadata evidence fingerprint does not match the artifact",
+            )
+        evidence_status = metadata.get("evidence_status")
+        if not isinstance(evidence_status, dict):
+            raise Step1Error(
+                "metadata_malformed", "metadata artifact has no evidence_status object"
+            )
+        allowed_statuses = {"available", "empty", "unavailable", "not_requested"}
+        for collection in (
+            "linked_issues",
+            "workflow_runs",
+            "workflow_jobs",
+            "check_runs",
+        ):
+            records = metadata.get(collection)
+            if not isinstance(records, list):
+                raise Step1Error(
+                    "metadata_malformed",
+                    f"metadata {collection} must be a list",
+                )
+            status = evidence_status.get(collection)
+            if status not in allowed_statuses:
+                raise Step1Error(
+                    "metadata_malformed",
+                    f"metadata {collection} has an invalid evidence status",
+                )
+        linked_issues = metadata["linked_issues"]
+        for issue in linked_issues:
+            if not isinstance(issue, dict) or not isinstance(
+                issue.get("relation"), str
+            ):
+                raise Step1Error(
+                    "metadata_malformed",
+                    "metadata linked_issues entries require a relation",
+                )
+            if not isinstance(issue.get("repository"), str) or not issue["repository"]:
+                raise Step1Error(
+                    "metadata_malformed",
+                    "metadata linked_issues entries require a repository",
+                )
+            if (
+                isinstance(issue.get("number"), bool)
+                or not isinstance(issue.get("number"), int)
+                or issue["number"] <= 0
+            ):
+                raise Step1Error(
+                    "metadata_malformed",
+                    "metadata linked_issues entries require a positive number",
+                )
+        workflow_run_ids: set[int] = set()
+        for run in metadata["workflow_runs"]:
+            if not isinstance(run, dict):
+                raise Step1Error(
+                    "metadata_malformed",
+                    "metadata workflow_runs entries must be objects",
+                )
+            run_id = run.get("id")
+            head_sha = run.get("head_sha")
+            if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id <= 0:
+                raise Step1Error(
+                    "metadata_malformed",
+                    "metadata workflow_runs entries require a positive id",
+                )
+            if head_sha != target:
+                raise Step1Error(
+                    "metadata_check_revision_mismatch",
+                    "metadata workflow run does not target the exact PR head SHA",
+                )
+            workflow_run_ids.add(run_id)
+        for job in metadata["workflow_jobs"]:
+            if not isinstance(job, dict):
+                raise Step1Error(
+                    "metadata_malformed",
+                    "metadata workflow_jobs entries must be objects",
+                )
+            run_id = job.get("workflow_run_id")
+            if (
+                isinstance(run_id, bool)
+                or not isinstance(run_id, int)
+                or run_id <= 0
+                or run_id not in workflow_run_ids
+            ):
+                raise Step1Error(
+                    "metadata_malformed",
+                    "metadata workflow_jobs entry has no matching workflow run",
+                )
+        for check in metadata["check_runs"]:
+            if not isinstance(check, dict):
+                raise Step1Error(
+                    "metadata_malformed", "metadata check_runs entries must be objects"
+                )
+            if check.get("head_sha") != target:
+                raise Step1Error(
+                    "metadata_check_revision_mismatch",
+                    "metadata check run does not target the exact PR head SHA",
+                )
     return {
         "status": "available",
         "artifact_path": str(metadata_path),
@@ -845,6 +970,11 @@ def _load_metadata(
         "provider": metadata.get("provenance", {}).get("provider")
         if isinstance(metadata.get("provenance"), dict)
         else None,
+        "schema_version": schema_version,
+        "evidence_sha256": metadata.get("provenance", {}).get("evidence_sha256")
+        if isinstance(metadata.get("provenance"), dict)
+        else None,
+        "evidence_status": metadata.get("evidence_status", {}),
         "record_counts": {
             key: len(metadata.get(key, []))
             for key in (
@@ -853,6 +983,9 @@ def _load_metadata(
                 "inline_comments",
                 "issue_comments",
                 "check_runs",
+                "linked_issues",
+                "workflow_runs",
+                "workflow_jobs",
             )
             if isinstance(metadata.get(key, []), list)
         },
@@ -867,7 +1000,9 @@ def analyze_document(
     metadata: str | Path | None = None,
     fixture_label: str = "<in-memory>",
 ) -> dict[str, Any]:
-    if not isinstance(document, dict) or not isinstance(document.get("pull_request"), dict):
+    if not isinstance(document, dict) or not isinstance(
+        document.get("pull_request"), dict
+    ):
         raise Step1Error("malformed_fixture", "fixture must contain pull_request")
     pr = document["pull_request"]
     try:

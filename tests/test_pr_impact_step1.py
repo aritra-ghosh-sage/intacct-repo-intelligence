@@ -11,6 +11,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from catalog.github_pr_metadata import normalize_pr_metadata
 from catalog.pr_impact_step1 import (
     Step1Error,
     analyze_fixture,
@@ -571,6 +572,96 @@ def test_metadata_artifact_revision_and_path_parity(tmp_path: Path) -> None:
     )
     with pytest.raises(Step1Error, match="metadata revisions"):
         analyze_fixture(fixture, make_manifest(tmp_path, repo), db, "ia-main", metadata)
+
+
+def test_federation_metadata_captures_linked_issues_and_ci_evidence(
+    tmp_path: Path,
+) -> None:
+    repo, base, target = make_repo(tmp_path)
+    fixture = make_fixture(tmp_path, base, target)
+    db = make_db(tmp_path, target)
+    metadata = tmp_path / "metadata-v2.json"
+    payload = normalize_pr_metadata(
+        repository="intacct/ia-app",
+        repo_key="ia-main",
+        pull_request={
+            "number": 1,
+            "html_url": "https://github.com/intacct/ia-app/pull/1",
+            "base": {"sha": base, "ref": "main"},
+            "head": {"sha": target, "ref": "feature"},
+        },
+        files=[{"filename": "a.php", "status": "modified"}],
+        reviews=[],
+        inline_comments=[],
+        issue_comments=[],
+        linked_issues=[
+            {
+                "event_id": 7,
+                "relation": "cross_referenced",
+                "repository": "intacct/ia-app",
+                "number": 2,
+                "url": "https://github.com/intacct/ia-app/issues/2",
+            }
+        ],
+        workflow_runs=[
+            {"id": 11, "name": "tests", "head_sha": target, "status": "completed"}
+        ],
+        workflow_jobs=[
+            {"id": 12, "workflow_run_id": 11, "name": "unit", "status": "completed"}
+        ],
+        check_runs=[
+            {"id": 13, "name": "checks", "head_sha": target, "status": "completed"}
+        ],
+        provider="test",
+        endpoints=["test://pull-request"],
+    )
+    metadata.write_text(json.dumps(payload), encoding="utf-8")
+
+    report = analyze_fixture(
+        fixture, make_manifest(tmp_path, repo), db, "ia-main", metadata
+    )
+
+    summary = report["pr_metadata"]
+    assert summary["schema_version"] == "0.2"
+    assert summary["evidence_sha256"] == payload["provenance"]["evidence_sha256"]
+    assert summary["record_counts"]["linked_issues"] == 1
+    assert summary["record_counts"]["workflow_runs"] == 1
+    assert summary["record_counts"]["workflow_jobs"] == 1
+    assert validate(report) == []
+
+
+def test_federation_metadata_rejects_ci_evidence_for_other_revision(
+    tmp_path: Path,
+) -> None:
+    repo, base, target = make_repo(tmp_path)
+    fixture = make_fixture(tmp_path, base, target)
+    db = make_db(tmp_path, target)
+    metadata = tmp_path / "metadata-v2.json"
+    payload = normalize_pr_metadata(
+        repository="intacct/ia-app",
+        repo_key="ia-main",
+        pull_request={
+            "number": 1,
+            "html_url": "https://github.com/intacct/ia-app/pull/1",
+            "base": {"sha": base, "ref": "main"},
+            "head": {"sha": target, "ref": "feature"},
+        },
+        files=[{"filename": "a.php", "status": "modified"}],
+        reviews=[],
+        inline_comments=[],
+        issue_comments=[],
+        check_runs=[
+            {"id": 13, "name": "checks", "head_sha": base, "status": "completed"}
+        ],
+        provider="test",
+        endpoints=["test://pull-request"],
+    )
+    metadata.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(Step1Error) as error:
+        analyze_fixture(fixture, make_manifest(tmp_path, repo), db, "ia-main", metadata)
+
+    assert error.value.code == "metadata_check_revision_mismatch"
 
 
 @pytest.mark.parametrize(

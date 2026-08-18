@@ -51,7 +51,10 @@ The accepted fact families include:
 - **Step 0:** exact PR/revision fixture and review context.
 - **Step 1:** read-only direct `ia-main` tracing over an exact target-revision
   SQLite catalog; report schema `0.5`, with an `entity_symbol_links` surface
-  when changed symbols have reviewed mappings.
+  when changed symbols have reviewed mappings. It may additionally consume a
+  schema `0.2` external federation artifact containing revision-pinned PR,
+  linked-issue, workflow, job, and check evidence. This artifact does not
+  change direct tracing or downstream repository resolution.
 - **Step 2:** read-only availability audit over the Step 1 report; report
   schema `0.1`; it does not re-query SQLite or infer impact.
 - **Step 3:** read-only incoming `CALLS`/`STATIC_CALLS` traversal for one or

@@ -91,7 +91,17 @@ def test_fetch_metadata_normalizes_provider_collections(
             [{"id": 1, "state": "approved"}],
             [{"id": 2, "path": "app/a.php"}],
             [{"id": 3, "body": "comment"}],
-            [{"id": 4, "name": "tests"}, {"id": 5, "name": "lint"}],
+            [],
+            [
+                {
+                    "id": 4,
+                    "name": "tests",
+                    "head_sha": "a" * 40,
+                    "status": "completed",
+                }
+            ],
+            [{"id": 5, "name": "tests", "status": "completed"}],
+            [{"id": 6, "name": "tests", "status": "completed"}],
         ]
     )
     calls = []
@@ -106,8 +116,10 @@ def test_fetch_metadata_normalizes_provider_collections(
     )
     assert value["pull_request"]["number"] == 49156
     assert len(value["changed_files"]) == 1
-    assert len(value["check_runs"]) == 2
-    assert calls[-1][1:] == (True, "check_runs")
+    assert len(value["check_runs"]) == 1
+    assert len(value["workflow_runs"]) == 1
+    assert value["workflow_jobs"][0]["workflow_run_id"] == 4
+    assert any(call[2] == "check_runs" for call in calls)
 
 
 def test_fetch_metadata_can_skip_check_runs(
@@ -120,6 +132,8 @@ def test_fetch_metadata_can_skip_check_runs(
             [{"id": 1, "state": "approved"}],
             [{"id": 2, "path": "app/a.php"}],
             [{"id": 3, "body": "comment"}],
+            [],
+            [],
         ]
     )
     calls = []
@@ -137,7 +151,7 @@ def test_fetch_metadata_can_skip_check_runs(
     )
 
     assert value["check_runs"] == []
-    assert len(calls) == 5
+    assert len(calls) == 7
     assert all("check-runs" not in call[0] for call in calls)
     assert all(
         "check-runs" not in endpoint for endpoint in value["provenance"]["endpoints"]

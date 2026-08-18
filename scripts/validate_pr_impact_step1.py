@@ -320,6 +320,37 @@ def validate(report: object) -> list[str]:
         ):
             if key not in metadata:
                 errors.append(f"available pr_metadata missing {key}")
+        schema_version = metadata.get("schema_version")
+        if schema_version not in {None, "0.1", "0.2"}:
+            errors.append("available pr_metadata has an unsupported schema_version")
+        evidence_sha256 = metadata.get("evidence_sha256")
+        if evidence_sha256 is not None and (
+            not isinstance(evidence_sha256, str)
+            or len(evidence_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in evidence_sha256)
+        ):
+            errors.append("available pr_metadata evidence_sha256 must be lowercase SHA-256")
+        evidence_status = metadata.get("evidence_status")
+        if evidence_status is not None:
+            if not isinstance(evidence_status, dict):
+                errors.append("available pr_metadata evidence_status must be an object")
+            else:
+                allowed = {"available", "empty", "unavailable", "not_requested"}
+                for collection in ("linked_issues", "workflow_runs", "workflow_jobs", "check_runs"):
+                    if evidence_status.get(collection) not in allowed:
+                        errors.append(
+                            f"available pr_metadata {collection} has an invalid evidence status"
+                        )
+        counts = metadata.get("record_counts")
+        if counts is not None:
+            if not isinstance(counts, dict):
+                errors.append("available pr_metadata record_counts must be an object")
+            else:
+                for key, count in counts.items():
+                    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+                        errors.append(
+                            f"available pr_metadata record_counts.{key} must be non-negative"
+                        )
     traces = report.get("direct_traces")
     if not isinstance(traces, list):
         errors.append("direct_traces must be a list")

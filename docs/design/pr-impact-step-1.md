@@ -178,3 +178,11 @@ The intake prefers `gh api`, falls back to the GitHub HTTP API using
 `GH_TOKEN` or `GITHUB_TOKEN`, and fails closed if neither provider is usable.
 Step 1 accepts the artifact with `--metadata` and blocks when its repository,
 revision pair, or changed paths disagree with the fixture and exact Git diff.
+
+The current metadata artifact is schema `0.2`. In addition to the existing PR,
+file, review, comment, and check-run records, it captures explicit linked issue
+cross-references, Actions workflow runs, workflow jobs, deterministic
+collection status, and an evidence fingerprint. Workflow and check evidence
+must target the exact PR head SHA. Schema `0.1` artifacts remain readable but
+do not provide the federation collections or fingerprint guarantee; see
+[PR Impact Step 1 Federation Artifact](pr-impact-step-1-federation.md).
