@@ -1,0 +1,11 @@
+name: StatusCheck
+on:
+  push:
+  pull_request:
+jobs:
+  statuscheck:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "pass all the time"
+          exit 0

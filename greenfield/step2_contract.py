@@ -1,0 +1,192 @@
+"""Contracts and normalized CI evidence for greenfield PR-impact Step 2."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+CONTRACT_SCHEMA_VERSION = "0.1"
+CI_SCHEMA_VERSION = "0.1"
+INVENTORY_SCHEMA_VERSION = "0.1"
+SHA = re.compile(r"^[0-9a-f]{40}$")
+
+
+class EvidenceError(ValueError):
+    """Raised when a contract or CI evidence artifact is invalid."""
+
+
+def _object(value: Any, label: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise EvidenceError(f"{label} must be an object")
+    return value
+
+
+def _text(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise EvidenceError(f"{label} must be a non-empty string")
+    return value.strip()
+
+
+def _sha(value: Any, label: str) -> str:
+    result = _text(value, label).lower()
+    if not SHA.fullmatch(result):
+        raise EvidenceError(f"{label} must be a 40-character lowercase SHA")
+    return result
+
+
+def _paths(value: Any, label: str) -> list[str]:
+    if not isinstance(value, list) or not value:
+        raise EvidenceError(f"{label} must be a non-empty list")
+    result = sorted({_text(item, f"{label} item") for item in value})
+    if any("*" in path or "?" in path for path in result):
+        raise EvidenceError(f"{label} must contain exact paths, not patterns")
+    return result
+
+
+def _canonical(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def artifact_sha256(value: object) -> str:
+    return hashlib.sha256(_canonical(value).encode("utf-8")).hexdigest()
+
+
+def load_contract(path: str | Path) -> dict[str, Any]:
+    source = Path(path)
+    try:
+        raw = yaml.safe_load(source.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise EvidenceError(f"contract_read_failed: {source}: {exc}") from exc
+    data = _object(raw, "contract")
+    if data.get("schema_version") != CONTRACT_SCHEMA_VERSION:
+        raise EvidenceError(f"contract schema_version must be {CONTRACT_SCHEMA_VERSION}")
+    repository = _text(data.get("repository"), "contract.repository")
+    revision = _sha(data.get("revision"), "contract.revision")
+    relations = data.get("relations")
+    if not isinstance(relations, list) or not relations:
+        raise EvidenceError("contract.relations must be a non-empty list")
+
+    normalized: list[dict[str, Any]] = []
+    keys: set[tuple[str, str, str]] = set()
+    for index, relation in enumerate(relations):
+        item = _object(relation, f"contract.relations[{index}]")
+        interface_id = _text(item.get("interface_id"), "contract.interface_id")
+        owner = _text(item.get("owner_repository", repository), "owner_repository")
+        consumer = _text(item.get("consumer_repository"), "consumer_repository")
+        relationship_type = _text(item.get("relationship_type"), "relationship_type")
+        status = _text(item.get("status"), "status")
+        if status not in {"active", "inactive"}:
+            raise EvidenceError("contract relation status must be active or inactive")
+        source_paths = _paths(item.get("source_paths"), "source_paths")
+        key = (interface_id, consumer, relationship_type)
+        if key in keys:
+            raise EvidenceError(f"duplicate contract relation: {key}")
+        keys.add(key)
+        normalized.append(
+            {
+                "interface_id": interface_id,
+                "owner_repository": owner,
+                "consumer_repository": consumer,
+                "relationship_type": relationship_type,
+                "source_paths": source_paths,
+                "status": status,
+                "owner": item.get("owner"),
+            }
+        )
+    normalized.sort(key=lambda item: (item["interface_id"], item["consumer_repository"], item["relationship_type"]))
+    raw_bytes = source.read_bytes()
+    return {
+        "schema_version": CONTRACT_SCHEMA_VERSION,
+        "repository": repository,
+        "revision": revision,
+        "relations": normalized,
+        "evidence": {
+            "path": source.as_posix(),
+            "sha256": hashlib.sha256(raw_bytes).hexdigest(),
+        },
+    }
+
+
+def load_ci_evidence(path: str | Path) -> dict[str, Any]:
+    source = Path(path)
+    try:
+        raw = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise EvidenceError(f"ci_evidence_read_failed: {source}: {exc}") from exc
+    data = _object(raw, "ci evidence")
+    if data.get("schema_version") != CI_SCHEMA_VERSION:
+        raise EvidenceError(f"ci evidence schema_version must be {CI_SCHEMA_VERSION}")
+    normalized = {
+        "schema_version": CI_SCHEMA_VERSION,
+        "evidence_id": _text(data.get("evidence_id"), "evidence_id"),
+        "repository": _text(data.get("repository"), "repository"),
+        "commit_sha": _sha(data.get("commit_sha"), "commit_sha"),
+        "source_repository": _text(data.get("source_repository"), "source_repository"),
+        "source_revision": _sha(data.get("source_revision"), "source_revision"),
+        "interface_id": _text(data.get("interface_id"), "interface_id"),
+        "status": _text(data.get("status"), "status"),
+        "tests": data.get("tests", []),
+        "evidence": {
+            "path": source.as_posix(),
+            "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        },
+    }
+    if normalized["status"] not in {"available", "empty", "unavailable", "stale"}:
+        raise EvidenceError("ci evidence status is invalid")
+    if not isinstance(normalized["tests"], list):
+        raise EvidenceError("ci evidence tests must be a list")
+    return normalized
+
+
+def normalize_repository_inventory(value: Any, *, path: str = "<in-memory>") -> dict[str, Any]:
+    """Validate captured read-only repository/workflow inventory evidence."""
+
+    data = _object(value, "repository inventory")
+    if data.get("schema_version") != INVENTORY_SCHEMA_VERSION:
+        raise EvidenceError(
+            f"repository inventory schema_version must be {INVENTORY_SCHEMA_VERSION}"
+        )
+    if data.get("evidence_type") != "repository_inventory":
+        raise EvidenceError("repository inventory evidence_type is invalid")
+    _text(data.get("repository"), "repository inventory.repository")
+    _text(
+        data.get("source_repository"), "repository inventory.source_repository"
+    )
+    _sha(
+        data.get("source_revision"), "repository inventory.source_revision"
+    )
+    _sha(
+        data.get("inspected_revision"), "repository inventory.inspected_revision"
+    )
+    status = _text(data.get("status"), "repository inventory.status")
+    if status not in {"available", "unavailable", "empty"}:
+        raise EvidenceError("repository inventory status is invalid")
+    for key in ("workflow_paths", "inventory_paths", "workflows", "workflow_runs", "check_runs", "artifacts", "gaps"):
+        if not isinstance(data.get(key), list):
+            raise EvidenceError(f"repository inventory.{key} must be a list")
+    artifact_status = _text(data.get("artifact_status"), "repository inventory.artifact_status")
+    if artifact_status not in {"available", "empty", "not_linked_to_source_revision"}:
+        raise EvidenceError("repository inventory artifact_status is invalid")
+    provenance = _object(data.get("provenance"), "repository inventory.provenance")
+    if provenance.get("read_only") is not True:
+        raise EvidenceError("repository inventory provenance.read_only must be true")
+    response_sha = _text(provenance.get("response_sha256"), "response_sha256")
+    if len(response_sha) != 64 or any(char not in "0123456789abcdef" for char in response_sha):
+        raise EvidenceError("repository inventory response_sha256 must be lowercase SHA-256")
+    normalized = dict(data)
+    normalized["evidence_path"] = path
+    return normalized
+
+
+def load_repository_inventory(path: str | Path) -> dict[str, Any]:
+    source = Path(path)
+    try:
+        value = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise EvidenceError(f"repository_inventory_read_failed: {source}: {exc}") from exc
+    return normalize_repository_inventory(value, path=source.as_posix())

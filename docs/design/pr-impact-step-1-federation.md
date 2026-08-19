@@ -51,4 +51,3 @@ or downstream repository conclusions.
 The artifact is read by the existing optional `--metadata` input. The current
 exact Git diff validation, SQLite read-only preflight, direct surfaces,
 `downstream_repositories: []`, and Step 2–4 sequencing remain unchanged.
-
