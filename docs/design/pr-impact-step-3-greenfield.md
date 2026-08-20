@@ -34,6 +34,23 @@ Every populated item retains exact source revision and evidence references.
 Owners and tests are emitted only when declared or observed by Step 2 input
 evidence. Missing owners and tests remain unavailable; they are not inferred.
 
+Repository inventory is contextual evidence, not changed-file evidence. Step 3
+does not copy inventory paths, workflow paths, or workflow definitions into the
+impact surface. It retains bounded observation metadata instead: inspected and
+source revisions, path/workflow counts, artifact and CI-linkage status, and the
+inventory response hash. The full inventory remains recoverable from the Step 2
+artifact referenced by `provenance.step2_report_sha256`.
+
+An inventory-only repository candidate is represented in
+`potentially_affected_repositories` and in a repository-scoped `impact` item.
+It does not create a synthetic `repository:<name>` interface. The `interfaces`,
+`owners`, and `test_suites` surfaces require declared interface evidence.
+
+Semantic components are promoted only for `explicit_source` or
+`resolved_exact` edges with exact changed-path evidence. Convention-based,
+candidate-static, ambiguous, dynamic, unresolved, and unavailable edges remain
+explicit gaps and are not reported as direct components.
+
 ## Blast-radius rules
 
 - `local`: no external candidates and no unresolved external evidence;

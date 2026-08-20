@@ -99,10 +99,14 @@ def load_related_pr_evidence(path: str | Path) -> dict[str, Any]:
         head_sha = _text(row.get("head_sha"), "related PR head_sha").lower()
         base_sha = _text(row.get("base_sha"), "related PR base_sha").lower()
         if not SHA.fullmatch(head_sha) or not SHA.fullmatch(base_sha):
-            raise OutcomeError("related PR head_sha and base_sha must be 40-character SHAs")
+            raise OutcomeError(
+                "related PR head_sha and base_sha must be 40-character SHAs"
+            )
         relation_type = _text(row.get("relation_type"), "related PR relation_type")
         evidence = row.get("evidence")
-        if not isinstance(evidence, dict) or not _text(evidence.get("id"), "related PR evidence.id"):
+        if not isinstance(evidence, dict) or not _text(
+            evidence.get("id"), "related PR evidence.id"
+        ):
             raise OutcomeError("related PR evidence.id is required")
         key = (target_repo, number)
         if key in keys:
@@ -110,9 +114,13 @@ def load_related_pr_evidence(path: str | Path) -> dict[str, Any]:
         keys.add(key)
         changed_paths = row.get("changed_paths", [])
         interface_ids = row.get("interface_ids", [])
-        if not isinstance(changed_paths, list) or any(not isinstance(item, str) for item in changed_paths):
+        if not isinstance(changed_paths, list) or any(
+            not isinstance(item, str) for item in changed_paths
+        ):
             raise OutcomeError("related PR changed_paths must be a list of strings")
-        if not isinstance(interface_ids, list) or any(not isinstance(item, str) for item in interface_ids):
+        if not isinstance(interface_ids, list) or any(
+            not isinstance(item, str) for item in interface_ids
+        ):
             raise OutcomeError("related PR interface_ids must be a list of strings")
         normalized.append(
             {
@@ -133,7 +141,9 @@ def load_related_pr_evidence(path: str | Path) -> dict[str, Any]:
         "source_repository": repository,
         "source_revision": revision,
         "source_pr_number": source_pr,
-        "pull_requests": sorted(normalized, key=lambda row: (row["repository"], row["number"])),
+        "pull_requests": sorted(
+            normalized, key=lambda row: (row["repository"], row["number"])
+        ),
         "evidence_path": source.as_posix(),
         "artifact_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
     }
@@ -149,7 +159,65 @@ def _candidate_rows(step2: Mapping[str, Any]) -> list[dict[str, Any]]:
 
 
 def _evidence_refs(candidate: Mapping[str, Any]) -> list[dict[str, Any]]:
-    return [dict(item) for item in candidate.get("evidence", []) if isinstance(item, dict)]
+    unique = {
+        _canonical(item): dict(item)
+        for item in candidate.get("evidence", [])
+        if isinstance(item, dict)
+    }
+    return [unique[key] for key in sorted(unique)]
+
+
+def _is_repository_only(candidate: Mapping[str, Any]) -> bool:
+    return (
+        candidate.get("relationship_type") == "repository_inventory"
+        and candidate.get("interface_id")
+        == f"repository:{candidate.get('target_repository')}"
+    )
+
+
+def _list_count(candidate: Mapping[str, Any], key: str) -> int:
+    value = candidate.get(key, [])
+    return len(value) if isinstance(value, list) else 0
+
+
+def _inventory_observation(candidate: Mapping[str, Any]) -> dict[str, Any] | None:
+    if candidate.get("relationship_type") != "repository_inventory":
+        return None
+    evidence = next(
+        (
+            item
+            for item in candidate.get("evidence", [])
+            if isinstance(item, dict) and item.get("kind") == "repository_inventory"
+        ),
+        {},
+    )
+    return {
+        "inspected_revision": evidence.get("inspected_revision"),
+        "source_revision": evidence.get("source_revision"),
+        "inventory_path_count": _list_count(candidate, "inventory_paths"),
+        "workflow_path_count": _list_count(candidate, "workflow_paths"),
+        "workflow_count": _list_count(candidate, "workflows"),
+        "artifact_status": evidence.get("artifact_status"),
+        "ci_linkage_status": evidence.get("ci_linkage_status"),
+        "response_sha256": evidence.get("response_sha256"),
+    }
+
+
+def _merge_evidence(*values: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    unique = {
+        _canonical(item): dict(item)
+        for items in values
+        for item in items
+        if isinstance(item, dict)
+    }
+    return [unique[key] for key in sorted(unique)]
+
+
+def _merge_observations(*values: dict[str, Any] | None) -> list[dict[str, Any]]:
+    unique = {
+        _canonical(value): dict(value) for value in values if isinstance(value, dict)
+    }
+    return [unique[key] for key in sorted(unique)]
 
 
 def _component_surface(
@@ -174,8 +242,13 @@ def _component_surface(
     if semantic_index is None:
         gaps.append("semantic_index_not_provided:direct_semantic_components")
         return _surface("partial", items, semantic_evidence="unavailable")
-    if semantic_index.get("repository") != repository or semantic_index.get("revision") != revision:
-        raise OutcomeError("semantic index repository or revision does not match Step 2")
+    if (
+        semantic_index.get("repository") != repository
+        or semantic_index.get("revision") != revision
+    ):
+        raise OutcomeError(
+            "semantic index repository or revision does not match Step 2"
+        )
     nodes = {
         node.get("key"): node
         for node in semantic_index.get("nodes", [])
@@ -186,8 +259,6 @@ def _component_surface(
         if not isinstance(edge, dict) or edge.get("resolution") not in {
             "explicit_source",
             "resolved_exact",
-            "framework_convention",
-            "candidate_static",
         }:
             continue
         matching = [
@@ -203,7 +274,11 @@ def _component_surface(
                 continue
             identity = node.get("identity")
             kind = node.get("kind")
-            if not isinstance(identity, str) or not isinstance(kind, str) or (kind, identity) in seen:
+            if (
+                not isinstance(identity, str)
+                or not isinstance(kind, str)
+                or (kind, identity) in seen
+            ):
                 continue
             seen.add((kind, identity))
             items.append(
@@ -220,7 +295,18 @@ def _component_surface(
         1
         for edge in semantic_index.get("edges", [])
         if isinstance(edge, dict)
-        and edge.get("resolution") in {"ambiguous", "dynamic", "unresolved", "unavailable"}
+        and edge.get("resolution")
+        in {"ambiguous", "dynamic", "unresolved", "unavailable"}
+        and any(
+            isinstance(evidence, dict) and evidence.get("source_path") in paths
+            for evidence in edge.get("evidence", [])
+        )
+    )
+    not_promoted = sum(
+        1
+        for edge in semantic_index.get("edges", [])
+        if isinstance(edge, dict)
+        and edge.get("resolution") in {"framework_convention", "candidate_static"}
         and any(
             isinstance(evidence, dict) and evidence.get("source_path") in paths
             for evidence in edge.get("evidence", [])
@@ -228,7 +314,13 @@ def _component_surface(
     )
     if unresolved:
         gaps.append(f"semantic_components_unresolved:{unresolved}")
-    return _surface("available" if not unresolved else "partial", sorted(items, key=lambda item: (item["kind"], item["identity"])), semantic_evidence="available")
+    if not_promoted:
+        gaps.append(f"semantic_components_not_promoted:{not_promoted}")
+    return _surface(
+        "available" if not unresolved else "partial",
+        sorted(items, key=lambda item: (item["kind"], item["identity"])),
+        semantic_evidence="available",
+    )
 
 
 def _aggregate_repositories(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -236,54 +328,125 @@ def _aggregate_repositories(candidates: list[dict[str, Any]]) -> list[dict[str, 
     for candidate in candidates:
         repository = candidate["target_repository"]
         current = grouped.get(repository)
-        if current is None or CLASSIFICATION_ORDER.get(candidate["classification"], 99) < CLASSIFICATION_ORDER.get(current["classification"], 99):
+        if current is None:
             grouped[repository] = {
                 "repository": repository,
                 "classification": candidate["classification"],
                 "evidence": _evidence_refs(candidate),
+                "observations": _merge_observations(_inventory_observation(candidate)),
             }
-        elif current is not None:
-            current["evidence"].extend(_evidence_refs(candidate))
+        elif CLASSIFICATION_ORDER.get(
+            candidate["classification"], 99
+        ) < CLASSIFICATION_ORDER.get(current["classification"], 99):
+            grouped[repository] = {
+                "repository": repository,
+                "classification": candidate["classification"],
+                "evidence": _merge_evidence(
+                    current["evidence"], _evidence_refs(candidate)
+                ),
+                "observations": _merge_observations(
+                    *current["observations"], _inventory_observation(candidate)
+                ),
+            }
+        else:
+            current["evidence"] = _merge_evidence(
+                current["evidence"], _evidence_refs(candidate)
+            )
+            current["observations"] = _merge_observations(
+                *current["observations"], _inventory_observation(candidate)
+            )
     for row in grouped.values():
-        row["evidence"] = sorted(row["evidence"], key=_canonical)
-    return sorted(grouped.values(), key=lambda row: (CLASSIFICATION_ORDER.get(row["classification"], 99), row["repository"]))
+        row["evidence"] = _merge_evidence(row["evidence"])
+        row["observations"] = sorted(row["observations"], key=_canonical)
+    return sorted(
+        grouped.values(),
+        key=lambda row: (
+            CLASSIFICATION_ORDER.get(row["classification"], 99),
+            row["repository"],
+        ),
+    )
 
 
 def _aggregate_interfaces(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [
-        {
-            "interface_id": candidate["interface_id"],
-            "target_repository": candidate["target_repository"],
-            "relationship_type": candidate["relationship_type"],
-            "classification": candidate["classification"],
-            "reason": candidate["reason"],
-            "evidence": _evidence_refs(candidate),
-        }
-        for candidate in candidates
-    ]
+    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+    for candidate in candidates:
+        if _is_repository_only(candidate):
+            continue
+        key = (candidate["target_repository"], candidate["interface_id"])
+        current = grouped.get(key)
+        if current is None:
+            grouped[key] = {
+                "interface_id": candidate["interface_id"],
+                "target_repository": candidate["target_repository"],
+                "relationship_type": candidate["relationship_type"],
+                "classification": candidate["classification"],
+                "reason": candidate["reason"],
+                "evidence": _evidence_refs(candidate),
+            }
+            continue
+        if CLASSIFICATION_ORDER.get(
+            candidate["classification"], 99
+        ) < CLASSIFICATION_ORDER.get(current["classification"], 99):
+            current.update(
+                relationship_type=candidate["relationship_type"],
+                classification=candidate["classification"],
+                reason=candidate["reason"],
+            )
+        current["evidence"] = _merge_evidence(
+            current["evidence"], _evidence_refs(candidate)
+        )
+    return sorted(
+        grouped.values(),
+        key=lambda row: (
+            CLASSIFICATION_ORDER.get(row["classification"], 99),
+            row["target_repository"],
+            row["interface_id"],
+        ),
+    )
 
 
 def _aggregate_owners(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    rows = []
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for candidate in candidates:
-        owner = candidate.get("owner")
-        owner_repository = candidate.get("owner_repository")
+        if _is_repository_only(candidate):
+            continue
+        key = (candidate["target_repository"], candidate["interface_id"])
+        grouped.setdefault(key, []).append(candidate)
+    rows = []
+    for (target_repository, interface_id), related in grouped.items():
+        owner_values = {
+            (candidate.get("owner"), candidate.get("owner_repository"))
+            for candidate in related
+            if candidate.get("owner") or candidate.get("owner_repository")
+        }
+        conflicting = len(owner_values) > 1
+        owner, owner_repository = next(iter(owner_values), (None, None))
         rows.append(
             {
-                "interface_id": candidate["interface_id"],
-                "target_repository": candidate["target_repository"],
-                "owner": owner,
-                "owner_repository": owner_repository,
-                "status": "available" if owner or owner_repository else "unavailable",
-                "evidence": _evidence_refs(candidate),
+                "interface_id": interface_id,
+                "target_repository": target_repository,
+                "owner": None if conflicting else owner,
+                "owner_repository": None if conflicting else owner_repository,
+                "status": "unknown"
+                if conflicting
+                else ("available" if owner or owner_repository else "unavailable"),
+                "reason": "conflicting_owner_evidence" if conflicting else None,
+                "evidence": _merge_evidence(
+                    *[_evidence_refs(candidate) for candidate in related]
+                ),
             }
         )
-    return rows
+    return sorted(rows, key=lambda row: (row["target_repository"], row["interface_id"]))
 
 
-def _aggregate_tests(candidates: list[dict[str, Any]], gaps: list[str]) -> dict[str, Any]:
+def _aggregate_tests(
+    candidates: list[dict[str, Any]], gaps: list[str]
+) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
-    for candidate in candidates:
+    interface_candidates = [
+        candidate for candidate in candidates if not _is_repository_only(candidate)
+    ]
+    for candidate in interface_candidates:
         tests = candidate.get("tests", [])
         if not isinstance(tests, list):
             tests = []
@@ -326,19 +489,67 @@ def _aggregate_tests(candidates: list[dict[str, Any]], gaps: list[str]) -> dict[
                     "evidence": _evidence_refs(candidate),
                 }
             )
-    if not candidates:
-        return _surface("not_modelled", [], reason="no_affected_repository_scope")
-    status = "available" if rows and all(row["status"] == "available" for row in rows) else "partial"
+    if not interface_candidates:
+        return _surface("not_modelled", [], reason="no_declared_interface_evidence")
+    unique: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for row in rows:
+        test = row.get("test", {})
+        key = (
+            row["target_repository"],
+            row["interface_id"],
+            f"{test.get('id')}:{test.get('path')}"
+            if isinstance(test, dict)
+            else row["status"],
+        )
+        current = unique.get(key)
+        if current is None or current["status"] == "unavailable":
+            unique[key] = row
+        elif row["status"] == "available":
+            current["evidence"] = _merge_evidence(current["evidence"], row["evidence"])
+    rows = list(unique.values())
+    status = (
+        "available"
+        if rows and all(row["status"] == "available" for row in rows)
+        else "partial"
+    )
     if any(row["status"] == "unavailable" for row in rows):
         gaps.append("test_suites_unavailable:no_normalized_test_evidence")
-    return _surface(status, sorted(rows, key=_canonical))
+    return _surface(
+        status,
+        sorted(
+            rows,
+            key=lambda row: (
+                row["target_repository"],
+                row["interface_id"],
+                _canonical(row.get("test", {})),
+            ),
+        ),
+    )
 
 
 def _blast_radius(candidates: list[dict[str, Any]], gaps: list[str]) -> str:
     if any(
-        candidate.get("relationship_type") in {"systemic", "shared_infrastructure", "shared_schema", "shared_build", "deployment"}
-        or candidate.get("declared_relationship_type") in {"systemic", "shared_infrastructure", "shared_schema", "shared_build", "deployment"}
-        or any(evidence.get("impact_scope") == "systemic" for evidence in candidate.get("evidence", []) if isinstance(evidence, dict))
+        candidate.get("relationship_type")
+        in {
+            "systemic",
+            "shared_infrastructure",
+            "shared_schema",
+            "shared_build",
+            "deployment",
+        }
+        or candidate.get("declared_relationship_type")
+        in {
+            "systemic",
+            "shared_infrastructure",
+            "shared_schema",
+            "shared_build",
+            "deployment",
+        }
+        or any(
+            evidence.get("impact_scope") == "systemic"
+            for evidence in candidate.get("evidence", [])
+            if isinstance(evidence, dict)
+        )
         for candidate in candidates
     ):
         return "systemic"
@@ -347,6 +558,48 @@ def _blast_radius(candidates: list[dict[str, Any]], gaps: list[str]) -> str:
     if any(candidate.get("classification") == "candidate" for candidate in candidates):
         return "boundary"
     return "unknown" if gaps else "local"
+
+
+def _impact_rows(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
+    for candidate in candidates:
+        repository_only = _is_repository_only(candidate)
+        interface_id = "" if repository_only else candidate["interface_id"]
+        scope = "repository" if repository_only else "interface"
+        key = (
+            scope,
+            candidate["target_repository"],
+            interface_id,
+            candidate["relationship_type"],
+            candidate["classification"],
+        )
+        item = grouped.setdefault(
+            key,
+            {
+                "scope": scope,
+                "target_repository": candidate["target_repository"],
+                "classification": candidate["classification"],
+                "relationship_type": candidate["relationship_type"],
+                "reason": candidate["reason"],
+                "evidence": [],
+            },
+        )
+        if not repository_only:
+            item["interface_id"] = candidate["interface_id"]
+        item["evidence"] = _merge_evidence(item["evidence"], _evidence_refs(candidate))
+        observation = _inventory_observation(candidate)
+        if observation is not None:
+            item["observation"] = observation
+    return sorted(
+        grouped.values(),
+        key=lambda row: (
+            CLASSIFICATION_ORDER.get(row["classification"], 99),
+            row["target_repository"],
+            row.get("interface_id", ""),
+            row["relationship_type"],
+            row["scope"],
+        ),
+    )
 
 
 def assemble_outcome(
@@ -380,10 +633,17 @@ def assemble_outcome(
             )
         if not isinstance(related_pr_evidence["pull_requests"], list):
             raise OutcomeError("related PR evidence pull_requests must be a list")
-        if not isinstance(related_pr_evidence["artifact_sha256"], str) or not SHA256.fullmatch(related_pr_evidence["artifact_sha256"]):
+        if not isinstance(
+            related_pr_evidence["artifact_sha256"], str
+        ) or not SHA256.fullmatch(related_pr_evidence["artifact_sha256"]):
             raise OutcomeError("related PR evidence artifact_sha256 is invalid")
-        if related_pr_evidence.get("source_repository") != repository or related_pr_evidence.get("source_revision") != revision:
-            raise OutcomeError("related PR evidence repository or revision does not match Step 2")
+        if (
+            related_pr_evidence.get("source_repository") != repository
+            or related_pr_evidence.get("source_revision") != revision
+        ):
+            raise OutcomeError(
+                "related PR evidence repository or revision does not match Step 2"
+            )
         related_surface = _surface(
             "available",
             list(related_pr_evidence["pull_requests"]),
@@ -394,9 +654,15 @@ def assemble_outcome(
             artifact_sha256=related_pr_evidence["artifact_sha256"],
         )
     else:
-        gaps.append("related_pull_requests_not_modelled:revision_pinned_artifact_not_provided")
-        related_surface = _surface("not_modelled", [], reason="revision_pinned_artifact_not_provided")
-    component_surface = _component_surface(repository, revision, paths, step2_hash, semantic_index, gaps)
+        gaps.append(
+            "related_pull_requests_not_modelled:revision_pinned_artifact_not_provided"
+        )
+        related_surface = _surface(
+            "not_modelled", [], reason="revision_pinned_artifact_not_provided"
+        )
+    component_surface = _component_surface(
+        repository, revision, paths, step2_hash, semantic_index, gaps
+    )
     repositories = _aggregate_repositories(candidates)
     interfaces = _aggregate_interfaces(candidates)
     owners = _aggregate_owners(candidates)
@@ -415,18 +681,40 @@ def assemble_outcome(
         },
         "blast_radius": _blast_radius(candidates, gaps),
         "direct_components": component_surface,
-        "potentially_affected_repositories": _surface("available" if repositories else ("unknown" if gaps else "available"), repositories),
-        "interfaces": _surface("available" if interfaces else ("unknown" if gaps else "available"), interfaces),
-        "owners": _surface("available" if owners and all(row["status"] == "available" for row in owners) else ("partial" if owners else "not_modelled"), owners),
+        "potentially_affected_repositories": _surface(
+            "available" if repositories else ("unknown" if gaps else "available"),
+            repositories,
+        ),
+        "interfaces": _surface(
+            "available" if interfaces else "not_modelled",
+            interfaces,
+            **({} if interfaces else {"reason": "no_declared_interface_evidence"}),
+        ),
+        "owners": _surface(
+            "available"
+            if owners and all(row["status"] == "available" for row in owners)
+            else ("partial" if owners else "not_modelled"),
+            owners,
+            **({} if owners else {"reason": "no_declared_interface_evidence"}),
+        ),
         "test_suites": tests,
         "related_pull_requests": related_surface,
-        "impact": _surface("available" if candidates else ("unknown" if gaps else "available"), candidates),
+        "impact": _surface(
+            "available" if candidates else ("unknown" if gaps else "available"),
+            _impact_rows(candidates),
+        ),
         "gaps": sorted(set(gaps)),
         "warnings": sorted(set(warnings)),
         "provenance": {
             "step2_report_sha256": step2_hash,
-            "semantic_index_sha256": semantic_index.get("provenance", {}).get("index_sha256") if semantic_index else None,
-            "related_pr_artifact_sha256": related_pr_evidence.get("artifact_sha256") if related_pr_evidence else None,
+            "semantic_index_sha256": semantic_index.get("provenance", {}).get(
+                "index_sha256"
+            )
+            if semantic_index
+            else None,
+            "related_pr_artifact_sha256": related_pr_evidence.get("artifact_sha256")
+            if related_pr_evidence
+            else None,
             "rule_set_version": RULE_SET_VERSION,
             "read_only": True,
             "catalog_mutation": "none",
