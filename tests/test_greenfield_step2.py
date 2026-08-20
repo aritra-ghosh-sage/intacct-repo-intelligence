@@ -10,6 +10,7 @@ from greenfield.github_repository_evidence import (
     RepositoryEvidenceError,
     collect_repository_evidence,
 )
+from greenfield.semantic_index import build_semantic_index_from_files
 from greenfield.step2_candidates import resolve_candidates
 from greenfield.step2_contract import EvidenceError, load_ci_evidence, load_contract
 from scripts.validate_greenfield_step2 import validate
@@ -27,7 +28,9 @@ def step1() -> dict:
             "repo_key": "ia-app",
             "target_revision": TARGET,
         },
-        "changed_files": [{"path": "app/source/company/CompanyConfig.cls", "status": "modified"}],
+        "changed_files": [
+            {"path": "app/source/company/CompanyConfig.cls", "status": "modified"}
+        ],
     }
 
 
@@ -124,7 +127,9 @@ def test_same_names_do_not_create_a_relationship(tmp_path: Path) -> None:
 def test_contract_rejects_wildcard_paths(tmp_path: Path) -> None:
     contract_path = tmp_path / "contract.yaml"
     write_contract(contract_path)
-    text = contract_path.read_text(encoding="utf-8").replace("CompanyConfig.cls", "*.cls")
+    text = contract_path.read_text(encoding="utf-8").replace(
+        "CompanyConfig.cls", "*.cls"
+    )
     contract_path.write_text(text, encoding="utf-8")
 
     with pytest.raises(EvidenceError, match="exact paths"):
@@ -147,9 +152,100 @@ def test_repeated_resolution_is_byte_deterministic(tmp_path: Path) -> None:
     )
 
 
+def test_semantic_index_supports_candidate_without_proving_ci() -> None:
+    semantic = build_semantic_index_from_files(
+        {
+            "app/source/gl/glaccount.ent": "$kSchemas['glaccount'] = array('module' => 'gl');",
+            "app/source/openapispec/gl/models/objects.general-ledger.account.s1.schema.yaml": "x-mappedTo: glaccount\n",
+        },
+        repository="ia-app",
+        revision=TARGET,
+    )
+    semantic["evidence_path"] = "semantic.json"
+    contract = {
+        "repository": "ia-app",
+        "revision": TARGET,
+        "relations": [
+            {
+                "interface_id": "api_object:general-ledger/account",
+                "consumer_repository": "ia-restapi-automation-tests",
+                "relationship_type": "api_contract",
+                "source_paths": ["app/source/company/CompanyConfig.cls"],
+                "status": "active",
+            }
+        ],
+        "evidence": {"path": "contract.yaml", "sha256": "c" * 64},
+    }
+    semantic_step1 = {
+        **step1(),
+        "changed_files": [
+            {
+                "path": "app/source/openapispec/gl/models/objects.general-ledger.account.s1.schema.yaml",
+                "status": "modified",
+            }
+        ],
+    }
+
+    report = resolve_candidates(
+        semantic_step1,
+        contracts=[contract],
+        semantic_indexes=[semantic],
+    )
+
+    assert report["candidates"][0]["classification"] == "candidate"
+    assert report["candidates"][0]["reason"] == "semantic_index_supports_contract"
+    assert report["candidates"][0]["evidence"][0]["kind"] == "semantic_index"
+    assert validate(report) == []
+
+
+def test_semantic_index_does_not_resurrect_a_stale_contract() -> None:
+    semantic_path = (
+        "app/source/openapispec/gl/models/objects.general-ledger.account.s1.schema.yaml"
+    )
+    semantic = build_semantic_index_from_files(
+        {
+            "app/source/gl/glaccount.ent": "$kSchemas['glaccount'] = array();",
+            semantic_path: "x-mappedTo: glaccount\n",
+        },
+        repository="ia-app",
+        revision=TARGET,
+    )
+    semantic["evidence_path"] = "semantic.json"
+    stale_contract = {
+        "repository": "ia-app",
+        "revision": "b" * 40,
+        "relations": [
+            {
+                "interface_id": "api_object:general-ledger/account",
+                "consumer_repository": "ia-restapi-automation-tests",
+                "relationship_type": "api_contract",
+                "source_paths": [semantic_path],
+                "status": "active",
+            }
+        ],
+        "evidence": {"path": "contract.yaml", "sha256": "c" * 64},
+    }
+    semantic_step1 = {
+        **step1(),
+        "changed_files": [{"path": semantic_path, "status": "modified"}],
+    }
+
+    report = resolve_candidates(
+        semantic_step1,
+        contracts=[stale_contract],
+        semantic_indexes=[semantic],
+    )
+
+    assert report["candidates"] == []
+    assert any(gap.startswith("contract:stale") for gap in report["gaps"])
+
+
 def provider_for(workflow_path: str, workflow_text: str, *, runs=None, artifacts=None):
     responses = {
-        "repos/intacct/example": {"full_name": "intacct/example", "default_branch": "main"},
+        "repos/intacct/example": {
+            "full_name": "intacct/example",
+            "default_branch": "main",
+        },
         "repos/intacct/example/git/ref/heads/main": {"object": {"sha": "e" * 40}},
         "repos/intacct/example/git/trees/" + "e" * 40 + "?recursive=1": {
             "tree": [
@@ -185,7 +281,9 @@ def provider_for(workflow_path: str, workflow_text: str, *, runs=None, artifacts
 
 
 def test_rest_inventory_without_linked_artifact_is_a_candidate(tmp_path: Path) -> None:
-    workflow = (Path(__file__).parent / "fixtures/greenfield/rest_workflow.yml").read_text()
+    workflow = (
+        Path(__file__).parent / "fixtures/greenfield/rest_workflow.yml"
+    ).read_text()
     evidence = collect_repository_evidence(
         "intacct/example",
         source_repository="ia-app",
@@ -202,7 +300,9 @@ def test_rest_inventory_without_linked_artifact_is_a_candidate(tmp_path: Path) -
 
 
 def test_gateway_pass_only_workflow_never_proves_test_execution() -> None:
-    workflow = (Path(__file__).parent / "fixtures/greenfield/gateway_statuscheck.yml").read_text()
+    workflow = (
+        Path(__file__).parent / "fixtures/greenfield/gateway_statuscheck.yml"
+    ).read_text()
     evidence = collect_repository_evidence(
         "intacct/example",
         source_repository="ia-app",
@@ -251,7 +351,9 @@ def test_validator_rejects_confirmed_inventory_evidence() -> None:
     report = resolve_candidates(step1(), inventory_evidence=[evidence])
     report["candidates"][0]["classification"] = "confirmed"
 
-    assert "repository inventory evidence can only classify a candidate" in validate(report)
+    assert "repository inventory evidence can only classify a candidate" in validate(
+        report
+    )
 
 
 def test_artifact_is_joined_only_to_the_matching_workflow_run() -> None:

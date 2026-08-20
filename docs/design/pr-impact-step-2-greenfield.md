@@ -13,7 +13,10 @@ SQLite, legacy catalog tables, graph data, or MCP state.
    with executed-test evidence.
 3. Read-only repository/workflow inventory produces a `candidate` only. It
    never proves that a test executed.
-4. Stale, unavailable, empty, mismatched, and missing evidence remains an
+4. A revision-pinned `ia-main` semantic sidecar may support a `candidate` when
+   an active contract supplies the cross-repository consumer. It never proves
+   CI execution or upgrades a candidate to confirmed coverage.
+5. Stale, unavailable, empty, mismatched, and missing evidence remains an
    explicit gap. It is never interpreted as no impact.
 
 The report is deterministic: inputs are normalized, candidates are
@@ -71,6 +74,33 @@ candidate repository. Generic `depends_on`, `enabled`, repository registration,
 workflow names, and pass-only status checks do not establish impact or test
 coverage. No changes are required in downstream repositories.
 
+## Semantic sidecar input
+
+Build a committed-revision sidecar for `ia-main` with:
+
+```bash
+PYTHONPATH=. ./.venv/bin/python scripts/build_greenfield_semantic_index.py \
+  --repo-root "$HOME/projects/main" \
+  --repository ia-main \
+  --revision <40-character-commit-sha> \
+  --output artifacts/greenfield/ia-main/<sha>/semantic-index.json
+```
+
+Pass it to Step 2 as optional static evidence:
+
+```bash
+PYTHONPATH=. ./.venv/bin/python scripts/trace_greenfield_step2.py \
+  --step1-report step1.json \
+  --semantic-index artifacts/greenfield/ia-main/<sha>/semantic-index.json \
+  --output step2.json
+```
+
+The sidecar preserves typed entity, API object, workflow, ActionUI, NextGen,
+import, and PHP-symbol edges. Unsupported XML and dynamic entity selection are
+reported as diagnostics. A semantic edge is candidate evidence only; exact
+active contracts and normalized CI evidence retain the stronger Step 2
+classification boundary.
+
 ## Manual mapping boundary
 
 The initial slice resolves impact at the declared interface/contract level and
@@ -94,6 +124,7 @@ PYTHONPATH=. ./.venv/bin/python scripts/validate_greenfield_step2.py \
   --report step2.json
 ```
 
-Static-code relationships, historical co-change, persistent storage, MCP,
-AI ranking, downstream workflow changes, and automated downstream PR creation
-remain deferred.
+Historical co-change, persistent storage, MCP, AI ranking, downstream workflow
+changes, and automated downstream PR creation remain deferred. The semantic
+sidecar is source evidence, not a replacement for repo-v1 or a general catalog
+refresh.

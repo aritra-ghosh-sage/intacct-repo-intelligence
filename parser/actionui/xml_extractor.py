@@ -14,6 +14,7 @@ from xml.parsers import expat
 from .model import (
     ActionUiArtifact,
     Diagnostic,
+    EntityReferenceFact,
     EventCallFact,
     EventFact,
     FieldFact,
@@ -24,11 +25,11 @@ _XINCLUDE_NAMESPACES = {
     "http://www.w3.org/2001/XInclude",
     "http://www.w3.org/2003/XInclude",
 }
-_JS_IDENTIFIER_START = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz$_")
-_JS_IDENTIFIER_PART = _JS_IDENTIFIER_START | frozenset("0123456789")
-_JS_KEYWORDS = frozenset(
-    {"catch", "for", "function", "if", "switch", "while", "with"}
+_JS_IDENTIFIER_START = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz$_"
 )
+_JS_IDENTIFIER_PART = _JS_IDENTIFIER_START | frozenset("0123456789")
+_JS_KEYWORDS = frozenset({"catch", "for", "function", "if", "switch", "while", "with"})
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,7 @@ class ActionUiXmlExtractionResult:
     """Immutable XML facts. A parse failure returns only diagnostics."""
 
     artifacts: tuple[ActionUiArtifact, ...] = ()
+    entity_references: tuple[EntityReferenceFact, ...] = ()
     fields: tuple[FieldFact, ...] = ()
     includes: tuple[IncludeFact, ...] = ()
     events: tuple[EventFact, ...] = ()
@@ -174,6 +176,7 @@ def extract_actionui_xml_facts(
     parser.SetParamEntityParsing(expat.XML_PARAM_ENTITY_PARSING_NEVER)
 
     artifacts: list[ActionUiArtifact] = []
+    entity_references: list[EntityReferenceFact] = []
     fields: list[FieldFact] = []
     includes: list[IncludeFact] = []
     events: list[EventFact] = []
@@ -231,7 +234,11 @@ def extract_actionui_xml_facts(
         line = parser.CurrentLineNumber
         parent = stack[-1]
         parent.text.append((data, line))
-        if parent.local_name == "path" and len(stack) >= 2 and stack[-2].local_name == "field":
+        if (
+            parent.local_name == "path"
+            and len(stack) >= 2
+            and stack[-2].local_name == "field"
+        ):
             stack[-2].direct_path.append((data, line))
 
     def end_element(name: str) -> None:
@@ -244,6 +251,19 @@ def extract_actionui_xml_facts(
 
         end_line = parser.CurrentLineNumber
         parent = stack[-1] if stack else None
+        if element.local_name == "entity":
+            entity_name = _normalized_text(element.text)
+            if entity_name is not None:
+                entity_references.append(
+                    EntityReferenceFact(
+                        entity_name=entity_name,
+                        source_file=source_file,
+                        reference_kind="direct_entity_element",
+                        start_line=element.start_line,
+                        end_line=end_line,
+                        evidence=f"<{element.raw_name}>{entity_name}</{element.raw_name}>",
+                    )
+                )
         if parent is not None and parent.local_name == "events":
             # Expat's buffered character callback reports the current parser
             # line, not necessarily the first line of the text chunk. Keep
@@ -276,7 +296,9 @@ def extract_actionui_xml_facts(
 
         if element.local_name != "field":
             return
-        path = element.attributes.get("path", "").strip() or _normalized_text(element.direct_path)
+        path = element.attributes.get("path", "").strip() or _normalized_text(
+            element.direct_path
+        )
         if path is None:
             path = _normalized_text(element.text)
         field_name = (
@@ -309,7 +331,9 @@ def extract_actionui_xml_facts(
         )
 
     def start_doctype(*_args) -> None:
-        raise _UnsupportedDocumentType("DOCTYPE declarations are not supported for actionUI XML.")
+        raise _UnsupportedDocumentType(
+            "DOCTYPE declarations are not supported for actionUI XML."
+        )
 
     parser.StartElementHandler = start_element
     parser.EndElementHandler = end_element
@@ -337,6 +361,7 @@ def extract_actionui_xml_facts(
 
     return ActionUiXmlExtractionResult(
         artifacts=tuple(artifacts),
+        entity_references=tuple(entity_references),
         fields=tuple(fields),
         includes=tuple(includes),
         events=tuple(events),

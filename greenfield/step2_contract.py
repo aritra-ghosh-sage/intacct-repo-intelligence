@@ -10,6 +10,8 @@ from typing import Any
 
 import yaml
 
+from greenfield.semantic_contract import load_index
+
 CONTRACT_SCHEMA_VERSION = "0.1"
 CI_SCHEMA_VERSION = "0.1"
 INVENTORY_SCHEMA_VERSION = "0.1"
@@ -64,7 +66,9 @@ def load_contract(path: str | Path) -> dict[str, Any]:
         raise EvidenceError(f"contract_read_failed: {source}: {exc}") from exc
     data = _object(raw, "contract")
     if data.get("schema_version") != CONTRACT_SCHEMA_VERSION:
-        raise EvidenceError(f"contract schema_version must be {CONTRACT_SCHEMA_VERSION}")
+        raise EvidenceError(
+            f"contract schema_version must be {CONTRACT_SCHEMA_VERSION}"
+        )
     repository = _text(data.get("repository"), "contract.repository")
     revision = _sha(data.get("revision"), "contract.revision")
     relations = data.get("relations")
@@ -98,7 +102,13 @@ def load_contract(path: str | Path) -> dict[str, Any]:
                 "owner": item.get("owner"),
             }
         )
-    normalized.sort(key=lambda item: (item["interface_id"], item["consumer_repository"], item["relationship_type"]))
+    normalized.sort(
+        key=lambda item: (
+            item["interface_id"],
+            item["consumer_repository"],
+            item["relationship_type"],
+        )
+    )
     raw_bytes = source.read_bytes()
     return {
         "schema_version": CONTRACT_SCHEMA_VERSION,
@@ -143,7 +153,9 @@ def load_ci_evidence(path: str | Path) -> dict[str, Any]:
     return normalized
 
 
-def normalize_repository_inventory(value: Any, *, path: str = "<in-memory>") -> dict[str, Any]:
+def normalize_repository_inventory(
+    value: Any, *, path: str = "<in-memory>"
+) -> dict[str, Any]:
     """Validate captured read-only repository/workflow inventory evidence."""
 
     data = _object(value, "repository inventory")
@@ -154,30 +166,38 @@ def normalize_repository_inventory(value: Any, *, path: str = "<in-memory>") -> 
     if data.get("evidence_type") != "repository_inventory":
         raise EvidenceError("repository inventory evidence_type is invalid")
     _text(data.get("repository"), "repository inventory.repository")
-    _text(
-        data.get("source_repository"), "repository inventory.source_repository"
-    )
-    _sha(
-        data.get("source_revision"), "repository inventory.source_revision"
-    )
-    _sha(
-        data.get("inspected_revision"), "repository inventory.inspected_revision"
-    )
+    _text(data.get("source_repository"), "repository inventory.source_repository")
+    _sha(data.get("source_revision"), "repository inventory.source_revision")
+    _sha(data.get("inspected_revision"), "repository inventory.inspected_revision")
     status = _text(data.get("status"), "repository inventory.status")
     if status not in {"available", "unavailable", "empty"}:
         raise EvidenceError("repository inventory status is invalid")
-    for key in ("workflow_paths", "inventory_paths", "workflows", "workflow_runs", "check_runs", "artifacts", "gaps"):
+    for key in (
+        "workflow_paths",
+        "inventory_paths",
+        "workflows",
+        "workflow_runs",
+        "check_runs",
+        "artifacts",
+        "gaps",
+    ):
         if not isinstance(data.get(key), list):
             raise EvidenceError(f"repository inventory.{key} must be a list")
-    artifact_status = _text(data.get("artifact_status"), "repository inventory.artifact_status")
+    artifact_status = _text(
+        data.get("artifact_status"), "repository inventory.artifact_status"
+    )
     if artifact_status not in {"available", "empty", "not_linked_to_source_revision"}:
         raise EvidenceError("repository inventory artifact_status is invalid")
     provenance = _object(data.get("provenance"), "repository inventory.provenance")
     if provenance.get("read_only") is not True:
         raise EvidenceError("repository inventory provenance.read_only must be true")
     response_sha = _text(provenance.get("response_sha256"), "response_sha256")
-    if len(response_sha) != 64 or any(char not in "0123456789abcdef" for char in response_sha):
-        raise EvidenceError("repository inventory response_sha256 must be lowercase SHA-256")
+    if len(response_sha) != 64 or any(
+        char not in "0123456789abcdef" for char in response_sha
+    ):
+        raise EvidenceError(
+            "repository inventory response_sha256 must be lowercase SHA-256"
+        )
     normalized = dict(data)
     normalized["evidence_path"] = path
     return normalized
@@ -188,5 +208,19 @@ def load_repository_inventory(path: str | Path) -> dict[str, Any]:
     try:
         value = json.loads(source.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise EvidenceError(f"repository_inventory_read_failed: {source}: {exc}") from exc
+        raise EvidenceError(
+            f"repository_inventory_read_failed: {source}: {exc}"
+        ) from exc
     return normalize_repository_inventory(value, path=source.as_posix())
+
+
+def load_semantic_index(path: str | Path) -> dict[str, Any]:
+    """Load a revision-pinned semantic sidecar for Step 2 candidate evidence."""
+
+    try:
+        value = load_index(path)
+    except ValueError as exc:
+        raise EvidenceError(str(exc)) from exc
+    normalized = dict(value)
+    normalized["evidence_path"] = Path(path).as_posix()
+    return normalized

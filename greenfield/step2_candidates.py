@@ -12,7 +12,14 @@ from greenfield.step2_contract import artifact_sha256
 REPORT_SCHEMA_VERSION = "0.1"
 ANALYSIS_KIND = "greenfield_pr_impact_step_2"
 RULE_SET_VERSION = "0.1"
-_CLASSIFICATION_ORDER = {"confirmed": 0, "candidate": 1, "unresolved": 2, "stale": 3, "unavailable": 4, "unknown": 5}
+_CLASSIFICATION_ORDER = {
+    "confirmed": 0,
+    "candidate": 1,
+    "unresolved": 2,
+    "stale": 3,
+    "unavailable": 4,
+    "unknown": 5,
+}
 
 
 class CandidateError(ValueError):
@@ -29,8 +36,12 @@ def _step1_context(step1: Mapping[str, Any]) -> tuple[str, str, list[str], str]:
     data = step1.get("input")
     if not isinstance(data, Mapping):
         raise CandidateError("Step 1 input must be an object")
-    repository = _text(data.get("repo_key") or data.get("repository"), "Step 1 repository")
-    revision = _text(data.get("target_revision") or data.get("head_sha"), "Step 1 target revision").lower()
+    repository = _text(
+        data.get("repo_key") or data.get("repository"), "Step 1 repository"
+    )
+    revision = _text(
+        data.get("target_revision") or data.get("head_sha"), "Step 1 target revision"
+    ).lower()
     changed = step1.get("changed_files")
     if not isinstance(changed, list) or not changed:
         raise CandidateError("Step 1 changed_files must be non-empty")
@@ -38,7 +49,9 @@ def _step1_context(step1: Mapping[str, Any]) -> tuple[str, str, list[str], str]:
     for item in changed:
         if not isinstance(item, Mapping):
             raise CandidateError("Step 1 changed_files entries must be objects")
-        paths.append(_text(item.get("path") or item.get("filename"), "changed file path"))
+        paths.append(
+            _text(item.get("path") or item.get("filename"), "changed file path")
+        )
     return repository, revision, sorted(set(paths)), artifact_sha256(step1)
 
 
@@ -56,21 +69,29 @@ def resolve_candidates(
     contracts: Iterable[Mapping[str, Any]] = (),
     ci_evidence: Iterable[Mapping[str, Any]] = (),
     inventory_evidence: Iterable[Mapping[str, Any]] = (),
+    semantic_indexes: Iterable[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     contracts = list(contracts)
     ci_evidence = list(ci_evidence)
     inventory_evidence = list(inventory_evidence)
-    source_repository, target_revision, changed_paths, step1_hash = _step1_context(step1)
+    semantic_indexes = list(semantic_indexes)
+    source_repository, target_revision, changed_paths, step1_hash = _step1_context(
+        step1
+    )
     candidates: dict[tuple[str, str, str, str], dict[str, Any]] = {}
     gaps: list[str] = []
     warnings: list[str] = []
 
     for contract in contracts:
         if contract.get("repository") != source_repository:
-            gaps.append(f"contract:source_repository_mismatch:{contract.get('repository')}")
+            gaps.append(
+                f"contract:source_repository_mismatch:{contract.get('repository')}"
+            )
             continue
         if contract.get("revision") != target_revision:
-            gaps.append(f"contract:stale:{contract.get('evidence', {}).get('path', 'unknown')}")
+            gaps.append(
+                f"contract:stale:{contract.get('evidence', {}).get('path', 'unknown')}"
+            )
             continue
         for relation in contract.get("relations", []):
             if relation.get("status") != "active":
@@ -86,20 +107,24 @@ def resolve_candidates(
                 "reason": "exact_active_contract",
                 "owner": relation.get("owner"),
                 "changed_paths": matched,
-                "evidence": [{
-                    "kind": "contract",
-                    "path": contract["evidence"]["path"],
-                    "sha256": contract["evidence"]["sha256"],
-                    "repository": contract["repository"],
-                    "revision": contract["revision"],
-                }],
+                "evidence": [
+                    {
+                        "kind": "contract",
+                        "path": contract["evidence"]["path"],
+                        "sha256": contract["evidence"]["sha256"],
+                        "repository": contract["repository"],
+                        "revision": contract["revision"],
+                    }
+                ],
             }
             candidates[_candidate_key(candidate)] = candidate
 
     known_interfaces = {candidate["interface_id"] for candidate in candidates.values()}
     for evidence in ci_evidence:
         if evidence.get("source_repository") != source_repository:
-            gaps.append(f"ci:source_repository_mismatch:{evidence.get('evidence_id', 'unknown')}")
+            gaps.append(
+                f"ci:source_repository_mismatch:{evidence.get('evidence_id', 'unknown')}"
+            )
             continue
         if evidence.get("source_revision") != target_revision:
             gaps.append(f"ci:stale:{evidence.get('evidence_id', 'unknown')}")
@@ -109,7 +134,11 @@ def resolve_candidates(
             gaps.append(f"ci:{status}:{evidence.get('evidence_id', 'unknown')}")
             continue
         interface_id = evidence["interface_id"]
-        reason = "ci_supports_confirmed_contract" if interface_id in known_interfaces else "ci_observed_exact_source_revision"
+        reason = (
+            "ci_supports_confirmed_contract"
+            if interface_id in known_interfaces
+            else "ci_observed_exact_source_revision"
+        )
         candidate = {
             "target_repository": evidence["repository"],
             "interface_id": interface_id,
@@ -118,15 +147,17 @@ def resolve_candidates(
             "reason": reason,
             "changed_paths": [],
             "tests": evidence.get("tests", []),
-            "evidence": [{
-                "kind": "ci",
-                "evidence_id": evidence["evidence_id"],
-                "path": evidence["evidence"]["path"],
-                "sha256": evidence["evidence"]["sha256"],
-                "repository": evidence["repository"],
-                "commit_sha": evidence["commit_sha"],
-                "source_revision": evidence["source_revision"],
-            }],
+            "evidence": [
+                {
+                    "kind": "ci",
+                    "evidence_id": evidence["evidence_id"],
+                    "path": evidence["evidence"]["path"],
+                    "sha256": evidence["evidence"]["sha256"],
+                    "repository": evidence["repository"],
+                    "commit_sha": evidence["commit_sha"],
+                    "source_revision": evidence["source_revision"],
+                }
+            ],
         }
         key = _candidate_key(candidate)
         if key not in candidates:
@@ -134,16 +165,20 @@ def resolve_candidates(
         else:
             candidates[key]["evidence"].extend(candidate["evidence"])
             candidates[key]["tests"] = sorted(
-                {json.dumps(test, sort_keys=True): test for test in candidates[key].get("tests", []) + candidate.get("tests", [])}.values(),
+                {
+                    json.dumps(test, sort_keys=True): test
+                    for test in candidates[key].get("tests", [])
+                    + candidate.get("tests", [])
+                }.values(),
                 key=lambda value: json.dumps(value, sort_keys=True),
             )
 
     interfaces_by_repository: dict[str, list[str]] = {}
     for candidate in candidates.values():
         if candidate["relationship_type"] == "explicit_contract":
-            interfaces_by_repository.setdefault(candidate["target_repository"], []).append(
-                candidate["interface_id"]
-            )
+            interfaces_by_repository.setdefault(
+                candidate["target_repository"], []
+            ).append(candidate["interface_id"])
     for repository, interfaces in interfaces_by_repository.items():
         interfaces_by_repository[repository] = sorted(set(interfaces))
 
@@ -169,7 +204,9 @@ def resolve_candidates(
         workflow_rows = [
             row for row in inventory.get("workflows", []) if isinstance(row, Mapping)
         ]
-        has_test_execution = any(row.get("has_test_execution") is True for row in workflow_rows)
+        has_test_execution = any(
+            row.get("has_test_execution") is True for row in workflow_rows
+        )
         has_artifact = inventory.get("artifact_status") == "available"
         interface_ids = interfaces_by_repository.get(repository, []) or [
             f"repository:{repository}"
@@ -190,15 +227,17 @@ def resolve_candidates(
                 "workflow_paths": inventory.get("workflow_paths", []),
                 "inventory_paths": inventory.get("inventory_paths", []),
                 "workflows": workflow_rows,
-                "evidence": [{
-                    "kind": "repository_inventory",
-                    "path": inventory.get("evidence_path", "<in-memory>"),
-                    "response_sha256": inventory["provenance"]["response_sha256"],
-                    "repository": repository,
-                    "inspected_revision": inventory["inspected_revision"],
-                    "source_revision": inventory["source_revision"],
-                    "artifact_status": inventory["artifact_status"],
-                }],
+                "evidence": [
+                    {
+                        "kind": "repository_inventory",
+                        "path": inventory.get("evidence_path", "<in-memory>"),
+                        "response_sha256": inventory["provenance"]["response_sha256"],
+                        "repository": repository,
+                        "inspected_revision": inventory["inspected_revision"],
+                        "source_revision": inventory["source_revision"],
+                        "artifact_status": inventory["artifact_status"],
+                    }
+                ],
             }
             candidates[_candidate_key(candidate)] = candidate
         if inventory.get("artifact_status") != "available":
@@ -206,12 +245,105 @@ def resolve_candidates(
         if not has_test_execution:
             gaps.append(f"workflow_has_no_test_execution:{repository}")
 
-    rows = sorted(candidates.values(), key=lambda item: (
-        _CLASSIFICATION_ORDER[item["classification"]],
-        item["target_repository"],
-        item["interface_id"],
-        item["relationship_type"],
-    ))
+    # Static semantic evidence can identify the changed contract surface, but
+    # it cannot identify a consumer repository by itself.  An active contract
+    # supplies that cross-repository target; the semantic index only upgrades
+    # the evidence path to an explicit candidate and never to confirmed CI.
+    semantic_interface_ids: set[str] = set()
+    semantic_provenance: list[str] = []
+    for index in semantic_indexes:
+        repository = index.get("repository")
+        revision = index.get("revision")
+        if repository != source_repository:
+            gaps.append(f"semantic_index:source_repository_mismatch:{repository}")
+            continue
+        if revision != target_revision:
+            gaps.append(f"semantic_index:stale:{index.get('evidence_path', 'unknown')}")
+            continue
+        raw_provenance = index.get("provenance", {})
+        provenance = raw_provenance if isinstance(raw_provenance, Mapping) else {}
+        if provenance.get("index_sha256"):
+            semantic_provenance.append(str(provenance["index_sha256"]))
+        nodes = {
+            node.get("key"): node
+            for node in index.get("nodes", [])
+            if isinstance(node, Mapping) and isinstance(node.get("key"), str)
+        }
+        changed_edges = []
+        for edge in index.get("edges", []):
+            if not isinstance(edge, Mapping):
+                continue
+            if any(
+                isinstance(evidence, Mapping)
+                and evidence.get("source_path") in changed_paths
+                for evidence in edge.get("evidence", [])
+            ):
+                changed_edges.append(edge)
+                for endpoint in (edge.get("source"), edge.get("target")):
+                    node = nodes.get(endpoint)
+                    if not isinstance(node, Mapping):
+                        continue
+                    if node.get("kind") in {"api_object", "entity"}:
+                        semantic_interface_ids.add(f"{node['kind']}:{node['identity']}")
+        if not changed_edges:
+            continue
+        for contract in contracts:
+            if contract.get("repository") != source_repository:
+                continue
+            if contract.get("revision") != target_revision:
+                continue
+            for relation in contract.get("relations", []):
+                if relation.get("status") != "active":
+                    continue
+                relation_id = relation.get("interface_id")
+                if relation_id not in semantic_interface_ids and not (
+                    set(relation.get("source_paths", [])) & set(changed_paths)
+                ):
+                    continue
+                target = relation["consumer_repository"]
+                existing_confirmed = any(
+                    candidate.get("target_repository") == target
+                    and candidate.get("interface_id") == relation_id
+                    and candidate.get("classification") == "confirmed"
+                    for candidate in candidates.values()
+                )
+                if existing_confirmed:
+                    continue
+                candidate = {
+                    "target_repository": target,
+                    "interface_id": relation_id,
+                    "relationship_type": "semantic_static",
+                    "classification": "candidate",
+                    "reason": "semantic_index_supports_contract",
+                    "changed_paths": changed_paths,
+                    "evidence": [
+                        {
+                            "kind": "semantic_index",
+                            "path": index.get("evidence_path", "<in-memory>"),
+                            "index_sha256": provenance.get("index_sha256"),
+                            "repository": repository,
+                            "revision": revision,
+                            "interface_ids": sorted(semantic_interface_ids),
+                        }
+                    ],
+                }
+                candidates[_candidate_key(candidate)] = candidate
+        for interface_id in sorted(semantic_interface_ids):
+            if not any(
+                candidate.get("interface_id") == interface_id
+                for candidate in candidates.values()
+            ):
+                gaps.append(f"semantic_index_no_consumer_contract:{interface_id}")
+
+    rows = sorted(
+        candidates.values(),
+        key=lambda item: (
+            _CLASSIFICATION_ORDER[item["classification"]],
+            item["target_repository"],
+            item["interface_id"],
+            item["relationship_type"],
+        ),
+    )
     if not rows:
         warnings.append("no confirmed or candidate impact evidence was resolved")
     target_repositories = {row["target_repository"] for row in rows}
@@ -228,6 +360,8 @@ def resolve_candidates(
         evidence_sources.append("ci_observed")
     if inventory_evidence:
         evidence_sources.append("repository_inventory")
+    if semantic_indexes:
+        evidence_sources.append("semantic_index")
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
         "analysis_kind": ANALYSIS_KIND,
@@ -245,6 +379,7 @@ def resolve_candidates(
             "step1_report_sha256": step1_hash,
             "rule_set_version": RULE_SET_VERSION,
             "evidence_sources": evidence_sources,
+            "semantic_index_sha256": sorted(set(semantic_provenance)),
             "read_only": True,
             "catalog_mutation": "none",
         },

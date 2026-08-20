@@ -22,11 +22,14 @@ from greenfield.step2_contract import (
     load_ci_evidence,
     load_contract,
     load_repository_inventory,
+    load_semantic_index,
     normalize_repository_inventory,
 )
 
 
-def _unavailable_inventory(repository: str, source_repository: str, source_revision: str, reason: str) -> dict[str, object]:
+def _unavailable_inventory(
+    repository: str, source_repository: str, source_revision: str, reason: str
+) -> dict[str, object]:
     return normalize_repository_inventory(
         {
             "schema_version": "0.1",
@@ -89,6 +92,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--contract", action="append", default=[])
     parser.add_argument("--ci-evidence", action="append", default=[])
     parser.add_argument("--inventory-evidence", action="append", default=[])
+    parser.add_argument("--semantic-index", action="append", default=[])
     parser.add_argument("--repository", action="append", default=[])
     parser.add_argument("--manifest", default="config/workspace_repos.yaml")
     parser.add_argument("--output")
@@ -97,15 +101,26 @@ def main(argv: list[str] | None = None) -> int:
         step1 = json.loads(Path(args.step1_report).read_text(encoding="utf-8"))
         contracts = [load_contract(path) for path in args.contract]
         ci_evidence = [load_ci_evidence(path) for path in args.ci_evidence]
-        inventory = [load_repository_inventory(path) for path in args.inventory_evidence]
+        inventory = [
+            load_repository_inventory(path) for path in args.inventory_evidence
+        ]
+        semantic_indexes = [load_semantic_index(path) for path in args.semantic_index]
         input_data = step1.get("input", {})
         source_repository = input_data.get("repo_key") or input_data.get("repository")
-        source_revision = input_data.get("target_revision") or input_data.get("head_sha")
-        if not isinstance(source_repository, str) or not isinstance(source_revision, str):
-            raise CandidateError("Step 1 source repository and target revision are required")
+        source_revision = input_data.get("target_revision") or input_data.get(
+            "head_sha"
+        )
+        if not isinstance(source_repository, str) or not isinstance(
+            source_revision, str
+        ):
+            raise CandidateError(
+                "Step 1 source repository and target revision are required"
+            )
         requested_repositories = list(args.repository)
         if not requested_repositories:
-            requested_repositories = _manifest_candidates(args.manifest, source_repository)
+            requested_repositories = _manifest_candidates(
+                args.manifest, source_repository
+            )
         for repository in sorted(set(requested_repositories)):
             try:
                 inventory.append(
@@ -119,9 +134,13 @@ def main(argv: list[str] | None = None) -> int:
                 )
             except RepositoryEvidenceError as exc:
                 inventory.append(
-                    _unavailable_inventory(repository, source_repository, source_revision, str(exc))
+                    _unavailable_inventory(
+                        repository, source_repository, source_revision, str(exc)
+                    )
                 )
-        report = resolve_candidates(step1, contracts, ci_evidence, inventory)
+        report = resolve_candidates(
+            step1, contracts, ci_evidence, inventory, semantic_indexes
+        )
     except (OSError, json.JSONDecodeError, CandidateError, EvidenceError) as exc:
         print(f"greenfield Step 2 failed: {exc}", file=sys.stderr)
         return 2

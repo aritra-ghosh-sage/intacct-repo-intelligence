@@ -302,6 +302,46 @@ repository to use the same language, build system, or source indexer. It also
 creates a staged path to add runtime coverage, semantic indexing, or integration
 builds only where the evidence gap justifies the cost.
 
+## `ia-main` Business Contract Spine
+
+The first semantic-index slice is intentionally bounded. It builds a
+revision-pinned, read-only JSON sidecar from committed Git blobs; it does not
+write to or replace `catalog/catalog.db`.
+
+The canonical typed chain is:
+
+```text
+PHP symbol -> .ent entity -> API object/schema/workflow -> UI/import surface
+```
+
+The `.ent` parser is domain-specific and extracts literal entity declarations,
+metadata, schema field mappings, nested literal field/table facts, entity
+relationships, includes, and parser diagnostics. Generic PHP symbol extraction
+remains separate from `.ent` semantics; dynamic or non-literal values remain
+unresolved.
+
+The strongest cross-layer bridge is the exact source mapping:
+
+```text
+objects.<module>.<object>.s<version>.schema.yaml
+  -> x-mappedTo literal
+  -> unique committed .ent stem
+```
+
+ActionUI `<entity>` references, NextGen object keys, explicit PHP manager/entity
+arguments, CSV importer metadata, and bounded flat-file object configuration
+are modeled as typed evidence. Generic XML, dynamic PHP, remote/generated
+configuration, and runtime execution remain explicit gaps.
+
+Resolution states include `explicit_source`, `resolved_exact`,
+`framework_convention`, `candidate_static`, `ambiguous`, `dynamic`,
+`unresolved`, and `unavailable`. Names, basenames, directory proximity, and AI
+similarity never create authoritative identity.
+
+Static semantic evidence can support a Step 2 candidate when an active
+cross-repository contract identifies the consumer. It cannot prove executed
+tests, confirmed CI coverage, or runtime business impact.
+
 ## PR Impact Analysis Flow
 
 ### Step 1: Capture the Source PR
