@@ -103,8 +103,10 @@ def resolve_candidates(
                 "target_repository": relation["consumer_repository"],
                 "interface_id": relation["interface_id"],
                 "relationship_type": "explicit_contract",
+                "declared_relationship_type": relation.get("relationship_type"),
                 "classification": "confirmed",
                 "reason": "exact_active_contract",
+                "owner_repository": relation.get("owner_repository"),
                 "owner": relation.get("owner"),
                 "changed_paths": matched,
                 "evidence": [

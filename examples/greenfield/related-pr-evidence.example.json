@@ -1,0 +1,20 @@
+{
+  "schema_version": "0.1",
+  "evidence_type": "related_pull_requests",
+  "source_repository": "ia-app",
+  "source_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "source_pr_number": 49156,
+  "pull_requests": [
+    {
+      "repository": "intacct/ia-restapi-automation-tests",
+      "number": 49201,
+      "state": "open",
+      "head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "base_sha": "cccccccccccccccccccccccccccccccccccccccc",
+      "relation_type": "declared_interface_follow_up",
+      "changed_paths": ["tests/company_config/gl_preference_test.py"],
+      "interface_ids": ["company.config.general-ledger-preference"],
+      "evidence": {"id": "contract-review:49156:49201"}
+    }
+  ]
+}
