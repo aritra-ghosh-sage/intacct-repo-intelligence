@@ -1,0 +1,37 @@
+"""Recommend deterministic greenfield Step 5 actions."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from greenfield.step5_actions import Step5Error, recommend_actions
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--step3-report", required=True)
+    parser.add_argument("--step4-report", required=True)
+    parser.add_argument("--output")
+    args = parser.parse_args(argv)
+    try:
+        step3 = json.loads(Path(args.step3_report).read_text(encoding="utf-8"))
+        step4 = json.loads(Path(args.step4_report).read_text(encoding="utf-8"))
+        report = recommend_actions(step3, step4)
+    except (OSError, json.JSONDecodeError, Step5Error, ValueError) as exc:
+        print(f"greenfield Step 5 failed: {exc}", file=sys.stderr)
+        return 2
+    rendered = json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+    if args.output:
+        Path(args.output).write_text(rendered, encoding="utf-8")
+    else:
+        print(rendered, end="")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
