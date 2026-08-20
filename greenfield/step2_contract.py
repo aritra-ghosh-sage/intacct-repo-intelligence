@@ -87,6 +87,50 @@ def load_contract(path: str | Path) -> dict[str, Any]:
         if status not in {"active", "inactive"}:
             raise EvidenceError("contract relation status must be active or inactive")
         source_paths = _paths(item.get("source_paths"), "source_paths")
+        test_obligations = item.get("test_obligations", [])
+        if not isinstance(test_obligations, list):
+            raise EvidenceError("test_obligations must be a list")
+        normalized_obligations: list[dict[str, Any]] = []
+        for obligation_index, obligation in enumerate(test_obligations):
+            if not isinstance(obligation, dict):
+                raise EvidenceError(
+                    f"test_obligations[{obligation_index}] must be an object"
+                )
+            obligation_id = _text(
+                obligation.get("id"),
+                f"test_obligations[{obligation_index}].id",
+            )
+            obligation_path = _text(
+                obligation.get("path"),
+                f"test_obligations[{obligation_index}].path",
+            )
+            required_change = obligation.get("required_change")
+            if required_change is not None:
+                required_change = _text(
+                    required_change,
+                    f"test_obligations[{obligation_index}].required_change",
+                )
+                if required_change not in {
+                    "fixture",
+                    "assertion",
+                    "schema",
+                    "setup",
+                    "integration",
+                }:
+                    raise EvidenceError(
+                        "test_obligations.required_change is invalid"
+                    )
+            normalized_obligations.append(
+                {
+                    "id": obligation_id,
+                    "path": obligation_path,
+                    "required_change": required_change,
+                    "behavior_id": obligation.get("behavior_id"),
+                }
+            )
+        normalized_obligations.sort(
+            key=lambda value: (value["id"], value["path"])
+        )
         key = (interface_id, consumer, relationship_type)
         if key in keys:
             raise EvidenceError(f"duplicate contract relation: {key}")
@@ -100,6 +144,7 @@ def load_contract(path: str | Path) -> dict[str, Any]:
                 "source_paths": source_paths,
                 "status": status,
                 "owner": item.get("owner"),
+                "test_obligations": normalized_obligations,
             }
         )
     normalized.sort(

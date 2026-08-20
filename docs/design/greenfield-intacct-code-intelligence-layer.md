@@ -346,6 +346,11 @@ tests, confirmed CI coverage, or runtime business impact.
 
 ### Step 1: Capture the Source PR
 
+Greenfield Step 1 is a repository-neutral evidence-capture boundary. It is not
+the existing repo-v1 direct-tracing Step 1 and does not depend on SQLite or a
+semantic sidecar. Its contract is documented in
+[PR Impact Step 1](pr-impact-step-1-greenfield.md).
+
 Persist:
 
 - Source repository
@@ -356,7 +361,9 @@ Persist:
 - PR metadata and linked issues
 - Relevant workflow and check results
 
-All later analysis must reference this exact source revision.
+All later analysis must reference this exact source revision. Workflow and
+check evidence must bind to the source PR head SHA, while linked issues remain
+context only.
 
 ### Step 2: Resolve Impact Candidates
 

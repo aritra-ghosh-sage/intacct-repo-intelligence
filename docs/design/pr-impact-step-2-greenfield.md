@@ -5,6 +5,12 @@ report, repository-local contracts, and normalized CI evidence. It is additive
 to the repo-v1 Step 2 availability audit; it does not read or modify repo-v1
 SQLite, legacy catalog tables, graph data, or MCP state.
 
+The Step 1 input is the greenfield `0.1` source-evidence artifact documented in
+[Greenfield PR Impact Step 1](pr-impact-step-1-greenfield.md). Step 2 reads
+`input.repository` (or `input.repo_key`), `input.target_revision` (or
+`input.head_sha`), and the exact paths in `changed_files`. It does not require
+repo-v1 direct traces, catalog revisions, or SQLite preflight fields.
+
 ## Resolution order
 
 1. An active contract at the exact Step 1 source revision produces
