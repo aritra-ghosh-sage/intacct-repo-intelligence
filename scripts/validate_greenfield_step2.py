@@ -106,9 +106,22 @@ def validate(report: Any) -> list[str]:
                     "inspected_revision",
                     "source_revision",
                     "artifact_status",
+                    "ci_linkage_status",
                 ):
                     if key not in evidence:
                         errors.append(f"repository inventory evidence missing {key}")
+                if evidence.get("ci_linkage_status") not in {
+                    "available",
+                    "unavailable",
+                }:
+                    errors.append("repository inventory ci_linkage_status is invalid")
+                if (
+                    evidence.get("artifact_status") == "available"
+                    and evidence.get("ci_linkage_status") != "available"
+                ):
+                    errors.append(
+                        "repository inventory artifact requires available ci linkage"
+                    )
             if evidence.get("kind") == "semantic_index":
                 digest = evidence.get("index_sha256")
                 if not isinstance(digest, str) or not SHA256.fullmatch(digest):

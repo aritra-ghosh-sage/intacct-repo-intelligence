@@ -207,14 +207,28 @@ def resolve_candidates(
         has_test_execution = any(
             row.get("has_test_execution") is True for row in workflow_rows
         )
+        workflow_classifications = {
+            str(row.get("classification")) for row in workflow_rows
+        }
+        metadata_only = bool(workflow_rows) and workflow_classifications == {
+            "metadata_only"
+        }
         has_artifact = inventory.get("artifact_status") == "available"
+        ci_linkage = inventory.get("ci_linkage", {})
+        ci_linkage_available = (
+            isinstance(ci_linkage, Mapping) and ci_linkage.get("status") == "available"
+        )
         interface_ids = interfaces_by_repository.get(repository, []) or [
             f"repository:{repository}"
         ]
         for interface_id in interface_ids:
             reason = "repository_inventory_only"
             if not has_test_execution:
-                reason = "workflow_has_no_test_execution"
+                reason = (
+                    "workflow_metadata_only"
+                    if metadata_only
+                    else "workflow_has_no_test_execution"
+                )
             elif has_artifact:
                 reason = "ci_artifact_present_not_normalized"
             candidate = {
@@ -236,20 +250,26 @@ def resolve_candidates(
                         "inspected_revision": inventory["inspected_revision"],
                         "source_revision": inventory["source_revision"],
                         "artifact_status": inventory["artifact_status"],
+                        "ci_linkage_status": ci_linkage.get("status", "unavailable")
+                        if isinstance(ci_linkage, Mapping)
+                        else "unavailable",
                     }
                 ],
             }
             candidates[_candidate_key(candidate)] = candidate
         if inventory.get("artifact_status") != "available":
             gaps.append(f"ci_artifact_unavailable:{repository}")
+        if not ci_linkage_available:
+            gaps.append(f"ci_linkage_unavailable:{repository}")
         if not has_test_execution:
             gaps.append(f"workflow_has_no_test_execution:{repository}")
+        if metadata_only:
+            gaps.append(f"workflow_metadata_only:{repository}")
 
     # Static semantic evidence can identify the changed contract surface, but
     # it cannot identify a consumer repository by itself.  An active contract
     # supplies that cross-repository target; the semantic index only upgrades
     # the evidence path to an explicit candidate and never to confirmed CI.
-    semantic_interface_ids: set[str] = set()
     semantic_provenance: list[str] = []
     for index in semantic_indexes:
         repository = index.get("repository")
@@ -270,6 +290,7 @@ def resolve_candidates(
             if isinstance(node, Mapping) and isinstance(node.get("key"), str)
         }
         changed_edges = []
+        index_interface_ids: set[str] = set()
         for edge in index.get("edges", []):
             if not isinstance(edge, Mapping):
                 continue
@@ -284,9 +305,38 @@ def resolve_candidates(
                     if not isinstance(node, Mapping):
                         continue
                     if node.get("kind") in {"api_object", "entity"}:
-                        semantic_interface_ids.add(f"{node['kind']}:{node['identity']}")
+                        interface_id = f"{node['kind']}:{node['identity']}"
+                        index_interface_ids.add(interface_id)
         if not changed_edges:
+            gaps.append(
+                f"semantic_index_no_changed_edge:{index.get('evidence_path', 'unknown')}"
+            )
             continue
+        if not index_interface_ids:
+            gaps.append(
+                "semantic_index_no_interface_for_changed_edge:"
+                f"{index.get('evidence_path', 'unknown')}"
+            )
+            continue
+        active_relations = [
+            relation
+            for contract in contracts
+            if contract.get("repository") == source_repository
+            and contract.get("revision") == target_revision
+            for relation in contract.get("relations", [])
+            if relation.get("status") == "active"
+        ]
+        active_interface_ids = {
+            relation.get("interface_id") for relation in active_relations
+        }
+        for interface_id in sorted(index_interface_ids):
+            if interface_id not in active_interface_ids:
+                gap_kind = (
+                    "semantic_index_unmatched_interface"
+                    if active_relations
+                    else "semantic_index_missing_active_contract"
+                )
+                gaps.append(f"{gap_kind}:{interface_id}")
         for contract in contracts:
             if contract.get("repository") != source_repository:
                 continue
@@ -296,7 +346,7 @@ def resolve_candidates(
                 if relation.get("status") != "active":
                     continue
                 relation_id = relation.get("interface_id")
-                if relation_id not in semantic_interface_ids and not (
+                if relation_id not in index_interface_ids and not (
                     set(relation.get("source_paths", [])) & set(changed_paths)
                 ):
                     continue
@@ -323,17 +373,11 @@ def resolve_candidates(
                             "index_sha256": provenance.get("index_sha256"),
                             "repository": repository,
                             "revision": revision,
-                            "interface_ids": sorted(semantic_interface_ids),
+                            "interface_ids": sorted(index_interface_ids),
                         }
                     ],
                 }
                 candidates[_candidate_key(candidate)] = candidate
-        for interface_id in sorted(semantic_interface_ids):
-            if not any(
-                candidate.get("interface_id") == interface_id
-                for candidate in candidates.values()
-            ):
-                gaps.append(f"semantic_index_no_consumer_contract:{interface_id}")
 
     rows = sorted(
         candidates.values(),

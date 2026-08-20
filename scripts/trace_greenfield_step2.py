@@ -45,6 +45,12 @@ def _unavailable_inventory(
             "check_runs": [],
             "artifacts": [],
             "artifact_status": "empty",
+            "ci_linkage": {
+                "status": "unavailable",
+                "reason": reason,
+                "source_repository": source_repository,
+                "source_revision": source_revision,
+            },
             "status": "unavailable",
             "gaps": [reason],
             "provenance": {

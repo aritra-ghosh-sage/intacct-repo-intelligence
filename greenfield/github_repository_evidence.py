@@ -16,8 +16,12 @@ from collections.abc import Callable
 from typing import Any
 
 SCHEMA_VERSION = "0.1"
-_TEST_COMMAND = re.compile(
+_TEST_EXECUTION = re.compile(
     r"(?:\bpytest\b|mvn\s+(?:test|verify)(?![-\w])|gradle\s+(?:test|check)(?![-\w])|npm\s+test\b|yarn\s+test\b|go\s+test\b|dotnet\s+test\b|\bctest\b)",
+    re.IGNORECASE,
+)
+_TEST_PREPARATION = re.compile(
+    r"(?:\b(?:mvn|mvnw)\s+test-compile\b|\bgradle\s+compileTest\w*\b|\bnpm\s+install\b)",
     re.IGNORECASE,
 )
 _INVENTORY_PATH = re.compile(
@@ -70,12 +74,17 @@ def _list(value: Any, label: str) -> list[Any]:
 
 
 def _workflow_classification(text: str) -> dict[str, Any]:
-    has_test_execution = bool(_TEST_COMMAND.search(text))
+    has_test_execution = bool(_TEST_EXECUTION.search(text))
+    has_test_preparation = bool(_TEST_PREPARATION.search(text))
     has_artifact_upload = "actions/upload-artifact@" in text
     if has_test_execution and has_artifact_upload:
         classification = "test_execution_with_artifact"
     elif has_test_execution:
         classification = "test_execution_without_artifact"
+    elif has_test_preparation and has_artifact_upload:
+        classification = "test_preparation_with_artifact"
+    elif has_test_preparation:
+        classification = "test_preparation_only"
     elif has_artifact_upload:
         classification = "artifact_without_test_execution"
     else:
@@ -83,8 +92,26 @@ def _workflow_classification(text: str) -> dict[str, Any]:
     return {
         "classification": classification,
         "has_test_execution": has_test_execution,
+        "has_test_preparation": has_test_preparation,
         "has_artifact_upload": has_artifact_upload,
     }
+
+
+def _has_source_binding(
+    value: Any, *, source_repository: str, source_revision: str
+) -> bool:
+    if not isinstance(value, dict):
+        return False
+    candidates = [value]
+    for key in ("metadata", "workflow_run", "run", "check_run"):
+        nested = value.get(key)
+        if isinstance(nested, dict):
+            candidates.append(nested)
+    return any(
+        candidate.get("source_repository") == source_repository
+        and candidate.get("source_revision") == source_revision
+        for candidate in candidates
+    )
 
 
 def _decode_content(value: MappingLike) -> bytes:
@@ -154,7 +181,9 @@ def collect_repository_evidence(
 
         workflows: list[dict[str, Any]] = []
         for path in workflow_paths:
-            content_endpoint = f"repos/{repository}/contents/{path}?ref={inspected_revision}"
+            content_endpoint = (
+                f"repos/{repository}/contents/{path}?ref={inspected_revision}"
+            )
             content = _object(call(content_endpoint), content_endpoint)
             endpoints.append(content_endpoint)
             text = _decode_content(content).decode("utf-8", errors="replace")
@@ -166,8 +195,10 @@ def collect_repository_evidence(
                 }
             )
 
-        runs_endpoint = f"repos/{repository}/actions/runs?head_sha={source_revision}&per_page=100"
-        check_endpoint = f"repos/{repository}/commits/{source_revision}/check-runs?per_page=100"
+        runs_endpoint = f"repos/{repository}/actions/runs?head_sha={inspected_revision}&per_page=100"
+        check_endpoint = (
+            f"repos/{repository}/commits/{inspected_revision}/check-runs?per_page=100"
+        )
         artifacts_endpoint = f"repos/{repository}/actions/artifacts?per_page=100"
 
         def optional_collection(endpoint: str, key: str) -> list[Any]:
@@ -182,16 +213,45 @@ def collect_repository_evidence(
         runs = optional_collection(runs_endpoint, "workflow_runs")
         checks = optional_collection(check_endpoint, "check_runs")
         artifacts = optional_collection(artifacts_endpoint, "artifacts")
-        run_ids = {run.get("id") for run in runs if isinstance(run, dict)}
+        run_ids = {
+            run.get("id")
+            for run in runs
+            if isinstance(run, dict)
+            and isinstance(run.get("id"), int)
+            and run.get("head_sha") == inspected_revision
+        }
+        source_bound_run_ids = {
+            run.get("id")
+            for run in runs
+            if isinstance(run, dict)
+            and run.get("id") in run_ids
+            and _has_source_binding(
+                run,
+                source_repository=source_repository,
+                source_revision=source_revision,
+            )
+        }
+        source_bound_check_ids = {
+            check.get("id")
+            for check in checks
+            if isinstance(check, dict)
+            and isinstance(check.get("id"), int)
+            and check.get("head_sha") == inspected_revision
+            and _has_source_binding(
+                check,
+                source_repository=source_repository,
+                source_revision=source_revision,
+            )
+        }
         workflow_jobs: list[dict[str, Any]] = []
         for run_id in sorted(run_ids):
             if not isinstance(run_id, int):
                 continue
-            jobs_endpoint = f"repos/{repository}/actions/runs/{run_id}/jobs?per_page=100"
-            jobs = optional_collection(jobs_endpoint, "jobs")
-            workflow_jobs.extend(
-                job for job in jobs if isinstance(job, dict)
+            jobs_endpoint = (
+                f"repos/{repository}/actions/runs/{run_id}/jobs?per_page=100"
             )
+            jobs = optional_collection(jobs_endpoint, "jobs")
+            workflow_jobs.extend(job for job in jobs if isinstance(job, dict))
         linked_artifacts = [
             artifact
             for artifact in artifacts
@@ -199,12 +259,29 @@ def collect_repository_evidence(
             and isinstance(artifact.get("workflow_run"), dict)
             and artifact["workflow_run"].get("id") in run_ids
         ]
-        if linked_artifacts:
+        source_bound_artifacts = [
+            artifact
+            for artifact in linked_artifacts
+            if artifact.get("workflow_run", {}).get("id") in source_bound_run_ids
+            or _has_source_binding(
+                artifact,
+                source_repository=source_repository,
+                source_revision=source_revision,
+            )
+        ]
+        source_linked = bool(
+            source_bound_run_ids or source_bound_check_ids or source_bound_artifacts
+        )
+        if source_bound_artifacts:
             artifact_status = "available"
         elif artifacts:
             artifact_status = "not_linked_to_source_revision"
         else:
             artifact_status = "empty"
+        if not source_linked:
+            collection_errors.append(
+                "ci_linkage_unavailable:target_repository_has_no_source_revision"
+            )
         return {
             "schema_version": SCHEMA_VERSION,
             "evidence_type": "repository_inventory",
@@ -218,41 +295,77 @@ def collect_repository_evidence(
             "workflows": sorted(workflows, key=lambda item: item["path"]),
             "workflow_runs": sorted(
                 [run for run in runs if isinstance(run, dict)],
-                key=lambda item: (str(item.get("id", "")), str(item.get("head_sha", ""))),
+                key=lambda item: (
+                    str(item.get("id", "")),
+                    str(item.get("head_sha", "")),
+                ),
             ),
             "workflow_jobs": sorted(
                 workflow_jobs,
-                key=lambda item: (str(item.get("run_id", "")), str(item.get("id", "")), str(item.get("name", ""))),
+                key=lambda item: (
+                    str(item.get("run_id", "")),
+                    str(item.get("id", "")),
+                    str(item.get("name", "")),
+                ),
             ),
             "check_runs": sorted(
                 [check for check in checks if isinstance(check, dict)],
                 key=lambda item: (str(item.get("name", "")), str(item.get("id", ""))),
             ),
             "artifacts": sorted(
-                [artifact for artifact in linked_artifacts if isinstance(artifact, dict)],
+                [
+                    artifact
+                    for artifact in linked_artifacts
+                    if isinstance(artifact, dict)
+                ],
                 key=lambda item: (str(item.get("name", "")), str(item.get("id", ""))),
             ),
             "artifact_status": artifact_status,
+            "ci_linkage": {
+                "status": "available" if source_linked else "unavailable",
+                "reason": None
+                if source_linked
+                else "target_repository_has_no_source_revision",
+                "source_repository": source_repository,
+                "source_revision": source_revision,
+                "bound_run_ids": sorted(
+                    run_id for run_id in source_bound_run_ids if isinstance(run_id, int)
+                ),
+                "bound_check_run_ids": sorted(
+                    check_id
+                    for check_id in source_bound_check_ids
+                    if isinstance(check_id, int)
+                ),
+                "bound_artifact_ids": sorted(
+                    artifact.get("id")
+                    for artifact in source_bound_artifacts
+                    if isinstance(artifact.get("id"), int)
+                ),
+            },
             "status": "available",
             "gaps": collection_errors,
             "provenance": {
                 "endpoints": endpoints,
                 "provider": "github_api",
-                "response_sha256": _sha256({
-                    "repository": repository,
-                    "inspected_revision": inspected_revision,
-                    "workflow_paths": workflow_paths,
-                    "inventory_paths": inventory_paths,
-                    "workflows": workflows,
-                    "workflow_runs": runs,
-                    "workflow_jobs": workflow_jobs,
-                    "check_runs": checks,
-                    "artifacts": linked_artifacts,
-                }),
+                "response_sha256": _sha256(
+                    {
+                        "repository": repository,
+                        "inspected_revision": inspected_revision,
+                        "workflow_paths": workflow_paths,
+                        "inventory_paths": inventory_paths,
+                        "workflows": workflows,
+                        "workflow_runs": runs,
+                        "workflow_jobs": workflow_jobs,
+                        "check_runs": checks,
+                        "artifacts": linked_artifacts,
+                    }
+                ),
                 "read_only": True,
             },
         }
     except RepositoryEvidenceError:
         raise
     except Exception as exc:
-        raise RepositoryEvidenceError(f"repository_evidence_failed: {repository}: {exc}") from exc
+        raise RepositoryEvidenceError(
+            f"repository_evidence_failed: {repository}: {exc}"
+        ) from exc

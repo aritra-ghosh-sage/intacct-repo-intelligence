@@ -13,10 +13,12 @@ from greenfield.github_repository_evidence import (
 from greenfield.semantic_index import build_semantic_index_from_files
 from greenfield.step2_candidates import resolve_candidates
 from greenfield.step2_contract import EvidenceError, load_ci_evidence, load_contract
+from scripts.trace_greenfield_step2 import _unavailable_inventory
 from scripts.validate_greenfield_step2 import validate
 
 TARGET = "a" * 40
 CONSUMER = "b" * 40
+DOWNSTREAM = "e" * 40
 
 
 def step1() -> dict:
@@ -240,39 +242,152 @@ def test_semantic_index_does_not_resurrect_a_stale_contract() -> None:
     assert any(gap.startswith("contract:stale") for gap in report["gaps"])
 
 
-def provider_for(workflow_path: str, workflow_text: str, *, runs=None, artifacts=None):
+def test_semantic_index_revision_mismatch_is_observable() -> None:
+    semantic = build_semantic_index_from_files(
+        {"app/source/gl/glaccount.ent": "$kSchemas['glaccount'] = array();"},
+        repository="ia-app",
+        revision="b" * 40,
+    )
+    semantic["evidence_path"] = "semantic.json"
+
+    report = resolve_candidates(step1(), semantic_indexes=[semantic])
+
+    assert "semantic_index:stale:semantic.json" in report["gaps"]
+
+
+def test_semantic_index_no_changed_edge_is_observable() -> None:
+    semantic = build_semantic_index_from_files(
+        {
+            "app/source/gl/glaccount.ent": "$kSchemas['glaccount'] = array();",
+            "app/source/openapispec/gl/models/objects.general-ledger.account.s1.schema.yaml": "x-mappedTo: glaccount\n",
+        },
+        repository="ia-app",
+        revision=TARGET,
+    )
+    semantic["evidence_path"] = "semantic.json"
+
+    report = resolve_candidates(
+        step1(),
+        semantic_indexes=[semantic],
+    )
+
+    assert "semantic_index_no_changed_edge:semantic.json" in report["gaps"]
+
+
+def test_semantic_index_unmatched_interface_is_observable() -> None:
+    semantic_path = (
+        "app/source/openapispec/gl/models/objects.general-ledger.account.s1.schema.yaml"
+    )
+    semantic = build_semantic_index_from_files(
+        {
+            "app/source/gl/glaccount.ent": "$kSchemas['glaccount'] = array();",
+            semantic_path: "x-mappedTo: glaccount\n",
+        },
+        repository="ia-app",
+        revision=TARGET,
+    )
+    semantic["evidence_path"] = "semantic.json"
+    contract = {
+        "repository": "ia-app",
+        "revision": TARGET,
+        "relations": [
+            {
+                "interface_id": "api_object:other-object",
+                "consumer_repository": "intacct/consumer",
+                "status": "active",
+                "source_paths": ["app/source/other.cls"],
+            }
+        ],
+    }
+    semantic_step1 = {
+        **step1(),
+        "changed_files": [{"path": semantic_path, "status": "modified"}],
+    }
+
+    report = resolve_candidates(
+        semantic_step1,
+        contracts=[contract],
+        semantic_indexes=[semantic],
+    )
+
+    assert (
+        "semantic_index_unmatched_interface:api_object:general-ledger/account"
+        in report["gaps"]
+    )
+
+
+def test_semantic_index_missing_active_contract_is_observable() -> None:
+    semantic_path = (
+        "app/source/openapispec/gl/models/objects.general-ledger.account.s1.schema.yaml"
+    )
+    semantic = build_semantic_index_from_files(
+        {
+            "app/source/gl/glaccount.ent": "$kSchemas['glaccount'] = array();",
+            semantic_path: "x-mappedTo: glaccount\n",
+        },
+        repository="ia-app",
+        revision=TARGET,
+    )
+    semantic["evidence_path"] = "semantic.json"
+    semantic_step1 = {
+        **step1(),
+        "changed_files": [{"path": semantic_path, "status": "modified"}],
+    }
+
+    report = resolve_candidates(
+        semantic_step1,
+        semantic_indexes=[semantic],
+    )
+
+    assert (
+        "semantic_index_missing_active_contract:api_object:general-ledger/account"
+        in report["gaps"]
+    )
+
+
+def provider_for(
+    workflow_path: str,
+    workflow_text: str,
+    *,
+    runs=None,
+    artifacts=None,
+    repository: str = "intacct/example",
+):
+    repo_prefix = f"repos/{repository}"
     responses = {
-        "repos/intacct/example": {
-            "full_name": "intacct/example",
+        repo_prefix: {
+            "full_name": repository,
             "default_branch": "main",
         },
-        "repos/intacct/example/git/ref/heads/main": {"object": {"sha": "e" * 40}},
-        "repos/intacct/example/git/trees/" + "e" * 40 + "?recursive=1": {
+        f"{repo_prefix}/git/ref/heads/main": {"object": {"sha": DOWNSTREAM}},
+        f"{repo_prefix}/git/trees/{DOWNSTREAM}?recursive=1": {
             "tree": [
                 {"path": workflow_path, "type": "blob"},
                 {"path": "features/example.feature", "type": "blob"},
                 {"path": "testscripts/example.xml", "type": "blob"},
             ]
         },
-        f"repos/intacct/example/contents/{workflow_path}?ref=" + "e" * 40: {
+        f"{repo_prefix}/contents/{workflow_path}?ref={DOWNSTREAM}": {
             "content": base64.b64encode(workflow_text.encode()).decode()
         },
-        "repos/intacct/example/actions/runs?head_sha=" + TARGET + "&per_page=100": {
+        f"{repo_prefix}/actions/runs?head_sha={DOWNSTREAM}&per_page=100": {
             "workflow_runs": runs or []
         },
-        "repos/intacct/example/commits/" + TARGET + "/check-runs?per_page=100": {
+        f"{repo_prefix}/commits/{DOWNSTREAM}/check-runs?per_page=100": {
             "check_runs": []
         },
-        "repos/intacct/example/actions/artifacts?per_page=100": {
-            "artifacts": artifacts or []
-        },
+        f"{repo_prefix}/actions/artifacts?per_page=100": {"artifacts": artifacts or []},
     }
     for run in runs or []:
-        responses[
-            f"repos/intacct/example/actions/runs/{run['id']}/jobs?per_page=100"
-        ] = {"jobs": []}
+        responses[f"{repo_prefix}/actions/runs/{run['id']}/jobs?per_page=100"] = {
+            "jobs": []
+        }
 
     def provider(endpoint: str):
+        if TARGET in endpoint:
+            raise AssertionError(
+                "source revision must not be used for downstream queries"
+            )
         if endpoint not in responses:
             raise AssertionError(f"unexpected endpoint: {endpoint}")
         return responses[endpoint]
@@ -281,40 +396,52 @@ def provider_for(workflow_path: str, workflow_text: str, *, runs=None, artifacts
 
 
 def test_rest_inventory_without_linked_artifact_is_a_candidate(tmp_path: Path) -> None:
+    repository = "intacct/ia-restapi-automation-tests"
     workflow = (
         Path(__file__).parent / "fixtures/greenfield/rest_workflow.yml"
     ).read_text()
     evidence = collect_repository_evidence(
-        "intacct/example",
+        repository,
         source_repository="ia-app",
         source_revision=TARGET,
-        provider=provider_for(".github/workflows/rest.yml", workflow),
+        provider=provider_for(
+            ".github/workflows/rest.yml", workflow, repository=repository
+        ),
     )
     report = resolve_candidates(step1(), inventory_evidence=[evidence])
 
     assert report["candidates"][0]["classification"] == "candidate"
     assert report["candidates"][0]["reason"] == "workflow_has_no_test_execution"
-    assert "ci_artifact_unavailable:intacct/example" in report["gaps"]
+    assert f"ci_artifact_unavailable:{repository}" in report["gaps"]
+    assert f"ci_linkage_unavailable:{repository}" in report["gaps"]
+    assert evidence["ci_linkage"]["status"] == "unavailable"
+    assert (
+        evidence["workflows"][0]["classification"] == "test_preparation_with_artifact"
+    )
     assert report["candidates"][0]["evidence"][0]["kind"] == "repository_inventory"
     assert validate(report) == []
 
 
 def test_gateway_pass_only_workflow_never_proves_test_execution() -> None:
+    repository = "intacct/ia-gwdata-gl"
     workflow = (
         Path(__file__).parent / "fixtures/greenfield/gateway_statuscheck.yml"
     ).read_text()
     evidence = collect_repository_evidence(
-        "intacct/example",
+        repository,
         source_repository="ia-app",
         source_revision=TARGET,
-        provider=provider_for(".github/workflows/StatusCheck.yml", workflow),
+        provider=provider_for(
+            ".github/workflows/StatusCheck.yml", workflow, repository=repository
+        ),
     )
     report = resolve_candidates(step1(), inventory_evidence=[evidence])
 
     candidate = report["candidates"][0]
     assert candidate["classification"] == "candidate"
-    assert candidate["reason"] == "workflow_has_no_test_execution"
-    assert "workflow_has_no_test_execution:intacct/example" in report["gaps"]
+    assert candidate["reason"] == "workflow_metadata_only"
+    assert f"workflow_has_no_test_execution:{repository}" in report["gaps"]
+    assert f"workflow_metadata_only:{repository}" in report["gaps"]
 
 
 def test_truncated_tree_is_retained_as_an_inventory_gap() -> None:
@@ -358,9 +485,15 @@ def test_validator_rejects_confirmed_inventory_evidence() -> None:
 
 def test_artifact_is_joined_only_to_the_matching_workflow_run() -> None:
     workflow = "name: test\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: mvn test\n"
-    runs = [{"id": 7, "head_sha": TARGET, "name": "test"}]
+    runs = [{"id": 7, "head_sha": DOWNSTREAM, "name": "test"}]
     artifacts = [
-        {"id": 8, "name": "step2-evidence", "workflow_run": {"id": 7}},
+        {
+            "id": 8,
+            "name": "step2-evidence",
+            "workflow_run": {"id": 7},
+            "source_repository": "ia-app",
+            "source_revision": TARGET,
+        },
         {"id": 9, "name": "other-run", "workflow_run": {"id": 99}},
     ]
     evidence = collect_repository_evidence(
@@ -374,6 +507,38 @@ def test_artifact_is_joined_only_to_the_matching_workflow_run() -> None:
 
     assert evidence["artifact_status"] == "available"
     assert [artifact["id"] for artifact in evidence["artifacts"]] == [8]
+    assert evidence["ci_linkage"]["status"] == "available"
+    assert any(
+        f"actions/runs?head_sha={DOWNSTREAM}" in endpoint
+        for endpoint in evidence["provenance"]["endpoints"]
+    )
+    assert not any(
+        TARGET in endpoint for endpoint in evidence["provenance"]["endpoints"]
+    )
+
+
+def test_unbound_artifact_does_not_prove_cross_repository_ci() -> None:
+    workflow = "name: test\njobs:\n  test:\n    steps:\n      - run: mvn test\n"
+    evidence = collect_repository_evidence(
+        "intacct/ia-restapi-automation-tests",
+        source_repository="ia-app",
+        source_revision=TARGET,
+        provider=provider_for(
+            ".github/workflows/test.yml",
+            workflow,
+            runs=[{"id": 7, "head_sha": DOWNSTREAM}],
+            artifacts=[{"id": 8, "workflow_run": {"id": 7}}],
+            repository="intacct/ia-restapi-automation-tests",
+        ),
+    )
+
+    report = resolve_candidates(step1(), inventory_evidence=[evidence])
+
+    assert evidence["artifact_status"] == "not_linked_to_source_revision"
+    assert evidence["ci_linkage"]["status"] == "unavailable"
+    assert (
+        "ci_linkage_unavailable:intacct/ia-restapi-automation-tests" in report["gaps"]
+    )
 
 
 def test_repository_access_failure_is_fail_closed() -> None:
@@ -387,6 +552,21 @@ def test_repository_access_failure_is_fail_closed() -> None:
             source_revision=TARGET,
             provider=provider,
         )
+
+
+def test_private_repository_failure_is_unavailable_in_step2() -> None:
+    evidence = _unavailable_inventory(
+        "intacct/ia-gwdata-gl",
+        "ia-app",
+        TARGET,
+        "github_api_failed: private repository access denied",
+    )
+
+    report = resolve_candidates(step1(), inventory_evidence=[evidence])
+
+    assert report["candidates"] == []
+    assert "repository_access_unavailable:intacct/ia-gwdata-gl" in report["gaps"]
+    assert validate(report) == []
 
 
 def test_inventory_collection_is_byte_deterministic() -> None:

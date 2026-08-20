@@ -188,6 +188,44 @@ def normalize_repository_inventory(
     )
     if artifact_status not in {"available", "empty", "not_linked_to_source_revision"}:
         raise EvidenceError("repository inventory artifact_status is invalid")
+    linkage = data.get("ci_linkage")
+    if linkage is None:
+        linkage = {
+            "status": "unavailable",
+            "reason": "target_repository_has_no_source_revision",
+            "source_repository": data["source_repository"],
+            "source_revision": data["source_revision"],
+        }
+    linkage = _object(linkage, "repository inventory.ci_linkage")
+    linkage_status = _text(
+        linkage.get("status"), "repository inventory.ci_linkage.status"
+    )
+    if linkage_status not in {"available", "unavailable"}:
+        raise EvidenceError("repository inventory ci_linkage status is invalid")
+    linkage_repository = _text(
+        linkage.get("source_repository"),
+        "repository inventory.ci_linkage.source_repository",
+    )
+    linkage_revision = _sha(
+        linkage.get("source_revision"),
+        "repository inventory.ci_linkage.source_revision",
+    )
+    if linkage_repository != data["source_repository"]:
+        raise EvidenceError(
+            "repository inventory ci_linkage source repository mismatches input"
+        )
+    if linkage_revision != data["source_revision"]:
+        raise EvidenceError(
+            "repository inventory ci_linkage source revision mismatches input"
+        )
+    if linkage_status == "unavailable" and not _text(
+        linkage.get("reason"), "repository inventory.ci_linkage.reason"
+    ):
+        raise EvidenceError("repository inventory ci_linkage reason is required")
+    if artifact_status == "available" and linkage_status != "available":
+        raise EvidenceError(
+            "repository inventory artifact cannot be available without ci linkage"
+        )
     provenance = _object(data.get("provenance"), "repository inventory.provenance")
     if provenance.get("read_only") is not True:
         raise EvidenceError("repository inventory provenance.read_only must be true")
@@ -199,6 +237,7 @@ def normalize_repository_inventory(
             "repository inventory response_sha256 must be lowercase SHA-256"
         )
     normalized = dict(data)
+    normalized["ci_linkage"] = dict(linkage)
     normalized["evidence_path"] = path
     return normalized
 

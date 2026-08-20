@@ -52,14 +52,20 @@ for another source revision is classified as stale.
 
 The two initial downstream repositories do not currently publish the expected
 normalized Step 2 artifact. The fallback adapter reads their default-branch
-tree, workflow files, exact-source-revision workflow runs/checks, and retained
-artifacts through read-only GitHub APIs. It records workflow classification,
-inventory paths, artifact linkage, and the inspected revision.
+tree, workflow files, workflow runs/checks at the downstream repository's own
+inspected revision, and retained artifacts through read-only GitHub APIs. It
+records workflow classification, inventory paths, artifact linkage, and the
+inspected revision. A downstream run or artifact is cross-repository CI
+evidence only when it explicitly binds both the source repository and source
+revision; otherwise the report records `ci_linkage_unavailable` and keeps the
+result at candidate/inventory strength.
 
 Inventory evidence can produce reasons such as:
 
 - `repository_inventory_only`
 - `workflow_has_no_test_execution`
+- `workflow_metadata_only`
+- `ci_linkage_unavailable`
 - `ci_artifact_unavailable`
 - `ci_artifact_present_not_normalized`
 - `repository_access_unavailable`
