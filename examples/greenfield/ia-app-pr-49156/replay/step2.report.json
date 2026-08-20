@@ -1,0 +1,84 @@
+{
+  "analysis_kind": "greenfield_pr_impact_step_2",
+  "blast_radius": "multi_repo",
+  "candidates": [
+    {
+      "changed_paths": [
+        "app/source/purchasing/POProcessTransactions.phtml"
+      ],
+      "classification": "confirmed",
+      "declared_relationship_type": "api_contract",
+      "evidence": [
+        {
+          "kind": "contract",
+          "path": "examples/greenfield/ia-app-pr-49156/replay/step2.contract.yaml",
+          "repository": "ia-main",
+          "revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59",
+          "sha256": "82c50767376349178d7a4ba30a638f1fe147a74a3aae223ef45e021956aac6ec"
+        }
+      ],
+      "interface_id": "purchasing.transactions.filter",
+      "owner": "purchasing-platform",
+      "owner_repository": "ia-main",
+      "reason": "exact_active_contract",
+      "relationship_type": "explicit_contract",
+      "target_repository": "intacct/ia-restapi-automation-tests"
+    },
+    {
+      "changed_paths": [],
+      "classification": "candidate",
+      "evidence": [
+        {
+          "commit_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "evidence_id": "ia-restapi-automation-tests:run-123",
+          "kind": "ci",
+          "path": "examples/greenfield/ia-app-pr-49156/replay/step2.ci.json",
+          "repository": "intacct/ia-restapi-automation-tests",
+          "sha256": "d883cfa786192becf420c6b5e136a779781a86214ea1b44c877d7489cc2f2066",
+          "source_revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59"
+        }
+      ],
+      "interface_id": "purchasing.transactions.filter",
+      "reason": "ci_supports_confirmed_contract",
+      "relationship_type": "ci_observed",
+      "target_repository": "intacct/ia-restapi-automation-tests",
+      "tests": [
+        {
+          "classification": "direct",
+          "id": "po-process-transactions",
+          "path": "tests/purchasing/po_process_transactions_test.py"
+        },
+        {
+          "classification": "indirect",
+          "id": "po-process-transactions-legacy",
+          "path": "tests/purchasing/legacy_po_test.py"
+        }
+      ]
+    }
+  ],
+  "gaps": [
+    "repository_inventory_empty:intacct/ia-restapi-automation-tests"
+  ],
+  "input": {
+    "changed_paths": [
+      "app/source/purchasing/POProcessTransactions.phtml"
+    ],
+    "source_repository": "ia-main",
+    "target_revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59"
+  },
+  "provenance": {
+    "catalog_mutation": "none",
+    "evidence_sources": [
+      "explicit_contract",
+      "ci_observed",
+      "repository_inventory"
+    ],
+    "read_only": true,
+    "rule_set_version": "0.1",
+    "semantic_index_sha256": [],
+    "step1_report_sha256": "7c031593df96f7a93a317e503919061f4dde8e0f64cdc5ad4b790baf31226378"
+  },
+  "schema_version": "0.1",
+  "status": "partial",
+  "warnings": []
+}

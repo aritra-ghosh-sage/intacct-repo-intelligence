@@ -46,6 +46,37 @@ def evidence_fingerprint(report: Mapping[str, Any]) -> str:
     return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
 
 
+def capture_failure_code(error: Exception) -> str:
+    """Classify a capture failure for clearer blocked Step 1 diagnostics."""
+
+    message = str(error).lower()
+    if any(
+        token in message
+        for token in (
+            "no github provider is available",
+            "github providers failed",
+            "gh executable is unavailable",
+            "gh api failed",
+            "github http api failed",
+            "github_provider_unavailable",
+        )
+    ):
+        return "provider_unavailable"
+    if any(
+        token in message
+        for token in (
+            "repo_not_found:",
+            "manifest_invalid:",
+            "repo_root_unavailable:",
+            "origin remote does not match configured github identity",
+            "origin remote does not match configured canonical git url",
+            "repository not found in manifest",
+        )
+    ):
+        return "manifest_identity_mismatch"
+    return "capture_failed"
+
+
 def _text(value: Any, label: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise CaptureError(f"{label} must be a non-empty string")
@@ -240,12 +271,12 @@ def build_report(metadata: Mapping[str, Any]) -> dict[str, Any]:
     return report
 
 
-def blocked_report(error: Exception) -> dict[str, Any]:
+def blocked_report(error: Exception, *, code: str = "capture_failed") -> dict[str, Any]:
     report: dict[str, Any] = {
         "schema_version": REPORT_SCHEMA_VERSION,
         "analysis_kind": ANALYSIS_KIND,
         "status": "blocked",
-        "error": {"code": "capture_failed", "message": str(error)},
+        "error": {"code": code, "message": str(error)},
         "input": {},
         "changed_files": [],
         "pr_metadata": {},

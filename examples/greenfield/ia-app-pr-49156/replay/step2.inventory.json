@@ -1,0 +1,27 @@
+{
+  "schema_version": "0.1",
+  "evidence_type": "repository_inventory",
+  "repository": "intacct/ia-restapi-automation-tests",
+  "source_repository": "ia-main",
+  "source_revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59",
+  "inspected_revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "status": "empty",
+  "workflow_paths": [],
+  "inventory_paths": [],
+  "workflows": [],
+  "workflow_runs": [],
+  "check_runs": [],
+  "artifacts": [],
+  "gaps": [],
+  "artifact_status": "empty",
+  "ci_linkage": {
+    "status": "unavailable",
+    "reason": "recorded_replay_omits_repository_inventory",
+    "source_repository": "ia-main",
+    "source_revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59"
+  },
+  "provenance": {
+    "read_only": true,
+    "response_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+  }
+}

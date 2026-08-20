@@ -1,0 +1,22 @@
+{
+  "schema_version": "0.1",
+  "evidence_id": "ia-restapi-automation-tests:run-123",
+  "repository": "intacct/ia-restapi-automation-tests",
+  "commit_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "source_repository": "ia-main",
+  "source_revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59",
+  "interface_id": "purchasing.transactions.filter",
+  "status": "available",
+  "tests": [
+    {
+      "id": "po-process-transactions",
+      "path": "tests/purchasing/po_process_transactions_test.py",
+      "classification": "direct"
+    },
+    {
+      "id": "po-process-transactions-legacy",
+      "path": "tests/purchasing/legacy_po_test.py",
+      "classification": "indirect"
+    }
+  ]
+}

@@ -12,7 +12,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from greenfield.step1_capture import CaptureError, blocked_report, capture_pr
+from greenfield.step1_capture import (
+    CaptureError,
+    blocked_report,
+    capture_failure_code,
+    capture_pr,
+)
 
 
 def _write_atomic(path: Path, report: dict[str, object]) -> None:
@@ -44,7 +49,7 @@ def main(argv: list[str] | None = None) -> int:
             pr_number=args.pr,
         )
     except (CaptureError, OSError) as exc:
-        report = blocked_report(exc)
+        report = blocked_report(exc, code=capture_failure_code(exc))
     try:
         _write_atomic(args.output, report)
     except OSError as exc:

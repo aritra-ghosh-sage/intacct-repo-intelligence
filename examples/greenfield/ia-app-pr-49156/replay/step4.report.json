@@ -1,0 +1,136 @@
+{
+  "analysis_kind": "greenfield_pr_impact_step_4",
+  "coverage": {
+    "items": [
+      {
+        "classification": "covered",
+        "evidence": [
+          {
+            "digest": "d883cfa786192becf420c6b5e136a779781a86214ea1b44c877d7489cc2f2066",
+            "evidence_id": "ia-restapi-automation-tests:run-123",
+            "kind": "ci"
+          }
+        ],
+        "interface_id": "purchasing.transactions.filter",
+        "reason": "exact_source_revision_ci_evidence",
+        "source_repository": "ia-main",
+        "source_revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59",
+        "target_repository": "intacct/ia-restapi-automation-tests",
+        "target_revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "test": {
+          "id": "po-process-transactions",
+          "path": "tests/purchasing/po_process_transactions_test.py"
+        }
+      },
+      {
+        "classification": "covered",
+        "evidence": [
+          {
+            "digest": "d883cfa786192becf420c6b5e136a779781a86214ea1b44c877d7489cc2f2066",
+            "evidence_id": "ia-restapi-automation-tests:run-123",
+            "kind": "ci"
+          }
+        ],
+        "interface_id": "purchasing.transactions.filter",
+        "reason": "exact_source_revision_ci_evidence",
+        "source_repository": "ia-main",
+        "source_revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59",
+        "target_repository": "intacct/ia-restapi-automation-tests",
+        "target_revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "test": {
+          "id": "po-process-transactions-legacy",
+          "path": "tests/purchasing/legacy_po_test.py"
+        }
+      },
+      {
+        "classification": "candidate",
+        "evidence": [
+          {
+            "kind": "step3_report",
+            "sha256": "9cea036e6cfc61ecb89154fedde09df7d189ec02b81de40c16ffddfcb4322390"
+          }
+        ],
+        "interface_id": "purchasing.transactions.filter",
+        "reason": "step3_test_evidence_without_execution_proof",
+        "source_repository": "ia-main",
+        "source_revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59",
+        "target_repository": "intacct/ia-restapi-automation-tests",
+        "test": {
+          "id": "po-process-transactions",
+          "path": "tests/purchasing/po_process_transactions_test.py"
+        }
+      },
+      {
+        "classification": "candidate",
+        "evidence": [
+          {
+            "kind": "step3_report",
+            "sha256": "9cea036e6cfc61ecb89154fedde09df7d189ec02b81de40c16ffddfcb4322390"
+          }
+        ],
+        "interface_id": "purchasing.transactions.filter",
+        "reason": "step3_test_evidence_without_execution_proof",
+        "source_repository": "ia-main",
+        "source_revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59",
+        "target_repository": "intacct/ia-restapi-automation-tests",
+        "test": {
+          "id": "po-process-transactions-legacy",
+          "path": "tests/purchasing/legacy_po_test.py"
+        }
+      }
+    ],
+    "status": "partial"
+  },
+  "gaps": [
+    "related_pull_requests_not_modelled:revision_pinned_artifact_not_provided",
+    "repository_inventory_empty:intacct/ia-restapi-automation-tests",
+    "semantic_index_not_provided:direct_semantic_components",
+    "test_obligation_missing:purchasing.transactions.filter:po-process-transactions-currency",
+    "test_suites_unavailable:no_normalized_test_evidence"
+  ],
+  "input": {
+    "changed_paths": [
+      "app/source/purchasing/POProcessTransactions.phtml"
+    ],
+    "source_repository": "ia-main",
+    "target_revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59"
+  },
+  "obligations": {
+    "items": [
+      {
+        "behavior_id": "purchasing.transactions.filter",
+        "interface_id": "purchasing.transactions.filter",
+        "required_change": "assertion",
+        "status": "satisfied",
+        "target_repository": "intacct/ia-restapi-automation-tests",
+        "test_id": "po-process-transactions",
+        "test_path": "tests/purchasing/po_process_transactions_test.py"
+      },
+      {
+        "behavior_id": "purchasing.transactions.currency",
+        "interface_id": "purchasing.transactions.filter",
+        "required_change": "fixture",
+        "status": "missing",
+        "target_repository": "intacct/ia-restapi-automation-tests",
+        "test_id": "po-process-transactions-currency",
+        "test_path": "tests/purchasing/po_process_transactions_test.py"
+      }
+    ],
+    "status": "partial"
+  },
+  "provenance": {
+    "catalog_mutation": "none",
+    "evidence_digests": [
+      "1111111111111111111111111111111111111111111111111111111111111111",
+      "82c50767376349178d7a4ba30a638f1fe147a74a3aae223ef45e021956aac6ec",
+      "d883cfa786192becf420c6b5e136a779781a86214ea1b44c877d7489cc2f2066"
+    ],
+    "github_writes": "none",
+    "read_only": true,
+    "rule_set_version": "0.1",
+    "step3_report_sha256": "9cea036e6cfc61ecb89154fedde09df7d189ec02b81de40c16ffddfcb4322390"
+  },
+  "schema_version": "0.1",
+  "status": "partial",
+  "warnings": []
+}

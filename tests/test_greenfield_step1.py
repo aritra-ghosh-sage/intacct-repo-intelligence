@@ -180,6 +180,43 @@ def test_blocked_cli_writes_atomic_report(
     assert validate(report) == []
 
 
+@pytest.mark.parametrize(
+    ("message", "code"),
+    [
+        (
+            "no GitHub provider is available; gh error: gh api failed: error connecting to api.github.com",
+            "provider_unavailable",
+        ),
+        (
+            "repo_not_found: manifest must contain exactly one 'ia-app' entry",
+            "manifest_identity_mismatch",
+        ),
+    ],
+)
+def test_blocked_cli_classifies_capture_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    message: str,
+    code: str,
+) -> None:
+    output = tmp_path / "step1.json"
+
+    def fail_capture(**_: object) -> dict:
+        raise CaptureError(message)
+
+    monkeypatch.setattr(trace_greenfield_step1, "capture_pr", fail_capture)
+    assert (
+        trace_greenfield_step1.main(
+            ["--repo-key", "ia-main", "--pr", "1", "--output", str(output)]
+        )
+        == 2
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["status"] == "blocked"
+    assert report["error"]["code"] == code
+    assert validate(report) == []
+
+
 def test_cli_reports_output_write_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
