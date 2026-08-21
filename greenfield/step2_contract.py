@@ -178,6 +178,31 @@ def load_ci_evidence(path: str | Path) -> dict[str, Any]:
     data = _object(raw, "ci evidence")
     if data.get("schema_version") != CI_SCHEMA_VERSION:
         raise EvidenceError(f"ci evidence schema_version must be {CI_SCHEMA_VERSION}")
+    raw_tests = data.get("tests", [])
+    if not isinstance(raw_tests, list):
+        raise EvidenceError("ci evidence tests must be a list")
+    tests: list[Any] = []
+    for test in raw_tests:
+        if not isinstance(test, dict):
+            tests.append(test)
+            continue
+        normalized_test = dict(test)
+        for field in (
+            "test_owner",
+            "test_command",
+            "execution_result",
+            "workflow_run_id",
+            "workflow_job_id",
+            "check_run_id",
+            "artifact_id",
+            "coverage",
+            "relationship",
+            "required_change",
+            "behavior_id",
+        ):
+            if field in test:
+                normalized_test[field] = test[field]
+        tests.append(normalized_test)
     normalized = {
         "schema_version": CI_SCHEMA_VERSION,
         "evidence_id": _text(data.get("evidence_id"), "evidence_id"),
@@ -187,7 +212,7 @@ def load_ci_evidence(path: str | Path) -> dict[str, Any]:
         "source_revision": _sha(data.get("source_revision"), "source_revision"),
         "interface_id": _text(data.get("interface_id"), "interface_id"),
         "status": _text(data.get("status"), "status"),
-        "tests": data.get("tests", []),
+        "tests": tests,
         "evidence": {
             "path": source.as_posix(),
             "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
@@ -195,8 +220,17 @@ def load_ci_evidence(path: str | Path) -> dict[str, Any]:
     }
     if normalized["status"] not in {"available", "empty", "unavailable", "stale"}:
         raise EvidenceError("ci evidence status is invalid")
-    if not isinstance(normalized["tests"], list):
-        raise EvidenceError("ci evidence tests must be a list")
+    for field in (
+        "workflow_run_id",
+        "workflow_job_id",
+        "check_run_id",
+        "artifact_id",
+        "execution_result",
+        "test_command",
+        "test_owner",
+    ):
+        if field in data:
+            normalized[field] = data[field]
     return normalized
 
 

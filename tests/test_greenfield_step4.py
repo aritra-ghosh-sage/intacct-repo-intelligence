@@ -142,6 +142,13 @@ def test_explicit_obligation_without_matching_test_is_missing() -> None:
     )
     assert report["obligations"]["items"][0]["status"] == "missing"
     assert report["obligations"]["items"][0]["required_change"] == "fixture"
+    missing = [
+        item
+        for item in report["coverage"]["items"]
+        if item.get("classification") == "missing"
+    ]
+    assert len(missing) == 1
+    assert missing[0]["obligation_id"] == "company.config.preference:required:tests/required.feature"
     assert any(gap.startswith("test_obligation_missing:") for gap in report["gaps"])
 
 

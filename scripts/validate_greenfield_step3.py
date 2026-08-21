@@ -12,6 +12,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from greenfield.step3_outcome import ANALYSIS_KIND, BLAST_RADIUS, REPORT_SCHEMA_VERSION
+from greenfield.source_identity import validate_identity_fields
 
 SHA = re.compile(r"^[0-9a-f]{40}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -158,6 +159,7 @@ def validate(report: Any) -> list[str]:
             errors.append("input.target_revision must be a lowercase 40-character SHA")
         if not isinstance(data.get("changed_paths"), list) or not data["changed_paths"]:
             errors.append("input.changed_paths must be a non-empty list")
+        errors.extend(validate_identity_fields(data))
     if report.get("blast_radius") not in BLAST_RADIUS:
         errors.append("blast_radius is invalid")
     impact_surface = _surface(report, "impact", errors)

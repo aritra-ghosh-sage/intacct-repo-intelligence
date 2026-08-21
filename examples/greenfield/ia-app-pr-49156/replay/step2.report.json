@@ -60,13 +60,18 @@
     "repository_inventory_empty:intacct/ia-restapi-automation-tests"
   ],
   "input": {
+    "base_revision": "e33954d66e7823303fa24087950d3306c547e0b7",
+    "canonical_repository": "intacct/ia-app",
     "changed_paths": [
       "app/source/purchasing/POProcessTransactions.phtml"
     ],
+    "source_pr_number": 49156,
+    "source_repo_key": "ia-main",
     "source_repository": "ia-main",
     "target_revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59"
   },
   "provenance": {
+    "base_revision": "e33954d66e7823303fa24087950d3306c547e0b7",
     "catalog_mutation": "none",
     "evidence_sources": [
       "explicit_contract",
@@ -76,6 +81,7 @@
     "read_only": true,
     "rule_set_version": "0.1",
     "semantic_index_sha256": [],
+    "source_pr_number": 49156,
     "step1_report_sha256": "7c031593df96f7a93a317e503919061f4dde8e0f64cdc5ad4b790baf31226378"
   },
   "schema_version": "0.1",

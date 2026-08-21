@@ -47,7 +47,7 @@
         "evidence": [
           {
             "kind": "step3_report",
-            "sha256": "9cea036e6cfc61ecb89154fedde09df7d189ec02b81de40c16ffddfcb4322390"
+            "sha256": "09295823b4bcaca20d35286f055ab0fe75b7d725f91f9db49dd00fc35dc54012"
           }
         ],
         "interface_id": "purchasing.transactions.filter",
@@ -65,7 +65,7 @@
         "evidence": [
           {
             "kind": "step3_report",
-            "sha256": "9cea036e6cfc61ecb89154fedde09df7d189ec02b81de40c16ffddfcb4322390"
+            "sha256": "09295823b4bcaca20d35286f055ab0fe75b7d725f91f9db49dd00fc35dc54012"
           }
         ],
         "interface_id": "purchasing.transactions.filter",
@@ -76,6 +76,29 @@
         "test": {
           "id": "po-process-transactions-legacy",
           "path": "tests/purchasing/legacy_po_test.py"
+        }
+      },
+      {
+        "behavior_id": "purchasing.transactions.currency",
+        "classification": "missing",
+        "evidence": [
+          {
+            "digest": "82c50767376349178d7a4ba30a638f1fe147a74a3aae223ef45e021956aac6ec",
+            "kind": "contract",
+            "path": "examples/greenfield/ia-app-pr-49156/replay/step2.contract.yaml",
+            "revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59"
+          }
+        ],
+        "interface_id": "purchasing.transactions.filter",
+        "obligation_id": "purchasing.transactions.filter:po-process-transactions-currency:tests/purchasing/po_process_transactions_test.py",
+        "reason": "declared_test_obligation_missing",
+        "required_change": "fixture",
+        "source_repository": "ia-main",
+        "source_revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59",
+        "target_repository": "intacct/ia-restapi-automation-tests",
+        "test": {
+          "id": "po-process-transactions-currency",
+          "path": "tests/purchasing/po_process_transactions_test.py"
         }
       }
     ],
@@ -89,9 +112,13 @@
     "test_suites_unavailable:no_normalized_test_evidence"
   ],
   "input": {
+    "base_revision": "e33954d66e7823303fa24087950d3306c547e0b7",
+    "canonical_repository": "intacct/ia-app",
     "changed_paths": [
       "app/source/purchasing/POProcessTransactions.phtml"
     ],
+    "source_pr_number": 49156,
+    "source_repo_key": "ia-main",
     "source_repository": "ia-main",
     "target_revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59"
   },
@@ -128,7 +155,7 @@
     "github_writes": "none",
     "read_only": true,
     "rule_set_version": "0.1",
-    "step3_report_sha256": "9cea036e6cfc61ecb89154fedde09df7d189ec02b81de40c16ffddfcb4322390"
+    "step3_report_sha256": "09295823b4bcaca20d35286f055ab0fe75b7d725f91f9db49dd00fc35dc54012"
   },
   "schema_version": "0.1",
   "status": "partial",

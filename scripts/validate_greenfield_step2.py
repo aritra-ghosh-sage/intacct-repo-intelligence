@@ -12,6 +12,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from greenfield.step2_candidates import ANALYSIS_KIND, REPORT_SCHEMA_VERSION
+from greenfield.source_identity import validate_identity_fields
 
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 CLASSIFICATIONS = {
@@ -64,6 +65,7 @@ def validate(report: Any) -> list[str]:
                 errors.append(f"missing input field: {key}")
         if not isinstance(data.get("changed_paths"), list):
             errors.append("input.changed_paths must be a list")
+        errors.extend(validate_identity_fields(data))
     candidates = report.get("candidates")
     if not isinstance(candidates, list):
         errors.append("candidates must be a list")

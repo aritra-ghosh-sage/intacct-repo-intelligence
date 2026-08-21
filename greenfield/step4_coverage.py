@@ -53,6 +53,18 @@ def _evidence(value: Mapping[str, Any], kind: str, **extra: Any) -> dict[str, An
     return result
 
 
+def _ci_evidence(
+    value: Mapping[str, Any], test: Mapping[str, Any] | None = None
+) -> list[dict[str, Any]]:
+    extra: dict[str, Any] = {"evidence_id": value.get("evidence_id")}
+    for field in ("workflow_run_id", "workflow_job_id", "check_run_id", "artifact_id"):
+        if value.get(field) is not None:
+            extra[field] = value[field]
+    if isinstance(test, Mapping) and test.get("execution_result") is not None:
+        extra["execution_result"] = test["execution_result"]
+    return [_evidence(value, "ci", **extra)]
+
+
 def _relation_scopes(
     contracts: Iterable[Mapping[str, Any]],
     canonical_repository: str,
@@ -122,7 +134,7 @@ def _ci_tests(
             "test": None,
             "source_repository": source_repository,
             "source_revision": source_revision,
-            "evidence": [_evidence(evidence, "ci", evidence_id=evidence.get("evidence_id"))],
+            "evidence": _ci_evidence(evidence),
         }]
     if status in {"unavailable", "empty"}:
         gaps.add(f"ci:{status}:{target_repository}")
@@ -134,14 +146,14 @@ def _ci_tests(
             "test": None,
             "source_repository": source_repository,
             "source_revision": source_revision,
-            "evidence": [_evidence(evidence, "ci", evidence_id=evidence.get("evidence_id"))],
+            "evidence": _ci_evidence(evidence),
         }]
     if status != "available":
         gaps.add(f"ci:unknown_status:{target_repository}")
         return []
     rows: list[dict[str, Any]] = []
     for test in evidence.get("tests", []):
-        evidence_ref = [_evidence(evidence, "ci", evidence_id=evidence.get("evidence_id"))]
+        evidence_ref = _ci_evidence(evidence, test if isinstance(test, Mapping) else None)
         if not isinstance(test, dict) or not isinstance(test.get("id"), str) or not test.get("id", "").strip() or not isinstance(test.get("path"), str) or not test.get("path", "").strip():
             gaps.add(f"ci:malformed_test:{target_repository}")
             rows.append({
@@ -171,6 +183,8 @@ def _ci_tests(
             row["test_owner"] = test["test_owner"].strip()
         if isinstance(test.get("test_command"), str) and test["test_command"].strip():
             row["test_command"] = test["test_command"].strip()
+        if test.get("execution_result") is not None:
+            row["execution_result"] = test["execution_result"]
         if test.get("required_change") is not None:
             row["required_change"] = test["required_change"]
         if test.get("behavior_id") is not None:
@@ -187,13 +201,7 @@ def _ci_tests(
                 "test": None,
                 "source_repository": source_repository,
                 "source_revision": source_revision,
-                "evidence": [
-                    _evidence(
-                        evidence,
-                        "ci",
-                        evidence_id=evidence.get("evidence_id"),
-                    )
-                ],
+                "evidence": _ci_evidence(evidence),
             }
         )
     return rows
@@ -291,6 +299,7 @@ def map_test_coverage(
             obligation_row = {
                 "target_repository": scope["target_repository"],
                 "interface_id": scope["interface_id"],
+                "obligation_id": f"{scope['interface_id']}:{test_id}:{test_path}",
                 "test_id": test_id,
                 "test_path": test_path,
                 "status": status,

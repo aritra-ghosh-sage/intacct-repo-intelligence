@@ -7,7 +7,7 @@
         "evidence": [
           {
             "kind": "step2_input",
-            "step2_report_sha256": "ab53862801e18578bce10ed9294bf7e92c1ad2b54e2dc9345e77e1fb95e26809"
+            "step2_report_sha256": "1bd689f2d3dc7d8fc74e4369b34047cddbf0e4ee91fea96ca7f1188a147ae37c"
           }
         ],
         "identity": "app/source/purchasing/POProcessTransactions.phtml",
@@ -68,9 +68,13 @@
     "status": "available"
   },
   "input": {
+    "base_revision": "e33954d66e7823303fa24087950d3306c547e0b7",
+    "canonical_repository": "intacct/ia-app",
     "changed_paths": [
       "app/source/purchasing/POProcessTransactions.phtml"
     ],
+    "source_pr_number": 49156,
+    "source_repo_key": "ia-main",
     "source_repository": "ia-main",
     "target_revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59"
   },
@@ -170,7 +174,7 @@
     "related_pr_artifact_sha256": null,
     "rule_set_version": "0.1",
     "semantic_index_sha256": null,
-    "step2_report_sha256": "ab53862801e18578bce10ed9294bf7e92c1ad2b54e2dc9345e77e1fb95e26809"
+    "step2_report_sha256": "1bd689f2d3dc7d8fc74e4369b34047cddbf0e4ee91fea96ca7f1188a147ae37c"
   },
   "related_pull_requests": {
     "items": [],

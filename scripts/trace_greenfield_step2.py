@@ -17,6 +17,7 @@ from greenfield.github_repository_evidence import (
     RepositoryEvidenceError,
     collect_repository_evidence,
 )
+from greenfield.source_identity import source_identity
 from greenfield.step2_candidates import CandidateError, resolve_candidates
 from greenfield.step2_contract import (
     EvidenceError,
@@ -66,15 +67,15 @@ def _unavailable_inventory(
     )
 
 
-def _manifest_candidates(path: str | Path, source_repository: str) -> list[str]:
+def _manifest_candidates(
+    path: str | Path, canonical_repository: str, source_repo_key: str
+) -> list[str]:
     """Return only explicit pr_impact_contracts consumers from the local manifest."""
 
     data: Any = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     repositories = data.get("repositories") if isinstance(data, dict) else None
     if not isinstance(repositories, list):
         return []
-    source_short = source_repository.rsplit("/", 1)[-1]
-    source_short = {"ia-main": "ia-app"}.get(source_short, source_short)
     result: set[str] = set()
     for entry in repositories:
         if not isinstance(entry, dict):
@@ -83,7 +84,7 @@ def _manifest_candidates(path: str | Path, source_repository: str) -> list[str]:
             if not isinstance(contract, dict):
                 continue
             target = str(contract.get("target_repository", ""))
-            if target.rsplit("/", 1)[-1] != source_short:
+            if target not in {canonical_repository, source_repo_key}:
                 continue
             remote = str(entry.get("remote_url", ""))
             if "github.com:" in remote:
@@ -119,7 +120,7 @@ def main(argv: list[str] | None = None) -> int:
         ]
         semantic_indexes = [load_semantic_index(path) for path in args.semantic_index]
         input_data = step1.get("input", {})
-        source_repository = input_data.get("repo_key") or input_data.get("repository")
+        canonical_repository, source_repository = source_identity(input_data)
         source_revision = input_data.get("target_revision") or input_data.get(
             "head_sha"
         )
@@ -132,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
         requested_repositories = list(args.repository)
         if not requested_repositories:
             requested_repositories = _manifest_candidates(
-                args.manifest, source_repository
+                args.manifest, canonical_repository, source_repository
             )
         for repository in sorted(set(requested_repositories)):
             try:

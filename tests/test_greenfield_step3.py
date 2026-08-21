@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from greenfield.semantic_contract import finalize_index
+from greenfield.related_prs import build_related_pr_evidence
 from greenfield.step2_candidates import resolve_candidates
 from greenfield.step3_outcome import (
     OutcomeError,
@@ -346,6 +347,50 @@ def test_related_pr_revision_mismatch_is_rejected(tmp_path: Path) -> None:
     evidence = load_related_pr_evidence(related_file(tmp_path, revision="d" * 40))
     with pytest.raises(OutcomeError, match="revision"):
         assemble_outcome(step2(), related_pr_evidence=evidence)
+
+
+def test_related_pr_builder_accepts_only_exact_cross_references() -> None:
+    related = build_related_pr_evidence(
+        source_repository="ia-app",
+        canonical_repository="intacct/ia-app",
+        source_pr_number=49156,
+        source_revision=TARGET,
+        candidate_repositories=["intacct/ia-restapi-automation-tests"],
+        timeline_events=[
+            {
+                "id": "event-1",
+                "event": "cross-referenced",
+                "source": {
+                    "issue": {
+                        "number": 49201,
+                        "repository_url": "https://api.github.com/repos/intacct/ia-restapi-automation-tests",
+                        "pull_request": {"url": "https://api.github.com/repos/intacct/ia-restapi-automation-tests/pulls/49201"},
+                    }
+                },
+            },
+            {
+                "id": "event-2",
+                "event": "cross-referenced",
+                "source": {
+                    "issue": {
+                        "number": 49202,
+                        "repository_url": "https://api.github.com/repos/other/repository",
+                        "pull_request": {"url": "ignored"},
+                    }
+                },
+            },
+        ],
+        pull_requests={
+            ("intacct/ia-restapi-automation-tests", 49201): {
+                "state": "open",
+                "head": {"sha": "b" * 40},
+                "base": {"sha": "c" * 40},
+            }
+        },
+        evidence_path="related.json",
+    )
+    assert related["status"] == "available"
+    assert related["pull_requests"][0]["number"] == 49201
 
 
 def test_outcome_is_deterministic() -> None:

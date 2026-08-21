@@ -10,6 +10,7 @@ from copy import deepcopy
 from typing import Any
 
 from greenfield.step4_contract import validate_step4_report
+from greenfield.source_identity import validate_identity_fields
 from scripts.validate_greenfield_step3 import validate as validate_step3
 
 REPORT_SCHEMA_VERSION = "0.1"
@@ -208,7 +209,7 @@ def recommend_actions(step3: Mapping[str, Any], step4: Mapping[str, Any]) -> dic
             action_type=action_type,
             target_repository=target,
             owner=_owner(owners.get((target, interface_id))),
-            scope={"interface_id": interface_id, "test_id": item["test_id"], "test_path": item["test_path"], "required_change": change, "target_revision": None},
+            scope={"interface_id": interface_id, "obligation_id": item.get("obligation_id"), "test_id": item["test_id"], "test_path": item["test_path"], "required_change": change, "target_revision": None},
             evidence=evidence,
             reason="declared_test_obligation_missing",
             completion_condition=f"The declared test obligation {item['test_id']} exists at {item['test_path']} and is validated against the source revision.",
@@ -254,7 +255,16 @@ def recommend_actions(step3: Mapping[str, Any], step4: Mapping[str, Any]) -> dic
 
     unique = {action["action_id"]: action for action in actions}
     ordered = sorted(unique.values(), key=lambda row: (0 if row["status"] == "blocked" else 1, row["target_repository"], row["scope"].get("interface_id", ""), row["action_type"], row["scope"].get("test_id", ""), row["action_id"]))
-    gaps = sorted({str(value) for value in step3.get("gaps", [])} | {str(value) for value in step4.get("gaps", [])})
+    owner_gaps = {
+        f"owner_approval_pending:{target}:{interface_id}"
+        for (target, interface_id), owner_row in owners.items()
+        if owner_row.get("status") != "available"
+    }
+    gaps = sorted(
+        {str(value) for value in step3.get("gaps", [])}
+        | {str(value) for value in step4.get("gaps", [])}
+        | owner_gaps
+    )
     source_input = {
         "source_repository": repository,
         "target_revision": revision,
@@ -307,6 +317,7 @@ def validate_step5_report(report: Any) -> list[str]:
             errors.append("input.target_revision must be a lowercase 40-character SHA")
         if not isinstance(data.get("changed_paths"), list) or not data["changed_paths"]:
             errors.append("input.changed_paths must be a non-empty list")
+        errors.extend(validate_identity_fields(data))
     actions = report.get("actions")
     if not isinstance(actions, list):
         errors.append("actions must be a list")

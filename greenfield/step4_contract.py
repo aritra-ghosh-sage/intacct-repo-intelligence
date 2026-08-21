@@ -15,6 +15,7 @@ from greenfield.step2_contract import (
     load_contract,
     load_repository_inventory,
 )
+from greenfield.source_identity import validate_identity_fields
 
 REPORT_SCHEMA_VERSION = "0.1"
 ANALYSIS_KIND = "greenfield_pr_impact_step_4"
@@ -125,6 +126,7 @@ def validate_step4_report(report: Any) -> list[str]:
             errors.append("input.target_revision must be a lowercase 40-character SHA")
         if not isinstance(data.get("changed_paths"), list) or not data["changed_paths"]:
             errors.append("input.changed_paths must be a non-empty list")
+        errors.extend(validate_identity_fields(data))
     for surface_name in ("coverage", "obligations"):
         surface = report.get(surface_name)
         if not isinstance(surface, dict):

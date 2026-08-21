@@ -37,8 +37,9 @@
       "target_revision": null
     },
     {
-      "action_id": "510adb5c4e70560171608124b1c3cf022fbf24dd0a2af6ea5195d562df0d8e38",
+      "action_id": "1a9e60ca017467b031fdca1c3df4c61fd56394b7428474b0fecd65a75ceae902",
       "action_type": "run_test_suite",
+      "approval_required": true,
       "completion_condition": "The named test po-process-transactions at tests/purchasing/po_process_transactions_test.py passes against the target revision.",
       "evidence": [
         {
@@ -61,11 +62,17 @@
       },
       "status": "recommended",
       "target_repository": "intacct/ia-restapi-automation-tests",
-      "target_revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      "target_revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "test_command": null,
+      "test_owner": {
+        "identity": null,
+        "status": "unavailable"
+      }
     },
     {
-      "action_id": "cafa600388e4244ed9e858b2356c18e44f98907cb7282cb5dbfbfe7eae1d4597",
+      "action_id": "3bb99f3baecfa8240c2f5da586e9756c38d3b99d6449a68ed14b88a05857950e",
       "action_type": "run_test_suite",
+      "approval_required": true,
       "completion_condition": "The named test po-process-transactions-legacy at tests/purchasing/legacy_po_test.py passes against the target revision.",
       "evidence": [
         {
@@ -88,11 +95,17 @@
       },
       "status": "recommended",
       "target_repository": "intacct/ia-restapi-automation-tests",
-      "target_revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      "target_revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "test_command": null,
+      "test_owner": {
+        "identity": null,
+        "status": "unavailable"
+      }
     },
     {
-      "action_id": "69c5ff21d47e16e3bc605cb088b99ecb03d26c28f762dcaaa5ece5a44453f56d",
+      "action_id": "e6b112ec00432f4f078e96e5fb5d827fe12ac8768c54476ba2578cf2e030377e",
       "action_type": "update_test_obligation",
+      "approval_required": true,
       "completion_condition": "The declared test obligation po-process-transactions-currency exists at tests/purchasing/po_process_transactions_test.py and is validated against the source revision.",
       "evidence": [
         {
@@ -127,7 +140,12 @@
       },
       "status": "recommended",
       "target_repository": "intacct/ia-restapi-automation-tests",
-      "target_revision": null
+      "target_revision": null,
+      "test_command": null,
+      "test_owner": {
+        "identity": null,
+        "status": "unavailable"
+      }
     }
   ],
   "analysis_kind": "greenfield_pr_impact_step_5",
@@ -139,9 +157,13 @@
     "test_suites_unavailable:no_normalized_test_evidence"
   ],
   "input": {
+    "base_revision": "e33954d66e7823303fa24087950d3306c547e0b7",
+    "canonical_repository": "intacct/ia-app",
     "changed_paths": [
       "app/source/purchasing/POProcessTransactions.phtml"
     ],
+    "source_pr_number": 49156,
+    "source_repo_key": "ia-main",
     "source_repository": "ia-main",
     "target_revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59"
   },
@@ -150,8 +172,8 @@
     "github_writes": "none",
     "read_only": true,
     "rule_set_version": "0.1",
-    "step3_report_sha256": "9cea036e6cfc61ecb89154fedde09df7d189ec02b81de40c16ffddfcb4322390",
-    "step4_report_sha256": "d41acdb27d4e1c0923d9da993115a84a252f6ac37c90b677a7f3b25c7b495fc2"
+    "step3_report_sha256": "09295823b4bcaca20d35286f055ab0fe75b7d725f91f9db49dd00fc35dc54012",
+    "step4_report_sha256": "215cf705fc901247c2463cc9b6af7e59e6786b642345d9fc55023dc35889ae48"
   },
   "schema_version": "0.1",
   "status": "partial",
