@@ -106,6 +106,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repository", action="append", default=[])
     parser.add_argument("--manifest", default="config/workspace_repos.yaml")
     parser.add_argument("--output")
+    parser.add_argument(
+        "--strict-ci-evidence",
+        action="store_true",
+        help="Require the normalized CI execution envelope for supplied CI evidence.",
+    )
     args = parser.parse_args(argv)
     try:
         step1 = read_json_object(args.step1_report)
@@ -115,7 +120,10 @@ def main(argv: list[str] | None = None) -> int:
                 "invalid Greenfield Step 1 report: " + "; ".join(step1_errors)
             )
         contracts = [load_contract(path) for path in args.contract]
-        ci_evidence = [load_ci_evidence(path) for path in args.ci_evidence]
+        ci_evidence = [
+            load_ci_evidence(path, strict=args.strict_ci_evidence)
+            for path in args.ci_evidence
+        ]
         inventory = [
             load_repository_inventory(path) for path in args.inventory_evidence
         ]

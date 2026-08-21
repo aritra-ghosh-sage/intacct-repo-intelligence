@@ -36,6 +36,9 @@ TEMPLATE_IDS = {
     "gwdata_gl_existing_case_update_v1",
     "restapi_existing_case_update_v1",
 }
+TARGET_EVIDENCE_PROVIDERS = {"github_git_api"}
+APPROVAL_ROLES = {"source_interface_owner", "consumer_test_owner"}
+ELIGIBILITY_PROFILES = {"replay", "step7"}
 
 
 class Step6Error(ValueError):
@@ -133,15 +136,144 @@ def _validate_file_rows(
     return rows
 
 
-def validate_step6_request(request: Any) -> list[str]:
+def _synthetic_sha(value: str) -> bool:
+    return len(set(value)) <= 1
+
+
+def _validate_approvals(value: Any, label: str) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        return [f"{label} must be a list"]
+    errors: list[str] = []
+    seen: set[str] = set()
+    for index, item in enumerate(value):
+        row = item if isinstance(item, Mapping) else {}
+        role = row.get("role")
+        if role not in APPROVAL_ROLES:
+            errors.append(f"{label}[{index}].role is invalid")
+        elif role in seen:
+            errors.append(f"{label} contains duplicate role: {role}")
+        else:
+            seen.add(role)
+        if row.get("status") not in {"approved", "pending", "unavailable"}:
+            errors.append(f"{label}[{index}].status is invalid")
+        if row.get("status") == "approved" and (
+            not isinstance(row.get("approver"), str) or not row["approver"].strip()
+        ):
+            errors.append(f"{label}[{index}].approver is required when approved")
+        if row.get("status") == "approved":
+            evidence = row.get("approval_evidence")
+            if not isinstance(evidence, Mapping):
+                errors.append(f"{label}[{index}].approval_evidence is required when approved")
+            else:
+                if not isinstance(evidence.get("provider"), str) or not evidence["provider"].strip():
+                    errors.append(f"{label}[{index}].approval_evidence.provider is required")
+                if not isinstance(evidence.get("record_id"), str) or not evidence["record_id"].strip():
+                    errors.append(f"{label}[{index}].approval_evidence.record_id is required")
+                if not isinstance(evidence.get("sha256"), str) or not SHA256.fullmatch(evidence["sha256"]):
+                    errors.append(f"{label}[{index}].approval_evidence.sha256 is invalid")
+            approval_digest = row.get("approval_sha256")
+            if not isinstance(approval_digest, str) or not SHA256.fullmatch(approval_digest):
+                errors.append(f"{label}[{index}].approval_sha256 is invalid")
+            elif artifact_sha256(
+                {
+                    "role": row.get("role"),
+                    "status": row.get("status"),
+                    "approver": row.get("approver"),
+                    "approval_evidence": row.get("approval_evidence"),
+                }
+            ) != approval_digest:
+                errors.append(f"{label}[{index}].approval_sha256 does not match approval")
+    return errors
+
+
+def _validate_target_evidence(
+    value: Any, target: Mapping[str, Any], label: str, *, strict: bool
+) -> list[str]:
+    if value is None:
+        return [f"{label} is required in strict evidence mode"] if strict else []
+    if not isinstance(value, Mapping):
+        return [f"{label} must be an object"]
+    errors: list[str] = []
+    if value.get("provider") not in TARGET_EVIDENCE_PROVIDERS:
+        errors.append(f"{label}.provider must be github_git_api")
+    if value.get("repository") != target.get("repository"):
+        errors.append(f"{label}.repository must match target.repository")
+    revision = value.get("revision")
+    if not isinstance(revision, str) or not SHA.fullmatch(revision):
+        errors.append(f"{label}.revision must be a lowercase 40-character SHA")
+    elif revision != target.get("base_revision"):
+        errors.append(f"{label}.revision must match target.base_revision")
+    elif _synthetic_sha(revision):
+        errors.append(f"{label}.revision must not be synthetic")
+    files = value.get("files")
+    if not isinstance(files, list) or not files:
+        errors.append(f"{label}.files must be a non-empty list")
+        files = []
+    target_rows = target.get("files", [])
+    if not isinstance(target_rows, list):
+        target_rows = []
+    if not target_rows:
+        patch = target.get("patch_files", [])
+        target_rows = patch if isinstance(patch, list) else []
+    target_files = {
+        row.get("path"): row
+        for row in target_rows
+        if isinstance(row, Mapping)
+    }
+    paths: list[str] = []
+    for index, item in enumerate(files):
+        row = item if isinstance(item, Mapping) else {}
+        path = row.get("path")
+        if not isinstance(path, str) or not path.strip():
+            errors.append(f"{label}.files[{index}].path is required")
+            continue
+        paths.append(path)
+        if path not in target_files:
+            errors.append(f"{label}.files[{index}].path is not in target.files: {path}")
+        digest = row.get("content_sha256")
+        if not isinstance(digest, str) or not SHA256.fullmatch(digest):
+            errors.append(f"{label}.files[{index}].content_sha256 is invalid")
+        elif target_files.get(path, {}).get("sha256") != digest:
+            errors.append(f"{label}.files[{index}].content_sha256 does not match target file")
+        if not isinstance(row.get("blob_or_response_id"), str) or not row["blob_or_response_id"].strip():
+            errors.append(f"{label}.files[{index}].blob_or_response_id is required")
+    if paths != sorted(set(paths)):
+        errors.append(f"{label}.files must be sorted and unique")
+    if set(paths) != set(target_files):
+        errors.append(f"{label}.files must exactly match target.files")
+    supplied = dict(value)
+    supplied.pop("evidence_sha256", None)
+    digest = value.get("evidence_sha256")
+    if not isinstance(digest, str) or not SHA256.fullmatch(digest):
+        errors.append(f"{label}.evidence_sha256 must be SHA-256")
+    elif artifact_sha256(supplied) != digest:
+        errors.append(f"{label}.evidence_sha256 does not match evidence")
+    return errors
+
+
+def _approved_roles(value: Any) -> set[str]:
+    if not isinstance(value, list):
+        return set()
+    return {
+        str(item.get("role"))
+        for item in value
+        if isinstance(item, Mapping) and item.get("status") == "approved"
+    }
+
+
+def validate_step6_request(
+    request: Any, *, strict_target_evidence: bool = False
+) -> list[str]:
     try:
-        _validate_request(request)
+        _validate_request(request, strict_target_evidence=strict_target_evidence)
     except Step6Error as exc:
         return [str(exc)]
     return []
 
 
-def _validate_request(request: Any) -> None:
+def _validate_request(request: Any, *, strict_target_evidence: bool = False) -> None:
     root = _object(request, "request")
     if root.get("schema_version") != REQUEST_SCHEMA_VERSION:
         raise Step6Error(f"schema_version must be {REQUEST_SCHEMA_VERSION}")
@@ -216,6 +348,28 @@ def _validate_request(request: Any) -> None:
     )
     if set(allowed) != set(files):
         raise Step6Error("target.allowed_paths must exactly match target.files")
+    target_for_evidence = dict(target)
+    patch_for_evidence = root.get("patch")
+    if "files" not in target_for_evidence and isinstance(patch_for_evidence, Mapping):
+        target_for_evidence["patch_files"] = [
+            {
+                "path": row.get("path"),
+                "sha256": row.get("before_sha256"),
+            }
+            for row in patch_for_evidence.get("files", [])
+            if isinstance(row, Mapping)
+        ]
+    target_evidence_errors = _validate_target_evidence(
+        root.get("target_evidence"),
+        target_for_evidence,
+        "target_evidence",
+        strict=strict_target_evidence,
+    )
+    if target_evidence_errors:
+        raise Step6Error("; ".join(target_evidence_errors))
+    approval_errors = _validate_approvals(root.get("approvals"), "approvals")
+    if approval_errors:
+        raise Step6Error("; ".join(approval_errors))
 
     template = _object(root.get("template"), "template")
     template_id = _text(template.get("id"), "template.id")
@@ -253,15 +407,32 @@ def _validate_request(request: Any) -> None:
         raise Step6Error("validation_plan must be a list of command/check strings")
 
 
-def validate_step6_report(report: Any) -> list[str]:
+def validate_step6_report(
+    report: Any,
+    *,
+    strict_target_evidence: bool = False,
+    require_approvals: bool = False,
+    require_step7_eligibility: bool = False,
+) -> list[str]:
     try:
-        _validate_report(report)
+        _validate_report(
+            report,
+            strict_target_evidence=strict_target_evidence,
+            require_approvals=require_approvals,
+            require_step7_eligibility=require_step7_eligibility,
+        )
     except Step6Error as exc:
         return [str(exc)]
     return []
 
 
-def _validate_report(report: Any) -> None:
+def _validate_report(
+    report: Any,
+    *,
+    strict_target_evidence: bool = False,
+    require_approvals: bool = False,
+    require_step7_eligibility: bool = False,
+) -> None:
     root = _object(report, "report")
     if root.get("schema_version") != REPORT_SCHEMA_VERSION:
         raise Step6Error(f"schema_version must be {REPORT_SCHEMA_VERSION}")
@@ -272,6 +443,11 @@ def _validate_report(report: Any) -> None:
         raise Step6Error("status is invalid")
     _text(root.get("reason"), "reason")
     _sha256(root.get("proposal_id"), "proposal_id")
+    eligibility = root.get("eligibility_profile", "replay")
+    if eligibility not in ELIGIBILITY_PROFILES:
+        raise Step6Error("eligibility_profile is invalid")
+    if require_step7_eligibility and eligibility != "step7":
+        raise Step6Error("report is not marked step7 eligible")
 
     source = _object(root.get("source"), "source")
     _text(source.get("repository"), "source.repository")
@@ -300,6 +476,32 @@ def _validate_report(report: Any) -> None:
         paths=True,
         allow_empty=status != "ready_for_ai_pr",
     )
+    target_for_evidence = dict(target)
+    patch_for_evidence = root.get("patch")
+    if "files" not in target_for_evidence and isinstance(patch_for_evidence, Mapping):
+        target_for_evidence["patch_files"] = [
+            {
+                "path": row.get("path"),
+                "sha256": row.get("before_sha256"),
+            }
+            for row in patch_for_evidence.get("files", [])
+            if isinstance(row, Mapping)
+        ]
+    target_evidence_errors = _validate_target_evidence(
+        root.get("target_evidence"),
+        target_for_evidence,
+        "target_evidence",
+        strict=strict_target_evidence or require_step7_eligibility,
+    )
+    if target_evidence_errors:
+        raise Step6Error("; ".join(target_evidence_errors))
+    approval_errors = _validate_approvals(root.get("approvals"), "approvals")
+    if approval_errors:
+        raise Step6Error("; ".join(approval_errors))
+    if (require_approvals or require_step7_eligibility) and status == "ready_for_ai_pr":
+        missing = sorted(APPROVAL_ROLES - _approved_roles(root.get("approvals")))
+        if missing:
+            raise Step6Error("approved owner roles are missing: " + ", ".join(missing))
 
     justification = _object(root.get("justification"), "justification")
     _sha256(justification.get("step5_action_id"), "justification.step5_action_id")

@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from greenfield.step6_contract import Step6Error, load_json
+from greenfield.step6_contract import Step6Error, load_json, validate_step6_report
 from greenfield.step6_patch import generate_step6
 
 
@@ -39,15 +39,47 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--step4-report", required=True, type=Path)
     parser.add_argument("--step5-report", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument(
+        "--strict-target-evidence",
+        action="store_true",
+        help="Require exact GitHub Git API target evidence for Step 7 eligibility.",
+    )
+    parser.add_argument(
+        "--require-owner-approvals",
+        action="store_true",
+        help="Block PR-producing output until both owner roles approve.",
+    )
+    parser.add_argument(
+        "--step7-eligible",
+        action="store_true",
+        help="Require the strict target-evidence and owner-approval gates.",
+    )
     args = parser.parse_args(argv)
+    if args.step7_eligible and not (
+        args.strict_target_evidence and args.require_owner_approvals
+    ):
+        parser.error("--step7-eligible requires --strict-target-evidence and --require-owner-approvals")
     try:
+        request = load_json(args.request, "Step 6 request")
+        if args.step7_eligible:
+            request["_step7_eligibility"] = True
         report = generate_step6(
-            load_json(args.request, "Step 6 request"),
+            request,
             load_json(args.step1_report, "Step 1 report"),
             load_json(args.step3_report, "Step 3 report"),
             load_json(args.step4_report, "Step 4 report"),
             load_json(args.step5_report, "Step 5 report"),
+            strict_target_evidence=args.strict_target_evidence,
+            require_approvals=args.require_owner_approvals,
         )
+        errors = validate_step6_report(
+            report,
+            strict_target_evidence=args.strict_target_evidence,
+            require_approvals=args.require_owner_approvals,
+            require_step7_eligibility=args.step7_eligible,
+        )
+        if errors:
+            raise Step6Error("generated invalid Step 6 report: " + "; ".join(errors))
         _write_atomic(args.output, report)
     except (OSError, Step6Error, ValueError) as exc:
         print(f"greenfield Step 6 failed: {exc}", file=sys.stderr)

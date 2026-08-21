@@ -9,6 +9,7 @@ import pytest
 from greenfield.github_repository_evidence import (
     RepositoryEvidenceError,
     collect_repository_evidence,
+    collect_target_evidence,
 )
 from greenfield.semantic_index import build_semantic_index_from_files
 from greenfield.step2_candidates import resolve_candidates
@@ -588,3 +589,138 @@ def test_inventory_collection_is_byte_deterministic() -> None:
     assert json.dumps(first, sort_keys=True, separators=(",", ":")) == json.dumps(
         second, sort_keys=True, separators=(",", ":")
     )
+
+
+def test_strict_ci_evidence_requires_execution_envelope(tmp_path: Path) -> None:
+    path = tmp_path / "ci.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "0.1",
+                "evidence_id": "run-1",
+                "repository": "intacct/tests",
+                "commit_sha": CONSUMER,
+                "source_repository": "ia-app",
+                "source_revision": TARGET,
+                "interface_id": "company.config.preference",
+                "status": "available",
+                "workflow_run_id": 10,
+                "workflow_job_id": 11,
+                "tests": [
+                    {
+                        "id": "test-one",
+                        "path": "tests/test_one.py",
+                        "execution_result": "passed",
+                        "test_command": {
+                            "argv": ["pytest", "tests/test_one.py"],
+                            "cwd": ".",
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    evidence = load_ci_evidence(path, strict=True)
+    assert evidence["tests"][0]["test_command"]["argv"] == [
+        "pytest",
+        "tests/test_one.py",
+    ]
+
+
+def test_strict_ci_evidence_rejects_shell_command(tmp_path: Path) -> None:
+    path = tmp_path / "ci.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "0.1",
+                "evidence_id": "run-1",
+                "repository": "intacct/tests",
+                "commit_sha": CONSUMER,
+                "source_repository": "ia-app",
+                "source_revision": TARGET,
+                "interface_id": "company.config.preference",
+                "status": "available",
+                "workflow_run_id": 10,
+                "workflow_job_id": 11,
+                "tests": [
+                    {
+                        "id": "test-one",
+                        "path": "tests/test_one.py",
+                        "execution_result": "passed",
+                        "test_command": "pytest tests/test_one.py",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(EvidenceError, match="structured argv"):
+        load_ci_evidence(path, strict=True)
+
+
+def test_strict_ci_evidence_requires_explicit_command_state(tmp_path: Path) -> None:
+    path = tmp_path / "ci.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "0.1",
+                "evidence_id": "run-1",
+                "repository": "intacct/tests",
+                "commit_sha": CONSUMER,
+                "source_repository": "ia-app",
+                "source_revision": TARGET,
+                "interface_id": "company.config.preference",
+                "status": "available",
+                "workflow_run_id": 10,
+                "workflow_job_id": 11,
+                "tests": [{
+                    "id": "test-one",
+                    "path": "tests/test_one.py",
+                    "execution_result": "passed",
+                }],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(EvidenceError, match="requires test_command"):
+        load_ci_evidence(path, strict=True)
+
+
+def test_target_evidence_is_revision_and_blob_pinned() -> None:
+    revision = "0123456789abcdef0123456789abcdef01234567"
+    content = b"Feature: Example\n"
+    encoded = base64.b64encode(content).decode()
+    endpoints = {
+        f"repos/intacct/tests/git/trees/{revision}?recursive=1": {
+            "tree": [
+                {"path": "features/example.feature", "type": "blob", "sha": "f" * 40}
+            ],
+            "truncated": False,
+        },
+        "repos/intacct/tests/git/blobs/" + "f" * 40: {
+            "encoding": "base64",
+            "content": encoded,
+        },
+    }
+
+    report = collect_target_evidence(
+        "intacct/tests",
+        revision=revision,
+        paths=["features/example.feature"],
+        provider=lambda endpoint: endpoints[endpoint],
+    )
+    assert report["provider"] == "github_git_api"
+    assert report["revision"] == revision
+    assert report["files"][0]["blob_or_response_id"] == "f" * 40
+    assert len(report["evidence_sha256"]) == 64
+
+
+def test_target_evidence_rejects_synthetic_revision() -> None:
+    with pytest.raises(RepositoryEvidenceError, match="must not be synthetic"):
+        collect_target_evidence(
+            "intacct/tests",
+            revision="d" * 40,
+            paths=["features/example.feature"],
+            provider=lambda _: {},
+        )

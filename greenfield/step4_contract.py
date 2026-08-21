@@ -166,6 +166,19 @@ def validate_step4_report(report: Any) -> list[str]:
             or not test["path"].strip()
         ):
             errors.append(f"{label}.test is invalid")
+        if "test_command" in item:
+            command = item["test_command"]
+            if command != "unavailable" and not (
+                isinstance(command, str)
+                and command.strip()
+                or isinstance(command, dict)
+                and isinstance(command.get("argv"), list)
+                and bool(command["argv"])
+                and all(isinstance(value, str) and value.strip() for value in command["argv"])
+                and isinstance(command.get("cwd", "."), str)
+                and bool(command.get("cwd", ".").strip())
+            ):
+                errors.append(f"{label}.test_command is invalid")
         evidence = item.get("evidence")
         if not isinstance(evidence, list) or not evidence or any(not isinstance(value, dict) for value in evidence):
             errors.append(f"{label}.evidence must be a non-empty list of objects")

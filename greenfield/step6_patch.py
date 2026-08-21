@@ -11,6 +11,7 @@ from greenfield.step4_contract import artifact_sha256 as step4_artifact_sha256
 from greenfield.step4_contract import validate_step4_report
 from greenfield.step5_actions import validate_step5_report
 from greenfield.step6_contract import (
+    APPROVAL_ROLES,
     REPORT_ANALYSIS_KIND,
     REPORT_SCHEMA_VERSION,
     RULE_SET_VERSION,
@@ -25,6 +26,16 @@ from scripts.validate_greenfield_step3 import validate as validate_step3
 
 SUPPORTED_ACTIONS = {"update_test_obligation"}
 SUPPORTED_TRIGGERS = {"fixture_contract_mismatch", "api_or_schema_changed"}
+
+
+def _approved_roles(value: Any) -> set[str]:
+    if not isinstance(value, list):
+        return set()
+    return {
+        str(item.get("role"))
+        for item in value
+        if isinstance(item, Mapping) and item.get("status") == "approved"
+    }
 
 
 def _text(value: Any, label: str) -> str:
@@ -154,6 +165,9 @@ def _base_report(
         "schema_version": REPORT_SCHEMA_VERSION,
         "analysis_kind": REPORT_ANALYSIS_KIND,
         "status": status,
+        "eligibility_profile": "step7"
+        if request.get("_step7_eligibility") is True
+        else "replay",
         "proposal_id": "0" * 64,
         "reason": reason,
         "source": {
@@ -214,6 +228,11 @@ def _base_report(
             "github_writes": "none",
         },
     }
+    if "approvals" in request:
+        report["approvals"] = deepcopy(request["approvals"])
+    if "target_evidence" in request:
+        report["target_evidence"] = deepcopy(request["target_evidence"])
+        report["target"]["files"] = deepcopy(target.get("files", []))
     report["idempotency_key"] = artifact_sha256(
         {
             "source_repository": source["repository"],
@@ -237,12 +256,27 @@ def generate_step6(
     step3: Mapping[str, Any],
     step4: Mapping[str, Any],
     step5: Mapping[str, Any],
+    *,
+    strict_target_evidence: bool = False,
+    require_approvals: bool = False,
 ) -> dict[str, Any]:
-    errors = validate_step6_request(request)
+    errors = validate_step6_request(
+        request, strict_target_evidence=strict_target_evidence
+    )
     if errors:
         raise Step6Error("invalid Step 6 request: " + "; ".join(errors))
     _upstream_context(request, step1, step3, step4, step5)
     action = request["action"]
+    if require_approvals:
+        missing_roles = sorted(
+            APPROVAL_ROLES - _approved_roles(request.get("approvals"))
+        )
+        if missing_roles:
+            return _base_report(
+                request,
+                status="blocked",
+                reason="owner_approval_pending:" + ",".join(missing_roles),
+            )
     if action["status"] != "recommended":
         return _base_report(request, status="blocked", reason="step5_action_blocked")
     if action["action_type"] not in SUPPORTED_ACTIONS:

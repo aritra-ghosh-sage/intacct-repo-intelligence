@@ -181,8 +181,12 @@ def _ci_tests(
         }
         if isinstance(test.get("test_owner"), str) and test["test_owner"].strip():
             row["test_owner"] = test["test_owner"].strip()
-        if isinstance(test.get("test_command"), str) and test["test_command"].strip():
-            row["test_command"] = test["test_command"].strip()
+        if "test_command" in test:
+            command = test["test_command"]
+            if isinstance(command, str) and command.strip():
+                row["test_command"] = command.strip()
+            elif isinstance(command, Mapping) or command == "unavailable":
+                row["test_command"] = command
         if test.get("execution_result") is not None:
             row["execution_result"] = test["execution_result"]
         if test.get("required_change") is not None:

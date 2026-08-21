@@ -306,6 +306,187 @@ def test_missing_target_evidence_fails_closed() -> None:
     assert validate_step6_request(request)
 
 
+def test_strict_target_evidence_requires_real_revision_and_file_identity() -> None:
+    files = [_file("features/example.feature", "Then old\n")]
+    request, step1, step3, step4, step5 = _request(
+        "intacct/ia-restapi-automation-tests",
+        "restapi_existing_case_update_v1",
+        files,
+        [
+            {
+                "path": files[0]["path"],
+                "old_text": "old",
+                "new_text": "new",
+                "expected_occurrences": 1,
+            }
+        ],
+    )
+    assert validate_step6_request(request, strict_target_evidence=True)
+
+    target_revision = "0123456789abcdef0123456789abcdef01234567"
+    request["target"]["base_revision"] = target_revision
+    evidence = {
+        "provider": "github_git_api",
+        "repository": request["target"]["repository"],
+        "revision": target_revision,
+        "files": [
+            {
+                "path": files[0]["path"],
+                "content_sha256": files[0]["sha256"],
+                "blob_or_response_id": "blob:example-feature",
+            }
+        ],
+    }
+    evidence["evidence_sha256"] = artifact_sha256(evidence)
+    request["target_evidence"] = evidence
+    assert validate_step6_request(request, strict_target_evidence=True) == []
+    report = generate_step6(
+        request,
+        step1,
+        step3,
+        step4,
+        step5,
+        strict_target_evidence=True,
+    )
+    assert report["status"] == "ready_for_ai_pr"
+    assert validate_step6_report(report, strict_target_evidence=True) == []
+
+
+def test_strict_step6_requires_both_owner_approvals_for_pr_output() -> None:
+    files = [_file("features/example.feature", "Then old\n")]
+    request, step1, step3, step4, step5 = _request(
+        "intacct/ia-restapi-automation-tests",
+        "restapi_existing_case_update_v1",
+        files,
+        [
+            {
+                "path": files[0]["path"],
+                "old_text": "old",
+                "new_text": "new",
+                "expected_occurrences": 1,
+            }
+        ],
+    )
+    target_revision = "0123456789abcdef0123456789abcdef01234567"
+    request["target"]["base_revision"] = target_revision
+    evidence = {
+        "provider": "github_git_api",
+        "repository": request["target"]["repository"],
+        "revision": target_revision,
+        "files": [
+            {
+                "path": files[0]["path"],
+                "content_sha256": files[0]["sha256"],
+                "blob_or_response_id": "blob:example-feature",
+            }
+        ],
+    }
+    evidence["evidence_sha256"] = artifact_sha256(evidence)
+    request["target_evidence"] = evidence
+    blocked = generate_step6(
+        request,
+        step1,
+        step3,
+        step4,
+        step5,
+        strict_target_evidence=True,
+        require_approvals=True,
+    )
+    assert blocked["status"] == "blocked"
+    assert "owner_approval_pending" in blocked["reason"]
+    assert validate_step6_report(blocked, strict_target_evidence=True) == []
+
+    request["approvals"] = [
+        {
+            "role": "source_interface_owner",
+            "status": "approved",
+            "approver": "source-owner",
+            "approval_evidence": {
+                "provider": "approval-service",
+                "record_id": "approval-source-1",
+                "sha256": "1" * 64,
+            },
+        },
+        {
+            "role": "consumer_test_owner",
+            "status": "approved",
+            "approver": "test-owner",
+            "approval_evidence": {
+                "provider": "approval-service",
+                "record_id": "approval-test-1",
+                "sha256": "2" * 64,
+            },
+        },
+    ]
+    for approval in request["approvals"]:
+        approval["approval_sha256"] = artifact_sha256(
+            {
+                "role": approval["role"],
+                "status": approval["status"],
+                "approver": approval["approver"],
+                "approval_evidence": approval["approval_evidence"],
+            }
+        )
+    ready = generate_step6(
+        request,
+        step1,
+        step3,
+        step4,
+        step5,
+        strict_target_evidence=True,
+        require_approvals=True,
+    )
+    assert ready["status"] == "ready_for_ai_pr"
+    assert validate_step6_report(
+        ready, strict_target_evidence=True, require_approvals=True
+    ) == []
+
+
+def test_owner_approval_gate_is_not_bypassed_without_strict_evidence() -> None:
+    files = [_file("features/example.feature", "Then old\n")]
+    request, step1, step3, step4, step5 = _request(
+        "intacct/ia-restapi-automation-tests",
+        "restapi_existing_case_update_v1",
+        files,
+        [{"path": files[0]["path"], "old_text": "old", "new_text": "new", "expected_occurrences": 1}],
+    )
+    blocked = generate_step6(
+        request, step1, step3, step4, step5, require_approvals=True
+    )
+    assert blocked["status"] == "blocked"
+
+
+def test_strict_target_evidence_requires_all_target_files() -> None:
+    files = sorted(
+        [_file("features/a.feature", "Then old\n"), _file("features/b.feature", "Then other\n")],
+        key=lambda row: row["path"],
+    )
+    request, *_ = _request(
+        "intacct/ia-restapi-automation-tests",
+        "restapi_existing_case_update_v1",
+        files,
+        [{"path": files[0]["path"], "old_text": "old", "new_text": "new", "expected_occurrences": 1}],
+    )
+    revision = "0123456789abcdef0123456789abcdef01234567"
+    request["target"]["base_revision"] = revision
+    evidence = {
+        "provider": "github_git_api",
+        "repository": request["target"]["repository"],
+        "revision": revision,
+        "files": [{
+            "path": files[0]["path"],
+            "content_sha256": files[0]["sha256"],
+            "blob_or_response_id": "blob:example",
+        }],
+    }
+    evidence["evidence_sha256"] = artifact_sha256(evidence)
+    request["target_evidence"] = evidence
+    assert any(
+        "exactly match target.files" in error
+        for error in validate_step6_request(request, strict_target_evidence=True)
+    )
+
+
 def test_multiple_old_fragments_fail_closed() -> None:
     files = [_file("features/example.feature", "Then old\nThen old\n")]
     request, step1, step3, step4, step5 = _request(

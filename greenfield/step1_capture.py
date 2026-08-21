@@ -50,6 +50,37 @@ def capture_failure_code(error: Exception) -> str:
     """Classify a capture failure for clearer blocked Step 1 diagnostics."""
 
     message = str(error).lower()
+    if any(token in message for token in ("rate limit", "rate_limit", "api rate")):
+        return "rate_limited"
+    if any(
+        token in message
+        for token in (
+            "bad credentials",
+            "authentication failed",
+            "requires authentication",
+            "401",
+        )
+    ):
+        return "authentication_failed"
+    if any(
+        token in message
+        for token in ("403", "forbidden", "permission denied", "resource not accessible")
+    ):
+        return "permission_denied"
+    if any(token in message for token in ("404", "not found", "unknown repository")):
+        return "not_found"
+    if any(token in message for token in ("timed out", "timeout", "timedout")):
+        return "timeout"
+    if any(
+        token in message
+        for token in (
+            "not json",
+            "not an array",
+            "missing array",
+            "invalid provider response",
+        )
+    ):
+        return "invalid_provider_response"
     if any(
         token in message
         for token in (
@@ -75,6 +106,12 @@ def capture_failure_code(error: Exception) -> str:
     ):
         return "manifest_identity_mismatch"
     return "capture_failed"
+
+
+def capture_failure_retryable(code: str) -> bool:
+    """Return whether an external orchestrator may retry a blocked capture."""
+
+    return code in {"provider_unavailable", "rate_limited", "timeout"}
 
 
 def _text(value: Any, label: str) -> str:
@@ -276,7 +313,11 @@ def blocked_report(error: Exception, *, code: str = "capture_failed") -> dict[st
         "schema_version": REPORT_SCHEMA_VERSION,
         "analysis_kind": ANALYSIS_KIND,
         "status": "blocked",
-        "error": {"code": code, "message": str(error)},
+        "error": {
+            "code": code,
+            "message": str(error),
+            "retryable": capture_failure_retryable(code),
+        },
         "input": {},
         "changed_files": [],
         "pr_metadata": {},

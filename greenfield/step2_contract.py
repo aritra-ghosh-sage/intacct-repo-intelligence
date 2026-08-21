@@ -50,6 +50,26 @@ def _paths(value: Any, label: str) -> list[str]:
     return result
 
 
+def _validate_test_command(value: Any, label: str, *, strict: bool) -> None:
+    if value == "unavailable":
+        return
+    if isinstance(value, str):
+        if strict:
+            raise EvidenceError(f"{label} must use structured argv or unavailable")
+        if not value.strip():
+            raise EvidenceError(f"{label} must be non-empty")
+        return
+    if not isinstance(value, dict):
+        raise EvidenceError(f"{label} must be an object or unavailable")
+    argv = value.get("argv")
+    if not isinstance(argv, list) or not argv or any(
+        not isinstance(item, str) or not item.strip() for item in argv
+    ):
+        raise EvidenceError(f"{label}.argv must be a non-empty list of strings")
+    if not isinstance(value.get("cwd", "."), str) or not value.get("cwd", ".").strip():
+        raise EvidenceError(f"{label}.cwd must be a non-empty string")
+
+
 def _canonical(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -169,7 +189,7 @@ def load_contract(path: str | Path) -> dict[str, Any]:
     }
 
 
-def load_ci_evidence(path: str | Path) -> dict[str, Any]:
+def load_ci_evidence(path: str | Path, *, strict: bool = False) -> dict[str, Any]:
     source = Path(path)
     try:
         raw = json.loads(source.read_text(encoding="utf-8"))
@@ -187,6 +207,8 @@ def load_ci_evidence(path: str | Path) -> dict[str, Any]:
             tests.append(test)
             continue
         normalized_test = dict(test)
+        if "test_command" in test:
+            _validate_test_command(test["test_command"], "ci test_command", strict=strict)
         for field in (
             "test_owner",
             "test_command",
@@ -220,6 +242,24 @@ def load_ci_evidence(path: str | Path) -> dict[str, Any]:
     }
     if normalized["status"] not in {"available", "empty", "unavailable", "stale"}:
         raise EvidenceError("ci evidence status is invalid")
+    if strict and normalized["status"] == "available":
+        if not tests:
+            raise EvidenceError("strict CI evidence requires tests")
+        if not isinstance(data.get("workflow_run_id"), int):
+            raise EvidenceError("strict CI evidence requires workflow_run_id")
+        if not isinstance(data.get("workflow_job_id"), int):
+            raise EvidenceError("strict CI evidence requires workflow_job_id")
+        for index, test in enumerate(tests):
+            if not isinstance(test, dict):
+                raise EvidenceError(f"strict CI test {index} must be an object")
+            if not isinstance(test.get("id"), str) or not test["id"].strip():
+                raise EvidenceError(f"strict CI test {index} requires id")
+            if not isinstance(test.get("path"), str) or not test["path"].strip():
+                raise EvidenceError(f"strict CI test {index} requires path")
+            if "execution_result" not in test:
+                raise EvidenceError(f"strict CI test {index} requires execution_result")
+            if "test_command" not in test:
+                raise EvidenceError(f"strict CI test {index} requires test_command or unavailable")
     for field in (
         "workflow_run_id",
         "workflow_job_id",

@@ -16,6 +16,7 @@ from collections.abc import Callable
 from typing import Any
 
 SCHEMA_VERSION = "0.1"
+TARGET_EVIDENCE_SCHEMA_VERSION = "0.1"
 _TEST_EXECUTION = re.compile(
     r"(?:\bpytest\b|mvn\s+(?:test|verify)(?![-\w])|gradle\s+(?:test|check)(?![-\w])|npm\s+test\b|yarn\s+test\b|go\s+test\b|dotnet\s+test\b|\bctest\b)",
     re.IGNORECASE,
@@ -368,4 +369,72 @@ def collect_repository_evidence(
     except Exception as exc:
         raise RepositoryEvidenceError(
             f"repository_evidence_failed: {repository}: {exc}"
+        ) from exc
+
+
+def collect_target_evidence(
+    repository: str,
+    *,
+    revision: str,
+    paths: list[str],
+    provider: Provider | None = None,
+) -> dict[str, Any]:
+    """Capture exact target file bytes from a GitHub commit without writes."""
+
+    if not isinstance(repository, str) or not repository.strip():
+        raise RepositoryEvidenceError("target repository is required")
+    if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise RepositoryEvidenceError("target revision must be a lowercase 40-character SHA")
+    if len(set(revision)) <= 1:
+        raise RepositoryEvidenceError("target revision must not be synthetic")
+    if not isinstance(paths, list) or not paths or paths != sorted(set(paths)):
+        raise RepositoryEvidenceError("target paths must be a sorted, unique non-empty list")
+    call = provider or _gh_provider
+    tree_endpoint = f"repos/{repository}/git/trees/{revision}?recursive=1"
+    try:
+        tree = _object(call(tree_endpoint), tree_endpoint)
+        if tree.get("truncated") is True:
+            raise RepositoryEvidenceError("target tree response is truncated")
+        entries = _list(tree.get("tree"), f"{tree_endpoint}.tree")
+        by_path = {
+            item.get("path"): item
+            for item in entries
+            if isinstance(item, dict) and item.get("type") == "blob"
+        }
+        endpoints = [tree_endpoint]
+        files: list[dict[str, Any]] = []
+        for path in paths:
+            entry = by_path.get(path)
+            if not isinstance(entry, dict) or not isinstance(entry.get("sha"), str):
+                raise RepositoryEvidenceError(f"target file is not a blob at revision: {path}")
+            blob_sha = entry["sha"]
+            blob_endpoint = f"repos/{repository}/git/blobs/{blob_sha}"
+            blob = _object(call(blob_endpoint), blob_endpoint)
+            endpoints.append(blob_endpoint)
+            content = _decode_content(blob)
+            files.append(
+                {
+                    "path": path,
+                    "content_sha256": _sha256(content),
+                    "blob_or_response_id": blob_sha,
+                }
+            )
+        report: dict[str, Any] = {
+            "schema_version": TARGET_EVIDENCE_SCHEMA_VERSION,
+            "evidence_type": "target_snapshot",
+            "provider": "github_git_api",
+            "repository": repository,
+            "revision": revision,
+            "files": files,
+            "provenance": {"endpoints": endpoints, "read_only": True},
+        }
+        report["evidence_sha256"] = _sha256(
+            {key: value for key, value in report.items() if key != "evidence_sha256"}
+        )
+        return report
+    except RepositoryEvidenceError:
+        raise
+    except Exception as exc:
+        raise RepositoryEvidenceError(
+            f"target_evidence_failed: {repository}@{revision}: {exc}"
         ) from exc

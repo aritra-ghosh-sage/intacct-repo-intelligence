@@ -8,7 +8,10 @@ import pytest
 from greenfield.step1_capture import (
     ANALYSIS_KIND,
     CaptureError,
+    blocked_report,
     build_report,
+    capture_failure_code,
+    capture_failure_retryable,
     capture_pr,
     evidence_fingerprint,
 )
@@ -215,6 +218,24 @@ def test_blocked_cli_classifies_capture_failures(
     assert report["status"] == "blocked"
     assert report["error"]["code"] == code
     assert validate(report) == []
+
+
+@pytest.mark.parametrize(
+    ("message", "code", "retryable"),
+    [
+        ("GitHub API returned 401 Bad credentials", "authentication_failed", False),
+        ("GitHub API returned 403 Forbidden", "permission_denied", False),
+        ("GitHub API returned 404 Not Found", "not_found", False),
+        ("GitHub HTTP API timed out", "timeout", True),
+        ("GitHub API rate limit exceeded", "rate_limited", True),
+        ("github metadata response is not JSON", "invalid_provider_response", False),
+    ],
+)
+def test_capture_failure_taxonomy(message: str, code: str, retryable: bool) -> None:
+    error = RuntimeError(message)
+    assert capture_failure_code(error) == code
+    assert capture_failure_retryable(code) is retryable
+    assert blocked_report(error, code=code)["error"]["retryable"] is retryable
 
 
 def test_cli_reports_output_write_failure(

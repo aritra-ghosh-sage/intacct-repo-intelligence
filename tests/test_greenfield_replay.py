@@ -7,6 +7,7 @@ from greenfield.step4_contract import validate_step4_report
 from greenfield.step5_actions import validate_step5_report
 from scripts import (
     replay_greenfield_step1_5,
+    replay_greenfield_step1_6,
     trace_greenfield_step2,
     trace_greenfield_step3,
     trace_greenfield_step4,
@@ -36,6 +37,37 @@ def test_replay_bundle_reproduces_golden_reports(tmp_path: Path) -> None:
         expected = json.loads((BUNDLE / name).read_text(encoding="utf-8"))
         actual = json.loads((output_dir / name).read_text(encoding="utf-8"))
         assert actual == expected
+
+
+def test_replay_bundle_reproduces_step6_golden_reports(tmp_path: Path) -> None:
+    output_dir = tmp_path / "greenfield-replay-step6"
+    assert (
+        replay_greenfield_step1_6.main(
+            ["--bundle-dir", str(BUNDLE), "--output-dir", str(output_dir)]
+        )
+        == 0
+    )
+    for name in (
+        "step2.report.json",
+        "step3.report.json",
+        "step4.report.json",
+        "step5.report.json",
+        "step6.report.json",
+    ):
+        expected = json.loads((BUNDLE / name).read_text(encoding="utf-8"))
+        actual = json.loads((output_dir / name).read_text(encoding="utf-8"))
+        assert actual == expected
+
+
+def test_step6_replay_resolves_bundle_files_from_any_cwd(tmp_path: Path, monkeypatch) -> None:
+    output_dir = tmp_path / "greenfield-replay-cwd"
+    monkeypatch.chdir(tmp_path)
+    assert (
+        replay_greenfield_step1_6.main(
+            ["--bundle-dir", str(BUNDLE.resolve()), "--output-dir", str(output_dir)]
+        )
+        == 0
+    )
 
 
 def test_optional_related_evidence_uses_stable_repository_path() -> None:
