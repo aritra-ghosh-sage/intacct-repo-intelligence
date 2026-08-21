@@ -1,0 +1,17 @@
+schema_version: "0.1"
+repository: ia-app
+revision: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+relations:
+  - interface_id: api_object:general-ledger/txn-allocation-template-line
+    owner_repository: ia-app
+    consumer_repository: intacct/ia-restapi-automation-tests
+    relationship_type: api_contract
+    source_paths:
+      - app/source/company/AllocationManager.cls
+    source_symbols:
+      - AllocationManager:ApplyCustomAllocation
+    status: active
+    test_obligations:
+      - id: allocation-template-line-update
+        path: features/fa/tc-transaction-allocation/transaction-allocation-MegaView.feature
+        required_change: assertion

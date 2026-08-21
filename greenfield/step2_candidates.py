@@ -9,6 +9,11 @@ from typing import Any
 
 from greenfield.source_identity import repository_matches, source_identity
 from greenfield.step2_contract import artifact_sha256
+from greenfield.step2_likelihood import (
+    attach_explicit_contract_anchors,
+    build_source_anchors,
+    rank_likely_tests,
+)
 
 REPORT_SCHEMA_VERSION = "0.1"
 ANALYSIS_KIND = "greenfield_pr_impact_step_2"
@@ -106,6 +111,25 @@ def resolve_candidates(
     gaps: list[str] = []
     warnings: list[str] = []
 
+    valid_semantic_indexes = [
+        index
+        for index in semantic_indexes
+        if repository_matches(index.get("repository"), canonical_repository, source_repo_key)
+        and index.get("revision") == target_revision
+    ]
+    source_anchors = build_source_anchors(changed_paths, valid_semantic_indexes)
+    active_relations = [
+        relation
+        for contract in contracts
+        if repository_matches(contract.get("repository"), canonical_repository, source_repo_key)
+        and contract.get("revision") == target_revision
+        for relation in contract.get("relations", [])
+        if relation.get("status") == "active"
+    ]
+    source_anchors = attach_explicit_contract_anchors(
+        source_anchors, changed_paths, active_relations, target_revision
+    )
+
     for contract in contracts:
         if not repository_matches(
             contract.get("repository"), canonical_repository, source_repo_key
@@ -134,6 +158,7 @@ def resolve_candidates(
                 "reason": "exact_active_contract",
                 "owner_repository": relation.get("owner_repository"),
                 "owner": relation.get("owner"),
+                "source_symbols": relation.get("source_symbols", []),
                 "changed_paths": matched,
                 "evidence": [
                     {
@@ -350,16 +375,6 @@ def resolve_candidates(
                 f"{index.get('evidence_path', 'unknown')}"
             )
             continue
-        active_relations = [
-            relation
-            for contract in contracts
-            if repository_matches(
-                contract.get("repository"), canonical_repository, source_repo_key
-            )
-            and contract.get("revision") == target_revision
-            for relation in contract.get("relations", [])
-            if relation.get("status") == "active"
-        ]
         active_interface_ids = {
             relation.get("interface_id") for relation in active_relations
         }
@@ -414,6 +429,22 @@ def resolve_candidates(
                     ],
                 }
                 candidates[_candidate_key(candidate)] = candidate
+
+    inventories_by_repository = {
+        str(inventory.get("repository")): inventory
+        for inventory in inventory_evidence
+        if isinstance(inventory, Mapping)
+        and inventory.get("source_revision") == target_revision
+        and inventory.get("status") == "available"
+    }
+    for candidate in candidates.values():
+        candidate["source_anchors"] = source_anchors
+        candidate["likely_tests"] = rank_likely_tests(
+            candidate,
+            inventories_by_repository.get(str(candidate.get("target_repository"))),
+            source_anchors,
+            active_relations,
+        )
 
     rows = sorted(
         candidates.values(),

@@ -28,6 +28,29 @@ repo-v1 direct traces, catalog revisions, or SQLite preflight fields.
 The report is deterministic: inputs are normalized, candidates are
 deduplicated by stable identity, evidence is retained, and output is sorted.
 
+## Source anchors and likely tests
+
+When a revision-pinned semantic sidecar is supplied, Step 2 joins changed
+source evidence to API objects through exact entity edges in that same
+revision. The resulting candidate may include `source_anchors`, with the
+changed source path, enclosing symbol, source lines, entity, API interface,
+source revision, and evidence hashes. A semantic source anchor is candidate
+evidence; it does not replace an active cross-repository contract or prove CI
+execution.
+
+Candidates may also include `likely_tests`. These are ranked, bounded test
+paths from the inspected downstream inventory. Exact contract test
+obligations rank highest. Source-backed interface/entity path signals may
+rank inventory paths lower, but filename similarity alone never creates an
+interface relationship. Every result includes a score rule version, confidence
+band, reason codes, and evidence basis. `inventory_paths` remains the raw
+repository inventory and is not an impacted-test assertion.
+
+The Greenfield flow does not read `config/entity_definitions.jsonl`. That file
+is legacy generated data outside this flow. Source mappings are built from
+committed `.ent`, OpenAPI, PHP, XML, and related blobs at the exact Step 1
+target revision.
+
 ## Contract input
 
 Repository-local YAML uses schema `0.1`:
@@ -117,9 +140,10 @@ classification boundary.
 
 The initial slice resolves impact at the declared interface/contract level and
 does not require a manual symbol-to-entity mapping for every changed symbol.
-Future symbol-level relationships may be supplied by generated, revision-pinned
-indexes and then reviewed. Names, basenames, filenames, modules, and semantic
-similarity are never authoritative identity.
+Revision-pinned semantic source anchors may narrow the likely test surface;
+explicit reviewed source-symbol-to-interface relationships remain available
+for cases the semantic extractor cannot resolve. Names, basenames, filenames,
+modules, and semantic similarity are never authoritative identity.
 
 ## CLI
 

@@ -14,6 +14,7 @@ from greenfield.github_repository_evidence import (
 from greenfield.semantic_index import build_semantic_index_from_files
 from greenfield.step2_candidates import resolve_candidates
 from greenfield.step2_contract import EvidenceError, load_ci_evidence, load_contract
+from greenfield.step2_likelihood import build_source_anchors, rank_likely_tests
 from scripts.trace_greenfield_step2 import _unavailable_inventory
 from scripts.validate_greenfield_step2 import validate
 
@@ -344,6 +345,75 @@ def test_semantic_index_missing_active_contract_is_observable() -> None:
         "semantic_index_missing_active_contract:api_object:general-ledger/account"
         in report["gaps"]
     )
+
+
+def test_source_anchor_joins_changed_symbol_to_exact_api_object() -> None:
+    semantic = build_semantic_index_from_files(
+        {
+            "app/source/company/allocationentry.ent": "$kSchemas['allocationentry'] = array('module' => 'gl');",
+            "app/source/openapispec/gl/models/objects.general-ledger.txn-allocation-template-line.s1.schema.yaml": "x-mappedTo: allocationentry\n",
+            "app/source/company/AllocationManager.cls": (
+                "<?php\nclass AllocationManager {\n"
+                "  function ApplyCustomAllocation() {\n"
+                "    $this->getManager('allocationentry');\n"
+                "  }\n}\n"
+            ),
+        },
+        repository="ia-app",
+        revision=TARGET,
+    )
+
+    anchors = build_source_anchors(
+        ["app/source/company/AllocationManager.cls"], [semantic]
+    )
+
+    assert len(anchors) == 1
+    assert anchors[0]["source_symbol"] == "AllocationManager:ApplyCustomAllocation"
+    assert anchors[0]["entity"] == "allocationentry"
+    assert anchors[0]["interfaces"][0]["interface_id"] == (
+        "api_object:general-ledger/txn-allocation-template-line"
+    )
+
+
+def test_likely_tests_are_ranked_from_source_evidence_and_inventory() -> None:
+    anchors = [
+        {
+            "source_path": "app/source/company/AllocationManager.cls",
+            "source_symbol": "AllocationManager:ApplyCustomAllocation",
+            "source_lines": {"start": 4, "end": 4},
+            "entity": "allocationentry",
+            "source_revision": TARGET,
+            "interfaces": [
+                {
+                    "interface_id": "api_object:general-ledger/txn-allocation-template-line",
+                    "mapping_kind": "semantic_source_contract",
+                    "source_revision": TARGET,
+                    "evidence": [{"kind": "semantic_index"}],
+                }
+            ],
+            "evidence": [{"source_path": "app/source/company/AllocationManager.cls"}],
+        }
+    ]
+    candidate = {
+        "target_repository": "intacct/ia-restapi-automation-tests",
+        "interface_id": "repository:intacct/ia-restapi-automation-tests",
+    }
+    inventory = {
+        "status": "available",
+        "inventory_paths": [
+            "features/fa/tc-transaction-allocation/transaction-allocation-MegaView.feature",
+            "features/co/v1/location/location.feature",
+            "features/ar/unrelated.feature",
+        ],
+    }
+
+    ranked = rank_likely_tests(candidate, inventory, anchors, [])
+
+    assert ranked
+    assert ranked[0]["path"].endswith("transaction-allocation-MegaView.feature")
+    assert ranked[0]["score"] > 0
+    assert ranked[0]["score_rule_set_version"] == "0.1"
+    assert all("evidence" in item and item["basis"] == "source_ranked" for item in ranked)
 
 
 def provider_for(

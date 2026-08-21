@@ -50,6 +50,17 @@ def _paths(value: Any, label: str) -> list[str]:
     return result
 
 
+def _optional_symbols(value: Any, label: str) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise EvidenceError(f"{label} must be a list")
+    result = sorted({_text(item, f"{label} item") for item in value})
+    if any("*" in symbol or "?" in symbol for symbol in result):
+        raise EvidenceError(f"{label} must contain exact symbols, not patterns")
+    return result
+
+
 def _validate_test_command(value: Any, label: str, *, strict: bool) -> None:
     if value == "unavailable":
         return
@@ -107,6 +118,9 @@ def load_contract(path: str | Path) -> dict[str, Any]:
         if status not in {"active", "inactive"}:
             raise EvidenceError("contract relation status must be active or inactive")
         source_paths = _paths(item.get("source_paths"), "source_paths")
+        source_symbols = _optional_symbols(
+            item.get("source_symbols"), "source_symbols"
+        )
         test_obligations = item.get("test_obligations", [])
         if not isinstance(test_obligations, list):
             raise EvidenceError("test_obligations must be a list")
@@ -164,6 +178,7 @@ def load_contract(path: str | Path) -> dict[str, Any]:
                 "consumer_repository": consumer,
                 "relationship_type": relationship_type,
                 "source_paths": source_paths,
+                "source_symbols": source_symbols,
                 "status": status,
                 "owner": item.get("owner"),
                 "test_obligations": normalized_obligations,

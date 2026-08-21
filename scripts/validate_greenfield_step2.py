@@ -32,6 +32,7 @@ CLASSIFICATION_ORDER = {
     "unavailable": 4,
     "unknown": 5,
 }
+LIKELY_CONFIDENCES = {"high", "medium", "low"}
 
 
 def validate(report: Any) -> list[str]:
@@ -150,6 +151,8 @@ def validate(report: Any) -> list[str]:
             and candidate.get("classification") != "candidate"
         ):
             errors.append("semantic index evidence can only classify a candidate")
+        _validate_source_anchors(candidate.get("source_anchors"), errors)
+        _validate_likely_tests(candidate, errors)
         candidate_keys.append(
             (
                 str(candidate.get("target_repository")),
@@ -181,6 +184,96 @@ def validate(report: Any) -> list[str]:
     if not isinstance(digest, str) or not SHA256.fullmatch(digest):
         errors.append("provenance.step1_report_sha256 must be lowercase SHA-256")
     return errors
+
+
+def _validate_source_anchors(value: Any, errors: list[str]) -> None:
+    if value is None:
+        return
+    if not isinstance(value, list):
+        errors.append("candidate source_anchors must be a list")
+        return
+    prior: tuple[str, str, str] | None = None
+    for anchor in value:
+        if not isinstance(anchor, dict):
+            errors.append("source anchor must be an object")
+            continue
+        for key in ("source_path", "entity", "source_revision", "interfaces", "evidence"):
+            if key not in anchor:
+                errors.append(f"source anchor missing {key}")
+        path = anchor.get("source_path")
+        if not isinstance(path, str) or not path:
+            errors.append("source anchor requires source_path")
+        revision = anchor.get("source_revision")
+        if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40}", revision):
+            errors.append("source anchor requires lowercase source_revision")
+        interfaces = anchor.get("interfaces")
+        if not isinstance(interfaces, list):
+            errors.append("source anchor interfaces must be a list")
+        else:
+            for mapping in interfaces:
+                if not isinstance(mapping, dict):
+                    errors.append("source interface mapping must be an object")
+                    continue
+                if not isinstance(mapping.get("interface_id"), str) or not mapping["interface_id"]:
+                    errors.append("source interface mapping requires interface_id")
+                if mapping.get("mapping_kind") not in {
+                    "semantic_source_contract",
+                    "explicit_source_contract",
+                }:
+                    errors.append("source interface mapping has invalid mapping_kind")
+        evidence = anchor.get("evidence")
+        if not isinstance(evidence, list):
+            errors.append("source anchor evidence must be a list")
+        key = (str(path), str(anchor.get("source_symbol", "")), str(anchor.get("entity", "")))
+        if prior is not None and key < prior:
+            errors.append("source_anchors must be deterministically ordered")
+        prior = key
+
+
+def _validate_likely_tests(candidate: dict[str, Any], errors: list[str]) -> None:
+    value = candidate.get("likely_tests")
+    if value is None:
+        return
+    if not isinstance(value, list):
+        errors.append("candidate likely_tests must be a list")
+        return
+    inventory = candidate.get("inventory_paths")
+    inventory_paths = set(inventory) if isinstance(inventory, list) else None
+    prior: tuple[int, str] | None = None
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict):
+            errors.append("likely test must be an object")
+            continue
+        path = item.get("path")
+        score = item.get("score")
+        if not isinstance(path, str) or not path:
+            errors.append("likely test requires path")
+        if isinstance(score, bool) or not isinstance(score, int) or not 0 <= score <= 100:
+            errors.append("likely test score must be an integer between 0 and 100")
+        if item.get("score_rule_set_version") != "0.1":
+            errors.append("likely test has unsupported score rule set")
+        if item.get("confidence") not in LIKELY_CONFIDENCES:
+            errors.append("likely test confidence is invalid")
+        if not isinstance(item.get("reasons"), list) or any(
+            not isinstance(reason, str) or not reason for reason in item["reasons"]
+        ):
+            errors.append("likely test reasons must be non-empty strings")
+        if not isinstance(item.get("evidence"), list) or not item["evidence"]:
+            errors.append("likely test evidence must be non-empty")
+        if item.get("basis") not in {"contract_backed", "source_ranked"}:
+            errors.append("likely test basis is invalid")
+        if isinstance(path, str) and inventory_paths is not None and path not in inventory_paths:
+            errors.append("likely test path must be present in inventory_paths")
+        if isinstance(path, str):
+            if path in seen:
+                errors.append("likely_tests contains duplicate paths")
+            seen.add(path)
+        if isinstance(score, int) and isinstance(path, str):
+            key = (-score, path)
+            if prior is not None and key < prior:
+                errors.append("likely_tests must be deterministically ordered")
+            prior = key
 
 
 def main(argv: list[str] | None = None) -> int:
