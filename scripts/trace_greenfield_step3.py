@@ -16,6 +16,7 @@ from greenfield.step3_outcome import (
     assemble_outcome,
     load_related_pr_evidence,
 )
+from scripts.validate_greenfield_step3 import validate as validate_step3
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -30,6 +31,11 @@ def main(argv: list[str] | None = None) -> int:
         semantic = load_index(args.semantic_index) if args.semantic_index else None
         related = load_related_pr_evidence(args.related_pr_evidence) if args.related_pr_evidence else None
         report = assemble_outcome(step2, semantic_index=semantic, related_pr_evidence=related)
+        report_errors = validate_step3(report)
+        if report_errors:
+            raise OutcomeError(
+                "generated invalid Greenfield Step 3 report: " + "; ".join(report_errors)
+            )
     except (OSError, json.JSONDecodeError, OutcomeError, ValueError) as exc:
         print(f"greenfield Step 3 failed: {exc}", file=sys.stderr)
         return 2

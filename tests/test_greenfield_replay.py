@@ -103,3 +103,18 @@ def test_cli_chain_reaches_step5_and_validates_intermediate_reports(
 
     assert validate_step4_report(json.loads(step4.read_text(encoding="utf-8"))) == []
     assert validate_step5_report(json.loads(step5.read_text(encoding="utf-8"))) == []
+
+    tampered_step3 = json.loads(step3.read_text(encoding="utf-8"))
+    tampered_step3["input"]["target_revision"] = "0" * 40
+    tampered_path = tmp_path / "tampered-step3.json"
+    tampered_path.write_text(json.dumps(tampered_step3), encoding="utf-8")
+    assert trace_greenfield_step5.main(
+        [
+            "--step3-report",
+            str(tampered_path),
+            "--step4-report",
+            str(step4),
+            "--output",
+            str(tmp_path / "tampered-step5.json"),
+        ]
+    ) == 2

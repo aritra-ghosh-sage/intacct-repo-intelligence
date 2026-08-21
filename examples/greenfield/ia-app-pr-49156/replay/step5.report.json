@@ -103,7 +103,7 @@
       }
     },
     {
-      "action_id": "e6b112ec00432f4f078e96e5fb5d827fe12ac8768c54476ba2578cf2e030377e",
+      "action_id": "92ca22a27b695bee15e8f39b950ced54e2128bb6da5a129737ccac6a74188d3f",
       "action_type": "update_test_obligation",
       "approval_required": true,
       "completion_condition": "The declared test obligation po-process-transactions-currency exists at tests/purchasing/po_process_transactions_test.py and is validated against the source revision.",
@@ -133,6 +133,7 @@
       "rule_set_version": "0.1",
       "scope": {
         "interface_id": "purchasing.transactions.filter",
+        "obligation_id": "purchasing.transactions.filter:po-process-transactions-currency:tests/purchasing/po_process_transactions_test.py",
         "required_change": "fixture",
         "target_revision": null,
         "test_id": "po-process-transactions-currency",
@@ -173,7 +174,7 @@
     "read_only": true,
     "rule_set_version": "0.1",
     "step3_report_sha256": "09295823b4bcaca20d35286f055ab0fe75b7d725f91f9db49dd00fc35dc54012",
-    "step4_report_sha256": "215cf705fc901247c2463cc9b6af7e59e6786b642345d9fc55023dc35889ae48"
+    "step4_report_sha256": "ff19b780a4d26e3d3342698b70f2b1e975447f1d3fc792aad6616760f3af0dbc"
   },
   "schema_version": "0.1",
   "status": "partial",

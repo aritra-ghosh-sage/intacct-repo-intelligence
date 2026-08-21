@@ -7,8 +7,8 @@ import json
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from greenfield.step2_contract import artifact_sha256
 from greenfield.source_identity import repository_matches, source_identity
+from greenfield.step2_contract import artifact_sha256
 
 REPORT_SCHEMA_VERSION = "0.1"
 ANALYSIS_KIND = "greenfield_pr_impact_step_2"

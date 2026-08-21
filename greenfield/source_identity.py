@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 import re
+from collections.abc import Mapping
 from typing import Any
 
 SHA = re.compile(r"^[0-9a-f]{40}$")

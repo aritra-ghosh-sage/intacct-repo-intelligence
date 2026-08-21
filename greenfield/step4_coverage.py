@@ -6,8 +6,8 @@ import json
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from greenfield.semantic_contract import validate_index
 from greenfield.artifact_io import artifact_sha256
+from greenfield.semantic_contract import validate_index
 from greenfield.source_identity import repository_matches, source_identity
 from greenfield.step4_contract import (
     ANALYSIS_KIND,

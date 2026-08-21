@@ -9,8 +9,8 @@ from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any
 
-from greenfield.step4_contract import validate_step4_report
 from greenfield.source_identity import validate_identity_fields
+from greenfield.step4_contract import validate_step4_report
 from scripts.validate_greenfield_step3 import validate as validate_step3
 
 REPORT_SCHEMA_VERSION = "0.1"

@@ -11,8 +11,8 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from greenfield.step3_outcome import ANALYSIS_KIND, BLAST_RADIUS, REPORT_SCHEMA_VERSION
 from greenfield.source_identity import validate_identity_fields
+from greenfield.step3_outcome import ANALYSIS_KIND, BLAST_RADIUS, REPORT_SCHEMA_VERSION
 
 SHA = re.compile(r"^[0-9a-f]{40}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")

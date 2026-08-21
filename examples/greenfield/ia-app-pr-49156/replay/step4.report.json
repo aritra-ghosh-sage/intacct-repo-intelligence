@@ -127,6 +127,7 @@
       {
         "behavior_id": "purchasing.transactions.filter",
         "interface_id": "purchasing.transactions.filter",
+        "obligation_id": "purchasing.transactions.filter:po-process-transactions:tests/purchasing/po_process_transactions_test.py",
         "required_change": "assertion",
         "status": "satisfied",
         "target_repository": "intacct/ia-restapi-automation-tests",
@@ -136,6 +137,7 @@
       {
         "behavior_id": "purchasing.transactions.currency",
         "interface_id": "purchasing.transactions.filter",
+        "obligation_id": "purchasing.transactions.filter:po-process-transactions-currency:tests/purchasing/po_process_transactions_test.py",
         "required_change": "fixture",
         "status": "missing",
         "target_repository": "intacct/ia-restapi-automation-tests",

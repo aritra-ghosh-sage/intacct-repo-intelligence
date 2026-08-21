@@ -46,5 +46,5 @@ def read_json_object(path: str | Path) -> dict[str, Any]:
     source = Path(path)
     value = json.loads(source.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
-        raise ValueError(f"{source} must contain a JSON object")
+        raise TypeError(f"{source} must contain a JSON object")
     return value

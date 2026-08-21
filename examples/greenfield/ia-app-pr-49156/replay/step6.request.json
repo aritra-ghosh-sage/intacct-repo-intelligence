@@ -1,6 +1,6 @@
 {
   "action": {
-    "action_id": "58d3f60a92ae7610173b7e24de8ee13504c34d914aa51aa5c325151b73f020ff",
+    "action_id": "92ca22a27b695bee15e8f39b950ced54e2128bb6da5a129737ccac6a74188d3f",
     "action_type": "update_test_obligation",
     "interface_id": "purchasing.transactions.filter",
     "status": "recommended",
@@ -71,9 +71,9 @@
   },
   "upstream": {
     "step1_report_sha256": "7c031593df96f7a93a317e503919061f4dde8e0f64cdc5ad4b790baf31226378",
-    "step3_report_sha256": "0db9c84929fa99a8dce7142d149c98cfcef7ba55ee575b6daf30bf254d4d399e",
-    "step4_report_sha256": "91e739ee43136533cc8e4e1fee754e8dbf71c6a7175ba03c4b458ed1ca723980",
-    "step5_report_sha256": "3def3413c46840ae224c1933c8e54a104773af271a7df2e7798a22b90890516f"
+    "step3_report_sha256": "09295823b4bcaca20d35286f055ab0fe75b7d725f91f9db49dd00fc35dc54012",
+    "step4_report_sha256": "ff19b780a4d26e3d3342698b70f2b1e975447f1d3fc792aad6616760f3af0dbc",
+    "step5_report_sha256": "8a192290b2ae24cba65ec9857c5d40cc24047a3933e1872b7d61cd440f1e5bdd"
   },
   "validation_plan": [
     "run the targeted test suite"

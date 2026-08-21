@@ -10,7 +10,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from greenfield.artifact_io import write_json_atomic
-from greenfield.step5_actions import Step5Error, recommend_actions
+from greenfield.step5_actions import (
+    Step5Error,
+    recommend_actions,
+    validate_step5_report,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -23,6 +27,11 @@ def main(argv: list[str] | None = None) -> int:
         step3 = json.loads(Path(args.step3_report).read_text(encoding="utf-8"))
         step4 = json.loads(Path(args.step4_report).read_text(encoding="utf-8"))
         report = recommend_actions(step3, step4)
+        report_errors = validate_step5_report(report)
+        if report_errors:
+            raise Step5Error(
+                "generated invalid Greenfield Step 5 report: " + "; ".join(report_errors)
+            )
     except (OSError, json.JSONDecodeError, Step5Error, ValueError) as exc:
         print(f"greenfield Step 5 failed: {exc}", file=sys.stderr)
         return 2

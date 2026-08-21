@@ -11,8 +11,8 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from greenfield.step2_candidates import ANALYSIS_KIND, REPORT_SCHEMA_VERSION
 from greenfield.source_identity import validate_identity_fields
+from greenfield.step2_candidates import ANALYSIS_KIND, REPORT_SCHEMA_VERSION
 
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 CLASSIFICATIONS = {

@@ -28,6 +28,7 @@ from greenfield.step2_contract import (
     normalize_repository_inventory,
 )
 from scripts.validate_greenfield_step1 import validate as validate_step1
+from scripts.validate_greenfield_step2 import validate as validate_step2
 
 
 def _unavailable_inventory(
@@ -155,7 +156,12 @@ def main(argv: list[str] | None = None) -> int:
         report = resolve_candidates(
             step1, contracts, ci_evidence, inventory, semantic_indexes
         )
-    except (OSError, json.JSONDecodeError, CandidateError, EvidenceError) as exc:
+        report_errors = validate_step2(report)
+        if report_errors:
+            raise CandidateError(
+                "generated invalid Greenfield Step 2 report: " + "; ".join(report_errors)
+            )
+    except (OSError, TypeError, json.JSONDecodeError, CandidateError, EvidenceError) as exc:
         print(f"greenfield Step 2 failed: {exc}", file=sys.stderr)
         return 2
     rendered = json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2) + "\n"

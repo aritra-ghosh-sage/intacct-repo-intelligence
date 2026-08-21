@@ -8,14 +8,14 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from greenfield.semantic_contract import load_index
 from greenfield.artifact_io import artifact_sha256
+from greenfield.semantic_contract import load_index
+from greenfield.source_identity import validate_identity_fields
 from greenfield.step2_contract import (
     load_ci_evidence,
     load_contract,
     load_repository_inventory,
 )
-from greenfield.source_identity import validate_identity_fields
 
 REPORT_SCHEMA_VERSION = "0.1"
 ANALYSIS_KIND = "greenfield_pr_impact_step_4"

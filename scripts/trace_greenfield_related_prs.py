@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Capture bounded related pull-request evidence without GitHub writes."""
 
 from __future__ import annotations
@@ -75,7 +74,7 @@ def main(argv: list[str] | None = None) -> int:
             pull_requests=pull_requests,
             evidence_path=args.output.as_posix(),
         )
-    except (OSError, ValueError, GitHubPrMetadataError) as exc:
+    except (OSError, TypeError, ValueError, GitHubPrMetadataError) as exc:
         report = {
             "schema_version": "0.1",
             "evidence_type": "related_pull_requests",

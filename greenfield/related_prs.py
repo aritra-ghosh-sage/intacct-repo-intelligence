@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
 import re
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 from greenfield.artifact_io import artifact_sha256
