@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from collections.abc import Mapping
@@ -10,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from greenfield.semantic_contract import load_index
+from greenfield.artifact_io import artifact_sha256
 from greenfield.step2_contract import (
     load_ci_evidence,
     load_contract,
@@ -45,20 +45,6 @@ class Step4Error(ValueError):
     """Raised when Step 4 evidence cannot be evaluated safely."""
 
 
-def canonical_json(value: object) -> str:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    )
-
-
-def artifact_sha256(value: object) -> str:
-    return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
-
-
 def load_step3_report(path: str | Path) -> dict[str, Any]:
     source = Path(path)
     try:
@@ -67,8 +53,6 @@ def load_step3_report(path: str | Path) -> dict[str, Any]:
         raise Step4Error(f"step3_report_read_failed: {source}: {exc}") from exc
     if not isinstance(value, dict):
         raise Step4Error("Step 3 report must be an object")
-    value["_artifact_path"] = source.as_posix()
-    value["_artifact_sha256"] = hashlib.sha256(source.read_bytes()).hexdigest()
     return value
 
 

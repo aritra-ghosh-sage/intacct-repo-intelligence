@@ -1,0 +1,100 @@
+{
+  "agent_policy": {
+    "must_change_only_allowed_paths": true,
+    "must_not_add_files": true,
+    "must_not_alter_evidence": true,
+    "must_not_approve": true,
+    "must_not_change_target_base_revision": true,
+    "must_not_merge": true,
+    "must_use_target_base_revision": true
+  },
+  "analysis_kind": "greenfield_pr_impact_step_6",
+  "idempotency_key": "12d67d6dedba2897a2b4798c22d29bc7b4c21c54d154b6ad16ce019f507fe592",
+  "justification": {
+    "evidence": [
+      {
+        "kind": "contract",
+        "path": "examples/greenfield/ia-app-pr-49156/replay/step2.contract.yaml"
+      }
+    ],
+    "interface_id": "purchasing.transactions.filter",
+    "step5_action_id": "58d3f60a92ae7610173b7e24de8ee13504c34d914aa51aa5c325151b73f020ff",
+    "test_id": "po-process-transactions-currency",
+    "test_path": "tests/purchasing/po_process_transactions_test.py",
+    "trigger": "fixture_contract_mismatch"
+  },
+  "patch": {
+    "files": [
+      {
+        "after": "Feature: Example\n\n  Scenario: Existing case\n    Given request fixture request.json\n    Then new\n",
+        "after_sha256": "37a1104a566e3759421d748a65bf39c0219195df20a37a6ac0160b0b7c1a8283",
+        "before": "Feature: Example\n\n  Scenario: Existing case\n    Given request fixture request.json\n    Then old\n",
+        "before_sha256": "5cb083c41ba4fad699774be287188660b85ddb3e50fee13dcc820fdbc3620384",
+        "path": "features/gl/v1-beta2/example.feature",
+        "status": "modified"
+      },
+      {
+        "after": "{\"field\": \"new\"}\n",
+        "after_sha256": "8f30ee7d11d39e816fa84339ca34cd02b6ecce2730ec244b11dde305072b34fe",
+        "before": "{\"field\": \"old\"}\n",
+        "before_sha256": "c72f58ba9044a49f80311b62495ee3a2313e2df94f2a8cd12e9acabdb06bbd44",
+        "path": "features/gl/v1-beta2/input/request.json",
+        "status": "modified"
+      }
+    ],
+    "format": "unified_diff",
+    "generator": {
+      "id": "restapi_existing_case_update_v1",
+      "version": "0.1"
+    },
+    "patch_sha256": "84e6c1090ebff2037f325d88969d9b6f98873f9aabfd8f45595fd76ca1d211f4",
+    "unified_diff": "--- a/features/gl/v1-beta2/example.feature\n+++ b/features/gl/v1-beta2/example.feature\n@@ -2,4 +2,4 @@\n \n   Scenario: Existing case\n     Given request fixture request.json\n-    Then old\n+    Then new\n--- a/features/gl/v1-beta2/input/request.json\n+++ b/features/gl/v1-beta2/input/request.json\n@@ -1 +1 @@\n-{\"field\": \"old\"}\n+{\"field\": \"new\"}\n"
+  },
+  "pr_request": {
+    "body_sections": [
+      "Source change and deterministic justification",
+      "Generated test changes",
+      "Validation requirements",
+      "Evidence and remaining uncertainty"
+    ],
+    "draft": true,
+    "title": "Update tests for purchasing.transactions.filter"
+  },
+  "proposal_id": "fc1a8bbb46706863bd41b6e6abc58412851411913705361f035af3d09438efe6",
+  "provenance": {
+    "catalog_mutation": "none",
+    "github_writes": "none",
+    "read_only": true,
+    "rule_set_version": "0.1",
+    "step1_report_sha256": "7c031593df96f7a93a317e503919061f4dde8e0f64cdc5ad4b790baf31226378",
+    "step3_report_sha256": "0db9c84929fa99a8dce7142d149c98cfcef7ba55ee575b6daf30bf254d4d399e",
+    "step4_report_sha256": "91e739ee43136533cc8e4e1fee754e8dbf71c6a7175ba03c4b458ed1ca723980",
+    "step5_report_sha256": "3def3413c46840ae224c1933c8e54a104773af271a7df2e7798a22b90890516f"
+  },
+  "reason": "deterministic_template_generated_patch",
+  "schema_version": "0.1",
+  "source": {
+    "base_revision": "e33954d66e7823303fa24087950d3306c547e0b7",
+    "changed_paths": [
+      "app/source/purchasing/POProcessTransactions.phtml"
+    ],
+    "diff": "diff --git a/app/source/purchasing/POProcessTransactions.phtml b/app/source/purchasing/POProcessTransactions.phtml\n",
+    "diff_sha256": "083b6fb6261100348c3bbff3e6fb823c2c4a4f625992f8e134c34b5305ac9a78",
+    "head_revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59",
+    "pr_number": 49156,
+    "pr_url": "https://github.com/intacct/ia-app/pull/49156",
+    "repository": "ia-main"
+  },
+  "status": "ready_for_ai_pr",
+  "target": {
+    "allowed_paths": [
+      "features/gl/v1-beta2/example.feature",
+      "features/gl/v1-beta2/input/request.json"
+    ],
+    "base_revision": "dddddddddddddddddddddddddddddddddddddddd",
+    "repository": "intacct/ia-restapi-automation-tests"
+  },
+  "validation_plan": [
+    "run the targeted test suite"
+  ]
+}

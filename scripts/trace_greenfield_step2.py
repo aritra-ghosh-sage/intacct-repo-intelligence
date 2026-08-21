@@ -12,6 +12,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from greenfield.artifact_io import read_json_object, write_json_atomic
 from greenfield.github_repository_evidence import (
     RepositoryEvidenceError,
     collect_repository_evidence,
@@ -25,6 +26,7 @@ from greenfield.step2_contract import (
     load_semantic_index,
     normalize_repository_inventory,
 )
+from scripts.validate_greenfield_step1 import validate as validate_step1
 
 
 def _unavailable_inventory(
@@ -104,7 +106,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output")
     args = parser.parse_args(argv)
     try:
-        step1 = json.loads(Path(args.step1_report).read_text(encoding="utf-8"))
+        step1 = read_json_object(args.step1_report)
+        step1_errors = validate_step1(step1)
+        if step1_errors:
+            raise CandidateError(
+                "invalid Greenfield Step 1 report: " + "; ".join(step1_errors)
+            )
         contracts = [load_contract(path) for path in args.contract]
         ci_evidence = [load_ci_evidence(path) for path in args.ci_evidence]
         inventory = [
@@ -152,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     rendered = json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
     if args.output:
-        Path(args.output).write_text(rendered, encoding="utf-8")
+        write_json_atomic(args.output, report)
     else:
         print(rendered, end="")
     return 0

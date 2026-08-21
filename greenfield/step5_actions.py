@@ -82,6 +82,12 @@ def _owner(row: Mapping[str, Any] | None) -> dict[str, Any]:
     return {"identity": None, "status": "unavailable"}
 
 
+def _test_owner(value: Any) -> dict[str, Any]:
+    if isinstance(value, str) and value.strip():
+        return {"identity": value.strip(), "status": "available"}
+    return {"identity": None, "status": "unavailable"}
+
+
 def _evidence(*values: Any) -> list[dict[str, Any]]:
     rows: dict[str, dict[str, Any]] = {}
     for value in values:
@@ -162,7 +168,7 @@ def recommend_actions(step3: Mapping[str, Any], step4: Mapping[str, Any]) -> dic
         if classification in {"covered", "indirectly_covered"} and isinstance(test, Mapping):
             test_id = _text(test.get("id"), "test id")
             test_path = _text(test.get("path"), "test path")
-            actions.append(_make_action(
+            action = _make_action(
                 action_type="run_test_suite",
                 target_repository=target,
                 owner=owner,
@@ -170,7 +176,14 @@ def recommend_actions(step3: Mapping[str, Any], step4: Mapping[str, Any]) -> dic
                 evidence=evidence,
                 reason=f"{classification}_test_evidence",
                 completion_condition=f"The named test {test_id} at {test_path} passes against the target revision.",
-            ))
+            )
+            action["test_owner"] = _test_owner(item.get("test_owner"))
+            action["test_command"] = item.get("test_command")
+            action["approval_required"] = action["test_owner"]["status"] != "available"
+            action["action_id"] = hashlib.sha256(
+                canonical_json({key: value for key, value in action.items() if key != "action_id"}).encode("utf-8")
+            ).hexdigest()
+            actions.append(action)
         if classification in {"unavailable", "stale"}:
             actions.append(_make_action(
                 action_type="block_propagation",
@@ -191,7 +204,7 @@ def recommend_actions(step3: Mapping[str, Any], step4: Mapping[str, Any]) -> dic
         change = item.get("required_change")
         action_type = "add_integration_test" if change == "integration" else "update_test_obligation"
         evidence = _evidence(interfaces.get((target, interface_id))) or fallback
-        actions.append(_make_action(
+        action = _make_action(
             action_type=action_type,
             target_repository=target,
             owner=_owner(owners.get((target, interface_id))),
@@ -199,7 +212,14 @@ def recommend_actions(step3: Mapping[str, Any], step4: Mapping[str, Any]) -> dic
             evidence=evidence,
             reason="declared_test_obligation_missing",
             completion_condition=f"The declared test obligation {item['test_id']} exists at {item['test_path']} and is validated against the source revision.",
-        ))
+        )
+        action["test_owner"] = _test_owner(item.get("test_owner"))
+        action["test_command"] = item.get("test_command")
+        action["approval_required"] = action["test_owner"]["status"] != "available"
+        action["action_id"] = hashlib.sha256(
+            canonical_json({key: value for key, value in action.items() if key != "action_id"}).encode("utf-8")
+        ).hexdigest()
+        actions.append(action)
 
     for gap in sorted({str(value) for value in step3.get("gaps", [])}):
         prefix = "repository_access_unavailable:"
@@ -235,11 +255,24 @@ def recommend_actions(step3: Mapping[str, Any], step4: Mapping[str, Any]) -> dic
     unique = {action["action_id"]: action for action in actions}
     ordered = sorted(unique.values(), key=lambda row: (0 if row["status"] == "blocked" else 1, row["target_repository"], row["scope"].get("interface_id", ""), row["action_type"], row["scope"].get("test_id", ""), row["action_id"]))
     gaps = sorted({str(value) for value in step3.get("gaps", [])} | {str(value) for value in step4.get("gaps", [])})
+    source_input = {
+        "source_repository": repository,
+        "target_revision": revision,
+        "changed_paths": changed_paths,
+    }
+    for field in (
+        "canonical_repository",
+        "source_repo_key",
+        "source_pr_number",
+        "base_revision",
+    ):
+        if field in step3["input"]:
+            source_input[field] = step3["input"][field]
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
         "analysis_kind": ANALYSIS_KIND,
         "status": "complete" if not gaps else "partial",
-        "input": {"source_repository": repository, "target_revision": revision, "changed_paths": changed_paths},
+        "input": source_input,
         "actions": ordered,
         "gaps": gaps,
         "warnings": sorted({str(value) for value in step3.get("warnings", [])} | {str(value) for value in step4.get("warnings", [])}),

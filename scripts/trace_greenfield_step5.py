@@ -9,6 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from greenfield.artifact_io import write_json_atomic
 from greenfield.step5_actions import Step5Error, recommend_actions
 
 
@@ -27,7 +28,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     rendered = json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
     if args.output:
-        Path(args.output).write_text(rendered, encoding="utf-8")
+        write_json_atomic(args.output, report)
     else:
         print(rendered, end="")
     return 0

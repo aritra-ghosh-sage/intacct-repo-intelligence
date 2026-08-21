@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from collections.abc import Iterable, Mapping
 from typing import Any
 
 from greenfield.semantic_contract import validate_index
+from greenfield.artifact_io import artifact_sha256
+from greenfield.source_identity import repository_matches, source_identity
 from greenfield.step4_contract import (
     ANALYSIS_KIND,
     CLASSIFICATION_ORDER,
@@ -15,7 +16,6 @@ from greenfield.step4_contract import (
     RULE_SET_VERSION,
     SHA,
     Step4Error,
-    artifact_sha256,
     evidence_digest,
     validate_step4_report,
 )
@@ -28,17 +28,23 @@ def _text(value: Any, label: str) -> str:
     return value.strip()
 
 
-def _source_context(step3: Mapping[str, Any]) -> tuple[str, str, list[str], str]:
+def _source_context(
+    step3: Mapping[str, Any],
+) -> tuple[str, str, str, str, list[str], str]:
     errors = validate_step3(step3)
     if errors:
         raise Step4Error("invalid Step 3 report: " + "; ".join(errors))
     data = step3["input"]
     repository = _text(data["source_repository"], "Step 3 source_repository")
+    try:
+        canonical_repository, repo_key = source_identity(data)
+    except ValueError as exc:
+        raise Step4Error(str(exc)) from exc
     revision = _text(data["target_revision"], "Step 3 target_revision").lower()
     if not SHA.fullmatch(revision):
         raise Step4Error("Step 3 target_revision must be a 40-character SHA")
     paths = sorted({_text(path, "changed path") for path in data["changed_paths"]})
-    return repository, revision, paths, artifact_sha256(step3)
+    return repository, canonical_repository, repo_key, revision, paths, artifact_sha256(step3)
 
 
 def _evidence(value: Mapping[str, Any], kind: str, **extra: Any) -> dict[str, Any]:
@@ -49,14 +55,15 @@ def _evidence(value: Mapping[str, Any], kind: str, **extra: Any) -> dict[str, An
 
 def _relation_scopes(
     contracts: Iterable[Mapping[str, Any]],
-    source_repository: str,
+    canonical_repository: str,
+    repo_key: str,
     source_revision: str,
     changed_paths: list[str],
     gaps: set[str],
 ) -> list[dict[str, Any]]:
     scopes: list[dict[str, Any]] = []
     for contract in contracts:
-        if contract.get("repository") != source_repository:
+        if not repository_matches(contract.get("repository"), canonical_repository, repo_key):
             gaps.add(f"contract:source_repository_mismatch:{contract.get('repository', 'unknown')}")
             continue
         if contract.get("revision") != source_revision:
@@ -91,13 +98,15 @@ def _relation_scopes(
 def _ci_tests(
     evidence: Mapping[str, Any],
     source_repository: str,
+    canonical_repository: str,
+    repo_key: str,
     source_revision: str,
     scope: Mapping[str, Any],
     gaps: set[str],
 ) -> list[dict[str, Any]]:
     status = evidence.get("status")
     target_repository = str(evidence.get("repository", scope["target_repository"]))
-    if evidence.get("source_repository") != source_repository:
+    if not repository_matches(evidence.get("source_repository"), canonical_repository, repo_key):
         gaps.add(f"ci:source_repository_mismatch:{target_repository}")
         return []
     if evidence.get("interface_id") != scope["interface_id"]:
@@ -158,6 +167,10 @@ def _ci_tests(
             "target_revision": evidence.get("commit_sha"),
             "evidence": evidence_ref,
         }
+        if isinstance(test.get("test_owner"), str) and test["test_owner"].strip():
+            row["test_owner"] = test["test_owner"].strip()
+        if isinstance(test.get("test_command"), str) and test["test_command"].strip():
+            row["test_command"] = test["test_command"].strip()
         if test.get("required_change") is not None:
             row["required_change"] = test["required_change"]
         if test.get("behavior_id") is not None:
@@ -211,10 +224,10 @@ def _step3_test_rows(step3: Mapping[str, Any], scopes: list[Mapping[str, Any]], 
     return rows
 
 
-def _semantic_rows(semantic_indexes: Iterable[Mapping[str, Any]], source_repository: str, source_revision: str, changed_paths: list[str], gaps: set[str], scopes: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+def _semantic_rows(semantic_indexes: Iterable[Mapping[str, Any]], source_repository: str, canonical_repository: str, repo_key: str, source_revision: str, changed_paths: list[str], gaps: set[str], scopes: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for index in semantic_indexes:
-        if index.get("repository") != source_repository or index.get("revision") != source_revision:
+        if not repository_matches(index.get("repository"), canonical_repository, repo_key) or index.get("revision") != source_revision:
             gaps.add(f"semantic_index:stale_or_mismatched:{index.get('evidence_path', 'unknown')}")
             continue
         errors = validate_index(index)
@@ -247,20 +260,20 @@ def map_test_coverage(
     inventory_evidence: Iterable[Mapping[str, Any]] = (),
     semantic_indexes: Iterable[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
-    source_repository, source_revision, changed_paths, step3_hash = _source_context(step3)
+    source_repository, canonical_repository, repo_key, source_revision, changed_paths, step3_hash = _source_context(step3)
     contracts = list(contracts)
     ci_evidence = list(ci_evidence)
     inventory_evidence = list(inventory_evidence)
     semantic_indexes = list(semantic_indexes)
     gaps: set[str] = {str(value) for value in step3.get("gaps", [])}
     warnings: set[str] = set()
-    scopes = _relation_scopes(contracts, source_repository, source_revision, changed_paths, gaps)
+    scopes = _relation_scopes(contracts, canonical_repository, repo_key, source_revision, changed_paths, gaps)
     coverage = _step3_test_rows(step3, scopes, step3_hash)
     obligations: list[dict[str, Any]] = []
     for scope in scopes:
         matching_ci = [item for item in ci_evidence if item.get("repository") == scope["target_repository"]]
         for evidence in matching_ci:
-            coverage.extend(_ci_tests(evidence, source_repository, source_revision, scope, gaps))
+            coverage.extend(_ci_tests(evidence, source_repository, canonical_repository, repo_key, source_revision, scope, gaps))
         for obligation in scope.get("test_obligations", []):
             if not isinstance(obligation, Mapping):
                 gaps.add(f"obligation:unknown:{scope['interface_id']}")
@@ -282,11 +295,30 @@ def map_test_coverage(
                 "test_path": test_path,
                 "status": status,
             }
+            for field in ("test_owner", "test_command"):
+                if isinstance(obligation.get(field), str) and obligation[field].strip():
+                    obligation_row[field] = obligation[field].strip()
             if obligation.get("required_change") is not None:
                 obligation_row["required_change"] = obligation["required_change"]
             if obligation.get("behavior_id") is not None:
                 obligation_row["behavior_id"] = obligation["behavior_id"]
             obligations.append(obligation_row)
+            if status == "missing":
+                coverage.append(
+                    {
+                        "target_repository": scope["target_repository"],
+                        "interface_id": scope["interface_id"],
+                        "classification": "missing",
+                        "reason": "declared_test_obligation_missing",
+                        "test": {"id": test_id, "path": test_path},
+                        "source_repository": source_repository,
+                        "source_revision": source_revision,
+                        "evidence": scope["evidence"],
+                        "required_change": obligation.get("required_change"),
+                        "behavior_id": obligation.get("behavior_id"),
+                        "obligation_id": f"{scope['interface_id']}:{test_id}:{test_path}",
+                    }
+                )
         if not matching_ci and not scope.get("test_obligations"):
             coverage.append({
                 "target_repository": scope["target_repository"],
@@ -298,7 +330,7 @@ def map_test_coverage(
                 "source_revision": source_revision,
                 "evidence": scope["evidence"],
             })
-    coverage.extend(_semantic_rows(semantic_indexes, source_repository, source_revision, changed_paths, gaps, scopes))
+    coverage.extend(_semantic_rows(semantic_indexes, source_repository, canonical_repository, repo_key, source_revision, changed_paths, gaps, scopes))
     if not scopes:
         gaps.add("test_coverage_unscoped:no_active_changed_contract")
     if not ci_evidence:
@@ -319,13 +351,24 @@ def map_test_coverage(
         "schema_version": REPORT_SCHEMA_VERSION,
         "analysis_kind": ANALYSIS_KIND,
         "status": "complete" if not gaps else "partial",
-        "input": {"source_repository": source_repository, "target_revision": source_revision, "changed_paths": changed_paths},
+        "input": {
+            "source_repository": source_repository,
+            "canonical_repository": canonical_repository,
+            "source_repo_key": repo_key,
+            "target_revision": source_revision,
+            "changed_paths": changed_paths,
+            **{
+                field: step3["input"][field]
+                for field in ("source_pr_number", "base_revision")
+                if field in step3["input"]
+            },
+        },
         "coverage": {"status": coverage_status, "items": coverage},
         "obligations": {"status": obligation_status, "items": obligations},
         "gaps": sorted(gaps),
         "warnings": sorted(warnings),
         "provenance": {
-            "step3_report_sha256": hashlib.sha256(json.dumps(step3, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest(),
+            "step3_report_sha256": step3_hash,
             "evidence_digests": sorted({evidence_digest(value) for value in [*contracts, *ci_evidence, *inventory_evidence, *semantic_indexes]}),
             "rule_set_version": RULE_SET_VERSION,
             "read_only": True,

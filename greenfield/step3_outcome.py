@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from greenfield.semantic_contract import validate_index
+from greenfield.source_identity import repository_matches, source_identity
 from greenfield.step2_candidates import report_sha256
 from scripts.validate_greenfield_step2 import validate as validate_step2
 
@@ -53,6 +54,10 @@ def _source_context(step2: Mapping[str, Any]) -> tuple[str, str, list[str]]:
         raise OutcomeError("invalid Step 2 report: " + "; ".join(errors))
     data = step2["input"]
     repository = _text(data["source_repository"], "Step 2 source_repository")
+    try:
+        source_identity(data)
+    except ValueError as exc:
+        raise OutcomeError(str(exc)) from exc
     revision = _text(data["target_revision"], "Step 2 target_revision").lower()
     if not SHA.fullmatch(revision):
         raise OutcomeError("Step 2 target_revision must be a 40-character SHA")
@@ -74,6 +79,9 @@ def load_related_pr_evidence(path: str | Path) -> dict[str, Any]:
         raise OutcomeError("related PR evidence schema_version must be 0.1")
     if raw.get("evidence_type") != "related_pull_requests":
         raise OutcomeError("related PR evidence_type is invalid")
+    status = raw.get("status", "available")
+    if status not in {"available", "empty", "unavailable"}:
+        raise OutcomeError("related PR evidence status must be available, empty, or unavailable")
     repository = _text(raw.get("source_repository"), "related source_repository")
     revision = _text(raw.get("source_revision"), "related source_revision").lower()
     if not SHA.fullmatch(revision):
@@ -138,7 +146,9 @@ def load_related_pr_evidence(path: str | Path) -> dict[str, Any]:
     result = {
         "schema_version": "0.1",
         "evidence_type": "related_pull_requests",
+        "status": status,
         "source_repository": repository,
+        "canonical_source_repository": raw.get("canonical_source_repository"),
         "source_revision": revision,
         "source_pr_number": source_pr,
         "pull_requests": sorted(
@@ -637,18 +647,32 @@ def assemble_outcome(
             related_pr_evidence["artifact_sha256"], str
         ) or not SHA256.fullmatch(related_pr_evidence["artifact_sha256"]):
             raise OutcomeError("related PR evidence artifact_sha256 is invalid")
+        try:
+            canonical_repository, repo_key = source_identity(step2["input"])
+        except ValueError as exc:
+            raise OutcomeError(str(exc)) from exc
+        related_repository = related_pr_evidence.get("source_repository")
+        related_canonical = related_pr_evidence.get("canonical_source_repository")
         if (
-            related_pr_evidence.get("source_repository") != repository
-            or related_pr_evidence.get("source_revision") != revision
-        ):
+            not repository_matches(related_repository, canonical_repository, repo_key)
+            and related_canonical != canonical_repository
+        ) or related_pr_evidence.get("source_revision") != revision:
             raise OutcomeError(
                 "related PR evidence repository or revision does not match Step 2"
             )
+        evidence_status = related_pr_evidence.get("status", "available")
+        if evidence_status not in {"available", "empty", "unavailable"}:
+            raise OutcomeError("related PR evidence status is invalid")
+        if evidence_status == "unavailable":
+            gaps.append("related_pull_requests_unavailable:revision_pinned_artifact")
+        surface_status = "unavailable" if evidence_status == "unavailable" else "available"
         related_surface = _surface(
-            "available",
+            surface_status,
             list(related_pr_evidence["pull_requests"]),
+            evidence_status=evidence_status,
             source_pr_number=related_pr_evidence["source_pr_number"],
             source_repository=related_pr_evidence["source_repository"],
+            canonical_source_repository=related_pr_evidence.get("canonical_source_repository"),
             source_revision=related_pr_evidence["source_revision"],
             evidence_path=related_pr_evidence["evidence_path"],
             artifact_sha256=related_pr_evidence["artifact_sha256"],
@@ -670,15 +694,24 @@ def assemble_outcome(
     if not candidates and not gaps:
         warnings.append("no external impact candidates were resolved")
     outcome_status = "complete" if not gaps else "partial"
+    source_input = {
+        "source_repository": repository,
+        "target_revision": revision,
+        "changed_paths": paths,
+    }
+    for field in (
+        "canonical_repository",
+        "source_repo_key",
+        "source_pr_number",
+        "base_revision",
+    ):
+        if field in step2["input"]:
+            source_input[field] = step2["input"][field]
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
         "analysis_kind": ANALYSIS_KIND,
         "status": outcome_status,
-        "input": {
-            "source_repository": repository,
-            "target_revision": revision,
-            "changed_paths": paths,
-        },
+        "input": source_input,
         "blast_radius": _blast_radius(candidates, gaps),
         "direct_components": component_surface,
         "potentially_affected_repositories": _surface(

@@ -126,6 +126,8 @@ def load_contract(path: str | Path) -> dict[str, Any]:
                     "path": obligation_path,
                     "required_change": required_change,
                     "behavior_id": obligation.get("behavior_id"),
+                    "test_owner": obligation.get("test_owner"),
+                    "test_command": obligation.get("test_command"),
                 }
             )
         normalized_obligations.sort(

@@ -8,6 +8,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from greenfield.step2_contract import artifact_sha256
+from greenfield.source_identity import repository_matches, source_identity
 
 REPORT_SCHEMA_VERSION = "0.1"
 ANALYSIS_KIND = "greenfield_pr_impact_step_2"
@@ -32,13 +33,16 @@ def _text(value: Any, label: str) -> str:
     return value.strip()
 
 
-def _step1_context(step1: Mapping[str, Any]) -> tuple[str, str, list[str], str]:
+def _step1_context(
+    step1: Mapping[str, Any],
+) -> tuple[str, str, str, list[str], str, int | None, str | None]:
     data = step1.get("input")
     if not isinstance(data, Mapping):
         raise CandidateError("Step 1 input must be an object")
-    repository = _text(
-        data.get("repo_key") or data.get("repository"), "Step 1 repository"
-    )
+    try:
+        canonical_repository, repo_key = source_identity(data)
+    except ValueError as exc:
+        raise CandidateError(str(exc)) from exc
     revision = _text(
         data.get("target_revision") or data.get("head_sha"), "Step 1 target revision"
     ).lower()
@@ -52,7 +56,21 @@ def _step1_context(step1: Mapping[str, Any]) -> tuple[str, str, list[str], str]:
         paths.append(
             _text(item.get("path") or item.get("filename"), "changed file path")
         )
-    return repository, revision, sorted(set(paths)), artifact_sha256(step1)
+    pr_number = data.get("pr_number")
+    if isinstance(pr_number, bool) or not isinstance(pr_number, int) or pr_number < 1:
+        pr_number = None
+    base_revision = data.get("base_revision") or data.get("base_sha")
+    if not isinstance(base_revision, str) or not base_revision.strip():
+        base_revision = None
+    return (
+        repo_key,
+        canonical_repository,
+        revision,
+        sorted(set(paths)),
+        artifact_sha256(step1),
+        pr_number,
+        base_revision.lower() if base_revision else None,
+    )
 
 
 def _candidate_key(candidate: Mapping[str, Any]) -> tuple[str, str, str, str]:
@@ -75,15 +93,23 @@ def resolve_candidates(
     ci_evidence = list(ci_evidence)
     inventory_evidence = list(inventory_evidence)
     semantic_indexes = list(semantic_indexes)
-    source_repository, target_revision, changed_paths, step1_hash = _step1_context(
-        step1
-    )
+    (
+        source_repo_key,
+        canonical_repository,
+        target_revision,
+        changed_paths,
+        step1_hash,
+        source_pr_number,
+        base_revision,
+    ) = _step1_context(step1)
     candidates: dict[tuple[str, str, str, str], dict[str, Any]] = {}
     gaps: list[str] = []
     warnings: list[str] = []
 
     for contract in contracts:
-        if contract.get("repository") != source_repository:
+        if not repository_matches(
+            contract.get("repository"), canonical_repository, source_repo_key
+        ):
             gaps.append(
                 f"contract:source_repository_mismatch:{contract.get('repository')}"
             )
@@ -123,7 +149,9 @@ def resolve_candidates(
 
     known_interfaces = {candidate["interface_id"] for candidate in candidates.values()}
     for evidence in ci_evidence:
-        if evidence.get("source_repository") != source_repository:
+        if not repository_matches(
+            evidence.get("source_repository"), canonical_repository, source_repo_key
+        ):
             gaps.append(
                 f"ci:source_repository_mismatch:{evidence.get('evidence_id', 'unknown')}"
             )
@@ -186,7 +214,9 @@ def resolve_candidates(
 
     for inventory in inventory_evidence:
         repository = inventory.get("repository", "unknown")
-        if inventory.get("source_repository") != source_repository:
+        if not repository_matches(
+            inventory.get("source_repository"), canonical_repository, source_repo_key
+        ):
             gaps.append(f"inventory:source_repository_mismatch:{repository}")
             continue
         if inventory.get("source_revision") != target_revision:
@@ -276,7 +306,7 @@ def resolve_candidates(
     for index in semantic_indexes:
         repository = index.get("repository")
         revision = index.get("revision")
-        if repository != source_repository:
+        if not repository_matches(repository, canonical_repository, source_repo_key):
             gaps.append(f"semantic_index:source_repository_mismatch:{repository}")
             continue
         if revision != target_revision:
@@ -323,7 +353,9 @@ def resolve_candidates(
         active_relations = [
             relation
             for contract in contracts
-            if contract.get("repository") == source_repository
+            if repository_matches(
+                contract.get("repository"), canonical_repository, source_repo_key
+            )
             and contract.get("revision") == target_revision
             for relation in contract.get("relations", [])
             if relation.get("status") == "active"
@@ -340,7 +372,9 @@ def resolve_candidates(
                 )
                 gaps.append(f"{gap_kind}:{interface_id}")
         for contract in contracts:
-            if contract.get("repository") != source_repository:
+            if not repository_matches(
+                contract.get("repository"), canonical_repository, source_repo_key
+            ):
                 continue
             if contract.get("revision") != target_revision:
                 continue
@@ -408,15 +442,22 @@ def resolve_candidates(
         evidence_sources.append("repository_inventory")
     if semantic_indexes:
         evidence_sources.append("semantic_index")
+    source_input = {
+        "source_repository": source_repo_key,
+        "canonical_repository": canonical_repository,
+        "source_repo_key": source_repo_key,
+        "target_revision": target_revision,
+        "changed_paths": changed_paths,
+    }
+    if source_pr_number is not None:
+        source_input["source_pr_number"] = source_pr_number
+    if base_revision is not None:
+        source_input["base_revision"] = base_revision
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
         "analysis_kind": ANALYSIS_KIND,
         "status": "complete" if not gaps else "partial",
-        "input": {
-            "source_repository": source_repository,
-            "target_revision": target_revision,
-            "changed_paths": changed_paths,
-        },
+        "input": source_input,
         "candidates": rows,
         "blast_radius": blast_radius,
         "gaps": sorted(set(gaps)),
@@ -428,6 +469,8 @@ def resolve_candidates(
             "semantic_index_sha256": sorted(set(semantic_provenance)),
             "read_only": True,
             "catalog_mutation": "none",
+            "source_pr_number": source_pr_number,
+            "base_revision": base_revision,
         },
     }
 

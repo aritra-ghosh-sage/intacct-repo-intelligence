@@ -1,0 +1,81 @@
+{
+  "action": {
+    "action_id": "58d3f60a92ae7610173b7e24de8ee13504c34d914aa51aa5c325151b73f020ff",
+    "action_type": "update_test_obligation",
+    "interface_id": "purchasing.transactions.filter",
+    "status": "recommended",
+    "target_repository": "intacct/ia-restapi-automation-tests",
+    "test_id": "po-process-transactions-currency",
+    "test_path": "tests/purchasing/po_process_transactions_test.py"
+  },
+  "analysis_kind": "greenfield_pr_impact_step_6_request",
+  "edit_operations": [
+    {
+      "expected_occurrences": 1,
+      "new_text": "Then new",
+      "old_text": "Then old",
+      "path": "features/gl/v1-beta2/example.feature"
+    },
+    {
+      "expected_occurrences": 1,
+      "new_text": "\"new\"",
+      "old_text": "\"old\"",
+      "path": "features/gl/v1-beta2/input/request.json"
+    }
+  ],
+  "schema_version": "0.1",
+  "source": {
+    "base_revision": "e33954d66e7823303fa24087950d3306c547e0b7",
+    "changed_paths": [
+      "app/source/purchasing/POProcessTransactions.phtml"
+    ],
+    "diff": "diff --git a/app/source/purchasing/POProcessTransactions.phtml b/app/source/purchasing/POProcessTransactions.phtml\n",
+    "diff_sha256": "083b6fb6261100348c3bbff3e6fb823c2c4a4f625992f8e134c34b5305ac9a78",
+    "head_revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59",
+    "pr_number": 49156,
+    "pr_url": "https://github.com/intacct/ia-app/pull/49156",
+    "repository": "ia-main"
+  },
+  "target": {
+    "allowed_paths": [
+      "features/gl/v1-beta2/example.feature",
+      "features/gl/v1-beta2/input/request.json"
+    ],
+    "base_revision": "dddddddddddddddddddddddddddddddddddddddd",
+    "files": [
+      {
+        "content": "Feature: Example\n\n  Scenario: Existing case\n    Given request fixture request.json\n    Then old\n",
+        "path": "features/gl/v1-beta2/example.feature",
+        "sha256": "5cb083c41ba4fad699774be287188660b85ddb3e50fee13dcc820fdbc3620384"
+      },
+      {
+        "content": "{\"field\": \"old\"}\n",
+        "path": "features/gl/v1-beta2/input/request.json",
+        "sha256": "c72f58ba9044a49f80311b62495ee3a2313e2df94f2a8cd12e9acabdb06bbd44"
+      }
+    ],
+    "repository": "intacct/ia-restapi-automation-tests"
+  },
+  "template": {
+    "id": "restapi_existing_case_update_v1",
+    "version": "0.1"
+  },
+  "trigger": {
+    "evidence": [
+      {
+        "kind": "contract",
+        "path": "examples/greenfield/ia-app-pr-49156/replay/step2.contract.yaml"
+      }
+    ],
+    "kind": "fixture_contract_mismatch"
+  },
+  "upstream": {
+    "step1_report_sha256": "7c031593df96f7a93a317e503919061f4dde8e0f64cdc5ad4b790baf31226378",
+    "step3_report_sha256": "0db9c84929fa99a8dce7142d149c98cfcef7ba55ee575b6daf30bf254d4d399e",
+    "step4_report_sha256": "91e739ee43136533cc8e4e1fee754e8dbf71c6a7175ba03c4b458ed1ca723980",
+    "step5_report_sha256": "3def3413c46840ae224c1933c8e54a104773af271a7df2e7798a22b90890516f"
+  },
+  "validation_plan": [
+    "run the targeted test suite"
+  ]
+}
