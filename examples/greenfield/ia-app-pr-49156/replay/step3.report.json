@@ -7,7 +7,7 @@
         "evidence": [
           {
             "kind": "step2_input",
-            "step2_report_sha256": "1bd689f2d3dc7d8fc74e4369b34047cddbf0e4ee91fea96ca7f1188a147ae37c"
+            "step2_report_sha256": "bb57f8d87508a76adfcd215ccd8eacf674b6d20ca10cb27a1887a9a0f38731b6"
           }
         ],
         "identity": "app/source/purchasing/POProcessTransactions.phtml",
@@ -174,7 +174,7 @@
     "related_pr_artifact_sha256": null,
     "rule_set_version": "0.1",
     "semantic_index_sha256": null,
-    "step2_report_sha256": "1bd689f2d3dc7d8fc74e4369b34047cddbf0e4ee91fea96ca7f1188a147ae37c"
+    "step2_report_sha256": "bb57f8d87508a76adfcd215ccd8eacf674b6d20ca10cb27a1887a9a0f38731b6"
   },
   "related_pull_requests": {
     "items": [],

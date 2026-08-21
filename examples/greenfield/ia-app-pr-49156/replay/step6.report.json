@@ -61,16 +61,16 @@
     "draft": true,
     "title": "Update tests for purchasing.transactions.filter"
   },
-  "proposal_id": "8b849b7d302861eb3dc48041ba8574c7257cb3944e74fdc7974439260d9806cc",
+  "proposal_id": "112b73cea943891d76f6978fc2ada80028c8eec67e41a53c178bec7feae15fac",
   "provenance": {
     "catalog_mutation": "none",
     "github_writes": "none",
     "read_only": true,
     "rule_set_version": "0.1",
     "step1_report_sha256": "7c031593df96f7a93a317e503919061f4dde8e0f64cdc5ad4b790baf31226378",
-    "step3_report_sha256": "09295823b4bcaca20d35286f055ab0fe75b7d725f91f9db49dd00fc35dc54012",
-    "step4_report_sha256": "ff19b780a4d26e3d3342698b70f2b1e975447f1d3fc792aad6616760f3af0dbc",
-    "step5_report_sha256": "8a192290b2ae24cba65ec9857c5d40cc24047a3933e1872b7d61cd440f1e5bdd"
+    "step3_report_sha256": "12e2f2fb0d2cd947d2e1cd3e5812ed8b5f76420c45130a5fc8815264c4ce7de6",
+    "step4_report_sha256": "545f83de6083ebfed0aa4325d7aa964e09330e5bc66e4d597f74633080d9db82",
+    "step5_report_sha256": "badd8a3f20b9aa4e08ca78878f198a6ff3f833fb8aec64d40da77b7b0c811c2e"
   },
   "reason": "deterministic_template_generated_patch",
   "schema_version": "0.1",

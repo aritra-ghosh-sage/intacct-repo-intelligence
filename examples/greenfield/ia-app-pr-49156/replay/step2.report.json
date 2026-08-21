@@ -18,10 +18,30 @@
         }
       ],
       "interface_id": "purchasing.transactions.filter",
+      "likely_tests": [],
       "owner": "purchasing-platform",
       "owner_repository": "ia-main",
       "reason": "exact_active_contract",
       "relationship_type": "explicit_contract",
+      "source_anchors": [
+        {
+          "entity": null,
+          "evidence": [],
+          "interfaces": [
+            {
+              "evidence": [],
+              "interface_id": "purchasing.transactions.filter",
+              "mapping_kind": "explicit_source_contract",
+              "source_revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59"
+            }
+          ],
+          "source_lines": {},
+          "source_path": "app/source/purchasing/POProcessTransactions.phtml",
+          "source_revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59",
+          "source_symbol": null
+        }
+      ],
+      "source_symbols": [],
       "target_repository": "intacct/ia-restapi-automation-tests"
     },
     {
@@ -39,8 +59,27 @@
         }
       ],
       "interface_id": "purchasing.transactions.filter",
+      "likely_tests": [],
       "reason": "ci_supports_confirmed_contract",
       "relationship_type": "ci_observed",
+      "source_anchors": [
+        {
+          "entity": null,
+          "evidence": [],
+          "interfaces": [
+            {
+              "evidence": [],
+              "interface_id": "purchasing.transactions.filter",
+              "mapping_kind": "explicit_source_contract",
+              "source_revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59"
+            }
+          ],
+          "source_lines": {},
+          "source_path": "app/source/purchasing/POProcessTransactions.phtml",
+          "source_revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59",
+          "source_symbol": null
+        }
+      ],
       "target_repository": "intacct/ia-restapi-automation-tests",
       "tests": [
         {
