@@ -1,0 +1,33 @@
+"""Validate a Greenfield Step 6 patch handoff report."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from greenfield.step6_contract import validate_step6_report
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("report", type=Path)
+    args = parser.parse_args(argv)
+    try:
+        report = json.loads(args.report.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"greenfield Step 6 validation failed: {exc}", file=sys.stderr)
+        return 2
+    errors = validate_step6_report(report)
+    if errors:
+        print("\n".join(errors), file=sys.stderr)
+        return 1
+    print("greenfield Step 6 report is valid")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
