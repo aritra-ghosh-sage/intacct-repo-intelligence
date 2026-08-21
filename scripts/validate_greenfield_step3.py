@@ -11,6 +11,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from greenfield.artifact_io import artifact_sha256
 from greenfield.source_identity import validate_identity_fields
 from greenfield.step3_outcome import ANALYSIS_KIND, BLAST_RADIUS, REPORT_SCHEMA_VERSION
 
@@ -346,6 +347,21 @@ def validate(report: Any) -> list[str]:
                     or not evidence["id"].strip()
                 ):
                     errors.append(f"{item_label}.evidence.id is required")
+                elif evidence.get("sha256") is not None and (
+                    not isinstance(evidence.get("sha256"), str)
+                    or not SHA256.fullmatch(evidence["sha256"])
+                ):
+                    errors.append(f"{item_label}.evidence.sha256 must be SHA-256")
+                elif evidence.get("sha256") is not None:
+                    payload = evidence.get("payload")
+                    if not isinstance(payload, dict):
+                        errors.append(
+                            f"{item_label}.evidence.payload is required with sha256"
+                        )
+                    elif artifact_sha256(payload) != evidence["sha256"]:
+                        errors.append(
+                            f"{item_label}.evidence.sha256 does not match payload"
+                        )
     if isinstance(repositories, list):
         repository_keys = [
             (

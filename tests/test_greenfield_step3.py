@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from greenfield.semantic_contract import finalize_index
 from greenfield.related_prs import build_related_pr_evidence
+from greenfield.semantic_contract import finalize_index
 from greenfield.step2_candidates import resolve_candidates
 from greenfield.step3_outcome import (
     OutcomeError,
@@ -391,6 +391,40 @@ def test_related_pr_builder_accepts_only_exact_cross_references() -> None:
     )
     assert related["status"] == "available"
     assert related["pull_requests"][0]["number"] == 49201
+    assert len(related["pull_requests"][0]["evidence"]["sha256"]) == 64
+    assert set(related["pull_requests"][0]["evidence"]["payload"]) == {
+        "timeline_event",
+        "pull_request",
+    }
+
+
+def test_related_pr_evidence_digest_rejects_payload_tampering(tmp_path: Path) -> None:
+    evidence = {
+        "schema_version": "0.1",
+        "evidence_type": "related_pull_requests",
+        "source_repository": "ia-app",
+        "source_revision": TARGET,
+        "source_pr_number": 49156,
+        "pull_requests": [
+            {
+                "repository": "intacct/ia-restapi-automation-tests",
+                "number": 49201,
+                "state": "open",
+                "head_sha": "b" * 40,
+                "base_sha": "c" * 40,
+                "relation_type": "github_cross_reference",
+                "evidence": {
+                    "id": "github_timeline:event-1",
+                    "payload": {"timeline_event": {"id": "event-1"}},
+                    "sha256": "0" * 64,
+                },
+            }
+        ],
+    }
+    path = tmp_path / "related.json"
+    path.write_text(json.dumps(evidence), encoding="utf-8")
+    with pytest.raises(OutcomeError, match="does not match payload"):
+        load_related_pr_evidence(path)
 
 
 def test_outcome_is_deterministic() -> None:

@@ -3,15 +3,15 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from scripts import replay_greenfield_step1_5
+from greenfield.step4_contract import validate_step4_report
+from greenfield.step5_actions import validate_step5_report
 from scripts import (
+    replay_greenfield_step1_5,
     trace_greenfield_step2,
     trace_greenfield_step3,
     trace_greenfield_step4,
     trace_greenfield_step5,
 )
-from greenfield.step4_contract import validate_step4_report
-from greenfield.step5_actions import validate_step5_report
 
 ROOT = Path(__file__).resolve().parents[1]
 BUNDLE = ROOT / "examples" / "greenfield" / "ia-app-pr-49156" / "replay"

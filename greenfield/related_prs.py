@@ -94,6 +94,10 @@ def build_related_pr_evidence(
             continue
         event_id = event.get("id")
         evidence_id = f"github_timeline:{event_id}" if event_id is not None else f"github_cross_reference:{repository}:{number}"
+        evidence_payload = {
+            "timeline_event": dict(event),
+            "pull_request": dict(pull_request),
+        }
         rows.append(
             {
                 "repository": repository,
@@ -102,7 +106,11 @@ def build_related_pr_evidence(
                 "head_sha": head_sha.lower(),
                 "base_sha": base_sha.lower(),
                 "relation_type": "github_cross_reference",
-                "evidence": {"id": evidence_id},
+                "evidence": {
+                    "id": evidence_id,
+                    "payload": evidence_payload,
+                    "sha256": artifact_sha256(evidence_payload),
+                },
             }
         )
         seen.add(related)

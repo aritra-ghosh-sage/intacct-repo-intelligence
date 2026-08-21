@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from greenfield.artifact_io import artifact_sha256
 from greenfield.semantic_contract import validate_index
 from greenfield.source_identity import repository_matches, source_identity
 from greenfield.step2_candidates import report_sha256
@@ -116,6 +117,19 @@ def load_related_pr_evidence(path: str | Path) -> dict[str, Any]:
             evidence.get("id"), "related PR evidence.id"
         ):
             raise OutcomeError("related PR evidence.id is required")
+        if evidence.get("sha256") is not None and (
+            not isinstance(evidence.get("sha256"), str)
+            or not SHA256.fullmatch(evidence["sha256"])
+        ):
+            raise OutcomeError("related PR evidence.sha256 must be SHA-256")
+        if evidence.get("sha256") is not None:
+            payload = evidence.get("payload")
+            if not isinstance(payload, dict):
+                raise OutcomeError(
+                    "related PR evidence.payload is required with sha256"
+                )
+            if artifact_sha256(payload) != evidence["sha256"]:
+                raise OutcomeError("related PR evidence.sha256 does not match payload")
         key = (target_repo, number)
         if key in keys:
             raise OutcomeError(f"duplicate related PR: {target_repo}#{number}")
