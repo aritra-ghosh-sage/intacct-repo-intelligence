@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from greenfield.step1_capture import evidence_fingerprint
+from greenfield.step1_5_trace import validate_trace
 from greenfield.step2_candidates import resolve_candidates
 from greenfield.step2_contract import (
     load_ci_evidence,
@@ -20,7 +21,6 @@ from greenfield.step2_contract import (
 from greenfield.step3_outcome import assemble_outcome, load_related_pr_evidence
 from greenfield.step4_contract import (
     load_ci_evidence_file,
-    load_contract_evidence,
     load_inventory_evidence,
     load_semantic_evidence,
     validate_step4_report,
@@ -87,7 +87,20 @@ def main(argv: list[str] | None = None) -> int:
         if step1_errors:
             raise ValueError("invalid step1 report: " + "; ".join(step1_errors))
 
-        contract = load_contract(_evidence_path(bundle_dir, "step2.contract.yaml"))
+        trace_path = bundle_dir / "step1.5.trace.json"
+        contract_path = bundle_dir / "step1.5.contract.json"
+        if trace_path.exists() != contract_path.exists():
+            raise ValueError("Step 1.5 bundle must contain both step1.5.trace.json and step1.5.contract.json")
+        contract_path = contract_path if contract_path.exists() else _evidence_path(bundle_dir, "step2.contract.yaml")
+        raw_contract = _read_json(contract_path)
+        if trace_path.exists() and raw_contract.get("generation", {}).get("step1_evidence_sha256") != evidence_fingerprint(step1):
+            raise ValueError("retained Step 1.5 contract is not linked to Step 1 evidence")
+        contract = load_contract(contract_path)
+        if trace_path.exists():
+            trace = _read_json(trace_path)
+            trace_errors = validate_trace(step1, trace)
+            if trace_errors:
+                raise ValueError("invalid retained Step 1.5 trace: " + "; ".join(trace_errors))
         ci = load_ci_evidence(_evidence_path(bundle_dir, "step2.ci.json"))
         inventory = load_repository_inventory(_evidence_path(bundle_dir, "step2.inventory.json"))
 
@@ -110,7 +123,7 @@ def main(argv: list[str] | None = None) -> int:
         step4 = map_test_coverage(
             step3,
             contracts=[
-                load_contract_evidence(_evidence_path(bundle_dir, "step2.contract.yaml"))
+                contract
             ],
             ci_evidence=[
                 load_ci_evidence_file(_evidence_path(bundle_dir, "step2.ci.json"))

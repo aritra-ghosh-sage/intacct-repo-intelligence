@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 from greenfield.step4_contract import validate_step4_report
@@ -97,6 +98,38 @@ def test_optional_related_evidence_uses_stable_repository_path() -> None:
     assert replay_greenfield_step1_5._evidence_path(
         absolute_bundle, "step3.related-pr-evidence.json"
     ) == Path("examples/greenfield/ia-app-pr-49156/replay/step3.related-pr-evidence.json")
+
+
+def test_retained_step1_5_artifacts_are_consumed_directly(tmp_path: Path) -> None:
+    bundle = tmp_path / "bundle"
+    shutil.copytree(PR_49137_BUNDLE, bundle)
+    (bundle / "step2.contract.yaml").unlink()
+    assert replay_greenfield_step1_6.main(["--bundle-dir", str(bundle)]) == 0
+
+
+def test_step1_5_trace_and_contract_must_be_paired(tmp_path: Path, capsys) -> None:
+    bundle = tmp_path / "bundle"
+    shutil.copytree(PR_49137_BUNDLE, bundle)
+    (bundle / "step1.5.contract.json").unlink()
+    assert replay_greenfield_step1_6.main(["--bundle-dir", str(bundle)]) == 2
+    assert "both step1.5.trace.json and step1.5.contract.json" in capsys.readouterr().err
+
+
+def test_stale_retained_step1_5_contract_fails_closed(tmp_path: Path, capsys) -> None:
+    bundle = tmp_path / "bundle"
+    shutil.copytree(PR_49137_BUNDLE, bundle)
+    contract = json.loads((bundle / "step1.5.contract.json").read_text(encoding="utf-8"))
+    contract["revision"] = "0" * 40
+    (bundle / "step1.5.contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    assert replay_greenfield_step1_6.main(["--bundle-dir", str(bundle)]) == 2
+    assert "contract" in capsys.readouterr().err
+
+
+def test_retained_step1_5_artifacts_are_byte_stable() -> None:
+    for name in ("step1.5.trace.json", "step1.5.contract.json"):
+        first = (PR_49137_BUNDLE / name).read_bytes()
+        second = (PR_49137_BUNDLE / name).read_bytes()
+        assert first == second
 
 
 def test_cli_chain_reaches_step5_and_validates_intermediate_reports(

@@ -31,7 +31,7 @@ from greenfield.step6_contract import (
     validate_step6_request,
 )
 from greenfield.step6_patch import generate_step6
-from greenfield.behavior_contract import generate_behavior_contract, load_source_trace
+from greenfield.step1_5_trace import validate_trace
 from scripts.validate_greenfield_step1 import validate as validate_step1
 from scripts.validate_greenfield_step2 import validate as validate_step2
 from scripts.validate_greenfield_step3 import validate as validate_step3
@@ -102,26 +102,26 @@ def _generated_contract_path(step1: dict[str, object]) -> Path:
 def _load_contract_for_replay(
     bundle: Path, step1: dict[str, object]
 ) -> tuple[dict[str, object], str]:
-    """Use the recorded Step 1.5 artifact, or derive it from its recorded trace.
-
-    A replay must not silently use a hand-authored Step 2 contract when the
-    bundle contains Step 1.5 evidence. Older bundles without that evidence
-    retain their explicit Step 2 contract fallback for compatibility.
-    """
-    recorded = bundle / "generated_behavior_contract.json"
-    if recorded.exists():
-        return load_contract(recorded), "generated_behavior_contract.json"
+    """Load the retained Step 1.5 contract and verify its paired trace."""
+    trace_path = bundle / "step1.5.trace.json"
+    contract_path = bundle / "step1.5.contract.json"
+    if trace_path.exists() != contract_path.exists():
+        raise ValueError("Step 1.5 bundle must contain both step1.5.trace.json and step1.5.contract.json")
+    if trace_path.exists():
+        trace = load_json(trace_path, "Step 1.5 trace")
+        trace_errors = validate_trace(step1, trace)
+        if trace_errors:
+            raise ValueError("invalid retained Step 1.5 trace: " + "; ".join(trace_errors))
+        raw_contract = load_json(contract_path, "Step 1.5 contract")
+        if raw_contract.get("generation", {}).get("step1_evidence_sha256") != evidence_fingerprint(step1):
+            raise ValueError("retained Step 1.5 contract is not linked to Step 1 evidence")
+        contract = load_contract(contract_path)
+        return contract, "step1.5.contract.json"
     canonical = _generated_contract_path(step1)
     if canonical.exists():
-        return load_contract(canonical), "generated_behavior_contract.json"
-    trace = bundle / "step1.source-trace.json"
-    if trace.exists():
-        return (
-            generate_behavior_contract(
-                step1, load_source_trace(trace), source_trace_path=trace.as_posix()
-            ),
-            "generated_behavior_contract.json",
-        )
+        return load_contract(canonical), "step1.5.contract.json"
+    if (bundle / "generated_behavior_contract.json").exists():
+        raise ValueError("legacy generated_behavior_contract.json is not a standardized Step 1.5 artifact")
     return load_contract(_evidence_path(bundle, "step2.contract.yaml")), "step2.contract.yaml"
 
 

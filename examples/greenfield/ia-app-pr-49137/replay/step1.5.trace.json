@@ -1,0 +1,110 @@
+{
+  "affected_symbols": [
+    {
+      "line": 1,
+      "path": "app/source/company/AllocationTxnHelper.cls",
+      "role": "entry",
+      "symbol": "AllocationTxnHelper::applyAllocation"
+    },
+    {
+      "line": 1,
+      "path": "app/source/gl/GLBatchManager.cls",
+      "role": "entry",
+      "symbol": "GLBatchManager::glTranslateApplyAllocation"
+    }
+  ],
+  "analysis_kind": "greenfield_pr_impact_step_1_5",
+  "behaviors": [
+    {
+      "description": "Apply-allocation recalculates named allocation splits and clears stale split totals before persistence.",
+      "edges": [
+        {
+          "relationship_type": "CALLS",
+          "resolution": "exact",
+          "source_line": 1,
+          "source_path": "app/source/gl/GLBatchManager.cls",
+          "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
+          "source_symbol": "GLBatchManager::glTranslateApplyAllocation",
+          "target_path": "app/source/company/AllocationTxnHelper.cls",
+          "target_symbol": "AllocationTxnHelper::applyAllocation"
+        }
+      ],
+      "entry_symbols": [
+        "AllocationTxnHelper::applyAllocation",
+        "GLBatchManager::glTranslateApplyAllocation"
+      ],
+      "kind": "allocation_recalculation",
+      "source_paths": [
+        "app/source/company/AllocationTxnHelper.cls",
+        "app/source/gl/GLBatchManager.cls"
+      ],
+      "surfaces": {
+        "actionui": "not_run",
+        "cross_module_callers": "unresolved",
+        "csv_import": "not_run",
+        "database_schema": "not_run",
+        "direct_gl_service": "available",
+        "nextgen_ui": "not_run",
+        "permissions_workflows": "not_run",
+        "xml_api": "not_run"
+      },
+      "symbol_paths": {
+        "AllocationTxnHelper::applyAllocation": "app/source/company/AllocationTxnHelper.cls",
+        "GLBatchManager::glTranslateApplyAllocation": "app/source/gl/GLBatchManager.cls"
+      }
+    }
+  ],
+  "calls": [
+    {
+      "relationship_type": "CALLS",
+      "resolution": "exact",
+      "source_line": 1,
+      "source_path": "app/source/gl/GLBatchManager.cls",
+      "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
+      "source_symbol": "GLBatchManager::glTranslateApplyAllocation",
+      "target_path": "app/source/company/AllocationTxnHelper.cls",
+      "target_symbol": "AllocationTxnHelper::applyAllocation"
+    }
+  ],
+  "changed_paths": [
+    "app/source/company/AllocationTxnHelper.cls",
+    "app/source/gl/GLBatchManager.cls"
+  ],
+  "input": {
+    "base_sha": "e45cec95f00f565f999d6f907fbc73d48e9c6836",
+    "changed_paths": [
+      "app/source/company/AllocationTxnHelper.cls",
+      "app/source/gl/GLBatchManager.cls"
+    ],
+    "head_sha": "42942af6221c1e974a7e266e96b3199cb95aa448",
+    "pr_number": 49137,
+    "repo_key": "ia-main",
+    "repository": "intacct/ia-app"
+  },
+  "provenance": {
+    "agent": {
+      "model": "fixture",
+      "provider": "recorded-replay"
+    },
+    "catalog_mutation": "none",
+    "context_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "github_writes": "none",
+    "read_only": true,
+    "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
+    "step1_evidence_sha256": "29f3b2577f41396d60724749b95cf4367f83fd48655e5e0665ad9532eb7bcda4",
+    "trace_sha256": "81182b19ef234704fe9f4a1e6921ee1e32d965c787ad8c847fcffa330176b02e"
+  },
+  "repository": "intacct/ia-app",
+  "revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
+  "schema_version": "0.1",
+  "surfaces": {
+    "actionui": "not_run",
+    "cross_module_callers": "unresolved",
+    "csv_import": "not_run",
+    "database_schema": "not_run",
+    "direct_gl_service": "available",
+    "nextgen_ui": "not_run",
+    "permissions_workflows": "not_run",
+    "xml_api": "not_run"
+  }
+}

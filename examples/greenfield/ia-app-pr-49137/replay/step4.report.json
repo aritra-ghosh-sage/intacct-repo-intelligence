@@ -8,7 +8,7 @@
           {
             "digest": "e70aed8a3fbf468afd264ea766872b87b39b41f6a554f1939a5236d580d6fdfd",
             "kind": "contract",
-            "path": "examples/greenfield/ia-app-pr-49137/replay/generated_behavior_contract.json",
+            "path": "examples/greenfield/ia-app-pr-49137/replay/step1.5.contract.json",
             "revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
           }
         ],

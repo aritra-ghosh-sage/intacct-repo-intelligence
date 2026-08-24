@@ -1,0 +1,204 @@
+{
+  "artifact_kind": "generated_behavior_contract",
+  "changed_symbols": [
+    "AllocationTxnHelper::applyAllocation",
+    "GLBatchManager::glTranslateApplyAllocation"
+  ],
+  "entry_surfaces": {
+    "actionui": {
+      "evidence": "source_trace",
+      "status": "not_run"
+    },
+    "cross_module_callers": {
+      "evidence": "source_trace",
+      "status": "unresolved"
+    },
+    "csv_import": {
+      "evidence": "source_trace",
+      "status": "not_run"
+    },
+    "database_schema": {
+      "evidence": "source_trace",
+      "status": "not_run"
+    },
+    "direct_gl_service": {
+      "evidence": "source_trace",
+      "status": "confirmed"
+    },
+    "nextgen_ui": {
+      "evidence": "source_trace",
+      "status": "not_run"
+    },
+    "permissions_workflows": {
+      "evidence": "source_trace",
+      "status": "not_run"
+    },
+    "xml_api": {
+      "evidence": "source_trace",
+      "status": "not_run"
+    }
+  },
+  "evidence": {
+    "path": "<generated>",
+    "sha256": "fda89e86a41e8dfb79cb5878847b883ef4ac9e0c1cd1a0c411615677c044c859"
+  },
+  "generation": {
+    "bounds": {
+      "max_edges": 2000,
+      "max_hops": 3,
+      "max_nodes": 500
+    },
+    "diagnostics": [],
+    "edges": [
+      {
+        "evidence_sha256": "183343c3661b25c7fd9a0cfece3d5bf2b40da08874af533e325591374bcd60f2",
+        "relationship_type": "CALLS",
+        "resolution": "exact",
+        "source_line": 1,
+        "source_path": "app/source/gl/GLBatchManager.cls",
+        "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
+        "source_symbol": "GLBatchManager::glTranslateApplyAllocation",
+        "target_path": "app/source/company/AllocationTxnHelper.cls",
+        "target_symbol": "AllocationTxnHelper::applyAllocation"
+      }
+    ],
+    "flow": {
+      "edges": [
+        {
+          "evidence_sha256": "183343c3661b25c7fd9a0cfece3d5bf2b40da08874af533e325591374bcd60f2",
+          "relationship_type": "CALLS",
+          "resolution": "exact",
+          "source_line": 1,
+          "source_path": "app/source/gl/GLBatchManager.cls",
+          "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
+          "source_symbol": "GLBatchManager::glTranslateApplyAllocation",
+          "target_path": "app/source/company/AllocationTxnHelper.cls",
+          "target_symbol": "AllocationTxnHelper::applyAllocation"
+        }
+      ],
+      "status": "complete"
+    },
+    "generator_version": "0.1",
+    "nodes": [
+      {
+        "role": "entry",
+        "source_paths": [
+          "app/source/company/AllocationTxnHelper.cls"
+        ],
+        "symbol": "AllocationTxnHelper::applyAllocation"
+      },
+      {
+        "role": "entry",
+        "source_paths": [
+          "app/source/gl/GLBatchManager.cls"
+        ],
+        "symbol": "GLBatchManager::glTranslateApplyAllocation"
+      }
+    ],
+    "rule_set_version": "0.1",
+    "source_trace_path": "examples/greenfield/ia-app-pr-49137/replay/step1.5.trace.json",
+    "source_trace_sha256": "6bddb998b265a906084d0ce1d838c31dbbc5ae1c1a4fb41fbd6fbb9ff8e2adc0",
+    "status": "complete",
+    "step1_evidence_sha256": "29f3b2577f41396d60724749b95cf4367f83fd48655e5e0665ad9532eb7bcda4",
+    "surfaces": {
+      "actionui": {
+        "evidence": "source_trace",
+        "status": "not_run"
+      },
+      "cross_module_callers": {
+        "evidence": "source_trace",
+        "status": "unresolved"
+      },
+      "csv_import": {
+        "evidence": "source_trace",
+        "status": "not_run"
+      },
+      "database_schema": {
+        "evidence": "source_trace",
+        "status": "not_run"
+      },
+      "direct_gl_service": {
+        "evidence": "source_trace",
+        "status": "confirmed"
+      },
+      "nextgen_ui": {
+        "evidence": "source_trace",
+        "status": "not_run"
+      },
+      "permissions_workflows": {
+        "evidence": "source_trace",
+        "status": "not_run"
+      },
+      "xml_api": {
+        "evidence": "source_trace",
+        "status": "not_run"
+      }
+    }
+  },
+  "impacted_files": [
+    {
+      "path": "app/source/company/AllocationTxnHelper.cls",
+      "status": "confirmed",
+      "symbols": [
+        "AllocationTxnHelper::applyAllocation"
+      ]
+    },
+    {
+      "path": "app/source/gl/GLBatchManager.cls",
+      "status": "confirmed",
+      "symbols": [
+        "GLBatchManager::glTranslateApplyAllocation"
+      ]
+    }
+  ],
+  "input": {
+    "base_sha": "e45cec95f00f565f999d6f907fbc73d48e9c6836",
+    "changed_paths": [
+      "app/source/company/AllocationTxnHelper.cls",
+      "app/source/gl/GLBatchManager.cls"
+    ],
+    "head_sha": "42942af6221c1e974a7e266e96b3199cb95aa448",
+    "pr_number": 49137,
+    "repo_key": "ia-main",
+    "repository": "intacct/ia-app"
+  },
+  "provenance": {
+    "catalog_mutation": "none",
+    "github_writes": "none",
+    "read_only": true,
+    "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+  },
+  "relations": [
+    {
+      "consumer_repository": "ia-app",
+      "entry_surfaces": [
+        "actionui",
+        "cross_module_callers",
+        "csv_import",
+        "database_schema",
+        "direct_gl_service",
+        "nextgen_ui",
+        "permissions_workflows",
+        "xml_api"
+      ],
+      "interface_id": "behavior:56d1ddedbff5f0e83a5d8650",
+      "owner": null,
+      "owner_repository": "ia-main",
+      "protected_behavior": "Apply-allocation recalculates named allocation splits and clears stale split totals before persistence.",
+      "relationship_type": "behavior_contract",
+      "source_paths": [
+        "app/source/company/AllocationTxnHelper.cls",
+        "app/source/gl/GLBatchManager.cls"
+      ],
+      "source_symbols": [
+        "AllocationTxnHelper::applyAllocation",
+        "GLBatchManager::glTranslateApplyAllocation"
+      ],
+      "status": "active",
+      "test_obligations": []
+    }
+  ],
+  "repository": "ia-main",
+  "revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
+  "schema_version": "0.1"
+}
