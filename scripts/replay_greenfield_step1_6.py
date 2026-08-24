@@ -132,12 +132,22 @@ def main(argv: list[str] | None = None) -> int:
         if errors:
             raise ValueError("invalid Step 1 report: " + "; ".join(errors))
         contract_path = _evidence_path(bundle, "step2.contract.yaml")
-        ci_path = _evidence_path(bundle, "step2.ci.json")
-        inventory_path = _evidence_path(bundle, "step2.inventory.json")
+        ci_paths = sorted(bundle.glob("step2.ci*.json"))
+        inventory_paths = sorted(bundle.glob("step2.inventory*.json"))
+        if not ci_paths:
+            raise ValueError("missing Step 2 CI evidence")
+        if not inventory_paths:
+            raise ValueError("missing Step 2 inventory evidence")
+        ci_path = ci_paths[0]
+        inventory_path = inventory_paths[0]
         contract = load_contract(contract_path)
-        ci = load_ci_evidence(ci_path)
-        inventory = load_repository_inventory(inventory_path)
-        _normalize_evidence_paths(contract, ci, inventory, bundle_dir=bundle)
+        ci_rows = [load_ci_evidence(path) for path in ci_paths]
+        inventory_rows = [load_repository_inventory(path) for path in inventory_paths]
+        for ci_row, ci_file in zip(ci_rows, ci_paths):
+            _normalize_evidence_paths(contract, ci_row, inventory_rows[0], bundle_dir=bundle)
+            ci_row["evidence"]["path"] = _evidence_label(bundle, ci_file.name)
+        for inventory_row, inventory_file in zip(inventory_rows, inventory_paths):
+            inventory_row["evidence_path"] = _evidence_label(bundle, inventory_file.name)
         semantic = None
         semantic_path = bundle / "step2.semantic-index.json"
         if semantic_path.exists():
@@ -150,8 +160,8 @@ def main(argv: list[str] | None = None) -> int:
         step2 = resolve_candidates(
             step1,
             contracts=[contract],
-            ci_evidence=[ci],
-            inventory_evidence=[inventory],
+            ci_evidence=ci_rows,
+            inventory_evidence=inventory_rows,
             semantic_indexes=[semantic] if semantic else [],
         )
         step2_errors = validate_step2(step2)
@@ -169,51 +179,50 @@ def main(argv: list[str] | None = None) -> int:
         contract_evidence["evidence"]["path"] = _evidence_label(
             bundle, "step2.contract.yaml"
         )
-        ci_evidence = load_ci_evidence_file(ci_path)
-        ci_evidence["evidence"]["path"] = _evidence_label(bundle, "step2.ci.json")
-        inventory_evidence = load_inventory_evidence(inventory_path)
-        inventory_evidence["evidence_path"] = _evidence_label(
-            bundle, "step2.inventory.json"
-        )
+        ci_evidence = [load_ci_evidence_file(path) for path in ci_paths]
+        for row, path in zip(ci_evidence, ci_paths):
+            row["evidence"]["path"] = _evidence_label(bundle, path.name)
+        inventory_evidence = [load_inventory_evidence(path) for path in inventory_paths]
+        for row, path in zip(inventory_evidence, inventory_paths):
+            row["evidence_path"] = _evidence_label(bundle, path.name)
         step4 = map_test_coverage(
             step3,
             contracts=[contract_evidence],
-            ci_evidence=[ci_evidence],
-            inventory_evidence=[inventory_evidence],
+            ci_evidence=ci_evidence,
+            inventory_evidence=inventory_evidence,
             semantic_indexes=[semantic] if semantic else [],
         )
         step5 = recommend_actions(step3, step4)
-        step6_request = load_json(bundle / "step6.request.json", "Step 6 request")
-        request_errors = validate_step6_request(step6_request)
-        if request_errors:
-            raise ValueError(
-                "invalid Step 6 request: " + "; ".join(request_errors)
+        step6_request_path = bundle / "step6.request.json"
+        step6 = None
+        if step6_request_path.exists():
+            step6_request = load_json(step6_request_path, "Step 6 request")
+            request_errors = validate_step6_request(step6_request)
+            if request_errors:
+                raise ValueError(
+                    "invalid Step 6 request: " + "; ".join(request_errors)
+                )
+            step6 = generate_step6(
+                step6_request,
+                step1,
+                step3,
+                step4,
+                step5,
             )
-        step6 = generate_step6(
-            step6_request,
-            step1,
-            step3,
-            step4,
-            step5,
-        )
 
         mismatches: list[str] = []
-        for name, report in (
+        reports_to_compare = [
             ("step2.report.json", step2),
             ("step3.report.json", step3),
             ("step4.report.json", step4),
             ("step5.report.json", step5),
-            ("step6.report.json", step6),
-        ):
+        ]
+        if step6 is not None:
+            reports_to_compare.append(("step6.report.json", step6))
+        for name, report in reports_to_compare:
             _compare(bundle, name, report, mismatches)
         if args.output_dir:
-            for name, report in (
-                ("step2.report.json", step2),
-                ("step3.report.json", step3),
-                ("step4.report.json", step4),
-                ("step5.report.json", step5),
-                ("step6.report.json", step6),
-            ):
+            for name, report in reports_to_compare:
                 _write_json(args.output_dir / name, report)
         reports = {
             "step1.json": step1,
@@ -221,8 +230,9 @@ def main(argv: list[str] | None = None) -> int:
             "step3.report.json": step3,
             "step4.report.json": step4,
             "step5.report.json": step5,
-            "step6.report.json": step6,
         }
+        if step6 is not None:
+            reports["step6.report.json"] = step6
         manifest = {
             "schema_version": "0.1",
             "bundle": str(bundle),
@@ -240,7 +250,7 @@ def main(argv: list[str] | None = None) -> int:
                 for name, value in sorted(reports.items())
             ],
             "source": step1.get("input", {}),
-            "target": step6.get("target", {}),
+            "target": step6.get("target", {}) if step6 is not None else None,
             "mismatches": mismatches,
         }
         if args.manifest_output:
@@ -255,12 +265,10 @@ def main(argv: list[str] | None = None) -> int:
                 "step3": step3["status"],
                 "step4": step4["status"],
                 "step5": step5["status"],
-                "step6": step6["status"],
             },
             "validation": {
                 "step4": validate_step4_report(step4),
                 "step5": validate_step5_report(step5),
-                "step6": validate_step6_report(step6),
             },
             "mismatches": mismatches,
             "manifest": str(args.manifest_output) if args.manifest_output else None,

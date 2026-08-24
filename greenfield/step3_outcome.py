@@ -29,6 +29,16 @@ CLASSIFICATION_ORDER = {
     "unknown": 5,
 }
 BLAST_RADIUS = {"local", "boundary", "multi_repo", "systemic", "unknown"}
+SURFACES = (
+    "xml_api",
+    "csv_import",
+    "actionui",
+    "nextgen_ui",
+    "direct_gl_service",
+    "cross_module_callers",
+    "database_schema",
+    "permissions_workflows",
+)
 
 
 class OutcomeError(ValueError):
@@ -178,6 +188,29 @@ def _surface(status: str, items: list[dict[str, Any]], **extra: Any) -> dict[str
     return {"status": status, "items": items, **extra}
 
 
+def _surface_statuses(paths: list[str]) -> dict[str, dict[str, Any]]:
+    lowered = [path.lower() for path in paths]
+    return {
+        "xml_api": {"status": "not_run", "reason": "xml_dispatch_not_modelled"},
+        "csv_import": {"status": "not_run", "reason": "csv_import_dispatch_not_modelled"},
+        "actionui": {"status": "not_run", "reason": "actionui_dispatch_not_modelled"},
+        "nextgen_ui": {"status": "not_run", "reason": "nextgen_ui_dispatch_not_modelled"},
+        "direct_gl_service": {
+            "status": "available" if any("/gl/" in path for path in lowered) else "not_run",
+            "reason": "changed_gl_source_path" if any("/gl/" in path for path in lowered) else "no_changed_gl_source_path",
+        },
+        "cross_module_callers": {"status": "unresolved", "reason": "cross_repository_runtime_tracing_not_modelled"},
+        "database_schema": {
+            "status": "not_run",
+            "reason": "schema_impact_requires_dedicated_trace",
+        },
+        "permissions_workflows": {
+            "status": "not_run",
+            "reason": "permission_workflow_impact_requires_dedicated_trace",
+        },
+    }
+
+
 def _candidate_rows(step2: Mapping[str, Any]) -> list[dict[str, Any]]:
     return [row for row in step2["candidates"] if isinstance(row, dict)]
 
@@ -211,7 +244,8 @@ def _inventory_observation(candidate: Mapping[str, Any]) -> dict[str, Any] | Non
         (
             item
             for item in candidate.get("evidence", [])
-            if isinstance(item, dict) and item.get("kind") == "repository_inventory"
+            if isinstance(item, dict)
+            and item.get("kind") in {"repository_inventory", "repository_inventory_unavailable"}
         ),
         {},
     )
@@ -727,6 +761,11 @@ def assemble_outcome(
         "status": outcome_status,
         "input": source_input,
         "blast_radius": _blast_radius(candidates, gaps),
+        **(
+            {"surface_statuses": _surface_statuses(paths)}
+            if step2["input"].get("evidence_profile") == "trust_foundation_v1"
+            else {}
+        ),
         "direct_components": component_surface,
         "potentially_affected_repositories": _surface(
             "available" if repositories else ("unknown" if gaps else "available"),

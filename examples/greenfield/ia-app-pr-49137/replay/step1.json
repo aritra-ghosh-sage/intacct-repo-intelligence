@@ -1,0 +1,60 @@
+{
+  "schema_version": "0.1",
+  "analysis_kind": "greenfield_pr_impact_step_1",
+  "status": "partial",
+  "input": {
+    "repository": "intacct/ia-app",
+    "repo_key": "ia-main",
+    "pr_number": 49137,
+    "base_sha": "e45cec95f00f565f999d6f907fbc73d48e9c6836",
+    "head_sha": "42942af6221c1e974a7e266e96b3199cb95aa448",
+    "base_revision": "e45cec95f00f565f999d6f907fbc73d48e9c6836",
+    "target_revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
+    "evidence_profile": "trust_foundation_v1",
+    "changed_paths": [
+      "app/source/company/AllocationTxnHelper.cls",
+      "app/source/gl/GLBatchManager.cls"
+    ]
+  },
+  "changed_files": [
+    {"path": "app/source/company/AllocationTxnHelper.cls", "filename": "app/source/company/AllocationTxnHelper.cls", "status": "modified"},
+    {"path": "app/source/gl/GLBatchManager.cls", "filename": "app/source/gl/GLBatchManager.cls", "status": "modified"}
+  ],
+  "pr_metadata": {
+    "number": 49137,
+    "base_revision": "e45cec95f00f565f999d6f907fbc73d48e9c6836",
+    "target_revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
+    "title": "Add allocation recalculation callback to GL journal allocation",
+    "url": "https://github.com/intacct/ia-app/pull/49137",
+    "diff_sha256": "828f581143e2cb11bf4d59d4863fb4fbd991451914648d2e3dade0c6b76972fc"
+  },
+  "linked_issues": [],
+  "workflow_runs": [],
+  "workflow_jobs": [],
+  "check_runs": [],
+  "evidence_status": {
+    "linked_issues": "empty",
+    "workflow_runs": "not_requested",
+    "workflow_jobs": "not_requested",
+    "check_runs": "not_requested"
+  },
+  "gaps": [
+    "workflow_and_check_evidence_not_captured_at_head_revision"
+  ],
+  "warnings": [
+    "unsupported XML, CSV, ActionUI, NextGen UI, and cross-module runtime paths remain unproven"
+  ],
+  "provenance": {
+    "source_metadata_schema_version": "0.1",
+    "provider": "recorded-replay",
+    "endpoints": [
+      "https://api.github.com/repos/intacct/ia-app/pulls/49137",
+      "https://api.github.com/repos/intacct/ia-app/pulls/49137/files"
+    ],
+    "fetched_at": "2026-08-24T00:00:00Z",
+    "read_only": true,
+    "catalog_mutation": "none",
+    "github_writes": "none",
+    "evidence_sha256": "29f3b2577f41396d60724749b95cf4367f83fd48655e5e0665ad9532eb7bcda4"
+  }
+}

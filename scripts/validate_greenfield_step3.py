@@ -17,7 +17,16 @@ from greenfield.step3_outcome import ANALYSIS_KIND, BLAST_RADIUS, REPORT_SCHEMA_
 
 SHA = re.compile(r"^[0-9a-f]{40}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
-SURFACE_STATUSES = {"available", "partial", "unavailable", "not_modelled", "unknown"}
+SURFACE_STATUSES = {
+    "available",
+    "partial",
+    "unavailable",
+    "not_modelled",
+    "not_run",
+    "unresolved",
+    "empty",
+    "unknown",
+}
 CLASSIFICATION_ORDER = {
     "confirmed": 0,
     "candidate": 1,
@@ -163,6 +172,22 @@ def validate(report: Any) -> list[str]:
         errors.extend(validate_identity_fields(data))
     if report.get("blast_radius") not in BLAST_RADIUS:
         errors.append("blast_radius is invalid")
+    surface_statuses = report.get("surface_statuses")
+    if surface_statuses is not None and not isinstance(surface_statuses, dict):
+        errors.append("surface_statuses must be an object")
+    elif isinstance(surface_statuses, dict):
+        expected = {
+            "xml_api", "csv_import", "actionui", "nextgen_ui", "direct_gl_service",
+            "cross_module_callers", "database_schema", "permissions_workflows",
+        }
+        missing_surfaces = sorted(expected - set(surface_statuses))
+        if missing_surfaces:
+            errors.append("surface_statuses missing: " + ", ".join(missing_surfaces))
+        for name, value in surface_statuses.items():
+            if not isinstance(value, dict) or value.get("status") not in {
+                "available", "empty", "not_run", "unresolved", "unavailable", "unknown"
+            }:
+                errors.append(f"surface_statuses.{name} is invalid")
     impact_surface = _surface(report, "impact", errors)
     impact = impact_surface.get("items", [])
     if not isinstance(impact, list):

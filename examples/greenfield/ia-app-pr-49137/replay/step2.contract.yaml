@@ -1,0 +1,24 @@
+schema_version: '0.1'
+repository: ia-main
+revision: 42942af6221c1e974a7e266e96b3199cb95aa448
+relations:
+  - interface_id: behavior:gl-allocation-recalculation
+    owner_repository: ia-main
+    consumer_repository: ia-app
+    relationship_type: behavior_contract
+    source_paths:
+      - app/source/company/AllocationTxnHelper.cls
+      - app/source/gl/GLBatchManager.cls
+    source_symbols:
+      - GLBatchManager::glTranslateApplyAllocation
+      - AllocationTxnHelper::applyAllocation
+    protected_behavior: Apply-allocation recalculates named allocation splits and clears stale split totals before persistence.
+    entry_surfaces:
+      - direct_gl_service
+      - xml_api
+      - csv_import
+      - actionui
+      - nextgen_ui
+    status: active
+    owner: gl-platform
+    test_obligations: []

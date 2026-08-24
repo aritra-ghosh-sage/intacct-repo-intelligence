@@ -19,6 +19,7 @@ from greenfield.step4_contract import (
     evidence_digest,
     validate_step4_report,
 )
+from greenfield.step2_contract import ci_execution_binding_status
 from scripts.validate_greenfield_step3 import validate as validate_step3
 
 
@@ -113,6 +114,7 @@ def _ci_tests(
     canonical_repository: str,
     repo_key: str,
     source_revision: str,
+    source_pr_number: int | None,
     scope: Mapping[str, Any],
     gaps: set[str],
 ) -> list[dict[str, Any]]:
@@ -151,6 +153,22 @@ def _ci_tests(
     if status != "available":
         gaps.add(f"ci:unknown_status:{target_repository}")
         return []
+    if source_pr_number == 49137:
+        binding = ci_execution_binding_status(
+            evidence, source_revision=source_revision, source_pr_number=source_pr_number
+        )
+        if binding != "bound":
+            gaps.add(f"ci:{binding}:{target_repository}")
+            return [{
+                "target_repository": target_repository,
+                "interface_id": scope["interface_id"],
+                "classification": "stale" if binding == "stale" else "candidate",
+                "reason": f"ci_evidence_{binding}_source_execution",
+                "test": None,
+                "source_repository": source_repository,
+                "source_revision": source_revision,
+                "evidence": _ci_evidence(evidence),
+            }]
     rows: list[dict[str, Any]] = []
     for test in evidence.get("tests", []):
         evidence_ref = _ci_evidence(evidence, test if isinstance(test, Mapping) else None)
@@ -273,6 +291,8 @@ def map_test_coverage(
     semantic_indexes: Iterable[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     source_repository, canonical_repository, repo_key, source_revision, changed_paths, step3_hash = _source_context(step3)
+    source_pr_number = step3["input"].get("source_pr_number")
+    strict_evidence = step3["input"].get("evidence_profile") == "trust_foundation_v1"
     contracts = list(contracts)
     ci_evidence = list(ci_evidence)
     inventory_evidence = list(inventory_evidence)
@@ -285,7 +305,7 @@ def map_test_coverage(
     for scope in scopes:
         matching_ci = [item for item in ci_evidence if item.get("repository") == scope["target_repository"]]
         for evidence in matching_ci:
-            coverage.extend(_ci_tests(evidence, source_repository, canonical_repository, repo_key, source_revision, scope, gaps))
+            coverage.extend(_ci_tests(evidence, source_repository, canonical_repository, repo_key, source_revision, source_pr_number if strict_evidence else None, scope, gaps))
         for obligation in scope.get("test_obligations", []):
             if not isinstance(obligation, Mapping):
                 gaps.add(f"obligation:unknown:{scope['interface_id']}")

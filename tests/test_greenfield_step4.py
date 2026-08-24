@@ -61,11 +61,14 @@ def _ci(
         "evidence_id": "run-1",
         "repository": "intacct/ia-restapi-automation-tests",
         "commit_sha": SUITE_SHA,
+        "inspected_revision": SUITE_SHA,
+        "workflow_run_id": 10,
+        "workflow_job_id": 20,
         "source_repository": "ia-app",
         "source_revision": source_revision,
         "interface_id": "company.config.preference",
         "status": status,
-        "tests": tests,
+        "tests": [dict(test, execution_result=test.get("execution_result", "passed")) for test in tests],
         "evidence": {"path": "ci.json", "sha256": "d" * 64},
     }
 
@@ -122,6 +125,25 @@ def test_exact_ci_evidence_is_covered_and_indirect_is_preserved() -> None:
     }
     assert classifications == {"direct": "covered", "dependent": "indirectly_covered"}
     assert validate_step4_report(report) == []
+
+
+def test_ci_without_exact_execution_binding_is_not_coverage() -> None:
+    evidence = _ci([{"id": "unbound", "path": "tests/unbound.feature"}])
+    evidence.pop("workflow_job_id")
+    step3 = _step3()
+    step3["input"]["source_pr_number"] = 49137
+    step3["input"]["evidence_profile"] = "trust_foundation_v1"
+    report = map_test_coverage(
+        step3, contracts=[_contract()], ci_evidence=[evidence], inventory_evidence=[_inventory()]
+    )
+    rows = [item for item in report["coverage"]["items"] if item["target_repository"] == evidence["repository"]]
+    assert any(item["reason"] == "ci_evidence_unavailable_source_execution" for item in rows)
+    assert not any(
+        isinstance(item.get("test"), dict)
+        and item["test"].get("id") == "unbound"
+        and item["classification"] == "covered"
+        for item in rows
+    )
 
 
 def test_contract_without_ci_is_candidate_and_is_still_partial() -> None:

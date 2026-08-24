@@ -8,7 +8,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from greenfield.source_identity import repository_matches, source_identity
-from greenfield.step2_contract import artifact_sha256
+from greenfield.step2_contract import artifact_sha256, ci_execution_binding_status
 from greenfield.step2_likelihood import (
     attach_explicit_contract_anchors,
     build_source_anchors,
@@ -18,6 +18,7 @@ from greenfield.step2_likelihood import (
 REPORT_SCHEMA_VERSION = "0.1"
 ANALYSIS_KIND = "greenfield_pr_impact_step_2"
 RULE_SET_VERSION = "0.1"
+TRUST_EVIDENCE_PROFILE = "trust_foundation_v1"
 _CLASSIFICATION_ORDER = {
     "confirmed": 0,
     "candidate": 1,
@@ -32,6 +33,63 @@ class CandidateError(ValueError):
     """Raised when the Step 1 input cannot be used for candidate resolution."""
 
 
+def _confidence_summary(
+    rows: list[Mapping[str, Any]],
+    gaps: list[str],
+    *,
+    contracts: list[Mapping[str, Any]],
+    ci_evidence: list[Mapping[str, Any]],
+    inventory_evidence: list[Mapping[str, Any]],
+    semantic_indexes: list[Mapping[str, Any]],
+    source_revision: str,
+    source_pr_number: int | None,
+) -> dict[str, Any]:
+    confirmed = sum(row.get("classification") == "confirmed" for row in rows)
+    bound_ci = sum(
+        ci_execution_binding_status(
+            evidence, source_revision=source_revision, source_pr_number=source_pr_number
+        )
+        == "bound"
+        for evidence in ci_evidence
+        if evidence.get("status") == "available"
+    )
+    stale_or_unbound = sum(
+        ci_execution_binding_status(
+            evidence, source_revision=source_revision, source_pr_number=source_pr_number
+        )
+        != "bound"
+        for evidence in ci_evidence
+        if evidence.get("status") == "available"
+    )
+    if confirmed:
+        band = "confirmed"
+    elif bound_ci:
+        band = "strong_candidate"
+    elif rows:
+        band = "candidate"
+    elif any(value.startswith(("contract:", "ci:", "inventory:", "semantic_index:")) for value in gaps):
+        band = "unresolved"
+    else:
+        band = "unavailable"
+    return {
+        "band": band,
+        "rule_set_version": RULE_SET_VERSION,
+        "components": {
+            "exact_source_evidence": bool(contracts),
+            "behavior_contract_match": any(
+                row.get("declared_relationship_type") == "behavior_contract"
+                and row.get("classification") == "confirmed"
+                for row in rows
+            ),
+            "revision_freshness": not any("stale" in gap for gap in gaps),
+            "source_runtime_trace": bool(contracts or semantic_indexes),
+            "ci_execution": "bound" if bound_ci else ("unbound" if stale_or_unbound else "none"),
+            "inventory_completeness": bool(inventory_evidence),
+            "unresolved_or_unavailable_gaps": len(gaps),
+        },
+    }
+
+
 def _text(value: Any, label: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise CandidateError(f"{label} must be a non-empty string")
@@ -40,7 +98,7 @@ def _text(value: Any, label: str) -> str:
 
 def _step1_context(
     step1: Mapping[str, Any],
-) -> tuple[str, str, str, list[str], str, int | None, str | None]:
+) -> tuple[str, str, str, list[str], str, int | None, str | None, bool]:
     data = step1.get("input")
     if not isinstance(data, Mapping):
         raise CandidateError("Step 1 input must be an object")
@@ -67,6 +125,9 @@ def _step1_context(
     base_revision = data.get("base_revision") or data.get("base_sha")
     if not isinstance(base_revision, str) or not base_revision.strip():
         base_revision = None
+    profile = data.get("evidence_profile")
+    if profile is not None and profile != TRUST_EVIDENCE_PROFILE:
+        raise CandidateError(f"unsupported evidence_profile: {profile}")
     return (
         repo_key,
         canonical_repository,
@@ -75,6 +136,7 @@ def _step1_context(
         artifact_sha256(step1),
         pr_number,
         base_revision.lower() if base_revision else None,
+        profile == TRUST_EVIDENCE_PROFILE,
     )
 
 
@@ -106,6 +168,7 @@ def resolve_candidates(
         step1_hash,
         source_pr_number,
         base_revision,
+        strict_evidence,
     ) = _step1_context(step1)
     candidates: dict[tuple[str, str, str, str], dict[str, Any]] = {}
     gaps: list[str] = []
@@ -254,6 +317,27 @@ def resolve_candidates(
                 if status == "unavailable"
                 else f"repository_inventory_empty:{repository}"
             )
+            if status == "unavailable" and strict_evidence:
+                candidate = {
+                    "target_repository": repository,
+                    "interface_id": f"repository:{repository}",
+                    "relationship_type": "repository_inventory",
+                    "classification": "unresolved",
+                    "reason": "repository_inventory_unavailable",
+                    "changed_paths": changed_paths,
+                    "evidence": [{
+                        "kind": "repository_inventory_unavailable",
+                        "path": inventory.get("evidence_path", "<in-memory>"),
+                        "response_sha256": inventory.get("provenance", {}).get("response_sha256"),
+                        "repository": repository,
+                        "inspected_revision": inventory.get("inspected_revision"),
+                        "source_revision": inventory.get("source_revision"),
+                        "artifact_status": inventory.get("artifact_status", "empty"),
+                        "ci_linkage_status": inventory.get("ci_linkage", {}).get("status", "unavailable"),
+                        "response_sha256": inventory.get("provenance", {}).get("response_sha256"),
+                    }],
+                }
+                candidates[_candidate_key(candidate)] = candidate
             continue
         for inventory_gap in inventory.get("gaps", []):
             if isinstance(inventory_gap, str) and inventory_gap:
@@ -484,6 +568,8 @@ def resolve_candidates(
         source_input["source_pr_number"] = source_pr_number
     if base_revision is not None:
         source_input["base_revision"] = base_revision
+    if strict_evidence:
+        source_input["evidence_profile"] = TRUST_EVIDENCE_PROFILE
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
         "analysis_kind": ANALYSIS_KIND,
@@ -491,6 +577,22 @@ def resolve_candidates(
         "input": source_input,
         "candidates": rows,
         "blast_radius": blast_radius,
+        **(
+            {
+                "confidence": _confidence_summary(
+                    rows,
+                    sorted(set(gaps)),
+                    contracts=contracts,
+                    ci_evidence=ci_evidence,
+                    inventory_evidence=inventory_evidence,
+                    semantic_indexes=semantic_indexes,
+                    source_revision=target_revision,
+                    source_pr_number=source_pr_number,
+                )
+            }
+            if strict_evidence
+            else {}
+        ),
         "gaps": sorted(set(gaps)),
         "warnings": sorted(set(warnings)),
         "provenance": {

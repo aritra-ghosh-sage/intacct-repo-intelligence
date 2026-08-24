@@ -57,11 +57,14 @@ def _ci(tests: list[dict], *, status: str = "available") -> dict:
         "evidence_id": "run-1",
         "repository": "intacct/ia-restapi-automation-tests",
         "commit_sha": SUITE_SHA,
+        "inspected_revision": SUITE_SHA,
+        "workflow_run_id": 10,
+        "workflow_job_id": 20,
         "source_repository": "ia-app",
         "source_revision": TARGET,
         "interface_id": "company.config.preference",
         "status": status,
-        "tests": tests,
+        "tests": [dict(test, execution_result=test.get("execution_result", "passed")) for test in tests],
         "evidence": {"path": "ci.json", "sha256": "d" * 64},
     }
 

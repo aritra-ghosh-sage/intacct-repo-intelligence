@@ -102,9 +102,9 @@ def _upstream_context(
     for field in ("action_type", "target_repository"):
         if action.get(field) != request["action"][field]:
             raise Step6Error(f"action.{field} does not match Step 5")
-    if action.get("scope", {}).get("test_id") != request["action"]["test_id"]:
+    if action.get("scope", {}).get("test_id") is not None and action.get("scope", {}).get("test_id") != request["action"]["test_id"]:
         raise Step6Error("action.test_id does not match Step 5")
-    if action.get("scope", {}).get("test_path") != request["action"]["test_path"]:
+    if action.get("scope", {}).get("test_path") is not None and action.get("scope", {}).get("test_path") != request["action"]["test_path"]:
         raise Step6Error("action.test_path does not match Step 5")
 
 

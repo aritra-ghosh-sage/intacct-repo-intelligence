@@ -1,0 +1,507 @@
+{
+  "analysis_kind": "greenfield_pr_impact_step_3",
+  "blast_radius": "multi_repo",
+  "direct_components": {
+    "items": [
+      {
+        "evidence": [
+          {
+            "kind": "step2_input",
+            "step2_report_sha256": "3fff8636c9b367a317a3f65137bb4c060741041d134904ad460fbf0d0053f8b6"
+          }
+        ],
+        "identity": "app/source/company/AllocationTxnHelper.cls",
+        "kind": "file",
+        "resolution": "explicit_source",
+        "source_repository": "ia-main",
+        "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+      },
+      {
+        "evidence": [
+          {
+            "kind": "step2_input",
+            "step2_report_sha256": "3fff8636c9b367a317a3f65137bb4c060741041d134904ad460fbf0d0053f8b6"
+          }
+        ],
+        "identity": "app/source/gl/GLBatchManager.cls",
+        "kind": "file",
+        "resolution": "explicit_source",
+        "source_repository": "ia-main",
+        "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+      }
+    ],
+    "semantic_evidence": "unavailable",
+    "status": "partial"
+  },
+  "gaps": [
+    "ci_artifact_unavailable:intacct/ia-gwdata-gl",
+    "ci_linkage_unavailable:intacct/ia-gwdata-gl",
+    "intacct/ia-gwdata-gl:source_bound_ci_unavailable",
+    "related_pull_requests_not_modelled:revision_pinned_artifact_not_provided",
+    "repository_access_unavailable:intacct/ia-test-automation",
+    "semantic_index_not_provided:direct_semantic_components",
+    "test_suites_unavailable:no_normalized_test_evidence",
+    "workflow_has_no_test_execution:intacct/ia-gwdata-gl",
+    "workflow_metadata_only:intacct/ia-gwdata-gl"
+  ],
+  "impact": {
+    "items": [
+      {
+        "classification": "confirmed",
+        "evidence": [
+          {
+            "kind": "contract",
+            "path": "examples/greenfield/ia-app-pr-49137/replay/step2.contract.yaml",
+            "repository": "ia-main",
+            "revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
+            "sha256": "3b451505d93f1617f492b9b570216c4b1ee5ebf820eebc372b23641344b027f9"
+          }
+        ],
+        "interface_id": "behavior:gl-allocation-recalculation",
+        "reason": "exact_active_contract",
+        "relationship_type": "explicit_contract",
+        "scope": "interface",
+        "target_repository": "ia-app"
+      },
+      {
+        "classification": "candidate",
+        "evidence": [
+          {
+            "artifact_status": "empty",
+            "ci_linkage_status": "unavailable",
+            "inspected_revision": "b159255de66a41e368fd67263f72cbc46761a537",
+            "kind": "repository_inventory",
+            "path": "examples/greenfield/ia-app-pr-49137/replay/step2.inventory-ia-gwdata-gl.json",
+            "repository": "intacct/ia-gwdata-gl",
+            "response_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+          }
+        ],
+        "observation": {
+          "artifact_status": "empty",
+          "ci_linkage_status": "unavailable",
+          "inspected_revision": "b159255de66a41e368fd67263f72cbc46761a537",
+          "inventory_path_count": 2,
+          "response_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
+          "workflow_count": 1,
+          "workflow_path_count": 1
+        },
+        "reason": "workflow_metadata_only",
+        "relationship_type": "repository_inventory",
+        "scope": "repository",
+        "target_repository": "intacct/ia-gwdata-gl"
+      },
+      {
+        "classification": "candidate",
+        "evidence": [
+          {
+            "commit_sha": "b159255de66a41e368fd67263f72cbc46761a537",
+            "evidence_id": "unavailable-ia-gwdata-gl-pr-49137",
+            "kind": "ci",
+            "path": "examples/greenfield/ia-app-pr-49137/replay/step2.ci-gwdata-gl.json",
+            "repository": "intacct/ia-gwdata-gl",
+            "sha256": "824181a142e4b640b5e24e08140c01410649d5e933766bf15284d374fdb91cac",
+            "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+          }
+        ],
+        "interface_id": "behavior:gl-allocation-recalculation",
+        "reason": "ci_supports_confirmed_contract",
+        "relationship_type": "ci_observed",
+        "scope": "interface",
+        "target_repository": "intacct/ia-gwdata-gl"
+      },
+      {
+        "classification": "candidate",
+        "evidence": [
+          {
+            "commit_sha": "2e7210de93917a9b7b2fade3ce9fcc749708cbd7",
+            "evidence_id": "unavailable-ia-rest-api-testing-pr-49137",
+            "kind": "ci",
+            "path": "examples/greenfield/ia-app-pr-49137/replay/step2.ci-rest-api-testing.json",
+            "repository": "intacct/ia-rest-api-testing",
+            "sha256": "be6d423c2cc17931f54cc23e86f74325814735306ef9ddb2bf3aaa500657496a",
+            "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+          }
+        ],
+        "interface_id": "behavior:gl-allocation-recalculation",
+        "reason": "ci_supports_confirmed_contract",
+        "relationship_type": "ci_observed",
+        "scope": "interface",
+        "target_repository": "intacct/ia-rest-api-testing"
+      },
+      {
+        "classification": "unresolved",
+        "evidence": [
+          {
+            "artifact_status": "empty",
+            "ci_linkage_status": "unavailable",
+            "inspected_revision": "b4b10ea2c008f45f5cf0b4135ca78e05906abd30",
+            "kind": "repository_inventory_unavailable",
+            "path": "examples/greenfield/ia-app-pr-49137/replay/step2.inventory-ia-test-automation.json",
+            "repository": "intacct/ia-test-automation",
+            "response_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+          }
+        ],
+        "observation": {
+          "artifact_status": "empty",
+          "ci_linkage_status": "unavailable",
+          "inspected_revision": "b4b10ea2c008f45f5cf0b4135ca78e05906abd30",
+          "inventory_path_count": 0,
+          "response_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
+          "workflow_count": 0,
+          "workflow_path_count": 0
+        },
+        "reason": "repository_inventory_unavailable",
+        "relationship_type": "repository_inventory",
+        "scope": "repository",
+        "target_repository": "intacct/ia-test-automation"
+      }
+    ],
+    "status": "available"
+  },
+  "input": {
+    "base_revision": "e45cec95f00f565f999d6f907fbc73d48e9c6836",
+    "canonical_repository": "intacct/ia-app",
+    "changed_paths": [
+      "app/source/company/AllocationTxnHelper.cls",
+      "app/source/gl/GLBatchManager.cls"
+    ],
+    "source_pr_number": 49137,
+    "source_repo_key": "ia-main",
+    "source_repository": "ia-main",
+    "target_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+  },
+  "interfaces": {
+    "items": [
+      {
+        "classification": "confirmed",
+        "evidence": [
+          {
+            "kind": "contract",
+            "path": "examples/greenfield/ia-app-pr-49137/replay/step2.contract.yaml",
+            "repository": "ia-main",
+            "revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
+            "sha256": "3b451505d93f1617f492b9b570216c4b1ee5ebf820eebc372b23641344b027f9"
+          }
+        ],
+        "interface_id": "behavior:gl-allocation-recalculation",
+        "reason": "exact_active_contract",
+        "relationship_type": "explicit_contract",
+        "target_repository": "ia-app"
+      },
+      {
+        "classification": "candidate",
+        "evidence": [
+          {
+            "commit_sha": "b159255de66a41e368fd67263f72cbc46761a537",
+            "evidence_id": "unavailable-ia-gwdata-gl-pr-49137",
+            "kind": "ci",
+            "path": "examples/greenfield/ia-app-pr-49137/replay/step2.ci-gwdata-gl.json",
+            "repository": "intacct/ia-gwdata-gl",
+            "sha256": "824181a142e4b640b5e24e08140c01410649d5e933766bf15284d374fdb91cac",
+            "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+          }
+        ],
+        "interface_id": "behavior:gl-allocation-recalculation",
+        "reason": "ci_supports_confirmed_contract",
+        "relationship_type": "ci_observed",
+        "target_repository": "intacct/ia-gwdata-gl"
+      },
+      {
+        "classification": "candidate",
+        "evidence": [
+          {
+            "commit_sha": "2e7210de93917a9b7b2fade3ce9fcc749708cbd7",
+            "evidence_id": "unavailable-ia-rest-api-testing-pr-49137",
+            "kind": "ci",
+            "path": "examples/greenfield/ia-app-pr-49137/replay/step2.ci-rest-api-testing.json",
+            "repository": "intacct/ia-rest-api-testing",
+            "sha256": "be6d423c2cc17931f54cc23e86f74325814735306ef9ddb2bf3aaa500657496a",
+            "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+          }
+        ],
+        "interface_id": "behavior:gl-allocation-recalculation",
+        "reason": "ci_supports_confirmed_contract",
+        "relationship_type": "ci_observed",
+        "target_repository": "intacct/ia-rest-api-testing"
+      }
+    ],
+    "status": "available"
+  },
+  "owners": {
+    "items": [
+      {
+        "evidence": [
+          {
+            "kind": "contract",
+            "path": "examples/greenfield/ia-app-pr-49137/replay/step2.contract.yaml",
+            "repository": "ia-main",
+            "revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
+            "sha256": "3b451505d93f1617f492b9b570216c4b1ee5ebf820eebc372b23641344b027f9"
+          }
+        ],
+        "interface_id": "behavior:gl-allocation-recalculation",
+        "owner": "gl-platform",
+        "owner_repository": "ia-main",
+        "reason": null,
+        "status": "available",
+        "target_repository": "ia-app"
+      },
+      {
+        "evidence": [
+          {
+            "commit_sha": "b159255de66a41e368fd67263f72cbc46761a537",
+            "evidence_id": "unavailable-ia-gwdata-gl-pr-49137",
+            "kind": "ci",
+            "path": "examples/greenfield/ia-app-pr-49137/replay/step2.ci-gwdata-gl.json",
+            "repository": "intacct/ia-gwdata-gl",
+            "sha256": "824181a142e4b640b5e24e08140c01410649d5e933766bf15284d374fdb91cac",
+            "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+          }
+        ],
+        "interface_id": "behavior:gl-allocation-recalculation",
+        "owner": null,
+        "owner_repository": null,
+        "reason": null,
+        "status": "unavailable",
+        "target_repository": "intacct/ia-gwdata-gl"
+      },
+      {
+        "evidence": [
+          {
+            "commit_sha": "2e7210de93917a9b7b2fade3ce9fcc749708cbd7",
+            "evidence_id": "unavailable-ia-rest-api-testing-pr-49137",
+            "kind": "ci",
+            "path": "examples/greenfield/ia-app-pr-49137/replay/step2.ci-rest-api-testing.json",
+            "repository": "intacct/ia-rest-api-testing",
+            "sha256": "be6d423c2cc17931f54cc23e86f74325814735306ef9ddb2bf3aaa500657496a",
+            "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+          }
+        ],
+        "interface_id": "behavior:gl-allocation-recalculation",
+        "owner": null,
+        "owner_repository": null,
+        "reason": null,
+        "status": "unavailable",
+        "target_repository": "intacct/ia-rest-api-testing"
+      }
+    ],
+    "status": "partial"
+  },
+  "potentially_affected_repositories": {
+    "items": [
+      {
+        "classification": "confirmed",
+        "evidence": [
+          {
+            "kind": "contract",
+            "path": "examples/greenfield/ia-app-pr-49137/replay/step2.contract.yaml",
+            "repository": "ia-main",
+            "revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
+            "sha256": "3b451505d93f1617f492b9b570216c4b1ee5ebf820eebc372b23641344b027f9"
+          }
+        ],
+        "observations": [],
+        "repository": "ia-app"
+      },
+      {
+        "classification": "candidate",
+        "evidence": [
+          {
+            "artifact_status": "empty",
+            "ci_linkage_status": "unavailable",
+            "inspected_revision": "b159255de66a41e368fd67263f72cbc46761a537",
+            "kind": "repository_inventory",
+            "path": "examples/greenfield/ia-app-pr-49137/replay/step2.inventory-ia-gwdata-gl.json",
+            "repository": "intacct/ia-gwdata-gl",
+            "response_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+          },
+          {
+            "commit_sha": "b159255de66a41e368fd67263f72cbc46761a537",
+            "evidence_id": "unavailable-ia-gwdata-gl-pr-49137",
+            "kind": "ci",
+            "path": "examples/greenfield/ia-app-pr-49137/replay/step2.ci-gwdata-gl.json",
+            "repository": "intacct/ia-gwdata-gl",
+            "sha256": "824181a142e4b640b5e24e08140c01410649d5e933766bf15284d374fdb91cac",
+            "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+          }
+        ],
+        "observations": [
+          {
+            "artifact_status": "empty",
+            "ci_linkage_status": "unavailable",
+            "inspected_revision": "b159255de66a41e368fd67263f72cbc46761a537",
+            "inventory_path_count": 2,
+            "response_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
+            "workflow_count": 1,
+            "workflow_path_count": 1
+          }
+        ],
+        "repository": "intacct/ia-gwdata-gl"
+      },
+      {
+        "classification": "candidate",
+        "evidence": [
+          {
+            "commit_sha": "2e7210de93917a9b7b2fade3ce9fcc749708cbd7",
+            "evidence_id": "unavailable-ia-rest-api-testing-pr-49137",
+            "kind": "ci",
+            "path": "examples/greenfield/ia-app-pr-49137/replay/step2.ci-rest-api-testing.json",
+            "repository": "intacct/ia-rest-api-testing",
+            "sha256": "be6d423c2cc17931f54cc23e86f74325814735306ef9ddb2bf3aaa500657496a",
+            "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+          }
+        ],
+        "observations": [],
+        "repository": "intacct/ia-rest-api-testing"
+      },
+      {
+        "classification": "unresolved",
+        "evidence": [
+          {
+            "artifact_status": "empty",
+            "ci_linkage_status": "unavailable",
+            "inspected_revision": "b4b10ea2c008f45f5cf0b4135ca78e05906abd30",
+            "kind": "repository_inventory_unavailable",
+            "path": "examples/greenfield/ia-app-pr-49137/replay/step2.inventory-ia-test-automation.json",
+            "repository": "intacct/ia-test-automation",
+            "response_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+          }
+        ],
+        "observations": [
+          {
+            "artifact_status": "empty",
+            "ci_linkage_status": "unavailable",
+            "inspected_revision": "b4b10ea2c008f45f5cf0b4135ca78e05906abd30",
+            "inventory_path_count": 0,
+            "response_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
+            "workflow_count": 0,
+            "workflow_path_count": 0
+          }
+        ],
+        "repository": "intacct/ia-test-automation"
+      }
+    ],
+    "status": "available"
+  },
+  "provenance": {
+    "catalog_mutation": "none",
+    "github_writes": "none",
+    "read_only": true,
+    "related_pr_artifact_sha256": null,
+    "rule_set_version": "0.1",
+    "semantic_index_sha256": null,
+    "step2_report_sha256": "3fff8636c9b367a317a3f65137bb4c060741041d134904ad460fbf0d0053f8b6"
+  },
+  "related_pull_requests": {
+    "items": [],
+    "reason": "revision_pinned_artifact_not_provided",
+    "status": "not_modelled"
+  },
+  "schema_version": "0.1",
+  "status": "partial",
+  "surface_statuses": {
+    "actionui": {
+      "reason": "actionui_dispatch_not_modelled",
+      "status": "not_run"
+    },
+    "cross_module_callers": {
+      "reason": "cross_repository_runtime_tracing_not_modelled",
+      "status": "unresolved"
+    },
+    "csv_import": {
+      "reason": "csv_import_dispatch_not_modelled",
+      "status": "not_run"
+    },
+    "database_schema": {
+      "reason": "schema_impact_requires_dedicated_trace",
+      "status": "not_run"
+    },
+    "direct_gl_service": {
+      "reason": "changed_gl_source_path",
+      "status": "available"
+    },
+    "nextgen_ui": {
+      "reason": "nextgen_ui_dispatch_not_modelled",
+      "status": "not_run"
+    },
+    "permissions_workflows": {
+      "reason": "permission_workflow_impact_requires_dedicated_trace",
+      "status": "not_run"
+    },
+    "xml_api": {
+      "reason": "xml_dispatch_not_modelled",
+      "status": "not_run"
+    }
+  },
+  "test_suites": {
+    "items": [
+      {
+        "evidence": [
+          {
+            "kind": "contract",
+            "path": "examples/greenfield/ia-app-pr-49137/replay/step2.contract.yaml",
+            "repository": "ia-main",
+            "revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
+            "sha256": "3b451505d93f1617f492b9b570216c4b1ee5ebf820eebc372b23641344b027f9"
+          }
+        ],
+        "interface_id": "behavior:gl-allocation-recalculation",
+        "reason": "no_normalized_test_evidence",
+        "status": "unavailable",
+        "target_repository": "ia-app"
+      },
+      {
+        "evidence": [
+          {
+            "commit_sha": "b159255de66a41e368fd67263f72cbc46761a537",
+            "evidence_id": "unavailable-ia-gwdata-gl-pr-49137",
+            "kind": "ci",
+            "path": "examples/greenfield/ia-app-pr-49137/replay/step2.ci-gwdata-gl.json",
+            "repository": "intacct/ia-gwdata-gl",
+            "sha256": "824181a142e4b640b5e24e08140c01410649d5e933766bf15284d374fdb91cac",
+            "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+          }
+        ],
+        "interface_id": "behavior:gl-allocation-recalculation",
+        "status": "available",
+        "target_repository": "intacct/ia-gwdata-gl",
+        "test": {
+          "execution_result": "not_run",
+          "id": "allocation-create-and-recalculate",
+          "path": "testscripts/GLJEReclassify/test_Create_AllocationJE.xml"
+        }
+      },
+      {
+        "evidence": [
+          {
+            "commit_sha": "2e7210de93917a9b7b2fade3ce9fcc749708cbd7",
+            "evidence_id": "unavailable-ia-rest-api-testing-pr-49137",
+            "kind": "ci",
+            "path": "examples/greenfield/ia-app-pr-49137/replay/step2.ci-rest-api-testing.json",
+            "repository": "intacct/ia-rest-api-testing",
+            "sha256": "be6d423c2cc17931f54cc23e86f74325814735306ef9ddb2bf3aaa500657496a",
+            "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+          }
+        ],
+        "interface_id": "behavior:gl-allocation-recalculation",
+        "status": "available",
+        "target_repository": "intacct/ia-rest-api-testing",
+        "test": {
+          "execution_result": "not_run",
+          "id": "gl-txn-allocation-api",
+          "path": "JenkinsParamFiles/NextGenAPI/gl/run-gl-txn-allocation-v0.json"
+        }
+      }
+    ],
+    "status": "partial"
+  },
+  "warnings": []
+}

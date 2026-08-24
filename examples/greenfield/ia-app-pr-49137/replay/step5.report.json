@@ -1,0 +1,96 @@
+{
+  "actions": [
+    {
+      "action_id": "c6daed09e706cbb28574de02ddcc61485263a2238513e4d4d67ca25c3b3241ce",
+      "action_type": "block_propagation",
+      "completion_condition": "The target repository and an exact base revision are available for inspection.",
+      "evidence": [
+        {
+          "kind": "step3_report",
+          "sha256": "472f8678f366d32a00472eef7406dc40e941c10d25ecdb5693a87ac522ccb93f"
+        },
+        {
+          "kind": "step4_report",
+          "sha256": "8c77293ee60756322cbbd6b792507be654cc56fe6667d109435a54d330b0b541"
+        }
+      ],
+      "owner": {
+        "identity": null,
+        "status": "unavailable"
+      },
+      "reason": "target_repository_unavailable",
+      "rule_set_version": "0.1",
+      "scope": {
+        "interface_id": "repository:intacct/ia-test-automation",
+        "target_revision": null
+      },
+      "status": "blocked",
+      "target_repository": "intacct/ia-test-automation",
+      "target_revision": null
+    },
+    {
+      "action_id": "a177cf7865e4c4f937ab1bb6c0260fbdedb6f7819fa315ced8545f4c31b7e0f0",
+      "action_type": "request_owner_review",
+      "completion_condition": "The declared owner reviews the impacted interface or records an explicit disposition.",
+      "evidence": [
+        {
+          "kind": "contract",
+          "path": "examples/greenfield/ia-app-pr-49137/replay/step2.contract.yaml",
+          "repository": "ia-main",
+          "revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
+          "sha256": "3b451505d93f1617f492b9b570216c4b1ee5ebf820eebc372b23641344b027f9"
+        }
+      ],
+      "owner": {
+        "identity": "gl-platform",
+        "status": "available"
+      },
+      "reason": "impacted_interface_owner_available",
+      "rule_set_version": "0.1",
+      "scope": {
+        "interface_id": "behavior:gl-allocation-recalculation",
+        "target_revision": null
+      },
+      "status": "recommended",
+      "target_repository": "ia-app",
+      "target_revision": null
+    }
+  ],
+  "analysis_kind": "greenfield_pr_impact_step_5",
+  "gaps": [
+    "ci_artifact_unavailable:intacct/ia-gwdata-gl",
+    "ci_linkage_unavailable:intacct/ia-gwdata-gl",
+    "intacct/ia-gwdata-gl:source_bound_ci_unavailable",
+    "owner_approval_pending:intacct/ia-gwdata-gl:behavior:gl-allocation-recalculation",
+    "owner_approval_pending:intacct/ia-rest-api-testing:behavior:gl-allocation-recalculation",
+    "related_pull_requests_not_modelled:revision_pinned_artifact_not_provided",
+    "repository_access_unavailable:intacct/ia-test-automation",
+    "semantic_index_not_provided:direct_semantic_components",
+    "test_suites_unavailable:no_normalized_test_evidence",
+    "workflow_has_no_test_execution:intacct/ia-gwdata-gl",
+    "workflow_metadata_only:intacct/ia-gwdata-gl"
+  ],
+  "input": {
+    "base_revision": "e45cec95f00f565f999d6f907fbc73d48e9c6836",
+    "canonical_repository": "intacct/ia-app",
+    "changed_paths": [
+      "app/source/company/AllocationTxnHelper.cls",
+      "app/source/gl/GLBatchManager.cls"
+    ],
+    "source_pr_number": 49137,
+    "source_repo_key": "ia-main",
+    "source_repository": "ia-main",
+    "target_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+  },
+  "provenance": {
+    "catalog_mutation": "none",
+    "github_writes": "none",
+    "read_only": true,
+    "rule_set_version": "0.1",
+    "step3_report_sha256": "472f8678f366d32a00472eef7406dc40e941c10d25ecdb5693a87ac522ccb93f",
+    "step4_report_sha256": "8c77293ee60756322cbbd6b792507be654cc56fe6667d109435a54d330b0b541"
+  },
+  "schema_version": "0.1",
+  "status": "partial",
+  "warnings": []
+}

@@ -1,0 +1,57 @@
+{
+  "artifacts": [
+    {
+      "name": "step1.json",
+      "rule_set_version": null,
+      "sha256": "e93d6c6c84935d3e5a7b6c857fb0b893fefce033ba9fbe16ad533bf5f28cbf7f",
+      "status": "partial"
+    },
+    {
+      "name": "step2.report.json",
+      "rule_set_version": "0.1",
+      "sha256": "3fff8636c9b367a317a3f65137bb4c060741041d134904ad460fbf0d0053f8b6",
+      "status": "partial"
+    },
+    {
+      "name": "step3.report.json",
+      "rule_set_version": "0.1",
+      "sha256": "472f8678f366d32a00472eef7406dc40e941c10d25ecdb5693a87ac522ccb93f",
+      "status": "partial"
+    },
+    {
+      "name": "step4.report.json",
+      "rule_set_version": "0.1",
+      "sha256": "8c77293ee60756322cbbd6b792507be654cc56fe6667d109435a54d330b0b541",
+      "status": "partial"
+    },
+    {
+      "name": "step5.report.json",
+      "rule_set_version": "0.1",
+      "sha256": "d6fde02e435f4de129f56b62582436bf3ed2c4d34716bf9bbf0fef36d3ec9c43",
+      "status": "partial"
+    }
+  ],
+  "bundle": "examples/greenfield/ia-app-pr-49137/replay",
+  "mismatches": [
+    "artifact mismatch: step2.report.json; fields: input.evidence_profile, provenance.step1_report_sha256",
+    "artifact mismatch: step3.report.json; fields: direct_components.items[0].evidence[0].step2_report_sha256, direct_components.items[1].evidence[0].step2_report_sha256, provenance.step2_report_sha256, surface_statuses.database_schema.reason, surface_statuses.database_schema.status, surface_statuses.permissions_workflows.reason, surface_statuses.permissions_workflows.status",
+    "artifact mismatch: step4.report.json; fields: provenance.step3_report_sha256",
+    "artifact mismatch: step5.report.json; fields: actions[0].action_id, actions[0].evidence[0].sha256, actions[0].evidence[1].sha256, provenance.step3_report_sha256, provenance.step4_report_sha256"
+  ],
+  "schema_version": "0.1",
+  "source": {
+    "base_revision": "e45cec95f00f565f999d6f907fbc73d48e9c6836",
+    "base_sha": "e45cec95f00f565f999d6f907fbc73d48e9c6836",
+    "changed_paths": [
+      "app/source/company/AllocationTxnHelper.cls",
+      "app/source/gl/GLBatchManager.cls"
+    ],
+    "evidence_profile": "trust_foundation_v1",
+    "head_sha": "42942af6221c1e974a7e266e96b3199cb95aa448",
+    "pr_number": 49137,
+    "repo_key": "ia-main",
+    "repository": "intacct/ia-app",
+    "target_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+  },
+  "target": null
+}

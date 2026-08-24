@@ -177,7 +177,11 @@ def attach_explicit_contract_anchors(
                 if anchor is None:
                     anchor = {
                         "source_path": path,
-                        "source_symbol": next(iter(declared_symbols), None),
+                        "source_symbol": (
+                            sorted(declared_symbols)[0]
+                            if relation.get("relationship_type") == "behavior_contract" and declared_symbols
+                            else next(iter(declared_symbols), None)
+                        ),
                         "source_lines": {},
                         "entity": None,
                         "source_revision": revision,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -59,6 +60,12 @@ def _optional_symbols(value: Any, label: str) -> list[str]:
     if any("*" in symbol or "?" in symbol for symbol in result):
         raise EvidenceError(f"{label} must contain exact symbols, not patterns")
     return result
+
+
+def _optional_text(value: Any, label: str) -> str | None:
+    if value is None:
+        return None
+    return _text(value, label)
 
 
 def _validate_test_command(value: Any, label: str, *, strict: bool) -> None:
@@ -121,6 +128,16 @@ def load_contract(path: str | Path) -> dict[str, Any]:
         source_symbols = _optional_symbols(
             item.get("source_symbols"), "source_symbols"
         )
+        protected_behavior = _optional_text(
+            item.get("protected_behavior"), "protected_behavior"
+        )
+        entry_surfaces = _optional_symbols(
+            item.get("entry_surfaces"), "entry_surfaces"
+        )
+        if relationship_type == "behavior_contract" and not protected_behavior:
+            raise EvidenceError(
+                "behavior_contract relations require protected_behavior"
+            )
         test_obligations = item.get("test_obligations", [])
         if not isinstance(test_obligations, list):
             raise EvidenceError("test_obligations must be a list")
@@ -179,6 +196,8 @@ def load_contract(path: str | Path) -> dict[str, Any]:
                 "relationship_type": relationship_type,
                 "source_paths": source_paths,
                 "source_symbols": source_symbols,
+                "protected_behavior": protected_behavior,
+                "entry_surfaces": entry_surfaces,
                 "status": status,
                 "owner": item.get("owner"),
                 "test_obligations": normalized_obligations,
@@ -276,6 +295,8 @@ def load_ci_evidence(path: str | Path, *, strict: bool = False) -> dict[str, Any
             if "test_command" not in test:
                 raise EvidenceError(f"strict CI test {index} requires test_command or unavailable")
     for field in (
+        "source_pr_number",
+        "inspected_revision",
         "workflow_run_id",
         "workflow_job_id",
         "check_run_id",
@@ -286,7 +307,57 @@ def load_ci_evidence(path: str | Path, *, strict: bool = False) -> dict[str, Any
     ):
         if field in data:
             normalized[field] = data[field]
+    if "source_pr_number" in normalized and (
+        isinstance(normalized["source_pr_number"], bool)
+        or not isinstance(normalized["source_pr_number"], int)
+        or normalized["source_pr_number"] < 1
+    ):
+        raise EvidenceError("source_pr_number must be a positive integer")
+    if "inspected_revision" in normalized:
+        normalized["inspected_revision"] = _sha(
+            normalized["inspected_revision"], "inspected_revision"
+        )
+        if normalized["inspected_revision"] != normalized["commit_sha"]:
+            raise EvidenceError("inspected_revision must equal commit_sha")
     return normalized
+
+
+def ci_execution_binding_status(
+    evidence: Mapping[str, Any],
+    *,
+    source_revision: str,
+    source_pr_number: int | None = None,
+) -> str:
+    """Return the deterministic coverage binding state for CI evidence."""
+
+    if evidence.get("source_revision") != source_revision:
+        return "stale"
+    if not isinstance(evidence.get("inspected_revision"), str):
+        return "unavailable"
+    if evidence.get("inspected_revision") != evidence.get("commit_sha"):
+        return "unavailable"
+    if source_pr_number is None or evidence.get("source_pr_number") != source_pr_number:
+        return "unavailable"
+    if isinstance(evidence.get("workflow_run_id"), bool) or not isinstance(evidence.get("workflow_run_id"), int) or evidence.get("workflow_run_id") < 1:
+        return "unavailable"
+    if isinstance(evidence.get("workflow_job_id"), bool) or not isinstance(evidence.get("workflow_job_id"), int) or evidence.get("workflow_job_id") < 1:
+        return "unavailable"
+    provenance = evidence.get("evidence")
+    if not isinstance(provenance, Mapping) or not isinstance(provenance.get("sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", provenance["sha256"]):
+        return "unavailable"
+    tests = evidence.get("tests")
+    if not isinstance(tests, list) or not tests:
+        return "unavailable"
+    for test in tests:
+        if not isinstance(test, Mapping):
+            return "unavailable"
+        if not isinstance(test.get("id"), str) or not test["id"].strip():
+            return "unavailable"
+        if not isinstance(test.get("path"), str) or not test["path"].strip():
+            return "unavailable"
+        if not isinstance(test.get("execution_result"), str) or not test["execution_result"].strip() or test["execution_result"] in {"not_run", "unavailable"}:
+            return "unavailable"
+    return "bound"
 
 
 def normalize_repository_inventory(

@@ -16,6 +16,27 @@ from scripts import (
 
 ROOT = Path(__file__).resolve().parents[1]
 BUNDLE = ROOT / "examples" / "greenfield" / "ia-app-pr-49156" / "replay"
+PR_49137_BUNDLE = ROOT / "examples" / "greenfield" / "ia-app-pr-49137" / "replay"
+
+
+def test_pr_49137_replay_is_golden_and_keeps_unproven_surfaces_explicit(tmp_path: Path) -> None:
+    output_dir = tmp_path / "greenfield-pr-49137"
+    assert replay_greenfield_step1_6.main(
+        ["--bundle-dir", str(PR_49137_BUNDLE), "--output-dir", str(output_dir)]
+    ) == 0
+    step3 = json.loads((output_dir / "step3.report.json").read_text(encoding="utf-8"))
+    repositories = {
+        item["repository"]: item["classification"]
+        for item in step3["potentially_affected_repositories"]["items"]
+    }
+    assert repositories["ia-app"] == "confirmed"
+    assert repositories["intacct/ia-gwdata-gl"] == "candidate"
+    assert repositories["intacct/ia-rest-api-testing"] == "candidate"
+    assert repositories["intacct/ia-test-automation"] == "unresolved"
+    assert step3["surface_statuses"]["xml_api"]["status"] == "not_run"
+    assert step3["surface_statuses"]["csv_import"]["status"] == "not_run"
+    assert step3["surface_statuses"]["cross_module_callers"]["status"] == "unresolved"
+    assert not (output_dir / "step6.report.json").exists()
 
 
 def test_replay_bundle_reproduces_golden_reports(tmp_path: Path) -> None:

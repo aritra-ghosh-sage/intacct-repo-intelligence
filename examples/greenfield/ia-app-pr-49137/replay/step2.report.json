@@ -1,0 +1,371 @@
+{
+  "analysis_kind": "greenfield_pr_impact_step_2",
+  "blast_radius": "multi_repo",
+  "candidates": [
+    {
+      "changed_paths": [
+        "app/source/company/AllocationTxnHelper.cls",
+        "app/source/gl/GLBatchManager.cls"
+      ],
+      "classification": "confirmed",
+      "declared_relationship_type": "behavior_contract",
+      "evidence": [
+        {
+          "kind": "contract",
+          "path": "examples/greenfield/ia-app-pr-49137/replay/step2.contract.yaml",
+          "repository": "ia-main",
+          "revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
+          "sha256": "3b451505d93f1617f492b9b570216c4b1ee5ebf820eebc372b23641344b027f9"
+        }
+      ],
+      "interface_id": "behavior:gl-allocation-recalculation",
+      "likely_tests": [],
+      "owner": "gl-platform",
+      "owner_repository": "ia-main",
+      "reason": "exact_active_contract",
+      "relationship_type": "explicit_contract",
+      "source_anchors": [
+        {
+          "entity": null,
+          "evidence": [],
+          "interfaces": [
+            {
+              "evidence": [],
+              "interface_id": "behavior:gl-allocation-recalculation",
+              "mapping_kind": "explicit_source_contract",
+              "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+            }
+          ],
+          "source_lines": {},
+          "source_path": "app/source/company/AllocationTxnHelper.cls",
+          "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
+          "source_symbol": "AllocationTxnHelper::applyAllocation"
+        },
+        {
+          "entity": null,
+          "evidence": [],
+          "interfaces": [
+            {
+              "evidence": [],
+              "interface_id": "behavior:gl-allocation-recalculation",
+              "mapping_kind": "explicit_source_contract",
+              "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+            }
+          ],
+          "source_lines": {},
+          "source_path": "app/source/gl/GLBatchManager.cls",
+          "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
+          "source_symbol": "AllocationTxnHelper::applyAllocation"
+        }
+      ],
+      "source_symbols": [
+        "AllocationTxnHelper::applyAllocation",
+        "GLBatchManager::glTranslateApplyAllocation"
+      ],
+      "target_repository": "ia-app"
+    },
+    {
+      "changed_paths": [],
+      "classification": "candidate",
+      "evidence": [
+        {
+          "commit_sha": "b159255de66a41e368fd67263f72cbc46761a537",
+          "evidence_id": "unavailable-ia-gwdata-gl-pr-49137",
+          "kind": "ci",
+          "path": "examples/greenfield/ia-app-pr-49137/replay/step2.ci-gwdata-gl.json",
+          "repository": "intacct/ia-gwdata-gl",
+          "sha256": "824181a142e4b640b5e24e08140c01410649d5e933766bf15284d374fdb91cac",
+          "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+        }
+      ],
+      "interface_id": "behavior:gl-allocation-recalculation",
+      "likely_tests": [],
+      "reason": "ci_supports_confirmed_contract",
+      "relationship_type": "ci_observed",
+      "source_anchors": [
+        {
+          "entity": null,
+          "evidence": [],
+          "interfaces": [
+            {
+              "evidence": [],
+              "interface_id": "behavior:gl-allocation-recalculation",
+              "mapping_kind": "explicit_source_contract",
+              "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+            }
+          ],
+          "source_lines": {},
+          "source_path": "app/source/company/AllocationTxnHelper.cls",
+          "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
+          "source_symbol": "AllocationTxnHelper::applyAllocation"
+        },
+        {
+          "entity": null,
+          "evidence": [],
+          "interfaces": [
+            {
+              "evidence": [],
+              "interface_id": "behavior:gl-allocation-recalculation",
+              "mapping_kind": "explicit_source_contract",
+              "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+            }
+          ],
+          "source_lines": {},
+          "source_path": "app/source/gl/GLBatchManager.cls",
+          "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
+          "source_symbol": "AllocationTxnHelper::applyAllocation"
+        }
+      ],
+      "target_repository": "intacct/ia-gwdata-gl",
+      "tests": [
+        {
+          "execution_result": "not_run",
+          "id": "allocation-create-and-recalculate",
+          "path": "testscripts/GLJEReclassify/test_Create_AllocationJE.xml"
+        }
+      ]
+    },
+    {
+      "changed_paths": [
+        "app/source/company/AllocationTxnHelper.cls",
+        "app/source/gl/GLBatchManager.cls"
+      ],
+      "classification": "candidate",
+      "evidence": [
+        {
+          "artifact_status": "empty",
+          "ci_linkage_status": "unavailable",
+          "inspected_revision": "b159255de66a41e368fd67263f72cbc46761a537",
+          "kind": "repository_inventory",
+          "path": "examples/greenfield/ia-app-pr-49137/replay/step2.inventory-ia-gwdata-gl.json",
+          "repository": "intacct/ia-gwdata-gl",
+          "response_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+        }
+      ],
+      "interface_id": "repository:intacct/ia-gwdata-gl",
+      "inventory_paths": [
+        "testdefinitions/GL_Transaction_Allocation.csv",
+        "testscripts/GLJEReclassify/test_Create_AllocationJE.xml"
+      ],
+      "likely_tests": [],
+      "reason": "workflow_metadata_only",
+      "relationship_type": "repository_inventory",
+      "source_anchors": [
+        {
+          "entity": null,
+          "evidence": [],
+          "interfaces": [
+            {
+              "evidence": [],
+              "interface_id": "behavior:gl-allocation-recalculation",
+              "mapping_kind": "explicit_source_contract",
+              "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+            }
+          ],
+          "source_lines": {},
+          "source_path": "app/source/company/AllocationTxnHelper.cls",
+          "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
+          "source_symbol": "AllocationTxnHelper::applyAllocation"
+        },
+        {
+          "entity": null,
+          "evidence": [],
+          "interfaces": [
+            {
+              "evidence": [],
+              "interface_id": "behavior:gl-allocation-recalculation",
+              "mapping_kind": "explicit_source_contract",
+              "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+            }
+          ],
+          "source_lines": {},
+          "source_path": "app/source/gl/GLBatchManager.cls",
+          "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
+          "source_symbol": "AllocationTxnHelper::applyAllocation"
+        }
+      ],
+      "target_repository": "intacct/ia-gwdata-gl",
+      "workflow_paths": [
+        ".github/workflows"
+      ],
+      "workflows": [
+        {
+          "classification": "metadata_only",
+          "has_test_execution": false,
+          "path": ".github/workflows"
+        }
+      ]
+    },
+    {
+      "changed_paths": [],
+      "classification": "candidate",
+      "evidence": [
+        {
+          "commit_sha": "2e7210de93917a9b7b2fade3ce9fcc749708cbd7",
+          "evidence_id": "unavailable-ia-rest-api-testing-pr-49137",
+          "kind": "ci",
+          "path": "examples/greenfield/ia-app-pr-49137/replay/step2.ci-rest-api-testing.json",
+          "repository": "intacct/ia-rest-api-testing",
+          "sha256": "be6d423c2cc17931f54cc23e86f74325814735306ef9ddb2bf3aaa500657496a",
+          "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+        }
+      ],
+      "interface_id": "behavior:gl-allocation-recalculation",
+      "likely_tests": [],
+      "reason": "ci_supports_confirmed_contract",
+      "relationship_type": "ci_observed",
+      "source_anchors": [
+        {
+          "entity": null,
+          "evidence": [],
+          "interfaces": [
+            {
+              "evidence": [],
+              "interface_id": "behavior:gl-allocation-recalculation",
+              "mapping_kind": "explicit_source_contract",
+              "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+            }
+          ],
+          "source_lines": {},
+          "source_path": "app/source/company/AllocationTxnHelper.cls",
+          "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
+          "source_symbol": "AllocationTxnHelper::applyAllocation"
+        },
+        {
+          "entity": null,
+          "evidence": [],
+          "interfaces": [
+            {
+              "evidence": [],
+              "interface_id": "behavior:gl-allocation-recalculation",
+              "mapping_kind": "explicit_source_contract",
+              "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+            }
+          ],
+          "source_lines": {},
+          "source_path": "app/source/gl/GLBatchManager.cls",
+          "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
+          "source_symbol": "AllocationTxnHelper::applyAllocation"
+        }
+      ],
+      "target_repository": "intacct/ia-rest-api-testing",
+      "tests": [
+        {
+          "execution_result": "not_run",
+          "id": "gl-txn-allocation-api",
+          "path": "JenkinsParamFiles/NextGenAPI/gl/run-gl-txn-allocation-v0.json"
+        }
+      ]
+    },
+    {
+      "changed_paths": [
+        "app/source/company/AllocationTxnHelper.cls",
+        "app/source/gl/GLBatchManager.cls"
+      ],
+      "classification": "unresolved",
+      "evidence": [
+        {
+          "artifact_status": "empty",
+          "ci_linkage_status": "unavailable",
+          "inspected_revision": "b4b10ea2c008f45f5cf0b4135ca78e05906abd30",
+          "kind": "repository_inventory_unavailable",
+          "path": "examples/greenfield/ia-app-pr-49137/replay/step2.inventory-ia-test-automation.json",
+          "repository": "intacct/ia-test-automation",
+          "response_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+        }
+      ],
+      "interface_id": "repository:intacct/ia-test-automation",
+      "likely_tests": [],
+      "reason": "repository_inventory_unavailable",
+      "relationship_type": "repository_inventory",
+      "source_anchors": [
+        {
+          "entity": null,
+          "evidence": [],
+          "interfaces": [
+            {
+              "evidence": [],
+              "interface_id": "behavior:gl-allocation-recalculation",
+              "mapping_kind": "explicit_source_contract",
+              "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+            }
+          ],
+          "source_lines": {},
+          "source_path": "app/source/company/AllocationTxnHelper.cls",
+          "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
+          "source_symbol": "AllocationTxnHelper::applyAllocation"
+        },
+        {
+          "entity": null,
+          "evidence": [],
+          "interfaces": [
+            {
+              "evidence": [],
+              "interface_id": "behavior:gl-allocation-recalculation",
+              "mapping_kind": "explicit_source_contract",
+              "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+            }
+          ],
+          "source_lines": {},
+          "source_path": "app/source/gl/GLBatchManager.cls",
+          "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
+          "source_symbol": "AllocationTxnHelper::applyAllocation"
+        }
+      ],
+      "target_repository": "intacct/ia-test-automation"
+    }
+  ],
+  "confidence": {
+    "band": "confirmed",
+    "components": {
+      "behavior_contract_match": true,
+      "ci_execution": "unbound",
+      "exact_source_evidence": true,
+      "inventory_completeness": true,
+      "revision_freshness": true,
+      "source_runtime_trace": true,
+      "unresolved_or_unavailable_gaps": 6
+    },
+    "rule_set_version": "0.1"
+  },
+  "gaps": [
+    "ci_artifact_unavailable:intacct/ia-gwdata-gl",
+    "ci_linkage_unavailable:intacct/ia-gwdata-gl",
+    "intacct/ia-gwdata-gl:source_bound_ci_unavailable",
+    "repository_access_unavailable:intacct/ia-test-automation",
+    "workflow_has_no_test_execution:intacct/ia-gwdata-gl",
+    "workflow_metadata_only:intacct/ia-gwdata-gl"
+  ],
+  "input": {
+    "base_revision": "e45cec95f00f565f999d6f907fbc73d48e9c6836",
+    "canonical_repository": "intacct/ia-app",
+    "changed_paths": [
+      "app/source/company/AllocationTxnHelper.cls",
+      "app/source/gl/GLBatchManager.cls"
+    ],
+    "evidence_profile": "trust_foundation_v1",
+    "source_pr_number": 49137,
+    "source_repo_key": "ia-main",
+    "source_repository": "ia-main",
+    "target_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+  },
+  "provenance": {
+    "base_revision": "e45cec95f00f565f999d6f907fbc73d48e9c6836",
+    "catalog_mutation": "none",
+    "evidence_sources": [
+      "explicit_contract",
+      "ci_observed",
+      "repository_inventory"
+    ],
+    "read_only": true,
+    "rule_set_version": "0.1",
+    "semantic_index_sha256": [],
+    "source_pr_number": 49137,
+    "step1_report_sha256": "e93d6c6c84935d3e5a7b6c857fb0b893fefce033ba9fbe16ad533bf5f28cbf7f"
+  },
+  "schema_version": "0.1",
+  "status": "partial",
+  "warnings": []
+}

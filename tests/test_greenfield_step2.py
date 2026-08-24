@@ -140,6 +140,44 @@ def test_contract_rejects_wildcard_paths(tmp_path: Path) -> None:
         load_contract(contract_path)
 
 
+def test_behavior_contract_requires_and_preserves_protected_behavior(tmp_path: Path) -> None:
+    contract_path = tmp_path / "behavior.yaml"
+    contract_path.write_text(
+        f"""schema_version: '0.1'
+repository: ia-app
+revision: {TARGET}
+relations:
+  - interface_id: behavior:gl-allocation-recalculation
+    consumer_repository: ia-gwdata-gl
+    relationship_type: behavior_contract
+    source_paths:
+      - app/source/gl/GLBatchManager.cls
+    source_symbols:
+      - GLBatchManager::glTranslateApplyAllocation
+    protected_behavior: allocation split totals are recalculated after apply
+    entry_surfaces:
+      - xml_api
+    status: active
+""",
+        encoding="utf-8",
+    )
+    relation = load_contract(contract_path)["relations"][0]
+    assert relation["relationship_type"] == "behavior_contract"
+    assert relation["protected_behavior"].startswith("allocation split")
+    assert relation["entry_surfaces"] == ["xml_api"]
+
+
+def test_available_ci_without_execution_binding_remains_candidate(tmp_path: Path) -> None:
+    ci_path = tmp_path / "ci.json"
+    write_ci(ci_path)
+    source = step1()
+    source["input"]["pr_number"] = 49137
+    source["input"]["evidence_profile"] = "trust_foundation_v1"
+    report = resolve_candidates(source, ci_evidence=[load_ci_evidence(ci_path)])
+    assert report["confidence"]["band"] == "candidate"
+    assert report["confidence"]["components"]["ci_execution"] == "unbound"
+
+
 def test_repeated_resolution_is_byte_deterministic(tmp_path: Path) -> None:
     contract_path = tmp_path / "contract.yaml"
     ci_path = tmp_path / "ci.json"
