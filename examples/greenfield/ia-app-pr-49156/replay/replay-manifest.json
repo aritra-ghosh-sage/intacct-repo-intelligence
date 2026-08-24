@@ -1,0 +1,103 @@
+{
+  "artifacts": [
+    {
+      "name": "step1.5.contract.json",
+      "rule_set_version": null,
+      "sha256": "fdfda07f08c41c344c79ec1fbe2a6e0d5cdf203cdb334732271fbc96dfabee5a",
+      "status": null
+    },
+    {
+      "name": "step1.5.trace.json",
+      "rule_set_version": null,
+      "sha256": "8011df4311f9e5d381d82b4f7f62c3bebe58fb43b462bef6a0dfd6589e852db2",
+      "status": null
+    },
+    {
+      "name": "step1.json",
+      "rule_set_version": null,
+      "sha256": "7c031593df96f7a93a317e503919061f4dde8e0f64cdc5ad4b790baf31226378",
+      "status": "complete"
+    },
+    {
+      "name": "step2.report.json",
+      "rule_set_version": "0.1",
+      "sha256": "ae84fbeb8ad068a79c9a0019f6becf011f5a88ec8293158c791208f59102c969",
+      "status": "partial"
+    },
+    {
+      "name": "step3.report.json",
+      "rule_set_version": "0.1",
+      "sha256": "d2e4cf99fc8c4a8c7d6cdab8f1d9ba239ce88d48d4a3b789099b36a3addc0705",
+      "status": "partial"
+    },
+    {
+      "name": "step4.report.json",
+      "rule_set_version": "0.1",
+      "sha256": "c137c22e8af87764ad733f1337220e533a7658125fae28ac4e3e162dbaf199b8",
+      "status": "partial"
+    },
+    {
+      "name": "step5.report.json",
+      "rule_set_version": "0.1",
+      "sha256": "17f9e1404bb6317b6eeab909fe68cd9112d8f66747504798ec7852a43b6fb0ad",
+      "status": "partial"
+    },
+    {
+      "name": "step6.report.json",
+      "rule_set_version": "0.1",
+      "sha256": "8d98d69d8f8a58b467560a11952ce0d51dc19633890982a7e9668c9f5a2fc6fb",
+      "status": "ready_for_ai_pr"
+    }
+  ],
+  "bundle": "examples/greenfield/ia-app-pr-49156/replay",
+  "mismatches": [],
+  "schema_version": "0.1",
+  "source": {
+    "base_revision": "e33954d66e7823303fa24087950d3306c547e0b7",
+    "base_sha": "e33954d66e7823303fa24087950d3306c547e0b7",
+    "changed_paths": [
+      "app/source/purchasing/POProcessTransactions.phtml"
+    ],
+    "head_sha": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59",
+    "pr_number": 49156,
+    "repo_key": "ia-main",
+    "repository": "intacct/ia-app",
+    "target_revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59"
+  },
+  "step7": {
+    "pr_eligible": false,
+    "reason": "step7_request_not_supplied",
+    "status": "unavailable"
+  },
+  "target": {
+    "allowed_paths": [
+      "features/gl/v1-beta2/example.feature",
+      "features/gl/v1-beta2/input/request.json"
+    ],
+    "base_revision": "dddddddddddddddddddddddddddddddddddddddd",
+    "repository": "intacct/ia-restapi-automation-tests"
+  },
+  "validation": {
+    "artifact_integrity": {
+      "status": "passed"
+    },
+    "coverage_completeness": {
+      "status": "partial"
+    },
+    "impact_completeness": {
+      "status": "partial"
+    },
+    "pr_eligibility": {
+      "pr_eligible": false,
+      "reason": "step7_not_validated",
+      "status": "not_eligible"
+    },
+    "provenance_revision_consistency": {
+      "status": "passed"
+    },
+    "runtime_validation": {
+      "reason": "step7_request_not_supplied",
+      "status": "unavailable"
+    }
+  }
+}

@@ -21,6 +21,7 @@ from greenfield.github_repository_evidence import (
     RepositoryEvidenceError,
     collect_repository_evidence,
 )
+from greenfield.replay_validation import validation_summary
 from greenfield.step2_contract import normalize_repository_inventory
 from scripts import (
     trace_greenfield_step1,
@@ -32,7 +33,9 @@ from scripts import (
 from scripts.validate_greenfield_test_proposal import validate as validate_test_proposal
 
 
-def _manifest_candidates(path: Path, source_repository: str, source_repo_key: str) -> list[str]:
+def _manifest_candidates(
+    path: Path, source_repository: str, source_repo_key: str
+) -> list[str]:
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
     rows = data.get("repositories", []) if isinstance(data, dict) else []
     result: set[str] = set()
@@ -40,7 +43,9 @@ def _manifest_candidates(path: Path, source_repository: str, source_repo_key: st
         if not isinstance(row, dict):
             continue
         for relation in row.get("pr_impact_contracts", []):
-            if not isinstance(relation, dict) or relation.get("target_repository") not in {source_repository, source_repo_key}:
+            if not isinstance(relation, dict) or relation.get(
+                "target_repository"
+            ) not in {source_repository, source_repo_key}:
                 continue
             remote = str(row.get("remote_url", ""))
             if "github.com:" in remote:
@@ -52,13 +57,23 @@ def _manifest_candidates(path: Path, source_repository: str, source_repo_key: st
     return sorted(result)
 
 
-def _collect_inventories(step1: dict[str, object], manifest: Path, output_dir: Path, repositories: list[str], supplied: list[str]) -> list[str]:
+def _collect_inventories(
+    step1: dict[str, object],
+    manifest: Path,
+    output_dir: Path,
+    repositories: list[str],
+    supplied: list[str],
+) -> list[str]:
     if supplied:
         return supplied
     source = step1["input"]
-    source_repository = str(source.get("repository") or source.get("canonical_repository"))
+    source_repository = str(
+        source.get("repository") or source.get("canonical_repository")
+    )
     source_repo_key = str(source.get("repo_key") or source.get("source_repo_key"))
-    targets = repositories or _manifest_candidates(manifest, source_repository, source_repo_key)
+    targets = repositories or _manifest_candidates(
+        manifest, source_repository, source_repo_key
+    )
     paths: list[str] = []
     for index, repository in enumerate(targets):
         try:
@@ -66,7 +81,9 @@ def _collect_inventories(step1: dict[str, object], manifest: Path, output_dir: P
                 collect_repository_evidence(
                     repository,
                     source_repository=source_repo_key,
-                    source_revision=str(source.get("target_revision") or source.get("head_sha")),
+                    source_revision=str(
+                        source.get("target_revision") or source.get("head_sha")
+                    ),
                 )
             )
         except RepositoryEvidenceError as exc:
@@ -88,13 +105,38 @@ def _run(main, argv: list[str]) -> None:
         raise RuntimeError(f"stage failed: {main.__module__}")
 
 
+def _step6_handoff() -> dict[str, object]:
+    return {
+        "schema_version": "0.1",
+        "analysis_kind": "greenfield_pr_impact_step_6_handoff",
+        "status": "unavailable",
+        "reason": "step6_request_and_target_evidence_not_supplied",
+        "required_inputs": [
+            "explicit Step 6 request",
+            "exact target repository and base revision",
+            "target-evidence package bound to that revision",
+            "required owner and approval evidence",
+        ],
+        "inference_policy": "no_repository_revision_owner_approval_or_edit_inference",
+        "invoked": False,
+        "pr_eligible": False,
+        "provenance": {
+            "read_only": True,
+            "github_writes": "none",
+            "catalog_mutation": "none",
+        },
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--step1-report", type=Path)
     source.add_argument("--pr", type=int)
     parser.add_argument("--repo-key", default="ia-main")
-    parser.add_argument("--manifest", type=Path, default=Path("config/workspace_repos.yaml"))
+    parser.add_argument(
+        "--manifest", type=Path, default=Path("config/workspace_repos.yaml")
+    )
     parser.add_argument("--source-root", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--codex-binary", default="codex")
@@ -110,11 +152,23 @@ def main(argv: list[str] | None = None) -> int:
     try:
         args.output_dir.mkdir(parents=True, exist_ok=True)
         step1_path = args.step1_report or args.output_dir / "step1.json"
-        if args.pr is not None and trace_greenfield_step1.main([
-                "--manifest", str(args.manifest), "--repo-key", args.repo_key,
-                "--pr", str(args.pr), "--output", str(step1_path),
-            ]) != 0:
-                return 2
+        if (
+            args.pr is not None
+            and trace_greenfield_step1.main(
+                [
+                    "--manifest",
+                    str(args.manifest),
+                    "--repo-key",
+                    args.repo_key,
+                    "--pr",
+                    str(args.pr),
+                    "--output",
+                    str(step1_path),
+                ]
+            )
+            != 0
+        ):
+            return 2
         step1 = read_json_object(step1_path)
         trace, context = run_codex_trace(
             step1,
@@ -127,10 +181,28 @@ def main(argv: list[str] | None = None) -> int:
         trace_path = args.output_dir / "step1.5.trace.json"
         contract_path = args.output_dir / "step1.5.contract.json"
         write_json_atomic(trace_path, trace)
-        write_json_atomic(contract_path, generate_contract(step1, trace, str(trace_path)))
-        inventories = _collect_inventories(step1, args.manifest, args.output_dir, args.repository, args.inventory_evidence)
+        write_json_atomic(
+            contract_path, generate_contract(step1, trace, str(trace_path))
+        )
+        inventories = _collect_inventories(
+            step1,
+            args.manifest,
+            args.output_dir,
+            args.repository,
+            args.inventory_evidence,
+        )
         step2_path = args.output_dir / "step2.json"
-        step2_args = ["--step1-report", str(step1_path), "--generated-contract", str(contract_path), "--output", str(step2_path), "--manifest", str(args.manifest), "--evidence-score"]
+        step2_args = [
+            "--step1-report",
+            str(step1_path),
+            "--generated-contract",
+            str(contract_path),
+            "--output",
+            str(step2_path),
+            "--manifest",
+            str(args.manifest),
+            "--evidence-score",
+        ]
         for value in args.repository:
             step2_args.extend(["--repository", value])
         for value in args.ci_evidence:
@@ -146,7 +218,14 @@ def main(argv: list[str] | None = None) -> int:
             step3_args.extend(["--related-pr-evidence", args.related_pr_evidence])
         _run(trace_greenfield_step3.main, step3_args)
         step4_path = args.output_dir / "step4.json"
-        step4_args = ["--step3-report", str(step3_path), "--contract", str(contract_path), "--output", str(step4_path)]
+        step4_args = [
+            "--step3-report",
+            str(step3_path),
+            "--contract",
+            str(contract_path),
+            "--output",
+            str(step4_path),
+        ]
         for value in args.ci_evidence:
             step4_args.extend(["--ci-evidence", value])
         for value in inventories:
@@ -155,7 +234,17 @@ def main(argv: list[str] | None = None) -> int:
             step4_args.extend(["--semantic-index", value])
         _run(trace_greenfield_step4.main, step4_args)
         step5_path = args.output_dir / "step5.json"
-        _run(trace_greenfield_step5.main, ["--step3-report", str(step3_path), "--step4-report", str(step4_path), "--output", str(step5_path)])
+        _run(
+            trace_greenfield_step5.main,
+            [
+                "--step3-report",
+                str(step3_path),
+                "--step4-report",
+                str(step4_path),
+                "--output",
+                str(step5_path),
+            ],
+        )
         proposal = run_codex_test_proposal(
             step1,
             {
@@ -171,18 +260,49 @@ def main(argv: list[str] | None = None) -> int:
         )
         proposal_errors = validate_test_proposal(proposal)
         if proposal_errors:
-            raise ValueError("invalid Codex test proposal: " + "; ".join(proposal_errors))
+            raise ValueError(
+                "invalid Codex test proposal: " + "; ".join(proposal_errors)
+            )
         proposal_path = args.output_dir / "test-proposal.json"
         write_json_atomic(proposal_path, proposal)
-        print(json.dumps({
-            "status": "complete",
-            "context_sha256": context["context_sha256"],
-            "artifacts": {name: str(path) for name, path in {
-                "step1": step1_path, "trace": trace_path, "contract": contract_path,
-                "step2": step2_path, "step3": step3_path, "step4": step4_path, "step5": step5_path,
-                "test_proposal": proposal_path,
-            }.items()},
-        }, sort_keys=True))
+        step3_report = read_json_object(step3_path)
+        step4_report = read_json_object(step4_path)
+        step6_handoff = _step6_handoff()
+        step6_handoff_path = args.output_dir / "step6.handoff.json"
+        write_json_atomic(step6_handoff_path, step6_handoff)
+        categories = validation_summary(
+            artifact_integrity="passed",
+            provenance_revision_consistency="passed",
+            step3=step3_report,
+            step4=step4_report,
+            runtime_status="unavailable",
+            runtime_reason="step7_inputs_unavailable",
+        )
+        print(
+            json.dumps(
+                {
+                    "status": "complete",
+                    "context_sha256": context["context_sha256"],
+                    "step6_handoff": step6_handoff,
+                    "validation": categories,
+                    "artifacts": {
+                        name: str(path)
+                        for name, path in {
+                            "step1": step1_path,
+                            "trace": trace_path,
+                            "contract": contract_path,
+                            "step2": step2_path,
+                            "step3": step3_path,
+                            "step4": step4_path,
+                            "step5": step5_path,
+                            "test_proposal": proposal_path,
+                            "step6_handoff": step6_handoff_path,
+                        }.items()
+                    },
+                },
+                sort_keys=True,
+            )
+        )
         return 0
     except (OSError, ValueError, TypeError, json.JSONDecodeError, RuntimeError) as exc:
         print(f"greenfield Codex pipeline failed: {exc}", file=sys.stderr)

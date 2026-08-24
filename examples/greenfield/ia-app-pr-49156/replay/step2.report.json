@@ -7,6 +7,56 @@
         "app/source/purchasing/POProcessTransactions.phtml"
       ],
       "classification": "confirmed",
+      "declared_relationship_type": "behavior_contract",
+      "evidence": [
+        {
+          "kind": "contract",
+          "path": "examples/greenfield/ia-app-pr-49156/replay/step1.5.contract.json",
+          "repository": "ia-main",
+          "revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59",
+          "sha256": "505e94ac8404491f5f4a6a1bf109f2c3c7b43fec7c8da90e9d892158061950e8"
+        }
+      ],
+      "interface_id": "behavior:613d56bdfae2a5208bc624bb",
+      "likely_tests": [],
+      "owner": null,
+      "owner_repository": "ia-main",
+      "reason": "exact_active_contract",
+      "relationship_type": "explicit_contract",
+      "source_anchors": [
+        {
+          "entity": null,
+          "evidence": [],
+          "interfaces": [
+            {
+              "evidence": [],
+              "interface_id": "behavior:613d56bdfae2a5208bc624bb",
+              "mapping_kind": "explicit_source_contract",
+              "source_revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59"
+            },
+            {
+              "evidence": [],
+              "interface_id": "purchasing.transactions.filter",
+              "mapping_kind": "explicit_source_contract",
+              "source_revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59"
+            }
+          ],
+          "source_lines": {},
+          "source_path": "app/source/purchasing/POProcessTransactions.phtml",
+          "source_revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59",
+          "source_symbol": "GetFilterParams"
+        }
+      ],
+      "source_symbols": [
+        "GetFilterParams"
+      ],
+      "target_repository": "ia-app"
+    },
+    {
+      "changed_paths": [
+        "app/source/purchasing/POProcessTransactions.phtml"
+      ],
+      "classification": "confirmed",
       "declared_relationship_type": "api_contract",
       "evidence": [
         {
@@ -30,6 +80,12 @@
           "interfaces": [
             {
               "evidence": [],
+              "interface_id": "behavior:613d56bdfae2a5208bc624bb",
+              "mapping_kind": "explicit_source_contract",
+              "source_revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59"
+            },
+            {
+              "evidence": [],
               "interface_id": "purchasing.transactions.filter",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59"
@@ -38,7 +94,7 @@
           "source_lines": {},
           "source_path": "app/source/purchasing/POProcessTransactions.phtml",
           "source_revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59",
-          "source_symbol": null
+          "source_symbol": "GetFilterParams"
         }
       ],
       "source_symbols": [],
@@ -69,6 +125,12 @@
           "interfaces": [
             {
               "evidence": [],
+              "interface_id": "behavior:613d56bdfae2a5208bc624bb",
+              "mapping_kind": "explicit_source_contract",
+              "source_revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59"
+            },
+            {
+              "evidence": [],
               "interface_id": "purchasing.transactions.filter",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59"
@@ -77,7 +139,7 @@
           "source_lines": {},
           "source_path": "app/source/purchasing/POProcessTransactions.phtml",
           "source_revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59",
-          "source_symbol": null
+          "source_symbol": "GetFilterParams"
         }
       ],
       "target_repository": "intacct/ia-restapi-automation-tests",

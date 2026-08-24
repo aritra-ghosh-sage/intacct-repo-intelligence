@@ -6,14 +6,17 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from greenfield.replay_validation import validation_summary
 from greenfield.step1_5_trace import validate_trace
 from greenfield.step1_capture import evidence_fingerprint
 from greenfield.step2_candidates import resolve_candidates
 from greenfield.step2_contract import (
+    artifact_sha256,
     load_ci_evidence,
     load_contract,
     load_repository_inventory,
@@ -55,7 +58,24 @@ def _evidence_path(bundle_dir: Path, name: str) -> str | Path:
         return bundle_dir / name
 
 
-def _compare(bundle_dir: Path, name: str, report: dict[str, object], errors: list[str]) -> None:
+def _evidence_file_path(bundle_dir: Path, name: str) -> Path:
+    """Resolve a bundle file independently of the process working directory."""
+
+    repo_root = Path(__file__).resolve().parents[1]
+    try:
+        relative = bundle_dir.resolve().relative_to(repo_root)
+        return repo_root / relative / name
+    except ValueError:
+        return bundle_dir / name
+
+
+def _relative_evidence_path(bundle_dir: Path, name: str) -> str:
+    return str(_evidence_path(bundle_dir, name))
+
+
+def _compare(
+    bundle_dir: Path, name: str, report: dict[str, object], errors: list[str]
+) -> None:
     golden = bundle_dir / name
     if not golden.exists():
         errors.append(f"missing golden artifact: {golden}")
@@ -63,6 +83,97 @@ def _compare(bundle_dir: Path, name: str, report: dict[str, object], errors: lis
     expected = _read_json(golden)
     if report != expected:
         errors.append(f"artifact mismatch: {name}")
+
+
+def _relation_key(relation: Mapping[str, object]) -> tuple[object, ...]:
+    return (
+        relation.get("interface_id"),
+        relation.get("consumer_repository"),
+        relation.get("relationship_type"),
+        tuple(sorted(relation.get("source_paths", [])))
+        if isinstance(relation.get("source_paths"), list)
+        else (),
+    )
+
+
+def _is_redundant_contract(
+    generated: Mapping[str, object], declared: Mapping[str, object]
+) -> bool:
+    generated_relations = generated.get("relations", [])
+    declared_relations = declared.get("relations", [])
+    if not isinstance(generated_relations, list) or not isinstance(
+        declared_relations, list
+    ):
+        return False
+    generated_keys = {
+        _relation_key(item) for item in generated_relations if isinstance(item, Mapping)
+    }
+    declared_keys = {
+        _relation_key(item) for item in declared_relations if isinstance(item, Mapping)
+    }
+    return bool(declared_keys) and declared_keys <= generated_keys
+
+
+def _load_contracts(
+    bundle_dir: Path, step1: Mapping[str, object]
+) -> tuple[list[dict[str, object]], list[str], list[tuple[str, dict[str, object]]]]:
+    trace_path = bundle_dir / "step1.5.trace.json"
+    standardized_path = bundle_dir / "step1.5.contract.json"
+    legacy_path = _evidence_file_path(bundle_dir, "step2.contract.yaml")
+    if trace_path.exists() != standardized_path.exists():
+        raise ValueError(
+            "Step 1.5 bundle must contain both step1.5.trace.json and step1.5.contract.json"
+        )
+    retained: list[tuple[str, dict[str, object]]] = []
+    if standardized_path.exists():
+        trace = _read_json(trace_path)
+        trace_errors = validate_trace(step1, trace)
+        if trace_errors:
+            raise ValueError(
+                "invalid retained Step 1.5 trace: " + "; ".join(trace_errors)
+            )
+        raw_contract = _read_json(standardized_path)
+        generation = raw_contract.get("generation")
+        if not isinstance(generation, Mapping):
+            raise ValueError("retained Step 1.5 contract has no generation provenance")
+        if generation.get("step1_evidence_sha256") != evidence_fingerprint(step1):
+            raise ValueError(
+                "retained Step 1.5 contract is not linked to Step 1 evidence"
+            )
+        if raw_contract.get("revision") != trace.get("revision"):
+            raise ValueError("retained Step 1.5 contract revision does not match trace")
+        if generation.get("source_trace_sha256") != artifact_sha256(trace):
+            raise ValueError(
+                "retained Step 1.5 contract trace fingerprint does not match trace"
+            )
+        generated = load_contract(standardized_path)
+        generated.setdefault("evidence", {})["path"] = _relative_evidence_path(
+            bundle_dir, "step1.5.contract.json"
+        )
+        contracts = [generated]
+        contract_names = ["step1.5.contract.json"]
+        retained.extend(
+            [
+                ("step1.5.trace.json", trace),
+                ("step1.5.contract.json", raw_contract),
+            ]
+        )
+        if legacy_path.exists():
+            declared = load_contract(legacy_path)
+            declared.setdefault("evidence", {})["path"] = _relative_evidence_path(
+                bundle_dir, "step2.contract.yaml"
+            )
+            if not _is_redundant_contract(generated, declared):
+                contracts.append(declared)
+                contract_names.append("step2.contract.yaml")
+        return contracts, contract_names, retained
+    if not legacy_path.exists():
+        raise ValueError("missing Step 2 contract evidence")
+    legacy = load_contract(legacy_path)
+    legacy.setdefault("evidence", {})["path"] = _relative_evidence_path(
+        bundle_dir, "step2.contract.yaml"
+    )
+    return [legacy], ["step2.contract.yaml"], retained
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -87,64 +198,74 @@ def main(argv: list[str] | None = None) -> int:
         if step1_errors:
             raise ValueError("invalid step1 report: " + "; ".join(step1_errors))
 
-        trace_path = bundle_dir / "step1.5.trace.json"
-        contract_path = bundle_dir / "step1.5.contract.json"
-        if trace_path.exists() != contract_path.exists():
-            raise ValueError("Step 1.5 bundle must contain both step1.5.trace.json and step1.5.contract.json")
-        contract_path = contract_path if contract_path.exists() else _evidence_path(bundle_dir, "step2.contract.yaml")
-        if trace_path.exists():
-            raw_contract = _read_json(contract_path)
-            if raw_contract.get("generation", {}).get("step1_evidence_sha256") != evidence_fingerprint(step1):
-                raise ValueError("retained Step 1.5 contract is not linked to Step 1 evidence")
-        contract = load_contract(contract_path)
-        if trace_path.exists():
-            trace = _read_json(trace_path)
-            trace_errors = validate_trace(step1, trace)
-            if trace_errors:
-                raise ValueError("invalid retained Step 1.5 trace: " + "; ".join(trace_errors))
-        ci = load_ci_evidence(_evidence_path(bundle_dir, "step2.ci.json"))
-        inventory = load_repository_inventory(_evidence_path(bundle_dir, "step2.inventory.json"))
+        contracts, _contract_names, retained_artifacts = _load_contracts(
+            bundle_dir, step1
+        )
+        ci = load_ci_evidence(_evidence_file_path(bundle_dir, "step2.ci.json"))
+        ci["evidence"]["path"] = _relative_evidence_path(bundle_dir, "step2.ci.json")
+        inventory = load_repository_inventory(
+            _evidence_file_path(bundle_dir, "step2.inventory.json")
+        )
+        inventory["evidence_path"] = _relative_evidence_path(
+            bundle_dir, "step2.inventory.json"
+        )
 
         semantic_index = None
         semantic_path = bundle_dir / "step2.semantic-index.json"
         if semantic_path.exists():
             semantic_index = load_semantic_evidence(
-                _evidence_path(bundle_dir, "step2.semantic-index.json")
+                _evidence_file_path(bundle_dir, "step2.semantic-index.json")
+            )
+            semantic_index["evidence_path"] = _relative_evidence_path(
+                bundle_dir, "step2.semantic-index.json"
             )
 
         related_pr_evidence = None
         related_path = bundle_dir / "step3.related-pr-evidence.json"
         if related_path.exists():
             related_pr_evidence = load_related_pr_evidence(
-                _evidence_path(bundle_dir, "step3.related-pr-evidence.json")
+                _evidence_file_path(bundle_dir, "step3.related-pr-evidence.json")
+            )
+            related_pr_evidence["evidence_path"] = _relative_evidence_path(
+                bundle_dir, "step3.related-pr-evidence.json"
             )
 
-        step2 = resolve_candidates(step1, contracts=[contract], ci_evidence=[ci], inventory_evidence=[inventory], semantic_indexes=[semantic_index] if semantic_index else [])
-        step3 = assemble_outcome(step2, semantic_index=semantic_index, related_pr_evidence=related_pr_evidence)
+        step2 = resolve_candidates(
+            step1,
+            contracts=contracts,
+            ci_evidence=[ci],
+            inventory_evidence=[inventory],
+            semantic_indexes=[semantic_index] if semantic_index else [],
+        )
+        step3 = assemble_outcome(
+            step2,
+            semantic_index=semantic_index,
+            related_pr_evidence=related_pr_evidence,
+        )
+        ci_for_step4 = load_ci_evidence_file(
+            _evidence_file_path(bundle_dir, "step2.ci.json")
+        )
+        ci_for_step4["evidence"]["path"] = _relative_evidence_path(
+            bundle_dir, "step2.ci.json"
+        )
+        inventory_for_step4 = load_inventory_evidence(
+            _evidence_file_path(bundle_dir, "step2.inventory.json")
+        )
+        inventory_for_step4["evidence_path"] = _relative_evidence_path(
+            bundle_dir, "step2.inventory.json"
+        )
         step4 = map_test_coverage(
             step3,
-            contracts=[
-                contract
-            ],
-            ci_evidence=[
-                load_ci_evidence_file(_evidence_path(bundle_dir, "step2.ci.json"))
-            ],
-            inventory_evidence=[
-                load_inventory_evidence(_evidence_path(bundle_dir, "step2.inventory.json"))
-            ],
+            contracts=contracts,
+            ci_evidence=[ci_for_step4],
+            inventory_evidence=[inventory_for_step4],
             semantic_indexes=[semantic_index] if semantic_index else [],
         )
         step5 = recommend_actions(step3, step4)
 
         errors: list[str] = []
-        retained_artifacts = []
-        if trace_path.exists():
-            retained_artifacts = [
-                ("step1.5.trace.json", _read_json(trace_path)),
-                ("step1.5.contract.json", raw_contract),
-            ]
-            for name, artifact in retained_artifacts:
-                _compare(bundle_dir, name, artifact, errors)
+        for name, artifact in retained_artifacts:
+            _compare(bundle_dir, name, artifact, errors)
         _compare(bundle_dir, "step2.report.json", step2, errors)
         _compare(bundle_dir, "step3.report.json", step3, errors)
         _compare(bundle_dir, "step4.report.json", step4, errors)
@@ -172,6 +293,16 @@ def main(argv: list[str] | None = None) -> int:
             "validation": {
                 "step4": validate_step4_report(step4),
                 "step5": validate_step5_report(step5),
+                "categories": validation_summary(
+                    artifact_integrity="passed" if not errors else "failed",
+                    provenance_revision_consistency="passed"
+                    if not errors
+                    else "failed",
+                    step3=step3,
+                    step4=step4,
+                    runtime_status="unavailable",
+                    runtime_reason="step7_inputs_unavailable",
+                ),
             },
             "mismatches": errors,
         }

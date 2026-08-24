@@ -33,7 +33,9 @@ def _git(source_root: Path, *args: str) -> str:
     return result.stdout
 
 
-def build_context(step1: Mapping[str, Any], source_root: str | Path, *, max_file_bytes: int = 120_000) -> dict[str, Any]:
+def build_context(
+    step1: Mapping[str, Any], source_root: str | Path, *, max_file_bytes: int = 120_000
+) -> dict[str, Any]:
     """Materialize only target-revision blobs needed by the agent."""
 
     root = Path(source_root).resolve()
@@ -56,7 +58,9 @@ def build_context(step1: Mapping[str, Any], source_root: str | Path, *, max_file
                     f"source blob exceeds max_file_bytes for {path}; "
                     "raise --max-file-bytes to preserve exact evidence"
                 )
-        files.append({"path": path, "status": status, "content": content, "truncated": truncated})
+        files.append(
+            {"path": path, "status": status, "content": content, "truncated": truncated}
+        )
     context = {
         "schema_version": "0.1",
         "source_repository": source.get("repository") or source.get("repo_key"),
@@ -118,11 +122,7 @@ def _run_codex_json(
             "--ephemeral",
             "--sandbox",
             "read-only",
-            "--ask-for-approval",
-            "never",
             "--ignore-user-config",
-            "--output-schema",
-            str(schema),
             "--output-last-message",
             str(output_path),
             "-C",
@@ -148,7 +148,9 @@ def _run_codex_json(
             raise CodexAgentError(f"Codex execution failed: {exc}") from exc
         if result.returncode:
             detail = result.stderr.strip() or result.stdout.strip()
-            raise CodexAgentError(f"Codex returned {result.returncode}: {detail[-2000:]}")
+            raise CodexAgentError(
+                f"Codex returned {result.returncode}: {detail[-2000:]}"
+            )
         try:
             return read_json_object(output_path)
         except (OSError, json.JSONDecodeError, TypeError) as exc:
@@ -168,7 +170,11 @@ def run_codex_trace(
 
     root = Path(source_root).resolve()
     context = build_context(step1, root, max_file_bytes=max_file_bytes)
-    schema = Path(__file__).resolve().parents[1] / "schemas" / "greenfield_step1_5_trace.schema.json"
+    schema = (
+        Path(__file__).resolve().parents[1]
+        / "schemas"
+        / "greenfield_step1_5_trace.schema.json"
+    )
     raw = _run_codex_json(
         root,
         schema,
@@ -178,15 +184,26 @@ def run_codex_trace(
         model=model,
         timeout=timeout,
     )
-    metadata = {"name": "codex", "model": model or "configured", "timeout_seconds": timeout}
-    trace = normalize_trace(step1, raw, agent_metadata=metadata, context_sha256=str(context["context_sha256"]))
+    metadata = {
+        "name": "codex",
+        "model": model or "configured",
+        "timeout_seconds": timeout,
+    }
+    trace = normalize_trace(
+        step1,
+        raw,
+        agent_metadata=metadata,
+        context_sha256=str(context["context_sha256"]),
+    )
     errors = validate_trace(step1, trace)
     if errors:
         raise TraceError("invalid Codex Step 1.5 trace: " + "; ".join(errors))
     return trace, context
 
 
-def generate_contract(step1: Mapping[str, Any], trace: Mapping[str, Any], trace_path: str) -> dict[str, Any]:
+def generate_contract(
+    step1: Mapping[str, Any], trace: Mapping[str, Any], trace_path: str
+) -> dict[str, Any]:
     return generate_behavior_contract(step1, trace, source_trace_path=trace_path)
 
 
@@ -225,7 +242,11 @@ def run_codex_test_proposal(
         "source_revision": source.get("target_revision") or source.get("head_sha"),
     }
     context["context_sha256"] = artifact_sha256(context)
-    schema = Path(__file__).resolve().parents[1] / "schemas" / "greenfield_test_proposal.schema.json"
+    schema = (
+        Path(__file__).resolve().parents[1]
+        / "schemas"
+        / "greenfield_test_proposal.schema.json"
+    )
     raw = _run_codex_json(
         Path(source_root).resolve(),
         schema,
@@ -240,9 +261,8 @@ def run_codex_test_proposal(
     raw["input"] = {
         "source_repository": context["source_repository"],
         "source_revision": context["source_revision"],
-        "changed_paths": step1["input"].get("changed_paths") or [
-            row.get("path") or row.get("filename") for row in step1["changed_files"]
-        ],
+        "changed_paths": step1["input"].get("changed_paths")
+        or [row.get("path") or row.get("filename") for row in step1["changed_files"]],
         "report_sha256": context["report_sha256"],
     }
     raw["provenance"] = {
@@ -250,6 +270,10 @@ def run_codex_test_proposal(
         "catalog_mutation": "none",
         "github_writes": "none",
         "context_sha256": context["context_sha256"],
-        "agent": {"name": "codex", "model": model or "configured", "timeout_seconds": timeout},
+        "agent": {
+            "name": "codex",
+            "model": model or "configured",
+            "timeout_seconds": timeout,
+        },
     }
     return raw

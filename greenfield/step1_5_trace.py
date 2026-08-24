@@ -18,7 +18,15 @@ from greenfield.step1_capture import evidence_fingerprint
 SCHEMA_VERSION = "0.1"
 ANALYSIS_KIND = "greenfield_pr_impact_step_1_5"
 SHA = re.compile(r"^[0-9a-f]{40}$")
-SURFACE_STATES = {"available", "empty", "unavailable", "not_run", "unresolved", "ambiguous", "dynamic"}
+SURFACE_STATES = {
+    "available",
+    "empty",
+    "unavailable",
+    "not_run",
+    "unresolved",
+    "ambiguous",
+    "dynamic",
+}
 
 
 class TraceError(ValueError):
@@ -66,7 +74,14 @@ def _validate_symbol_rows(value: Any, changed_paths: set[str]) -> list[dict[str,
         if key in seen:
             raise TraceError(f"duplicate affected symbol: {symbol} at {path}")
         seen.add(key)
-        rows.append({"symbol": symbol, "path": path, "line": line, "role": item.get("role", "affected")})
+        rows.append(
+            {
+                "symbol": symbol,
+                "path": path,
+                "line": line,
+                "role": item.get("role", "affected"),
+            }
+        )
     return sorted(rows, key=lambda item: (item["path"], item["line"], item["symbol"]))
 
 
@@ -84,7 +99,9 @@ def _validate_surfaces(value: Any) -> dict[str, str]:
     return dict(sorted(result.items()))
 
 
-def _call_key(value: Mapping[str, Any]) -> tuple[str, str, str, str, int, str, str, str]:
+def _call_key(
+    value: Mapping[str, Any],
+) -> tuple[str, str, str, str, int, str, str, str]:
     return (
         _text(value.get("source_symbol"), "call source_symbol"),
         _text(value.get("target_symbol"), "call target_symbol"),
@@ -106,8 +123,17 @@ def validate_trace(step1: Mapping[str, Any], trace: Mapping[str, Any]) -> list[s
         if not isinstance(source, Mapping):
             raise TraceError("Step 1 input must be an object")
         canonical, repo_key = source_identity(source)
-        revision = _sha(source.get("target_revision") or source.get("head_sha"), "Step 1 target revision")
-        changed_paths = set(_paths(source.get("changed_paths") or [row.get("path") for row in step1.get("changed_files", [])], "Step 1 changed paths"))
+        revision = _sha(
+            source.get("target_revision") or source.get("head_sha"),
+            "Step 1 target revision",
+        )
+        changed_paths = set(
+            _paths(
+                source.get("changed_paths")
+                or [row.get("path") for row in step1.get("changed_files", [])],
+                "Step 1 changed paths",
+            )
+        )
         if trace.get("schema_version") != SCHEMA_VERSION:
             raise TraceError("schema_version is invalid")
         if trace.get("analysis_kind") != ANALYSIS_KIND:
@@ -116,7 +142,9 @@ def validate_trace(step1: Mapping[str, Any], trace: Mapping[str, Any]) -> list[s
             raise TraceError("trace repository does not match Step 1")
         if _sha(trace.get("revision"), "trace revision") != revision:
             raise TraceError("trace revision does not match Step 1")
-        if _paths(trace.get("changed_paths"), "trace changed paths") != sorted(changed_paths):
+        if _paths(trace.get("changed_paths"), "trace changed paths") != sorted(
+            changed_paths
+        ):
             raise TraceError("trace changed paths do not match Step 1")
         _validate_symbol_rows(trace.get("affected_symbols"), changed_paths)
         _validate_surfaces(trace.get("surfaces", {}))
@@ -130,12 +158,15 @@ def validate_trace(step1: Mapping[str, Any], trace: Mapping[str, Any]) -> list[s
         if identity.get("pr_number") != source.get("pr_number"):
             raise TraceError("trace input PR number does not match Step 1")
         if _sha(identity.get("base_sha"), "trace input base_sha") != _sha(
-            source.get("base_sha") or source.get("base_revision"), "Step 1 base revision"
+            source.get("base_sha") or source.get("base_revision"),
+            "Step 1 base revision",
         ):
             raise TraceError("trace input base SHA does not match Step 1")
         if _sha(identity.get("head_sha"), "trace input head_sha") != revision:
             raise TraceError("trace input head SHA does not match Step 1")
-        if _paths(identity.get("changed_paths"), "trace input changed paths") != sorted(changed_paths):
+        if _paths(identity.get("changed_paths"), "trace input changed paths") != sorted(
+            changed_paths
+        ):
             raise TraceError("trace input changed paths do not match Step 1")
         calls = trace.get("calls")
         if not isinstance(calls, list):
@@ -145,29 +176,57 @@ def validate_trace(step1: Mapping[str, Any], trace: Mapping[str, Any]) -> list[s
                 raise TraceError(f"calls[{index}] must be an object")
             if call.get("relationship_type") not in {"CALLS", "STATIC_CALLS"}:
                 raise TraceError(f"calls[{index}].relationship_type is invalid")
-            if isinstance(call.get("source_line"), bool) or not isinstance(call.get("source_line"), int) or call["source_line"] < 1:
+            if (
+                isinstance(call.get("source_line"), bool)
+                or not isinstance(call.get("source_line"), int)
+                or call["source_line"] < 1
+            ):
                 raise TraceError(f"calls[{index}].source_line must be positive")
-            if _sha(call.get("source_revision"), f"calls[{index}].source_revision") != revision:
-                raise TraceError(f"calls[{index}].source_revision does not match Step 1")
+            if (
+                _sha(call.get("source_revision"), f"calls[{index}].source_revision")
+                != revision
+            ):
+                raise TraceError(
+                    f"calls[{index}].source_revision does not match Step 1"
+                )
             if call.get("resolution") != "exact":
                 raise TraceError(f"calls[{index}].resolution must be exact")
         behaviors = trace.get("behaviors")
         if not isinstance(behaviors, list) or not behaviors:
             raise TraceError("behaviors must be a non-empty list")
         contract = generate_behavior_contract(step1, trace)
-        expected_calls = {
-            _call_key(edge)
-            for edge in contract["generation"]["edges"]
-        }
+        expected_calls = {_call_key(edge) for edge in contract["generation"]["edges"]}
         actual_calls = {_call_key(call) for call in calls}
         if actual_calls != expected_calls or len(actual_calls) != len(calls):
             raise TraceError("trace calls must exactly match validated behavior edges")
+        provenance = trace.get("provenance")
+        if not isinstance(provenance, Mapping):
+            raise TraceError("trace provenance must be an object")
+        if provenance.get("source_revision") != revision:
+            raise TraceError("trace provenance source_revision does not match Step 1")
+        if provenance.get("step1_evidence_sha256") != evidence_fingerprint(step1):
+            raise TraceError(
+                "trace provenance Step 1 evidence fingerprint does not match"
+            )
+        unsigned = copy.deepcopy(dict(trace))
+        unsigned_provenance = unsigned.get("provenance")
+        if not isinstance(unsigned_provenance, dict):
+            raise TraceError("trace provenance must be an object")
+        unsigned_provenance.pop("trace_sha256", None)
+        if provenance.get("trace_sha256") != artifact_sha256(unsigned):
+            raise TraceError("trace provenance trace_sha256 does not match contents")
     except (TraceError, BehaviorContractError, TypeError, ValueError) as exc:
         errors.append(str(exc))
     return errors
 
 
-def normalize_trace(step1: Mapping[str, Any], raw: Mapping[str, Any], *, agent_metadata: Mapping[str, Any], context_sha256: str) -> dict[str, Any]:
+def normalize_trace(
+    step1: Mapping[str, Any],
+    raw: Mapping[str, Any],
+    *,
+    agent_metadata: Mapping[str, Any],
+    context_sha256: str,
+) -> dict[str, Any]:
     """Attach trusted Step 1/Codex provenance without trusting model metadata."""
 
     trace = copy.deepcopy(dict(raw))
@@ -176,8 +235,12 @@ def normalize_trace(step1: Mapping[str, Any], raw: Mapping[str, Any], *, agent_m
     trace["schema_version"] = SCHEMA_VERSION
     trace["analysis_kind"] = ANALYSIS_KIND
     trace["repository"] = canonical
-    trace["revision"] = str(source.get("target_revision") or source.get("head_sha")).lower()
-    trace["changed_paths"] = sorted({str(row.get("path") or row.get("filename")) for row in step1["changed_files"]})
+    trace["revision"] = str(
+        source.get("target_revision") or source.get("head_sha")
+    ).lower()
+    trace["changed_paths"] = sorted(
+        {str(row.get("path") or row.get("filename")) for row in step1["changed_files"]}
+    )
     trace["input"] = {
         "repository": canonical,
         "repo_key": source.get("repo_key") or source.get("source_repo_key"),
@@ -186,7 +249,9 @@ def normalize_trace(step1: Mapping[str, Any], raw: Mapping[str, Any], *, agent_m
         "head_sha": trace["revision"],
         "changed_paths": trace["changed_paths"],
     }
-    trace["affected_symbols"] = _validate_symbol_rows(trace.get("affected_symbols", []), set(trace["changed_paths"]))
+    trace["affected_symbols"] = _validate_symbol_rows(
+        trace.get("affected_symbols", []), set(trace["changed_paths"])
+    )
     trace["surfaces"] = _validate_surfaces(trace.get("surfaces", {}))
     trace["provenance"] = {
         "read_only": True,

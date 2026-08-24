@@ -46,8 +46,25 @@
         "classification": "candidate",
         "evidence": [
           {
+            "digest": "505e94ac8404491f5f4a6a1bf109f2c3c7b43fec7c8da90e9d892158061950e8",
+            "kind": "contract",
+            "path": "examples/greenfield/ia-app-pr-49156/replay/step1.5.contract.json",
+            "revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59"
+          }
+        ],
+        "interface_id": "behavior:613d56bdfae2a5208bc624bb",
+        "reason": "declared_contract_without_test_evidence",
+        "source_repository": "ia-main",
+        "source_revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59",
+        "target_repository": "ia-app",
+        "test": null
+      },
+      {
+        "classification": "candidate",
+        "evidence": [
+          {
             "kind": "step3_report",
-            "sha256": "12e2f2fb0d2cd947d2e1cd3e5812ed8b5f76420c45130a5fc8815264c4ce7de6"
+            "sha256": "d2e4cf99fc8c4a8c7d6cdab8f1d9ba239ce88d48d4a3b789099b36a3addc0705"
           }
         ],
         "interface_id": "purchasing.transactions.filter",
@@ -65,7 +82,7 @@
         "evidence": [
           {
             "kind": "step3_report",
-            "sha256": "12e2f2fb0d2cd947d2e1cd3e5812ed8b5f76420c45130a5fc8815264c4ce7de6"
+            "sha256": "d2e4cf99fc8c4a8c7d6cdab8f1d9ba239ce88d48d4a3b789099b36a3addc0705"
           }
         ],
         "interface_id": "purchasing.transactions.filter",
@@ -151,13 +168,14 @@
     "catalog_mutation": "none",
     "evidence_digests": [
       "1111111111111111111111111111111111111111111111111111111111111111",
+      "505e94ac8404491f5f4a6a1bf109f2c3c7b43fec7c8da90e9d892158061950e8",
       "82c50767376349178d7a4ba30a638f1fe147a74a3aae223ef45e021956aac6ec",
       "d883cfa786192becf420c6b5e136a779781a86214ea1b44c877d7489cc2f2066"
     ],
     "github_writes": "none",
     "read_only": true,
     "rule_set_version": "0.1",
-    "step3_report_sha256": "12e2f2fb0d2cd947d2e1cd3e5812ed8b5f76420c45130a5fc8815264c4ce7de6"
+    "step3_report_sha256": "d2e4cf99fc8c4a8c7d6cdab8f1d9ba239ce88d48d4a3b789099b36a3addc0705"
   },
   "schema_version": "0.1",
   "status": "partial",

@@ -8,14 +8,20 @@ from unittest.mock import patch
 import pytest
 
 from greenfield.codex_agent import CodexAgentError, build_context, run_codex_trace
-from greenfield.step1_5_trace import validate_trace
+from greenfield.step1_5_trace import normalize_trace, validate_trace
 from greenfield.step1_capture import evidence_fingerprint
 from scripts import trace_greenfield_step1_5, trace_greenfield_step2
 from scripts.validate_greenfield_test_proposal import validate as validate_test_proposal
 
 ROOT = Path(__file__).resolve().parents[1]
-STEP1 = json.loads((ROOT / "examples/greenfield/ia-app-pr-49137/replay/step1.json").read_text())
-SOURCE_TRACE = json.loads((ROOT / "examples/greenfield/ia-app-pr-49137/replay/step1.source-trace.json").read_text())
+STEP1 = json.loads(
+    (ROOT / "examples/greenfield/ia-app-pr-49137/replay/step1.json").read_text()
+)
+SOURCE_TRACE = json.loads(
+    (
+        ROOT / "examples/greenfield/ia-app-pr-49137/replay/step1.source-trace.json"
+    ).read_text()
+)
 
 
 def _trace() -> dict[str, object]:
@@ -49,25 +55,48 @@ def _trace() -> dict[str, object]:
             },
         }
     )
-    return trace
+    return normalize_trace(
+        STEP1,
+        trace,
+        agent_metadata={"name": "fixture", "model": "fixture", "timeout_seconds": 1},
+        context_sha256="a" * 64,
+    )
 
 
 def test_codex_trace_validation_preserves_exact_surface_states() -> None:
     trace = _trace()
     assert validate_trace(STEP1, trace) == []
-    assert trace["surfaces"]["xml_api"]["status"] == "not_run"
+    assert trace["surfaces"]["xml_api"] == "not_run"
+
+
+def test_trace_provenance_bindings_are_fail_closed() -> None:
+    trace = _trace()
+    trace["provenance"]["source_revision"] = "0" * 40
+    assert any("source_revision" in error for error in validate_trace(STEP1, trace))
+
+    trace = _trace()
+    trace["provenance"]["step1_evidence_sha256"] = "0" * 64
+    assert any("fingerprint" in error for error in validate_trace(STEP1, trace))
+
+    trace = _trace()
+    trace["provenance"]["trace_sha256"] = "0" * 64
+    assert any("trace_sha256" in error for error in validate_trace(STEP1, trace))
 
 
 def test_trace_rejects_unchanged_affected_symbol() -> None:
     trace = _trace()
-    trace["affected_symbols"].append({"symbol": "Other::run", "path": "app/source/other.cls", "line": 1})
+    trace["affected_symbols"].append(
+        {"symbol": "Other::run", "path": "app/source/other.cls", "line": 1}
+    )
     assert any("changed path" in error for error in validate_trace(STEP1, trace))
 
 
 def test_trace_rejects_prose_or_missing_calls() -> None:
     trace = _trace()
     del trace["calls"]
-    assert any("calls must be a list" in error for error in validate_trace(STEP1, trace))
+    assert any(
+        "calls must be a list" in error for error in validate_trace(STEP1, trace)
+    )
 
 
 def test_trace_requires_pr_and_base_identity() -> None:
@@ -88,15 +117,30 @@ def test_context_reads_target_revision_only(tmp_path: Path) -> None:
     import subprocess
 
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
-    subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.test"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.email", "test@example.test"],
+        check=True,
+    )
     subprocess.run(["git", "-C", str(repo), "config", "user.name", "Test"], check=True)
     (repo / "changed.php").write_text("<?php echo 'target';\n")
     subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
     subprocess.run(["git", "-C", str(repo), "commit", "-qm", "target"], check=True)
-    revision = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+    revision = subprocess.check_output(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+    ).strip()
     step1 = copy.deepcopy(STEP1)
-    step1["input"].update({"target_revision": revision, "head_sha": revision, "base_revision": revision, "base_sha": revision, "changed_paths": ["changed.php"]})
-    step1["changed_files"] = [{"path": "changed.php", "filename": "changed.php", "status": "modified"}]
+    step1["input"].update(
+        {
+            "target_revision": revision,
+            "head_sha": revision,
+            "base_revision": revision,
+            "base_sha": revision,
+            "changed_paths": ["changed.php"],
+        }
+    )
+    step1["changed_files"] = [
+        {"path": "changed.php", "filename": "changed.php", "status": "modified"}
+    ]
     step1["pr_metadata"]["base_revision"] = revision
     step1["pr_metadata"]["target_revision"] = revision
     step1["provenance"]["evidence_sha256"] = evidence_fingerprint(step1)
@@ -110,16 +154,31 @@ def test_runner_writes_trace_and_contract(tmp_path: Path) -> None:
     trace = _trace()
     trace_path = tmp_path / "trace.json"
     contract_path = tmp_path / "contract.json"
-    with patch("scripts.trace_greenfield_step1_5.run_codex_trace", return_value=(trace, {"context_sha256": "a" * 64})):
-        result = trace_greenfield_step1_5.main([
-            "--step1-report", str(ROOT / "examples/greenfield/ia-app-pr-49137/replay/step1.json"),
-            "--source-root", str(tmp_path),
-            "--trace-output", str(trace_path),
-            "--contract-output", str(contract_path),
-        ])
+    with patch(
+        "scripts.trace_greenfield_step1_5.run_codex_trace",
+        return_value=(trace, {"context_sha256": "a" * 64}),
+    ):
+        result = trace_greenfield_step1_5.main(
+            [
+                "--step1-report",
+                str(ROOT / "examples/greenfield/ia-app-pr-49137/replay/step1.json"),
+                "--source-root",
+                str(tmp_path),
+                "--trace-output",
+                str(trace_path),
+                "--contract-output",
+                str(contract_path),
+            ]
+        )
     assert result == 0
-    assert json.loads(trace_path.read_text())["analysis_kind"] == "greenfield_pr_impact_step_1_5"
-    assert json.loads(contract_path.read_text())["artifact_kind"] == "generated_behavior_contract"
+    assert (
+        json.loads(trace_path.read_text())["analysis_kind"]
+        == "greenfield_pr_impact_step_1_5"
+    )
+    assert (
+        json.loads(contract_path.read_text())["artifact_kind"]
+        == "generated_behavior_contract"
+    )
 
 
 def test_codex_failure_is_explicit() -> None:
@@ -137,16 +196,18 @@ def test_test_proposal_requires_exact_target_and_evidence() -> None:
             "source_revision": "a" * 40,
             "changed_paths": ["app/source/a.php"],
         },
-        "proposals": [{
-            "target_repository": "intacct/tests",
-            "target_base_revision": "b" * 40,
-            "paths": ["tests/a.feature"],
-            "operation": "update",
-            "test_area": "a",
-            "rationale": "declared obligation",
-            "evidence": [{"kind": "step4_report", "sha256": "c" * 64}],
-            "validation_commands": [{"argv": ["pytest", "tests/a.py"], "cwd": "."}],
-        }],
+        "proposals": [
+            {
+                "target_repository": "intacct/tests",
+                "target_base_revision": "b" * 40,
+                "paths": ["tests/a.feature"],
+                "operation": "update",
+                "test_area": "a",
+                "rationale": "declared obligation",
+                "evidence": [{"kind": "step4_report", "sha256": "c" * 64}],
+                "validation_commands": [{"argv": ["pytest", "tests/a.py"], "cwd": "."}],
+            }
+        ],
         "findings": [],
         "provenance": {"read_only": True},
     }
@@ -157,4 +218,6 @@ def test_test_proposal_requires_exact_target_and_evidence() -> None:
 
 def test_step2_does_not_refetch_supplied_inventory() -> None:
     supplied = [{"repository": "intacct/tests"}]
-    assert trace_greenfield_step2._supplied_inventory_repositories(supplied) == {"intacct/tests"}
+    assert trace_greenfield_step2._supplied_inventory_repositories(supplied) == {
+        "intacct/tests"
+    }

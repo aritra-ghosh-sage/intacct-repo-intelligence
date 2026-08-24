@@ -1,4 +1,4 @@
-"""Replay a recorded Greenfield Step 1-6 bundle locally."""
+"""Replay a recorded Greenfield Step 1-7 bundle locally."""
 
 from __future__ import annotations
 
@@ -10,12 +10,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from greenfield.artifact_io import artifact_sha256
-from greenfield.step1_5_trace import validate_trace
+from greenfield.replay_validation import validation_summary
 from greenfield.step1_capture import evidence_fingerprint
 from greenfield.step2_candidates import resolve_candidates
 from greenfield.step2_contract import (
     load_ci_evidence,
-    load_contract,
     load_repository_inventory,
 )
 from greenfield.step3_outcome import assemble_outcome, load_related_pr_evidence
@@ -29,9 +28,13 @@ from greenfield.step4_coverage import map_test_coverage
 from greenfield.step5_actions import recommend_actions, validate_step5_report
 from greenfield.step6_contract import (
     load_json,
+    validate_step6_report,
     validate_step6_request,
 )
 from greenfield.step6_patch import generate_step6
+from greenfield.step7_contract import validate_step7_report
+from greenfield.step7_validate import validate_step7
+from scripts.replay_greenfield_step1_5 import _load_contracts
 from scripts.validate_greenfield_step1 import validate as validate_step1
 from scripts.validate_greenfield_step2 import validate as validate_step2
 from scripts.validate_greenfield_step3 import validate as validate_step3
@@ -82,23 +85,16 @@ def _load_contract_for_replay(
     bundle: Path, step1: dict[str, object]
 ) -> tuple[dict[str, object], str]:
     """Load the retained Step 1.5 contract and verify its paired trace."""
-    trace_path = bundle / "step1.5.trace.json"
-    contract_path = bundle / "step1.5.contract.json"
-    if trace_path.exists() != contract_path.exists():
-        raise ValueError("Step 1.5 bundle must contain both step1.5.trace.json and step1.5.contract.json")
-    if trace_path.exists():
-        trace = load_json(trace_path, "Step 1.5 trace")
-        trace_errors = validate_trace(step1, trace)
-        if trace_errors:
-            raise ValueError("invalid retained Step 1.5 trace: " + "; ".join(trace_errors))
-        raw_contract = load_json(contract_path, "Step 1.5 contract")
-        if raw_contract.get("generation", {}).get("step1_evidence_sha256") != evidence_fingerprint(step1):
-            raise ValueError("retained Step 1.5 contract is not linked to Step 1 evidence")
-        contract = load_contract(contract_path)
-        return contract, "step1.5.contract.json"
+    contracts, names, _retained = _load_contracts(bundle, step1)
+    if (bundle / "step1.5.contract.json").exists():
+        return contracts[0], "step1.5.contract.json"
+    if names:
+        return contracts[0], names[0]
     if (bundle / "generated_behavior_contract.json").exists():
-        raise ValueError("legacy generated_behavior_contract.json is not a standardized Step 1.5 artifact")
-    return load_contract(_evidence_path(bundle, "step2.contract.yaml")), "step2.contract.yaml"
+        raise ValueError(
+            "legacy generated_behavior_contract.json is not a standardized Step 1.5 artifact"
+        )
+    raise ValueError("missing Step 2 contract evidence")
 
 
 def _evidence_label(bundle_dir: Path, name: str) -> str:
@@ -150,6 +146,11 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="Optionally write a deterministic replay manifest.",
     )
+    parser.add_argument(
+        "--target-checkout",
+        type=Path,
+        help="Optional exact target checkout for conditional Step 7 replay.",
+    )
     args = parser.parse_args(argv)
     bundle = args.bundle_dir
     try:
@@ -157,7 +158,12 @@ def main(argv: list[str] | None = None) -> int:
         errors = validate_step1(step1)
         if errors:
             raise ValueError("invalid Step 1 report: " + "; ".join(errors))
-        contract, contract_name = _load_contract_for_replay(bundle, step1)
+        contracts, contract_names, retained_artifacts = _load_contracts(bundle, step1)
+        contract_name = (
+            "step1.5.contract.json"
+            if (bundle / "step1.5.contract.json").exists()
+            else contract_names[0]
+        )
         ci_paths = sorted(bundle.glob("step2.ci*.json"))
         inventory_paths = sorted(bundle.glob("step2.inventory*.json"))
         if not ci_paths:
@@ -168,13 +174,11 @@ def main(argv: list[str] | None = None) -> int:
         inventory_rows = [load_repository_inventory(path) for path in inventory_paths]
         for ci_row, ci_file in zip(ci_rows, ci_paths):
             _normalize_evidence_paths(
-                contract,
+                contracts[0],
                 ci_row,
                 inventory_rows[0],
                 bundle_dir=bundle,
-                contract_name=(
-                    contract_name
-                ),
+                contract_name=(contract_name),
             )
             ci_row["evidence"]["path"] = _evidence_label(bundle, ci_file.name)
         for inventory_row, inventory_file in zip(inventory_rows, inventory_paths):
@@ -185,14 +189,20 @@ def main(argv: list[str] | None = None) -> int:
         semantic_path = bundle / "step2.semantic-index.json"
         if semantic_path.exists():
             semantic = load_semantic_evidence(semantic_path)
+            semantic["evidence_path"] = _evidence_label(
+                bundle, "step2.semantic-index.json"
+            )
         related = None
         related_path = bundle / "step3.related-pr-evidence.json"
         if related_path.exists():
             related = load_related_pr_evidence(related_path)
+            related["evidence_path"] = _evidence_label(
+                bundle, "step3.related-pr-evidence.json"
+            )
 
         step2 = resolve_candidates(
             step1,
-            contracts=[contract],
+            contracts=contracts,
             ci_evidence=ci_rows,
             inventory_evidence=inventory_rows,
             semantic_indexes=[semantic] if semantic else [],
@@ -208,10 +218,15 @@ def main(argv: list[str] | None = None) -> int:
         if step3_errors:
             raise ValueError("invalid Step 3 report: " + "; ".join(step3_errors))
 
-        contract_evidence = dict(contract)
-        if isinstance(contract_evidence.get("evidence"), dict):
-            contract_evidence["evidence"] = dict(contract_evidence["evidence"])
-            contract_evidence["evidence"]["path"] = _evidence_label(bundle, contract_name)
+        contract_evidence = []
+        for contract, contract_name in zip(contracts, contract_names):
+            evidence_contract = dict(contract)
+            if isinstance(evidence_contract.get("evidence"), dict):
+                evidence_contract["evidence"] = dict(evidence_contract["evidence"])
+                evidence_contract["evidence"]["path"] = _evidence_label(
+                    bundle, contract_name
+                )
+            contract_evidence.append(evidence_contract)
         ci_evidence = [load_ci_evidence_file(path) for path in ci_paths]
         for row, path in zip(ci_evidence, ci_paths):
             row["evidence"]["path"] = _evidence_label(bundle, path.name)
@@ -220,7 +235,7 @@ def main(argv: list[str] | None = None) -> int:
             row["evidence_path"] = _evidence_label(bundle, path.name)
         step4 = map_test_coverage(
             step3,
-            contracts=[contract_evidence],
+            contracts=contract_evidence,
             ci_evidence=ci_evidence,
             inventory_evidence=inventory_evidence,
             semantic_indexes=[semantic] if semantic else [],
@@ -241,6 +256,55 @@ def main(argv: list[str] | None = None) -> int:
                 step5,
             )
 
+        step7 = None
+        step7_handoff: dict[str, object] = {
+            "status": "unavailable",
+            "reason": "step7_request_not_supplied",
+            "pr_eligible": False,
+        }
+        step7_request_path = bundle / "step7.request.json"
+        if step7_request_path.exists():
+            if step6 is None:
+                step7_handoff = {
+                    "status": "blocked",
+                    "reason": "step6_report_not_supplied",
+                    "pr_eligible": False,
+                }
+            else:
+                strict_errors = validate_step6_report(
+                    step6,
+                    strict_target_evidence=True,
+                    require_approvals=True,
+                    require_step7_eligibility=True,
+                )
+                if strict_errors:
+                    step7_handoff = {
+                        "status": "blocked",
+                        "reason": "step6_strict_evidence_unavailable",
+                        "details": strict_errors,
+                        "pr_eligible": False,
+                    }
+                elif args.target_checkout is None:
+                    step7_handoff = {
+                        "status": "unavailable",
+                        "reason": "target_checkout_not_supplied",
+                        "pr_eligible": False,
+                    }
+                else:
+                    step7_request = load_json(step7_request_path, "Step 7 request")
+                    step7 = validate_step7(step6, step7_request, args.target_checkout)
+                    step7_errors = validate_step7_report(step7)
+                    if step7_errors:
+                        raise ValueError(
+                            "generated invalid Step 7 report: "
+                            + "; ".join(step7_errors)
+                        )
+                    step7_handoff = {
+                        "status": step7["status"],
+                        "reason": "step7_replayed",
+                        "pr_eligible": step7["pr_eligible"],
+                    }
+
         mismatches: list[str] = []
         reports_to_compare = [
             ("step2.report.json", step2),
@@ -248,18 +312,18 @@ def main(argv: list[str] | None = None) -> int:
             ("step4.report.json", step4),
             ("step5.report.json", step5),
         ]
-        if contract_name == "step1.5.contract.json":
-            reports_to_compare[0:0] = [
-                ("step1.5.trace.json", load_json(bundle / "step1.5.trace.json", "Step 1.5 trace")),
-                ("step1.5.contract.json", load_json(bundle / "step1.5.contract.json", "Step 1.5 contract")),
-            ]
+        for name, artifact in reversed(retained_artifacts):
+            reports_to_compare.insert(0, (name, artifact))
         if step6 is not None:
             reports_to_compare.append(("step6.report.json", step6))
+        if step7 is not None:
+            reports_to_compare.append(("step7.report.json", step7))
         for name, report in reports_to_compare:
             _compare(bundle, name, report, mismatches)
         if args.output_dir:
             for name, report in reports_to_compare:
                 _write_json(args.output_dir / name, report)
+            _write_json(args.output_dir / "step7.handoff.json", step7_handoff)
         reports = {
             "step1.json": step1,
             "step2.report.json": step2,
@@ -267,11 +331,20 @@ def main(argv: list[str] | None = None) -> int:
             "step4.report.json": step4,
             "step5.report.json": step5,
         }
-        if contract_name == "step1.5.contract.json":
-            reports["step1.5.trace.json"] = load_json(bundle / "step1.5.trace.json", "Step 1.5 trace")
-            reports["step1.5.contract.json"] = load_json(bundle / "step1.5.contract.json", "Step 1.5 contract")
+        reports.update({name: artifact for name, artifact in retained_artifacts})
         if step6 is not None:
             reports["step6.report.json"] = step6
+        if step7 is not None:
+            reports["step7.report.json"] = step7
+        categories = validation_summary(
+            artifact_integrity="passed" if not mismatches else "failed",
+            provenance_revision_consistency="passed" if not mismatches else "failed",
+            step3=step3,
+            step4=step4,
+            step7=step7,
+            runtime_status=step7_handoff["status"] if step7 is None else None,
+            runtime_reason=str(step7_handoff.get("reason")),
+        )
         manifest = {
             "schema_version": "0.1",
             "bundle": str(bundle),
@@ -290,6 +363,8 @@ def main(argv: list[str] | None = None) -> int:
             ],
             "source": step1.get("input", {}),
             "target": step6.get("target", {}) if step6 is not None else None,
+            "step7": step7_handoff,
+            "validation": categories,
             "mismatches": mismatches,
         }
         if args.manifest_output:
@@ -308,7 +383,9 @@ def main(argv: list[str] | None = None) -> int:
             "validation": {
                 "step4": validate_step4_report(step4),
                 "step5": validate_step5_report(step5),
+                "categories": categories,
             },
+            "step7": step7_handoff,
             "mismatches": mismatches,
             "manifest": str(args.manifest_output) if args.manifest_output else None,
         }

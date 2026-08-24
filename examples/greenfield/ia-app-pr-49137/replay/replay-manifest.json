@@ -21,30 +21,35 @@
     {
       "name": "step2.report.json",
       "rule_set_version": "0.1",
-      "sha256": "1404e78951e12ec5328f195201d4c192765827715eb5a977f0e7a3cf4946039b",
+      "sha256": "8599ba2f876addfefd8fe0e2ea3ad64c0d84a54e9d371b1c11d43fe225663959",
       "status": "partial"
     },
     {
       "name": "step3.report.json",
       "rule_set_version": "0.1",
-      "sha256": "a6030c2ab2ebcc574c391cbc20f55a1ebb2412f4b20b2a268d44fb6c59379aea",
+      "sha256": "22a07cf61c6ec988da1232594563964fcc378a6c946122190422e233aa203f4d",
       "status": "partial"
     },
     {
       "name": "step4.report.json",
       "rule_set_version": "0.1",
-      "sha256": "6bf0cd19b9dbb849684dc80ac3c37c9d2adf7c1167615a22676c39ff60adf3d1",
+      "sha256": "975ae9a133f9529dd1ae5a4b75cc8515888ea24e344248c610f84df61a380f42",
       "status": "partial"
     },
     {
       "name": "step5.report.json",
       "rule_set_version": "0.1",
-      "sha256": "c22b5a361861741952343f4f2478f973a887d9b930a6b00d8519472da1969065",
+      "sha256": "c7cf27bc0bcb5974c2314be0ff9fd8fd5702ae997cb29240909eff27bbeb333b",
       "status": "partial"
     }
   ],
   "bundle": "examples/greenfield/ia-app-pr-49137/replay",
-  "mismatches": [],
+  "mismatches": [
+    "artifact mismatch: step2.report.json; fields: candidates[0].source_anchors[0].interfaces[1], candidates[0].source_anchors[1].interfaces[1], candidates[1].changed_paths[0], candidates[1].changed_paths[1], candidates[1].classification, candidates[1].declared_relationship_type, candidates[1].evidence[0].commit_sha, candidates[1].evidence[0].evidence_id, candidates[1].evidence[0].kind, candidates[1].evidence[0].path, candidates[1].evidence[0].repository, candidates[1].evidence[0].revision, candidates[1].evidence[0].sha256, candidates[1].evidence[0].source_revision, candidates[1].owner, candidates[1].owner_repository, candidates[1].reason, candidates[1].relationship_type, candidates[1].source_anchors[0].interfaces[1], candidates[1].source_anchors[1].interfaces[1]",
+    "artifact mismatch: step3.report.json; fields: direct_components.items[0].evidence[0].step2_report_sha256, direct_components.items[1].evidence[0].step2_report_sha256, impact.items[1].classification, impact.items[1].evidence[0].artifact_status, impact.items[1].evidence[0].ci_linkage_status, impact.items[1].evidence[0].inspected_revision, impact.items[1].evidence[0].kind, impact.items[1].evidence[0].path, impact.items[1].evidence[0].repository, impact.items[1].evidence[0].response_sha256, impact.items[1].evidence[0].revision, impact.items[1].evidence[0].sha256, impact.items[1].evidence[0].source_revision, impact.items[1].interface_id, impact.items[1].observation, impact.items[1].reason, impact.items[1].relationship_type, impact.items[1].scope, impact.items[1].target_repository, impact.items[2].evidence[0].artifact_status",
+    "artifact mismatch: step4.report.json; fields: coverage.items[1], provenance.evidence_digests[2], provenance.evidence_digests[3], provenance.evidence_digests[4], provenance.evidence_digests[5], provenance.step3_report_sha256",
+    "artifact mismatch: step5.report.json; fields: actions[0].action_id, actions[0].evidence[0].sha256, actions[0].evidence[1].sha256, actions[2], provenance.step3_report_sha256, provenance.step4_report_sha256"
+  ],
   "schema_version": "0.1",
   "source": {
     "base_revision": "e45cec95f00f565f999d6f907fbc73d48e9c6836",
@@ -60,5 +65,33 @@
     "repository": "intacct/ia-app",
     "target_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
   },
-  "target": null
+  "step7": {
+    "pr_eligible": false,
+    "reason": "step7_request_not_supplied",
+    "status": "unavailable"
+  },
+  "target": null,
+  "validation": {
+    "artifact_integrity": {
+      "status": "failed"
+    },
+    "coverage_completeness": {
+      "status": "partial"
+    },
+    "impact_completeness": {
+      "status": "partial"
+    },
+    "pr_eligibility": {
+      "pr_eligible": false,
+      "reason": "step7_not_validated",
+      "status": "not_eligible"
+    },
+    "provenance_revision_consistency": {
+      "status": "failed"
+    },
+    "runtime_validation": {
+      "reason": "step7_request_not_supplied",
+      "status": "unavailable"
+    }
+  }
 }

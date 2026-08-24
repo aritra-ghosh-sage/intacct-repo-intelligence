@@ -34,6 +34,12 @@
               "interface_id": "behavior:56d1ddedbff5f0e83a5d8650",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+            },
+            {
+              "evidence": [],
+              "interface_id": "behavior:gl-allocation-recalculation",
+              "mapping_kind": "explicit_source_contract",
+              "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
             }
           ],
           "source_lines": {},
@@ -48,6 +54,86 @@
             {
               "evidence": [],
               "interface_id": "behavior:56d1ddedbff5f0e83a5d8650",
+              "mapping_kind": "explicit_source_contract",
+              "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+            },
+            {
+              "evidence": [],
+              "interface_id": "behavior:gl-allocation-recalculation",
+              "mapping_kind": "explicit_source_contract",
+              "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+            }
+          ],
+          "source_lines": {},
+          "source_path": "app/source/gl/GLBatchManager.cls",
+          "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
+          "source_symbol": "AllocationTxnHelper::applyAllocation"
+        }
+      ],
+      "source_symbols": [
+        "AllocationTxnHelper::applyAllocation",
+        "GLBatchManager::glTranslateApplyAllocation"
+      ],
+      "target_repository": "ia-app"
+    },
+    {
+      "changed_paths": [
+        "app/source/company/AllocationTxnHelper.cls",
+        "app/source/gl/GLBatchManager.cls"
+      ],
+      "classification": "confirmed",
+      "declared_relationship_type": "behavior_contract",
+      "evidence": [
+        {
+          "kind": "contract",
+          "path": "examples/greenfield/ia-app-pr-49137/replay/step2.contract.yaml",
+          "repository": "ia-main",
+          "revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
+          "sha256": "3b451505d93f1617f492b9b570216c4b1ee5ebf820eebc372b23641344b027f9"
+        }
+      ],
+      "interface_id": "behavior:gl-allocation-recalculation",
+      "likely_tests": [],
+      "owner": "gl-platform",
+      "owner_repository": "ia-main",
+      "reason": "exact_active_contract",
+      "relationship_type": "explicit_contract",
+      "source_anchors": [
+        {
+          "entity": null,
+          "evidence": [],
+          "interfaces": [
+            {
+              "evidence": [],
+              "interface_id": "behavior:56d1ddedbff5f0e83a5d8650",
+              "mapping_kind": "explicit_source_contract",
+              "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+            },
+            {
+              "evidence": [],
+              "interface_id": "behavior:gl-allocation-recalculation",
+              "mapping_kind": "explicit_source_contract",
+              "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+            }
+          ],
+          "source_lines": {},
+          "source_path": "app/source/company/AllocationTxnHelper.cls",
+          "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
+          "source_symbol": "AllocationTxnHelper::applyAllocation"
+        },
+        {
+          "entity": null,
+          "evidence": [],
+          "interfaces": [
+            {
+              "evidence": [],
+              "interface_id": "behavior:56d1ddedbff5f0e83a5d8650",
+              "mapping_kind": "explicit_source_contract",
+              "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+            },
+            {
+              "evidence": [],
+              "interface_id": "behavior:gl-allocation-recalculation",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
             }
@@ -80,7 +166,7 @@
       ],
       "interface_id": "behavior:gl-allocation-recalculation",
       "likely_tests": [],
-      "reason": "ci_observed_exact_source_revision",
+      "reason": "ci_supports_confirmed_contract",
       "relationship_type": "ci_observed",
       "source_anchors": [
         {
@@ -90,6 +176,12 @@
             {
               "evidence": [],
               "interface_id": "behavior:56d1ddedbff5f0e83a5d8650",
+              "mapping_kind": "explicit_source_contract",
+              "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+            },
+            {
+              "evidence": [],
+              "interface_id": "behavior:gl-allocation-recalculation",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
             }
@@ -106,6 +198,12 @@
             {
               "evidence": [],
               "interface_id": "behavior:56d1ddedbff5f0e83a5d8650",
+              "mapping_kind": "explicit_source_contract",
+              "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+            },
+            {
+              "evidence": [],
+              "interface_id": "behavior:gl-allocation-recalculation",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
             }
@@ -161,6 +259,12 @@
               "interface_id": "behavior:56d1ddedbff5f0e83a5d8650",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+            },
+            {
+              "evidence": [],
+              "interface_id": "behavior:gl-allocation-recalculation",
+              "mapping_kind": "explicit_source_contract",
+              "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
             }
           ],
           "source_lines": {},
@@ -175,6 +279,12 @@
             {
               "evidence": [],
               "interface_id": "behavior:56d1ddedbff5f0e83a5d8650",
+              "mapping_kind": "explicit_source_contract",
+              "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+            },
+            {
+              "evidence": [],
+              "interface_id": "behavior:gl-allocation-recalculation",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
             }
@@ -213,7 +323,7 @@
       ],
       "interface_id": "behavior:gl-allocation-recalculation",
       "likely_tests": [],
-      "reason": "ci_observed_exact_source_revision",
+      "reason": "ci_supports_confirmed_contract",
       "relationship_type": "ci_observed",
       "source_anchors": [
         {
@@ -223,6 +333,12 @@
             {
               "evidence": [],
               "interface_id": "behavior:56d1ddedbff5f0e83a5d8650",
+              "mapping_kind": "explicit_source_contract",
+              "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+            },
+            {
+              "evidence": [],
+              "interface_id": "behavior:gl-allocation-recalculation",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
             }
@@ -239,6 +355,12 @@
             {
               "evidence": [],
               "interface_id": "behavior:56d1ddedbff5f0e83a5d8650",
+              "mapping_kind": "explicit_source_contract",
+              "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+            },
+            {
+              "evidence": [],
+              "interface_id": "behavior:gl-allocation-recalculation",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
             }
@@ -290,6 +412,12 @@
               "interface_id": "behavior:56d1ddedbff5f0e83a5d8650",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+            },
+            {
+              "evidence": [],
+              "interface_id": "behavior:gl-allocation-recalculation",
+              "mapping_kind": "explicit_source_contract",
+              "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
             }
           ],
           "source_lines": {},
@@ -304,6 +432,12 @@
             {
               "evidence": [],
               "interface_id": "behavior:56d1ddedbff5f0e83a5d8650",
+              "mapping_kind": "explicit_source_contract",
+              "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
+            },
+            {
+              "evidence": [],
+              "interface_id": "behavior:gl-allocation-recalculation",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
             }

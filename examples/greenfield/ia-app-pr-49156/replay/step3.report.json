@@ -7,7 +7,7 @@
         "evidence": [
           {
             "kind": "step2_input",
-            "step2_report_sha256": "bb57f8d87508a76adfcd215ccd8eacf674b6d20ca10cb27a1887a9a0f38731b6"
+            "step2_report_sha256": "ae84fbeb8ad068a79c9a0019f6becf011f5a88ec8293158c791208f59102c969"
           }
         ],
         "identity": "app/source/purchasing/POProcessTransactions.phtml",
@@ -28,6 +28,23 @@
   ],
   "impact": {
     "items": [
+      {
+        "classification": "confirmed",
+        "evidence": [
+          {
+            "kind": "contract",
+            "path": "examples/greenfield/ia-app-pr-49156/replay/step1.5.contract.json",
+            "repository": "ia-main",
+            "revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59",
+            "sha256": "505e94ac8404491f5f4a6a1bf109f2c3c7b43fec7c8da90e9d892158061950e8"
+          }
+        ],
+        "interface_id": "behavior:613d56bdfae2a5208bc624bb",
+        "reason": "exact_active_contract",
+        "relationship_type": "explicit_contract",
+        "scope": "interface",
+        "target_repository": "ia-app"
+      },
       {
         "classification": "confirmed",
         "evidence": [
@@ -84,6 +101,22 @@
         "classification": "confirmed",
         "evidence": [
           {
+            "kind": "contract",
+            "path": "examples/greenfield/ia-app-pr-49156/replay/step1.5.contract.json",
+            "repository": "ia-main",
+            "revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59",
+            "sha256": "505e94ac8404491f5f4a6a1bf109f2c3c7b43fec7c8da90e9d892158061950e8"
+          }
+        ],
+        "interface_id": "behavior:613d56bdfae2a5208bc624bb",
+        "reason": "exact_active_contract",
+        "relationship_type": "explicit_contract",
+        "target_repository": "ia-app"
+      },
+      {
+        "classification": "confirmed",
+        "evidence": [
+          {
             "commit_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             "evidence_id": "ia-restapi-automation-tests:run-123",
             "kind": "ci",
@@ -110,6 +143,23 @@
   },
   "owners": {
     "items": [
+      {
+        "evidence": [
+          {
+            "kind": "contract",
+            "path": "examples/greenfield/ia-app-pr-49156/replay/step1.5.contract.json",
+            "repository": "ia-main",
+            "revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59",
+            "sha256": "505e94ac8404491f5f4a6a1bf109f2c3c7b43fec7c8da90e9d892158061950e8"
+          }
+        ],
+        "interface_id": "behavior:613d56bdfae2a5208bc624bb",
+        "owner": null,
+        "owner_repository": "ia-main",
+        "reason": null,
+        "status": "available",
+        "target_repository": "ia-app"
+      },
       {
         "evidence": [
           {
@@ -145,6 +195,20 @@
         "classification": "confirmed",
         "evidence": [
           {
+            "kind": "contract",
+            "path": "examples/greenfield/ia-app-pr-49156/replay/step1.5.contract.json",
+            "repository": "ia-main",
+            "revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59",
+            "sha256": "505e94ac8404491f5f4a6a1bf109f2c3c7b43fec7c8da90e9d892158061950e8"
+          }
+        ],
+        "observations": [],
+        "repository": "ia-app"
+      },
+      {
+        "classification": "confirmed",
+        "evidence": [
+          {
             "commit_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             "evidence_id": "ia-restapi-automation-tests:run-123",
             "kind": "ci",
@@ -174,7 +238,7 @@
     "related_pr_artifact_sha256": null,
     "rule_set_version": "0.1",
     "semantic_index_sha256": null,
-    "step2_report_sha256": "bb57f8d87508a76adfcd215ccd8eacf674b6d20ca10cb27a1887a9a0f38731b6"
+    "step2_report_sha256": "ae84fbeb8ad068a79c9a0019f6becf011f5a88ec8293158c791208f59102c969"
   },
   "related_pull_requests": {
     "items": [],
@@ -185,6 +249,21 @@
   "status": "partial",
   "test_suites": {
     "items": [
+      {
+        "evidence": [
+          {
+            "kind": "contract",
+            "path": "examples/greenfield/ia-app-pr-49156/replay/step1.5.contract.json",
+            "repository": "ia-main",
+            "revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59",
+            "sha256": "505e94ac8404491f5f4a6a1bf109f2c3c7b43fec7c8da90e9d892158061950e8"
+          }
+        ],
+        "interface_id": "behavior:613d56bdfae2a5208bc624bb",
+        "reason": "no_normalized_test_evidence",
+        "status": "unavailable",
+        "target_repository": "ia-app"
+      },
       {
         "evidence": [
           {

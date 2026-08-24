@@ -1,0 +1,145 @@
+{
+  "affected_symbols": [
+    {
+      "line": 1376,
+      "path": "app/source/purchasing/POProcessTransactions.phtml",
+      "role": "entry",
+      "symbol": "GetFilterParams"
+    }
+  ],
+  "analysis_kind": "greenfield_pr_impact_step_1_5",
+  "behaviors": [
+    {
+      "description": "Purchase-transaction filter initialization now derives ismcpenabled from the PO module's multicurrency preference through IsMCPEnabled('po') instead of accepting the request field.",
+      "edges": [
+        {
+          "relationship_type": "CALLS",
+          "resolution": "exact",
+          "source_line": 1382,
+          "source_path": "app/source/purchasing/POProcessTransactions.phtml",
+          "source_revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59",
+          "source_symbol": "GetFilterParams",
+          "target_line": 18,
+          "target_path": "app/source/common/perm_util.inc",
+          "target_symbol": "IsMCPEnabled"
+        }
+      ],
+      "entry_symbols": [
+        "GetFilterParams"
+      ],
+      "kind": "purchase_transaction_multicurrency_filter_initialization",
+      "source_paths": [
+        "app/source/purchasing/POProcessTransactions.phtml"
+      ],
+      "surfaces": {
+        "actionui": "not_run",
+        "cross_module_callers": "unresolved",
+        "csv_import": "not_run",
+        "database_schema": "not_run",
+        "legacy_phtml_ui": "available",
+        "nextgen_ui": "not_run",
+        "permissions_workflows": "not_run",
+        "runtime_request_coverage": "unavailable",
+        "tests": "not_run",
+        "xml_api": "not_run"
+      },
+      "symbol_paths": {
+        "GetFilterParams": "app/source/purchasing/POProcessTransactions.phtml",
+        "IsMCPEnabled": "app/source/common/perm_util.inc"
+      }
+    }
+  ],
+  "calls": [
+    {
+      "relationship_type": "CALLS",
+      "resolution": "exact",
+      "source_line": 1382,
+      "source_path": "app/source/purchasing/POProcessTransactions.phtml",
+      "source_revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59",
+      "source_symbol": "GetFilterParams",
+      "target_line": 18,
+      "target_path": "app/source/common/perm_util.inc",
+      "target_symbol": "IsMCPEnabled"
+    }
+  ],
+  "changed_paths": [
+    "app/source/purchasing/POProcessTransactions.phtml"
+  ],
+  "findings": [
+    {
+      "code": "exact_changed_call",
+      "detail": "GetFilterParams directly calls IsMCPEnabled with the literal module key 'po'.",
+      "evidence": {
+        "revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59",
+        "source_line": 1382,
+        "source_path": "app/source/purchasing/POProcessTransactions.phtml",
+        "target_line": 18,
+        "target_path": "app/source/common/perm_util.inc"
+      },
+      "status": "available"
+    },
+    {
+      "code": "incoming_callers_unresolved",
+      "detail": "Incoming callers beyond the changed PHTML execution context were not exhaustively examined.",
+      "next_check": "Resolve all target-revision callers of GetFilterParams and determine which request flows consume the resulting ismcpenabled filter.",
+      "status": "unresolved"
+    },
+    {
+      "code": "runtime_evidence_unavailable",
+      "detail": "No runtime execution or request fixture evidence was supplied, so behavior under forged, absent, or conflicting _mcpEnabled request values is not observed.",
+      "next_check": "Run a bounded purchase-transaction filter test with PO multicurrency enabled and disabled while varying the request _mcpEnabled value.",
+      "status": "unavailable"
+    },
+    {
+      "code": "test_coverage_not_run",
+      "detail": "No test surface was inspected or executed.",
+      "next_check": "Search target-revision tests for POProcessTransactions, GetFilterParams, and ismcpenabled, then verify coverage of the preference-derived value.",
+      "status": "not_run"
+    },
+    {
+      "code": "cross_repository_evidence_unavailable",
+      "detail": "Cross-repository consumers cannot be established from the supplied single-repository source evidence.",
+      "next_check": "Use separately revision-pinned evidence for any candidate consumer repository before asserting downstream impact.",
+      "status": "unavailable"
+    }
+  ],
+  "input": {
+    "base_sha": "e33954d66e7823303fa24087950d3306c547e0b7",
+    "changed_paths": [
+      "app/source/purchasing/POProcessTransactions.phtml"
+    ],
+    "head_sha": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59",
+    "pr_number": 49156,
+    "repo_key": "ia-main",
+    "repository": "intacct/ia-app"
+  },
+  "provenance": {
+    "agent": {
+      "model": "configured",
+      "name": "codex",
+      "timeout_seconds": 300
+    },
+    "catalog_mutation": "none",
+    "context_sha256": "29c4ec2745cfb775ad9b8fbd3a35812c45d0f027db21cfc086973978eb237287",
+    "github_writes": "none",
+    "read_only": true,
+    "source_revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59",
+    "step1_evidence_sha256": "ceff0f92fb6a19c9f397073658b24987b6ee14b335734b3935863ee02665081c",
+    "trace_sha256": "82bcef912f8ab72d7d9e92cbab96a1ae343a39b599d470c20551ef41487c1280"
+  },
+  "repository": "intacct/ia-app",
+  "revision": "f914d9892a51c1d34eadfd0e4da89f8418ed2c59",
+  "schema_version": "0.1",
+  "surfaces": {
+    "actionui": "not_run",
+    "cross_module_callers": "unresolved",
+    "csv_import": "not_run",
+    "database_schema": "not_run",
+    "legacy_phtml_ui": "available",
+    "nextgen_ui": "not_run",
+    "permissions_workflows": "not_run",
+    "runtime_request_coverage": "unavailable",
+    "tests": "not_run",
+    "xml_api": "not_run"
+  }
+}

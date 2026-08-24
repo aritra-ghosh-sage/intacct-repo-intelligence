@@ -1,17 +1,17 @@
 {
   "actions": [
     {
-      "action_id": "dd8a871e5de6b6b87c2f3e0aaccf4ba72a0a1ce602a450517bda6f9188d975ff",
+      "action_id": "29a38e282791a41c742df2eda9b606558e3d8586d11a8e1afbef3c14ccf0d26e",
       "action_type": "block_propagation",
       "completion_condition": "The target repository and an exact base revision are available for inspection.",
       "evidence": [
         {
           "kind": "step3_report",
-          "sha256": "a6030c2ab2ebcc574c391cbc20f55a1ebb2412f4b20b2a268d44fb6c59379aea"
+          "sha256": "22a07cf61c6ec988da1232594563964fcc378a6c946122190422e233aa203f4d"
         },
         {
           "kind": "step4_report",
-          "sha256": "6bf0cd19b9dbb849684dc80ac3c37c9d2adf7c1167615a22676c39ff60adf3d1"
+          "sha256": "975ae9a133f9529dd1ae5a4b75cc8515888ea24e344248c610f84df61a380f42"
         }
       ],
       "owner": {
@@ -54,6 +54,33 @@
       "status": "recommended",
       "target_repository": "ia-app",
       "target_revision": null
+    },
+    {
+      "action_id": "a177cf7865e4c4f937ab1bb6c0260fbdedb6f7819fa315ced8545f4c31b7e0f0",
+      "action_type": "request_owner_review",
+      "completion_condition": "The declared owner reviews the impacted interface or records an explicit disposition.",
+      "evidence": [
+        {
+          "kind": "contract",
+          "path": "examples/greenfield/ia-app-pr-49137/replay/step2.contract.yaml",
+          "repository": "ia-main",
+          "revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
+          "sha256": "3b451505d93f1617f492b9b570216c4b1ee5ebf820eebc372b23641344b027f9"
+        }
+      ],
+      "owner": {
+        "identity": "gl-platform",
+        "status": "available"
+      },
+      "reason": "impacted_interface_owner_available",
+      "rule_set_version": "0.1",
+      "scope": {
+        "interface_id": "behavior:gl-allocation-recalculation",
+        "target_revision": null
+      },
+      "status": "recommended",
+      "target_repository": "ia-app",
+      "target_revision": null
     }
   ],
   "analysis_kind": "greenfield_pr_impact_step_5",
@@ -87,8 +114,8 @@
     "github_writes": "none",
     "read_only": true,
     "rule_set_version": "0.1",
-    "step3_report_sha256": "a6030c2ab2ebcc574c391cbc20f55a1ebb2412f4b20b2a268d44fb6c59379aea",
-    "step4_report_sha256": "6bf0cd19b9dbb849684dc80ac3c37c9d2adf7c1167615a22676c39ff60adf3d1"
+    "step3_report_sha256": "22a07cf61c6ec988da1232594563964fcc378a6c946122190422e233aa203f4d",
+    "step4_report_sha256": "975ae9a133f9529dd1ae5a4b75cc8515888ea24e344248c610f84df61a380f42"
   },
   "schema_version": "0.1",
   "status": "partial",
