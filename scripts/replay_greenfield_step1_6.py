@@ -78,27 +78,6 @@ def _evidence_path(bundle_dir: Path, name: str) -> Path:
         return bundle_dir / name
 
 
-def _generated_contract_path(step1: dict[str, object]) -> Path:
-    revision = step1.get("input", {}).get("target_revision")
-    if not isinstance(revision, str):
-        raise TypeError(
-            "Step 1 target revision is required for generated contract lookup"
-        )
-    repository = step1.get("input", {}).get("repository")
-    if not isinstance(repository, str) or not repository:
-        raise TypeError("Step 1 repository is required for generated contract lookup")
-    repo_name = repository.rsplit("/", 1)[-1]
-    return (
-        Path(__file__).resolve().parents[1]
-        / "artifacts"
-        / "greenfield"
-        / "behavior-contracts"
-        / repo_name
-        / revision
-        / "contract.json"
-    )
-
-
 def _load_contract_for_replay(
     bundle: Path, step1: dict[str, object]
 ) -> tuple[dict[str, object], str]:
@@ -117,9 +96,6 @@ def _load_contract_for_replay(
             raise ValueError("retained Step 1.5 contract is not linked to Step 1 evidence")
         contract = load_contract(contract_path)
         return contract, "step1.5.contract.json"
-    canonical = _generated_contract_path(step1)
-    if canonical.exists():
-        return load_contract(canonical), "step1.5.contract.json"
     if (bundle / "generated_behavior_contract.json").exists():
         raise ValueError("legacy generated_behavior_contract.json is not a standardized Step 1.5 artifact")
     return load_contract(_evidence_path(bundle, "step2.contract.yaml")), "step2.contract.yaml"

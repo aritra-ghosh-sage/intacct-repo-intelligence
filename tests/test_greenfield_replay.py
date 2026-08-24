@@ -128,6 +128,14 @@ def test_stale_retained_step1_5_contract_fails_closed(tmp_path: Path, capsys) ->
     assert "contract" in capsys.readouterr().err
 
 
+def test_legacy_replay_does_not_use_ambient_generated_contract(tmp_path: Path) -> None:
+    bundle = tmp_path / "bundle"
+    shutil.copytree(BUNDLE, bundle)
+    step1 = json.loads((bundle / "step1.json").read_text(encoding="utf-8"))
+    _contract, name = replay_greenfield_step1_6._load_contract_for_replay(bundle, step1)
+    assert name == "step2.contract.yaml"
+
+
 def test_retained_step1_5_artifacts_are_byte_stable() -> None:
     for name in ("step1.5.trace.json", "step1.5.contract.json"):
         first = (PR_49137_BUNDLE / name).read_bytes()
