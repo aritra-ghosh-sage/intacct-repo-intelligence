@@ -153,7 +153,7 @@ def _ci_tests(
     if status != "available":
         gaps.add(f"ci:unknown_status:{target_repository}")
         return []
-    if source_pr_number == 49137:
+    if source_pr_number is not None:
         binding = ci_execution_binding_status(
             evidence, source_revision=source_revision, source_pr_number=source_pr_number
         )
