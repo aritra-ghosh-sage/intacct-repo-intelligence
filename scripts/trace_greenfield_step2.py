@@ -96,6 +96,14 @@ def _manifest_candidates(
     return sorted(result)
 
 
+def _supplied_inventory_repositories(inventory: list[dict[str, Any]]) -> set[str]:
+    return {
+        str(item.get("repository"))
+        for item in inventory
+        if isinstance(item, dict) and isinstance(item.get("repository"), str)
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--step1-report", required=True)
@@ -116,6 +124,11 @@ def main(argv: list[str] | None = None) -> int:
         "--strict-ci-evidence",
         action="store_true",
         help="Require the normalized CI execution envelope for supplied CI evidence.",
+    )
+    parser.add_argument(
+        "--evidence-score",
+        action="store_true",
+        help="Attach the versioned explainable evidence-strength score to candidates.",
     )
     args = parser.parse_args(argv)
     try:
@@ -152,7 +165,10 @@ def main(argv: list[str] | None = None) -> int:
             requested_repositories = _manifest_candidates(
                 args.manifest, canonical_repository, source_repository
             )
+        supplied_inventory_repositories = _supplied_inventory_repositories(inventory)
         for repository in sorted(set(requested_repositories)):
+            if repository in supplied_inventory_repositories:
+                continue
             try:
                 inventory.append(
                     normalize_repository_inventory(
@@ -170,7 +186,12 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 )
         report = resolve_candidates(
-            step1, contracts, ci_evidence, inventory, semantic_indexes
+            step1,
+            contracts,
+            ci_evidence,
+            inventory,
+            semantic_indexes,
+            include_evidence_scores=args.evidence_score,
         )
         report_errors = validate_step2(report)
         if report_errors:

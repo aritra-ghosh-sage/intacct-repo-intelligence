@@ -149,12 +149,43 @@ def _candidate_key(candidate: Mapping[str, Any]) -> tuple[str, str, str, str]:
     )
 
 
+def _evidence_score(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    """Return an explainable evidence-strength score, not a probability."""
+
+    score = 0
+    components: dict[str, int] = {}
+    evidence_kinds = {
+        str(item.get("kind"))
+        for item in candidate.get("evidence", [])
+        if isinstance(item, Mapping)
+    }
+    if "contract" in evidence_kinds:
+        components["exact_contract"] = 60
+    if candidate.get("declared_relationship_type") == "behavior_contract":
+        components["behavior_contract"] = 20
+    if "ci" in evidence_kinds:
+        components["source_revision_ci"] = 25
+    if "semantic_index" in evidence_kinds:
+        components["semantic_source_evidence"] = 15
+    if "repository_inventory" in evidence_kinds:
+        components["repository_inventory"] = 5
+    score = min(100, sum(components.values()))
+    return {
+        "score": score,
+        "rule_set_version": "0.1",
+        "components": components,
+        "meaning": "evidence_strength_not_probability",
+    }
+
+
 def resolve_candidates(
     step1: Mapping[str, Any],
     contracts: Iterable[Mapping[str, Any]] = (),
     ci_evidence: Iterable[Mapping[str, Any]] = (),
     inventory_evidence: Iterable[Mapping[str, Any]] = (),
     semantic_indexes: Iterable[Mapping[str, Any]] = (),
+    *,
+    include_evidence_scores: bool = False,
 ) -> dict[str, Any]:
     contracts = list(contracts)
     ci_evidence = list(ci_evidence)
@@ -551,6 +582,8 @@ def resolve_candidates(
             source_anchors,
             active_relations,
         )
+        if include_evidence_scores:
+            candidate["evidence_score"] = _evidence_score(candidate)
 
     rows = sorted(
         candidates.values(),

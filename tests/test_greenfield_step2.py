@@ -12,7 +12,7 @@ from greenfield.github_repository_evidence import (
     collect_target_evidence,
 )
 from greenfield.semantic_index import build_semantic_index_from_files
-from greenfield.step2_candidates import resolve_candidates
+from greenfield.step2_candidates import _evidence_score, resolve_candidates
 from greenfield.step2_contract import EvidenceError, load_ci_evidence, load_contract
 from greenfield.step2_likelihood import build_source_anchors, rank_likely_tests
 from scripts.trace_greenfield_step2 import _unavailable_inventory
@@ -36,6 +36,38 @@ def step1() -> dict:
             {"path": "app/source/company/CompanyConfig.cls", "status": "modified"}
         ],
     }
+
+
+def test_evidence_score_is_explainable_and_not_probability() -> None:
+    score = _evidence_score(
+        {
+            "declared_relationship_type": "behavior_contract",
+            "evidence": [{"kind": "contract"}, {"kind": "ci"}],
+        }
+    )
+    assert score == {
+        "score": 100,
+        "rule_set_version": "0.1",
+        "components": {
+            "behavior_contract": 20,
+            "exact_contract": 60,
+            "source_revision_ci": 25,
+        },
+        "meaning": "evidence_strength_not_probability",
+    }
+
+
+def test_validator_rejects_tampered_evidence_score(tmp_path: Path) -> None:
+    contract_path = tmp_path / "contract.yaml"
+    write_contract(contract_path)
+    report = resolve_candidates(
+        step1(),
+        [load_contract(contract_path)],
+        include_evidence_scores=True,
+    )
+    assert validate(report) == []
+    report["candidates"][0]["evidence_score"]["score"] = 0
+    assert any("evidence_score" in error for error in validate(report))
 
 
 def write_contract(path: Path, revision: str = TARGET) -> None:

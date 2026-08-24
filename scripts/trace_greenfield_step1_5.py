@@ -1,0 +1,61 @@
+"""Generate and validate a Codex-agent Greenfield Step 1.5 trace."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from greenfield.artifact_io import read_json_object, write_json_atomic
+from greenfield.behavior_contract import BehaviorContractError
+from greenfield.codex_agent import CodexAgentError, generate_contract, run_codex_trace
+from greenfield.step1_5_trace import TraceError, validate_trace
+from scripts.validate_greenfield_step1 import validate as validate_step1
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--step1-report", required=True, type=Path)
+    parser.add_argument("--source-root", required=True, type=Path)
+    parser.add_argument("--trace-output", required=True, type=Path)
+    parser.add_argument("--contract-output", required=True, type=Path)
+    parser.add_argument("--codex-binary", default="codex")
+    parser.add_argument("--model")
+    parser.add_argument("--timeout", type=int, default=300)
+    parser.add_argument("--max-file-bytes", type=int, default=0)
+    args = parser.parse_args(argv)
+    try:
+        step1 = read_json_object(args.step1_report)
+        errors = validate_step1(step1)
+        if errors:
+            raise TraceError("invalid Step 1 report: " + "; ".join(errors))
+        trace, context = run_codex_trace(
+            step1,
+            args.source_root,
+            codex_binary=args.codex_binary,
+            model=args.model,
+            timeout=args.timeout,
+            max_file_bytes=args.max_file_bytes,
+        )
+        if validate_trace(step1, trace):
+            raise TraceError("generated trace failed validation")
+        contract = generate_contract(step1, trace, args.trace_output.as_posix())
+        write_json_atomic(args.trace_output, trace)
+        write_json_atomic(args.contract_output, contract)
+        print(json.dumps({
+            "status": "complete",
+            "context_sha256": context["context_sha256"],
+            "trace": str(args.trace_output),
+            "contract": str(args.contract_output),
+        }, sort_keys=True))
+        return 0
+    except (OSError, TypeError, ValueError, json.JSONDecodeError, CodexAgentError, TraceError, BehaviorContractError) as exc:
+        print(f"greenfield Step 1.5 failed: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

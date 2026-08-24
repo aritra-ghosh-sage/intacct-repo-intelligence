@@ -12,7 +12,11 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from greenfield.source_identity import validate_identity_fields
-from greenfield.step2_candidates import ANALYSIS_KIND, REPORT_SCHEMA_VERSION
+from greenfield.step2_candidates import (
+    ANALYSIS_KIND,
+    REPORT_SCHEMA_VERSION,
+    _evidence_score,
+)
 
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 CLASSIFICATIONS = {
@@ -72,6 +76,9 @@ def validate(report: Any) -> list[str]:
         errors.append("candidates must be a list")
         candidates = []
     candidate_keys: list[tuple[str, str, str, str]] = []
+    score_presence = {"evidence_score" in candidate for candidate in candidates if isinstance(candidate, dict)}
+    if score_presence == {True, False}:
+        errors.append("evidence_score must be present on every candidate or none")
     for candidate in candidates:
         if not isinstance(candidate, dict):
             errors.append("candidate must be an object")
@@ -153,6 +160,10 @@ def validate(report: Any) -> list[str]:
             errors.append("semantic index evidence can only classify a candidate")
         _validate_source_anchors(candidate.get("source_anchors"), errors)
         _validate_likely_tests(candidate, errors)
+        if "evidence_score" in candidate:
+            expected_score = _evidence_score(candidate)
+            if candidate.get("evidence_score") != expected_score:
+                errors.append("candidate evidence_score does not match evidence")
         candidate_keys.append(
             (
                 str(candidate.get("target_repository")),
