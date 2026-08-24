@@ -6,7 +6,7 @@
         "classification": "candidate",
         "evidence": [
           {
-            "digest": "6e98cbb005fc419317a328487288c77f414a9442386b66422943be8b615d7aa0",
+            "digest": "e70aed8a3fbf468afd264ea766872b87b39b41f6a554f1939a5236d580d6fdfd",
             "kind": "contract",
             "path": "examples/greenfield/ia-app-pr-49137/replay/generated_behavior_contract.json",
             "revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
@@ -54,14 +54,14 @@
     "evidence_digests": [
       "1111111111111111111111111111111111111111111111111111111111111111",
       "2222222222222222222222222222222222222222222222222222222222222222",
-      "6e98cbb005fc419317a328487288c77f414a9442386b66422943be8b615d7aa0",
       "824181a142e4b640b5e24e08140c01410649d5e933766bf15284d374fdb91cac",
-      "be6d423c2cc17931f54cc23e86f74325814735306ef9ddb2bf3aaa500657496a"
+      "be6d423c2cc17931f54cc23e86f74325814735306ef9ddb2bf3aaa500657496a",
+      "e70aed8a3fbf468afd264ea766872b87b39b41f6a554f1939a5236d580d6fdfd"
     ],
     "github_writes": "none",
     "read_only": true,
     "rule_set_version": "0.1",
-    "step3_report_sha256": "cabf7c78ac72eaa609af8a29bc138bf8a7eb4403751350be70b635024ad0e5eb"
+    "step3_report_sha256": "2a4500f956d3dbea02e2cc69cbf998e55b2320e91dfdca2101e4631cb8772cf2"
   },
   "schema_version": "0.1",
   "status": "partial",

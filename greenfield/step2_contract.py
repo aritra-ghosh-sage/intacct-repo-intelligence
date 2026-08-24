@@ -104,6 +104,11 @@ def artifact_sha256(value: object) -> str:
     return hashlib.sha256(_canonical(value).encode("utf-8")).hexdigest()
 
 
+def _edge_evidence_sha256(edge: Mapping[str, Any]) -> str:
+    fact = {key: value for key, value in edge.items() if key != "evidence_sha256"}
+    return artifact_sha256(fact)
+
+
 def load_contract(path: str | Path) -> dict[str, Any]:
     source = Path(path)
     try:
@@ -118,6 +123,17 @@ def load_contract(path: str | Path) -> dict[str, Any]:
     repository = _text(data.get("repository"), "contract.repository")
     revision = _sha(data.get("revision"), "contract.revision")
     if data.get("artifact_kind") == "generated_behavior_contract":
+        input_data = _object(data.get("input"), "contract.input")
+        for field in ("repository", "repo_key", "base_sha", "head_sha"):
+            _text(input_data.get(field), f"contract.input.{field}")
+        pr_number = input_data.get("pr_number")
+        if isinstance(pr_number, bool) or not isinstance(pr_number, int) or pr_number < 1:
+            raise EvidenceError("contract.input.pr_number must be positive")
+        if input_data["head_sha"] != revision:
+            raise EvidenceError("generated contract input.head_sha does not match revision")
+        input_paths = _paths(input_data.get("changed_paths"), "contract.input.changed_paths")
+        if input_paths != sorted(input_paths):
+            raise EvidenceError("generated contract changed paths must be sorted")
         generation = _object(data.get("generation"), "contract.generation")
         for field in ("generator_version", "rule_set_version", "step1_evidence_sha256", "source_trace_sha256"):
             _text(generation.get(field), f"contract.generation.{field}")
@@ -126,14 +142,25 @@ def load_contract(path: str | Path) -> dict[str, Any]:
         bounds = _object(generation.get("bounds"), "contract.generation.bounds")
         for field in ("max_hops", "max_nodes", "max_edges"):
             value = bounds.get(field)
-            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-                raise EvidenceError(f"contract.generation.bounds.{field} must be positive")
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise EvidenceError(f"contract.generation.bounds.{field} must be non-negative")
         if generation.get("status") not in {"complete", "partial"}:
             raise EvidenceError("contract.generation.status is invalid")
         if not isinstance(generation.get("diagnostics"), list):
             raise EvidenceError("contract.generation.diagnostics must be a list")
         if not isinstance(generation.get("nodes"), list) or not isinstance(generation.get("edges"), list):
             raise EvidenceError("contract.generation nodes and edges must be lists")
+        flow = _object(generation.get("flow"), "contract.generation.flow")
+        if not isinstance(flow.get("edges"), list):
+            raise EvidenceError("contract.generation.flow.edges must be a list")
+        for edge in [*generation["edges"], *flow["edges"]]:
+            if not isinstance(edge, dict) or edge.get("source_revision") != revision:
+                raise EvidenceError("generated contract edge source revision is stale")
+            if edge.get("relationship_type") not in {"CALLS", "STATIC_CALLS"}:
+                raise EvidenceError("generated contract edge relationship type is invalid")
+            edge_hash = _sha256(edge.get("evidence_sha256"), "edge evidence_sha256")
+            if edge_hash != _edge_evidence_sha256(edge):
+                raise EvidenceError("generated contract edge evidence hash does not match fact")
         stored_digest = data.get("evidence", {}).get("sha256") if isinstance(data.get("evidence"), dict) else None
         unsigned = {key: value for key, value in data.items() if key != "evidence"}
         if stored_digest != artifact_sha256(unsigned):

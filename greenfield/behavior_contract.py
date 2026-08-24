@@ -85,7 +85,7 @@ def _stable_behavior_id(repository: str, behavior: Mapping[str, Any]) -> str:
     return f"behavior:{digest}"
 
 
-def _validate_step1(step1: Mapping[str, Any]) -> tuple[str, str, list[str]]:
+def _validate_step1(step1: Mapping[str, Any]) -> tuple[str, str, str, str, list[str]]:
     source = step1.get("input")
     if not isinstance(source, Mapping):
         raise BehaviorContractError("Step 1 input must be an object")
@@ -93,23 +93,35 @@ def _validate_step1(step1: Mapping[str, Any]) -> tuple[str, str, list[str]]:
         canonical_repository, _repo_key = source_identity(source)
     except ValueError as exc:
         raise BehaviorContractError(str(exc)) from exc
+    repo_key = _text(source.get("repo_key") or source.get("source_repo_key"), "Step 1 repo key")
     revision = _sha(
         source.get("target_revision") or source.get("head_sha"),
         "Step 1 target revision",
     )
+    base = _sha(source.get("base_revision") or source.get("base_sha"), "Step 1 base revision")
+    pr_number = source.get("pr_number")
+    if isinstance(pr_number, bool) or not isinstance(pr_number, int) or pr_number < 1:
+        raise BehaviorContractError("Step 1 PR number must be positive")
     paths = source.get("changed_paths")
     if paths is None:
         paths = [row.get("path") for row in step1.get("changed_files", [])]
     paths = _paths(paths, "Step 1 changed paths")
-    return canonical_repository, revision, paths
+    return canonical_repository, repo_key, base, revision, paths
+
+
+def _fact_hash(fact: Mapping[str, Any]) -> str:
+    """Hash only the normalized, source-bound fields of one fact."""
+    return hashlib.sha256(
+        json.dumps(dict(fact), sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
 
 def _validate_trace(
-    trace: Mapping[str, Any], repository: str, revision: str, changed_paths: list[str]
+    trace: Mapping[str, Any], repository: str, repo_key: str, revision: str, changed_paths: list[str]
 ) -> list[dict[str, Any]]:
     if trace.get("schema_version") != SCHEMA_VERSION:
         raise BehaviorContractError("source trace schema_version is invalid")
-    if trace.get("repository") not in {repository, "ia-main", "ia-app"}:
+    if trace.get("repository") not in {repository, repo_key}:
         raise BehaviorContractError("source trace repository does not match Step 1")
     if trace.get("revision") != revision:
         raise BehaviorContractError("source trace revision does not match Step 1")
@@ -139,6 +151,18 @@ def _validate_trace(
         if not isinstance(edges, list):
             raise BehaviorContractError(f"behavior {index}.edges must be a list")
         normalized_edges: list[dict[str, Any]] = []
+        symbol_paths = raw.get("symbol_paths", {})
+        if not isinstance(symbol_paths, Mapping):
+            raise BehaviorContractError(f"behavior {index}.symbol_paths must be an object")
+        normalized_symbol_paths = {
+            _text(symbol, f"behavior {index}.symbol_paths key"): _text(
+                path, f"behavior {index}.symbol_paths value"
+            )
+            for symbol, path in symbol_paths.items()
+        }
+        for path in normalized_symbol_paths.values():
+            if "*" in path or "?" in path:
+                raise BehaviorContractError(f"behavior {index}.symbol_paths must contain exact paths")
         for edge in edges:
             if not isinstance(edge, Mapping):
                 raise BehaviorContractError("source trace edges must be objects")
@@ -147,22 +171,40 @@ def _validate_trace(
                 raise BehaviorContractError(
                     "source trace edge relationship_type is invalid"
                 )
-            normalized_edges.append(
-                {
-                    "source_symbol": _text(
-                        edge.get("source_symbol"), "edge source_symbol"
-                    ),
-                    "target_symbol": _text(
-                        edge.get("target_symbol"), "edge target_symbol"
-                    ),
+            source_symbol = _text(edge.get("source_symbol"), "edge source_symbol")
+            target_symbol = _text(edge.get("target_symbol"), "edge target_symbol")
+            source_path = _text(edge.get("source_path"), "edge source_path")
+            if source_path not in paths:
+                raise BehaviorContractError("edge source_path must belong to behavior source_paths")
+            source_line = edge.get("source_line", 1)
+            if isinstance(source_line, bool) or not isinstance(source_line, int) or source_line < 1:
+                raise BehaviorContractError("edge source_line must be a positive integer")
+            source_revision = _sha(edge.get("source_revision", revision), "edge source_revision")
+            fact = {
+                    "source_symbol": source_symbol,
+                    "target_symbol": target_symbol,
                     "relationship_type": relation,
-                    "source_path": _text(edge.get("source_path"), "edge source_path"),
-                    "source_line": int(edge.get("source_line", 1)),
-                    "resolution": _text(
-                        edge.get("resolution", "exact"), "edge resolution"
+                    "source_path": source_path,
+                    "source_line": source_line,
+                    "source_revision": source_revision,
+                    "target_path": _text(
+                        edge.get("target_path", normalized_symbol_paths.get(target_symbol)),
+                        "edge target_path",
                     ),
+                    "resolution": _text(edge.get("resolution", "exact"), "edge resolution"),
                 }
+            if source_revision != revision:
+                raise BehaviorContractError("edge source_revision does not match Step 1")
+            if fact["resolution"] != "exact":
+                raise BehaviorContractError("behavior edges must use exact resolution")
+            fact["evidence_sha256"] = _text(
+                edge.get("evidence_sha256", _fact_hash(fact)), "edge evidence_sha256"
             )
+            if not SHA256.fullmatch(fact["evidence_sha256"]):
+                raise BehaviorContractError("edge evidence_sha256 must be lowercase SHA-256")
+            if fact["evidence_sha256"] != _fact_hash({key: value for key, value in fact.items() if key != "evidence_sha256"}):
+                raise BehaviorContractError("edge evidence_sha256 does not match source fact")
+            normalized_edges.append(fact)
         normalized.append(
             {
                 "kind": _text(raw.get("kind", "behavior"), "behavior kind"),
@@ -176,6 +218,7 @@ def _validate_trace(
                         item["relationship_type"],
                     ),
                 ),
+                "symbol_paths": normalized_symbol_paths,
                 "description": raw.get("description"),
                 "surfaces": raw.get("surfaces", {}),
             }
@@ -194,24 +237,63 @@ def generate_behavior_contract(
 ) -> dict[str, Any]:
     """Generate the existing Step 2 contract shape from exact trace evidence."""
 
-    repository, revision, changed_paths = _validate_step1(step1)
-    behaviors = _validate_trace(source_trace, repository, revision, changed_paths)
+    if any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in (max_hops, max_nodes, max_edges)):
+        raise BehaviorContractError("traversal bounds must be non-negative integers")
+    repository, repo_key, base_revision, revision, changed_paths = _validate_step1(step1)
+    behaviors = _validate_trace(source_trace, repository, repo_key, revision, changed_paths)
     diagnostics: list[dict[str, Any]] = []
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, Any]] = []
     relations: list[dict[str, Any]] = []
     surfaces: dict[str, dict[str, Any]] = {}
+    all_changed_symbols: set[str] = set()
+    impacted: dict[str, set[str]] = {path: set() for path in changed_paths}
     for behavior in behaviors:
         behavior_id = _stable_behavior_id(repository, behavior)
+        behavior_edges = behavior["edges"]
+        adjacency: dict[str, list[dict[str, Any]]] = {}
+        for edge in behavior_edges:
+            adjacency.setdefault(edge["source_symbol"], []).append(edge)
+        reachable: set[str] = set(behavior["entry_symbols"])
+        frontier = {symbol: {symbol} for symbol in behavior["entry_symbols"]}
+        visited_edges: set[tuple[str, str, str, str, int]] = set()
+        for hop in range(max_hops):
+            next_frontier: dict[str, set[str]] = {}
+            for symbol in sorted(frontier):
+                for edge in sorted(adjacency.get(symbol, []), key=lambda item: (item["target_symbol"], item["relationship_type"], item["source_path"], item["source_line"])):
+                    key = (edge["source_symbol"], edge["target_symbol"], edge["relationship_type"], edge["source_path"], edge["source_line"])
+                    target = edge["target_symbol"]
+                    if target in frontier[symbol]:
+                        diagnostics.append({"code": "cycle_detected", "status": "confirmed", "symbol": target})
+                    if key in visited_edges:
+                        continue
+                    visited_edges.add(key)
+                    edges.append(edge)
+                    if target not in frontier[symbol]:
+                        reachable.add(target)
+                        next_frontier.setdefault(target, frontier[symbol] | {target})
+                    impacted.setdefault(edge["source_path"], set()).add(edge["source_symbol"])
+                    impacted.setdefault(edge["target_path"], set()).add(target)
+            frontier = next_frontier
+            if not frontier:
+                break
+        if frontier:
+            diagnostics.append({"code": "hop_budget_exceeded", "status": "unresolved"})
+        all_changed_symbols.update(reachable)
+        for symbol in sorted(reachable):
+            path = behavior["symbol_paths"].get(symbol)
+            if path:
+                impacted.setdefault(path, set()).add(symbol)
         for symbol in behavior["entry_symbols"]:
             nodes.append(
                 {
                     "symbol": symbol,
                     "role": "entry",
-                    "source_paths": behavior["source_paths"],
+                    "source_paths": [behavior["symbol_paths"].get(symbol, behavior["source_paths"][0])],
                 }
             )
-        edges.extend(behavior["edges"])
+        for symbol in sorted(reachable - set(behavior["entry_symbols"])):
+            nodes.append({"symbol": symbol, "role": "impacted", "source_paths": [behavior["symbol_paths"].get(symbol, behavior["source_paths"][0])]})
         if len(nodes) > max_nodes:
             diagnostics.append({"code": "node_budget_exceeded", "status": "unresolved"})
             nodes = nodes[:max_nodes]
@@ -220,7 +302,7 @@ def generate_behavior_contract(
             edges = edges[:max_edges]
         for name, status in sorted((behavior.get("surfaces") or {}).items()):
             if isinstance(status, str):
-                surfaces[name] = {"status": status, "evidence": "source_trace"}
+                surfaces[name] = {"status": "confirmed" if status == "available" else status, "evidence": "source_trace"}
         description = behavior.get("description")
         if not isinstance(description, str) or not description.strip():
             description = "Source behavior rooted at " + ", ".join(
@@ -250,6 +332,20 @@ def generate_behavior_contract(
         "artifact_kind": "generated_behavior_contract",
         "repository": "ia-main" if repository == "intacct/ia-app" else repository,
         "revision": revision,
+        "input": {
+            "repository": repository,
+            "repo_key": repo_key,
+            "pr_number": step1["input"].get("pr_number") or step1["input"].get("source_pr_number"),
+            "base_sha": base_revision,
+            "head_sha": revision,
+            "changed_paths": changed_paths,
+        },
+        "changed_symbols": sorted(all_changed_symbols),
+        "impacted_files": [
+            {"path": path, "symbols": sorted(symbols), "status": "confirmed" if symbols else "not_run"}
+            for path, symbols in sorted(impacted.items())
+            if symbols
+        ],
         "relations": relations,
         "generation": {
             "generator_version": GENERATOR_VERSION,
@@ -262,14 +358,17 @@ def generate_behavior_contract(
                 "max_nodes": max_nodes,
                 "max_edges": max_edges,
             },
-            "status": "partial" if diagnostics else "complete",
+            "status": "partial" if any(item["code"].endswith("budget_exceeded") for item in diagnostics) else "complete",
             "diagnostics": diagnostics,
             "nodes": sorted(nodes, key=lambda item: item["symbol"]),
             "edges": sorted(
                 edges, key=lambda item: (item["source_symbol"], item["target_symbol"])
             ),
             "surfaces": surfaces,
+            "flow": {"status": "partial" if any(item["code"].endswith("budget_exceeded") for item in diagnostics) else "complete", "edges": sorted(edges, key=lambda item: (item["source_symbol"], item["target_symbol"], item["source_path"], item["source_line"]))},
         },
+        "entry_surfaces": surfaces,
+        "provenance": {"read_only": True, "catalog_mutation": "none", "github_writes": "none", "source_revision": revision},
         "evidence": {"path": "<generated>", "sha256": "0" * 64},
     }
     body["evidence"]["sha256"] = artifact_sha256(

@@ -17,12 +17,17 @@
         "app/source/company/AllocationTxnHelper.cls",
         "app/source/gl/GLBatchManager.cls"
       ],
+      "symbol_paths": {
+        "AllocationTxnHelper::applyAllocation": "app/source/company/AllocationTxnHelper.cls",
+        "GLBatchManager::glTranslateApplyAllocation": "app/source/gl/GLBatchManager.cls"
+      },
       "edges": [
         {
           "source_symbol": "GLBatchManager::glTranslateApplyAllocation",
           "target_symbol": "AllocationTxnHelper::applyAllocation",
           "relationship_type": "CALLS",
           "source_path": "app/source/gl/GLBatchManager.cls",
+          "target_path": "app/source/company/AllocationTxnHelper.cls",
           "source_line": 1,
           "resolution": "exact"
         }

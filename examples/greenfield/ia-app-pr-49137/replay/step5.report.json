@@ -1,17 +1,17 @@
 {
   "actions": [
     {
-      "action_id": "9ad7d0fbc6a8f48fd0c86c857f6f0415211cb7cabdcf8f47286422bf7930a28d",
+      "action_id": "6a7d54980142d2190fe6fd0c6ea1cb1f79a1b237377b0e9f8ae814366b5ec696",
       "action_type": "block_propagation",
       "completion_condition": "The target repository and an exact base revision are available for inspection.",
       "evidence": [
         {
           "kind": "step3_report",
-          "sha256": "cabf7c78ac72eaa609af8a29bc138bf8a7eb4403751350be70b635024ad0e5eb"
+          "sha256": "2a4500f956d3dbea02e2cc69cbf998e55b2320e91dfdca2101e4631cb8772cf2"
         },
         {
           "kind": "step4_report",
-          "sha256": "2d61d7d77d9d07666866c884765946118ca997a9eb5e11754768ea25e2192e45"
+          "sha256": "360badbc6ae63c6859e9a7edfdc69a81bf2942e2bbf0c0a3369b80543468998c"
         }
       ],
       "owner": {
@@ -29,7 +29,7 @@
       "target_revision": null
     },
     {
-      "action_id": "83562ca02fba4aeac6a502d464af2bf0adea2d35aa69a33b8d3fe10330450797",
+      "action_id": "42ecd7f4de50d89628ad5b8b2c522a0dbc3cbdc4ff53875bfbc25eec7f7edd7e",
       "action_type": "request_owner_review",
       "completion_condition": "The declared owner reviews the impacted interface or records an explicit disposition.",
       "evidence": [
@@ -38,7 +38,7 @@
           "path": "examples/greenfield/ia-app-pr-49137/replay/generated_behavior_contract.json",
           "repository": "ia-main",
           "revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
-          "sha256": "6e98cbb005fc419317a328487288c77f414a9442386b66422943be8b615d7aa0"
+          "sha256": "e70aed8a3fbf468afd264ea766872b87b39b41f6a554f1939a5236d580d6fdfd"
         }
       ],
       "owner": {
@@ -87,8 +87,8 @@
     "github_writes": "none",
     "read_only": true,
     "rule_set_version": "0.1",
-    "step3_report_sha256": "cabf7c78ac72eaa609af8a29bc138bf8a7eb4403751350be70b635024ad0e5eb",
-    "step4_report_sha256": "2d61d7d77d9d07666866c884765946118ca997a9eb5e11754768ea25e2192e45"
+    "step3_report_sha256": "2a4500f956d3dbea02e2cc69cbf998e55b2320e91dfdca2101e4631cb8772cf2",
+    "step4_report_sha256": "360badbc6ae63c6859e9a7edfdc69a81bf2942e2bbf0c0a3369b80543468998c"
   },
   "schema_version": "0.1",
   "status": "partial",

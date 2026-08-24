@@ -22,7 +22,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--step1-report", required=True, type=Path)
     parser.add_argument("--source-trace", required=True, type=Path)
-    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument(
+        "--output",
+        type=Path,
+        help="Artifact path; defaults to artifacts/greenfield/behavior-contracts/<repo-key>/<head-sha>/contract.json.",
+    )
     args = parser.parse_args(argv)
     try:
         step1 = read_json_object(args.step1_report)
@@ -34,11 +38,25 @@ def main(argv: list[str] | None = None) -> int:
             load_source_trace(args.source_trace),
             source_trace_path=args.source_trace.as_posix(),
         )
-        write_behavior_contract(contract, args.output)
+        output = args.output
+        if output is None:
+            source = step1["input"]
+            repository = str(source.get("repository") or "ia-app")
+            repo_key = repository.rsplit("/", 1)[-1]
+            output = (
+                Path(__file__).resolve().parents[1]
+                / "artifacts"
+                / "greenfield"
+                / "behavior-contracts"
+                / str(repo_key)
+                / str(source.get("head_sha") or source.get("target_revision"))
+                / "contract.json"
+            )
+        write_behavior_contract(contract, output)
     except (OSError, TypeError, ValueError) as exc:
         print(f"behavior contract generation failed: {exc}", file=sys.stderr)
         return 2
-    print(args.output)
+    print(output)
     return 0
 
 

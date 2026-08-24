@@ -181,9 +181,32 @@ def resolve_candidates(
         and index.get("revision") == target_revision
     ]
     source_anchors = build_source_anchors(changed_paths, valid_semantic_indexes)
+    eligible_contracts: list[Mapping[str, Any]] = []
+    for contract in contracts:
+        if contract.get("artifact_kind") != "generated_behavior_contract":
+            eligible_contracts.append(contract)
+            continue
+        generated_input = contract.get("input")
+        generated_paths = (
+            generated_input.get("changed_paths")
+            if isinstance(generated_input, Mapping)
+            else None
+        )
+        if not isinstance(generated_input, Mapping) or (
+            generated_input.get("repository") not in {canonical_repository, source_repo_key}
+            or generated_input.get("repo_key") != source_repo_key
+            or generated_input.get("head_sha") != target_revision
+            or not isinstance(generated_paths, list)
+            or sorted(generated_paths) != sorted(changed_paths)
+        ):
+            gaps.append(
+                f"contract:generated_input_mismatch:{contract.get('evidence', {}).get('path', 'unknown')}"
+            )
+            continue
+        eligible_contracts.append(contract)
     active_relations = [
         relation
-        for contract in contracts
+        for contract in eligible_contracts
         if repository_matches(contract.get("repository"), canonical_repository, source_repo_key)
         and contract.get("revision") == target_revision
         for relation in contract.get("relations", [])
@@ -193,7 +216,7 @@ def resolve_candidates(
         source_anchors, changed_paths, active_relations, target_revision
     )
 
-    for contract in contracts:
+    for contract in eligible_contracts:
         if not repository_matches(
             contract.get("repository"), canonical_repository, source_repo_key
         ):
@@ -334,7 +357,6 @@ def resolve_candidates(
                         "source_revision": inventory.get("source_revision"),
                         "artifact_status": inventory.get("artifact_status", "empty"),
                         "ci_linkage_status": inventory.get("ci_linkage", {}).get("status", "unavailable"),
-                        "response_sha256": inventory.get("provenance", {}).get("response_sha256"),
                     }],
                 }
                 candidates[_candidate_key(candidate)] = candidate

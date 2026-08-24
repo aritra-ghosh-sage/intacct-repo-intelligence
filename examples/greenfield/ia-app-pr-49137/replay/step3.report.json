@@ -7,7 +7,7 @@
         "evidence": [
           {
             "kind": "step2_input",
-            "step2_report_sha256": "6ad7e2d9df1bc4908b5e65915aa642f474fd573b4879d3c6294ac014d60a1cc1"
+            "step2_report_sha256": "8b4d250400d097b229d6f57e4b27e15ecbcc38262fef69c3fb9d7988984ff2b3"
           }
         ],
         "identity": "app/source/company/AllocationTxnHelper.cls",
@@ -20,7 +20,7 @@
         "evidence": [
           {
             "kind": "step2_input",
-            "step2_report_sha256": "6ad7e2d9df1bc4908b5e65915aa642f474fd573b4879d3c6294ac014d60a1cc1"
+            "step2_report_sha256": "8b4d250400d097b229d6f57e4b27e15ecbcc38262fef69c3fb9d7988984ff2b3"
           }
         ],
         "identity": "app/source/gl/GLBatchManager.cls",
@@ -54,7 +54,7 @@
             "path": "examples/greenfield/ia-app-pr-49137/replay/generated_behavior_contract.json",
             "repository": "ia-main",
             "revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
-            "sha256": "6e98cbb005fc419317a328487288c77f414a9442386b66422943be8b615d7aa0"
+            "sha256": "e70aed8a3fbf468afd264ea766872b87b39b41f6a554f1939a5236d580d6fdfd"
           }
         ],
         "interface_id": "behavior:56d1ddedbff5f0e83a5d8650",
@@ -184,7 +184,7 @@
             "path": "examples/greenfield/ia-app-pr-49137/replay/generated_behavior_contract.json",
             "repository": "ia-main",
             "revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
-            "sha256": "6e98cbb005fc419317a328487288c77f414a9442386b66422943be8b615d7aa0"
+            "sha256": "e70aed8a3fbf468afd264ea766872b87b39b41f6a554f1939a5236d580d6fdfd"
           }
         ],
         "interface_id": "behavior:56d1ddedbff5f0e83a5d8650",
@@ -240,7 +240,7 @@
             "path": "examples/greenfield/ia-app-pr-49137/replay/generated_behavior_contract.json",
             "repository": "ia-main",
             "revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
-            "sha256": "6e98cbb005fc419317a328487288c77f414a9442386b66422943be8b615d7aa0"
+            "sha256": "e70aed8a3fbf468afd264ea766872b87b39b41f6a554f1939a5236d580d6fdfd"
           }
         ],
         "interface_id": "behavior:56d1ddedbff5f0e83a5d8650",
@@ -301,7 +301,7 @@
             "path": "examples/greenfield/ia-app-pr-49137/replay/generated_behavior_contract.json",
             "repository": "ia-main",
             "revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
-            "sha256": "6e98cbb005fc419317a328487288c77f414a9442386b66422943be8b615d7aa0"
+            "sha256": "e70aed8a3fbf468afd264ea766872b87b39b41f6a554f1939a5236d580d6fdfd"
           }
         ],
         "observations": [],
@@ -398,7 +398,7 @@
     "related_pr_artifact_sha256": null,
     "rule_set_version": "0.1",
     "semantic_index_sha256": null,
-    "step2_report_sha256": "6ad7e2d9df1bc4908b5e65915aa642f474fd573b4879d3c6294ac014d60a1cc1"
+    "step2_report_sha256": "8b4d250400d097b229d6f57e4b27e15ecbcc38262fef69c3fb9d7988984ff2b3"
   },
   "related_pull_requests": {
     "items": [],
@@ -450,7 +450,7 @@
             "path": "examples/greenfield/ia-app-pr-49137/replay/generated_behavior_contract.json",
             "repository": "ia-main",
             "revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
-            "sha256": "6e98cbb005fc419317a328487288c77f414a9442386b66422943be8b615d7aa0"
+            "sha256": "e70aed8a3fbf468afd264ea766872b87b39b41f6a554f1939a5236d580d6fdfd"
           }
         ],
         "interface_id": "behavior:56d1ddedbff5f0e83a5d8650",
