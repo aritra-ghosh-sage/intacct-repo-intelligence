@@ -12,15 +12,15 @@
       "evidence": [
         {
           "kind": "contract",
-          "path": "examples/greenfield/ia-app-pr-49137/replay/step2.contract.yaml",
+          "path": "examples/greenfield/ia-app-pr-49137/replay/generated_behavior_contract.json",
           "repository": "ia-main",
           "revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
-          "sha256": "3b451505d93f1617f492b9b570216c4b1ee5ebf820eebc372b23641344b027f9"
+          "sha256": "6e98cbb005fc419317a328487288c77f414a9442386b66422943be8b615d7aa0"
         }
       ],
-      "interface_id": "behavior:gl-allocation-recalculation",
+      "interface_id": "behavior:56d1ddedbff5f0e83a5d8650",
       "likely_tests": [],
-      "owner": "gl-platform",
+      "owner": null,
       "owner_repository": "ia-main",
       "reason": "exact_active_contract",
       "relationship_type": "explicit_contract",
@@ -31,7 +31,7 @@
           "interfaces": [
             {
               "evidence": [],
-              "interface_id": "behavior:gl-allocation-recalculation",
+              "interface_id": "behavior:56d1ddedbff5f0e83a5d8650",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
             }
@@ -47,7 +47,7 @@
           "interfaces": [
             {
               "evidence": [],
-              "interface_id": "behavior:gl-allocation-recalculation",
+              "interface_id": "behavior:56d1ddedbff5f0e83a5d8650",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
             }
@@ -80,7 +80,7 @@
       ],
       "interface_id": "behavior:gl-allocation-recalculation",
       "likely_tests": [],
-      "reason": "ci_supports_confirmed_contract",
+      "reason": "ci_observed_exact_source_revision",
       "relationship_type": "ci_observed",
       "source_anchors": [
         {
@@ -89,7 +89,7 @@
           "interfaces": [
             {
               "evidence": [],
-              "interface_id": "behavior:gl-allocation-recalculation",
+              "interface_id": "behavior:56d1ddedbff5f0e83a5d8650",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
             }
@@ -105,7 +105,7 @@
           "interfaces": [
             {
               "evidence": [],
-              "interface_id": "behavior:gl-allocation-recalculation",
+              "interface_id": "behavior:56d1ddedbff5f0e83a5d8650",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
             }
@@ -158,7 +158,7 @@
           "interfaces": [
             {
               "evidence": [],
-              "interface_id": "behavior:gl-allocation-recalculation",
+              "interface_id": "behavior:56d1ddedbff5f0e83a5d8650",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
             }
@@ -174,7 +174,7 @@
           "interfaces": [
             {
               "evidence": [],
-              "interface_id": "behavior:gl-allocation-recalculation",
+              "interface_id": "behavior:56d1ddedbff5f0e83a5d8650",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
             }
@@ -213,7 +213,7 @@
       ],
       "interface_id": "behavior:gl-allocation-recalculation",
       "likely_tests": [],
-      "reason": "ci_supports_confirmed_contract",
+      "reason": "ci_observed_exact_source_revision",
       "relationship_type": "ci_observed",
       "source_anchors": [
         {
@@ -222,7 +222,7 @@
           "interfaces": [
             {
               "evidence": [],
-              "interface_id": "behavior:gl-allocation-recalculation",
+              "interface_id": "behavior:56d1ddedbff5f0e83a5d8650",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
             }
@@ -238,7 +238,7 @@
           "interfaces": [
             {
               "evidence": [],
-              "interface_id": "behavior:gl-allocation-recalculation",
+              "interface_id": "behavior:56d1ddedbff5f0e83a5d8650",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
             }
@@ -287,7 +287,7 @@
           "interfaces": [
             {
               "evidence": [],
-              "interface_id": "behavior:gl-allocation-recalculation",
+              "interface_id": "behavior:56d1ddedbff5f0e83a5d8650",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
             }
@@ -303,7 +303,7 @@
           "interfaces": [
             {
               "evidence": [],
-              "interface_id": "behavior:gl-allocation-recalculation",
+              "interface_id": "behavior:56d1ddedbff5f0e83a5d8650",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
             }

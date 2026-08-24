@@ -17,6 +17,7 @@ CONTRACT_SCHEMA_VERSION = "0.1"
 CI_SCHEMA_VERSION = "0.1"
 INVENTORY_SCHEMA_VERSION = "0.1"
 SHA = re.compile(r"^[0-9a-f]{40}$")
+SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 class EvidenceError(ValueError):
@@ -39,6 +40,13 @@ def _sha(value: Any, label: str) -> str:
     result = _text(value, label).lower()
     if not SHA.fullmatch(result):
         raise EvidenceError(f"{label} must be a 40-character lowercase SHA")
+    return result
+
+
+def _sha256(value: Any, label: str) -> str:
+    result = _text(value, label).lower()
+    if not SHA256.fullmatch(result):
+        raise EvidenceError(f"{label} must be a 64-character lowercase SHA-256")
     return result
 
 
@@ -109,6 +117,27 @@ def load_contract(path: str | Path) -> dict[str, Any]:
         )
     repository = _text(data.get("repository"), "contract.repository")
     revision = _sha(data.get("revision"), "contract.revision")
+    if data.get("artifact_kind") == "generated_behavior_contract":
+        generation = _object(data.get("generation"), "contract.generation")
+        for field in ("generator_version", "rule_set_version", "step1_evidence_sha256", "source_trace_sha256"):
+            _text(generation.get(field), f"contract.generation.{field}")
+        _sha256(generation.get("step1_evidence_sha256"), "contract.generation.step1_evidence_sha256")
+        _sha256(generation.get("source_trace_sha256"), "contract.generation.source_trace_sha256")
+        bounds = _object(generation.get("bounds"), "contract.generation.bounds")
+        for field in ("max_hops", "max_nodes", "max_edges"):
+            value = bounds.get(field)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise EvidenceError(f"contract.generation.bounds.{field} must be positive")
+        if generation.get("status") not in {"complete", "partial"}:
+            raise EvidenceError("contract.generation.status is invalid")
+        if not isinstance(generation.get("diagnostics"), list):
+            raise EvidenceError("contract.generation.diagnostics must be a list")
+        if not isinstance(generation.get("nodes"), list) or not isinstance(generation.get("edges"), list):
+            raise EvidenceError("contract.generation nodes and edges must be lists")
+        stored_digest = data.get("evidence", {}).get("sha256") if isinstance(data.get("evidence"), dict) else None
+        unsigned = {key: value for key, value in data.items() if key != "evidence"}
+        if stored_digest != artifact_sha256(unsigned):
+            raise EvidenceError("generated contract evidence.sha256 does not match contents")
     relations = data.get("relations")
     if not isinstance(relations, list) or not relations:
         raise EvidenceError("contract.relations must be a non-empty list")

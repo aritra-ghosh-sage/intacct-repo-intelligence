@@ -1,0 +1,43 @@
+{
+  "schema_version": "0.1",
+  "repository": "intacct/ia-app",
+  "revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
+  "changed_paths": [
+    "app/source/company/AllocationTxnHelper.cls",
+    "app/source/gl/GLBatchManager.cls"
+  ],
+  "behaviors": [
+    {
+      "kind": "allocation_recalculation",
+      "entry_symbols": [
+        "AllocationTxnHelper::applyAllocation",
+        "GLBatchManager::glTranslateApplyAllocation"
+      ],
+      "source_paths": [
+        "app/source/company/AllocationTxnHelper.cls",
+        "app/source/gl/GLBatchManager.cls"
+      ],
+      "edges": [
+        {
+          "source_symbol": "GLBatchManager::glTranslateApplyAllocation",
+          "target_symbol": "AllocationTxnHelper::applyAllocation",
+          "relationship_type": "CALLS",
+          "source_path": "app/source/gl/GLBatchManager.cls",
+          "source_line": 1,
+          "resolution": "exact"
+        }
+      ],
+      "description": "Apply-allocation recalculates named allocation splits and clears stale split totals before persistence.",
+      "surfaces": {
+        "direct_gl_service": "available",
+        "xml_api": "not_run",
+        "csv_import": "not_run",
+        "actionui": "not_run",
+        "nextgen_ui": "not_run",
+        "cross_module_callers": "unresolved",
+        "database_schema": "not_run",
+        "permissions_workflows": "not_run"
+      }
+    }
+  ]
+}

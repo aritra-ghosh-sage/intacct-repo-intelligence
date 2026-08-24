@@ -29,7 +29,6 @@ from greenfield.step4_coverage import map_test_coverage
 from greenfield.step5_actions import recommend_actions, validate_step5_report
 from greenfield.step6_contract import (
     load_json,
-    validate_step6_report,
     validate_step6_request,
 )
 from greenfield.step6_patch import generate_step6
@@ -79,6 +78,23 @@ def _evidence_path(bundle_dir: Path, name: str) -> Path:
         return bundle_dir / name
 
 
+def _generated_contract_path(step1: dict[str, object]) -> Path:
+    revision = step1.get("input", {}).get("target_revision")
+    if not isinstance(revision, str):
+        raise TypeError(
+            "Step 1 target revision is required for generated contract lookup"
+        )
+    return (
+        Path(__file__).resolve().parents[1]
+        / "artifacts"
+        / "greenfield"
+        / "behavior-contracts"
+        / "ia-app"
+        / revision
+        / "contract.json"
+    )
+
+
 def _evidence_label(bundle_dir: Path, name: str) -> str:
     repo_root = Path(__file__).resolve().parents[1]
     try:
@@ -89,12 +105,16 @@ def _evidence_label(bundle_dir: Path, name: str) -> str:
 
 
 def _normalize_evidence_paths(
-    contract: dict[str, object], ci: dict[str, object], inventory: dict[str, object],
-    *, bundle_dir: Path,
+    contract: dict[str, object],
+    ci: dict[str, object],
+    inventory: dict[str, object],
+    *,
+    bundle_dir: Path,
+    contract_name: str = "step2.contract.yaml",
 ) -> None:
     contract_evidence = contract.get("evidence")
     if isinstance(contract_evidence, dict):
-        contract_evidence["path"] = _evidence_label(bundle_dir, "step2.contract.yaml")
+        contract_evidence["path"] = _evidence_label(bundle_dir, contract_name)
     ci_evidence = ci.get("evidence")
     if isinstance(ci_evidence, dict):
         ci_evidence["path"] = _evidence_label(bundle_dir, "step2.ci.json")
@@ -131,23 +151,38 @@ def main(argv: list[str] | None = None) -> int:
         errors = validate_step1(step1)
         if errors:
             raise ValueError("invalid Step 1 report: " + "; ".join(errors))
-        contract_path = _evidence_path(bundle, "step2.contract.yaml")
+        generated_contract = _generated_contract_path(step1)
+        contract_path = (
+            generated_contract
+            if generated_contract.exists()
+            else _evidence_path(bundle, "step2.contract.yaml")
+        )
         ci_paths = sorted(bundle.glob("step2.ci*.json"))
         inventory_paths = sorted(bundle.glob("step2.inventory*.json"))
         if not ci_paths:
             raise ValueError("missing Step 2 CI evidence")
         if not inventory_paths:
             raise ValueError("missing Step 2 inventory evidence")
-        ci_path = ci_paths[0]
-        inventory_path = inventory_paths[0]
         contract = load_contract(contract_path)
         ci_rows = [load_ci_evidence(path) for path in ci_paths]
         inventory_rows = [load_repository_inventory(path) for path in inventory_paths]
         for ci_row, ci_file in zip(ci_rows, ci_paths):
-            _normalize_evidence_paths(contract, ci_row, inventory_rows[0], bundle_dir=bundle)
+            _normalize_evidence_paths(
+                contract,
+                ci_row,
+                inventory_rows[0],
+                bundle_dir=bundle,
+                contract_name=(
+                    "generated_behavior_contract.json"
+                    if generated_contract.exists()
+                    else "step2.contract.yaml"
+                ),
+            )
             ci_row["evidence"]["path"] = _evidence_label(bundle, ci_file.name)
         for inventory_row, inventory_file in zip(inventory_rows, inventory_paths):
-            inventory_row["evidence_path"] = _evidence_label(bundle, inventory_file.name)
+            inventory_row["evidence_path"] = _evidence_label(
+                bundle, inventory_file.name
+            )
         semantic = None
         semantic_path = bundle / "step2.semantic-index.json"
         if semantic_path.exists():
@@ -177,7 +212,10 @@ def main(argv: list[str] | None = None) -> int:
 
         contract_evidence = load_contract_evidence(contract_path)
         contract_evidence["evidence"]["path"] = _evidence_label(
-            bundle, "step2.contract.yaml"
+            bundle,
+            "generated_behavior_contract.json"
+            if generated_contract.exists()
+            else "step2.contract.yaml",
         )
         ci_evidence = [load_ci_evidence_file(path) for path in ci_paths]
         for row, path in zip(ci_evidence, ci_paths):
@@ -199,9 +237,7 @@ def main(argv: list[str] | None = None) -> int:
             step6_request = load_json(step6_request_path, "Step 6 request")
             request_errors = validate_step6_request(step6_request)
             if request_errors:
-                raise ValueError(
-                    "invalid Step 6 request: " + "; ".join(request_errors)
-                )
+                raise ValueError("invalid Step 6 request: " + "; ".join(request_errors))
             step6 = generate_step6(
                 step6_request,
                 step1,

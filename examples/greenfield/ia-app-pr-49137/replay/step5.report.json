@@ -1,17 +1,17 @@
 {
   "actions": [
     {
-      "action_id": "c6daed09e706cbb28574de02ddcc61485263a2238513e4d4d67ca25c3b3241ce",
+      "action_id": "9ad7d0fbc6a8f48fd0c86c857f6f0415211cb7cabdcf8f47286422bf7930a28d",
       "action_type": "block_propagation",
       "completion_condition": "The target repository and an exact base revision are available for inspection.",
       "evidence": [
         {
           "kind": "step3_report",
-          "sha256": "472f8678f366d32a00472eef7406dc40e941c10d25ecdb5693a87ac522ccb93f"
+          "sha256": "cabf7c78ac72eaa609af8a29bc138bf8a7eb4403751350be70b635024ad0e5eb"
         },
         {
           "kind": "step4_report",
-          "sha256": "8c77293ee60756322cbbd6b792507be654cc56fe6667d109435a54d330b0b541"
+          "sha256": "2d61d7d77d9d07666866c884765946118ca997a9eb5e11754768ea25e2192e45"
         }
       ],
       "owner": {
@@ -29,26 +29,26 @@
       "target_revision": null
     },
     {
-      "action_id": "a177cf7865e4c4f937ab1bb6c0260fbdedb6f7819fa315ced8545f4c31b7e0f0",
+      "action_id": "83562ca02fba4aeac6a502d464af2bf0adea2d35aa69a33b8d3fe10330450797",
       "action_type": "request_owner_review",
       "completion_condition": "The declared owner reviews the impacted interface or records an explicit disposition.",
       "evidence": [
         {
           "kind": "contract",
-          "path": "examples/greenfield/ia-app-pr-49137/replay/step2.contract.yaml",
+          "path": "examples/greenfield/ia-app-pr-49137/replay/generated_behavior_contract.json",
           "repository": "ia-main",
           "revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
-          "sha256": "3b451505d93f1617f492b9b570216c4b1ee5ebf820eebc372b23641344b027f9"
+          "sha256": "6e98cbb005fc419317a328487288c77f414a9442386b66422943be8b615d7aa0"
         }
       ],
       "owner": {
-        "identity": "gl-platform",
+        "identity": "ia-main",
         "status": "available"
       },
       "reason": "impacted_interface_owner_available",
       "rule_set_version": "0.1",
       "scope": {
-        "interface_id": "behavior:gl-allocation-recalculation",
+        "interface_id": "behavior:56d1ddedbff5f0e83a5d8650",
         "target_revision": null
       },
       "status": "recommended",
@@ -87,8 +87,8 @@
     "github_writes": "none",
     "read_only": true,
     "rule_set_version": "0.1",
-    "step3_report_sha256": "472f8678f366d32a00472eef7406dc40e941c10d25ecdb5693a87ac522ccb93f",
-    "step4_report_sha256": "8c77293ee60756322cbbd6b792507be654cc56fe6667d109435a54d330b0b541"
+    "step3_report_sha256": "cabf7c78ac72eaa609af8a29bc138bf8a7eb4403751350be70b635024ad0e5eb",
+    "step4_report_sha256": "2d61d7d77d9d07666866c884765946118ca997a9eb5e11754768ea25e2192e45"
   },
   "schema_version": "0.1",
   "status": "partial",

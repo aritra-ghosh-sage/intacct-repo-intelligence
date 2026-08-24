@@ -6,13 +6,13 @@
         "classification": "candidate",
         "evidence": [
           {
-            "digest": "3b451505d93f1617f492b9b570216c4b1ee5ebf820eebc372b23641344b027f9",
+            "digest": "6e98cbb005fc419317a328487288c77f414a9442386b66422943be8b615d7aa0",
             "kind": "contract",
-            "path": "examples/greenfield/ia-app-pr-49137/replay/step2.contract.yaml",
+            "path": "examples/greenfield/ia-app-pr-49137/replay/generated_behavior_contract.json",
             "revision": "42942af6221c1e974a7e266e96b3199cb95aa448"
           }
         ],
-        "interface_id": "behavior:gl-allocation-recalculation",
+        "interface_id": "behavior:56d1ddedbff5f0e83a5d8650",
         "reason": "declared_contract_without_test_evidence",
         "source_repository": "ia-main",
         "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
@@ -54,14 +54,14 @@
     "evidence_digests": [
       "1111111111111111111111111111111111111111111111111111111111111111",
       "2222222222222222222222222222222222222222222222222222222222222222",
-      "3b451505d93f1617f492b9b570216c4b1ee5ebf820eebc372b23641344b027f9",
+      "6e98cbb005fc419317a328487288c77f414a9442386b66422943be8b615d7aa0",
       "824181a142e4b640b5e24e08140c01410649d5e933766bf15284d374fdb91cac",
       "be6d423c2cc17931f54cc23e86f74325814735306ef9ddb2bf3aaa500657496a"
     ],
     "github_writes": "none",
     "read_only": true,
     "rule_set_version": "0.1",
-    "step3_report_sha256": "472f8678f366d32a00472eef7406dc40e941c10d25ecdb5693a87ac522ccb93f"
+    "step3_report_sha256": "cabf7c78ac72eaa609af8a29bc138bf8a7eb4403751350be70b635024ad0e5eb"
   },
   "schema_version": "0.1",
   "status": "partial",

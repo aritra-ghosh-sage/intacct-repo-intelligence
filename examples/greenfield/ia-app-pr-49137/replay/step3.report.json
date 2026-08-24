@@ -7,7 +7,7 @@
         "evidence": [
           {
             "kind": "step2_input",
-            "step2_report_sha256": "3fff8636c9b367a317a3f65137bb4c060741041d134904ad460fbf0d0053f8b6"
+            "step2_report_sha256": "6ad7e2d9df1bc4908b5e65915aa642f474fd573b4879d3c6294ac014d60a1cc1"
           }
         ],
         "identity": "app/source/company/AllocationTxnHelper.cls",
@@ -20,7 +20,7 @@
         "evidence": [
           {
             "kind": "step2_input",
-            "step2_report_sha256": "3fff8636c9b367a317a3f65137bb4c060741041d134904ad460fbf0d0053f8b6"
+            "step2_report_sha256": "6ad7e2d9df1bc4908b5e65915aa642f474fd573b4879d3c6294ac014d60a1cc1"
           }
         ],
         "identity": "app/source/gl/GLBatchManager.cls",
@@ -51,13 +51,13 @@
         "evidence": [
           {
             "kind": "contract",
-            "path": "examples/greenfield/ia-app-pr-49137/replay/step2.contract.yaml",
+            "path": "examples/greenfield/ia-app-pr-49137/replay/generated_behavior_contract.json",
             "repository": "ia-main",
             "revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
-            "sha256": "3b451505d93f1617f492b9b570216c4b1ee5ebf820eebc372b23641344b027f9"
+            "sha256": "6e98cbb005fc419317a328487288c77f414a9442386b66422943be8b615d7aa0"
           }
         ],
-        "interface_id": "behavior:gl-allocation-recalculation",
+        "interface_id": "behavior:56d1ddedbff5f0e83a5d8650",
         "reason": "exact_active_contract",
         "relationship_type": "explicit_contract",
         "scope": "interface",
@@ -106,7 +106,7 @@
           }
         ],
         "interface_id": "behavior:gl-allocation-recalculation",
-        "reason": "ci_supports_confirmed_contract",
+        "reason": "ci_observed_exact_source_revision",
         "relationship_type": "ci_observed",
         "scope": "interface",
         "target_repository": "intacct/ia-gwdata-gl"
@@ -125,7 +125,7 @@
           }
         ],
         "interface_id": "behavior:gl-allocation-recalculation",
-        "reason": "ci_supports_confirmed_contract",
+        "reason": "ci_observed_exact_source_revision",
         "relationship_type": "ci_observed",
         "scope": "interface",
         "target_repository": "intacct/ia-rest-api-testing"
@@ -181,13 +181,13 @@
         "evidence": [
           {
             "kind": "contract",
-            "path": "examples/greenfield/ia-app-pr-49137/replay/step2.contract.yaml",
+            "path": "examples/greenfield/ia-app-pr-49137/replay/generated_behavior_contract.json",
             "repository": "ia-main",
             "revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
-            "sha256": "3b451505d93f1617f492b9b570216c4b1ee5ebf820eebc372b23641344b027f9"
+            "sha256": "6e98cbb005fc419317a328487288c77f414a9442386b66422943be8b615d7aa0"
           }
         ],
-        "interface_id": "behavior:gl-allocation-recalculation",
+        "interface_id": "behavior:56d1ddedbff5f0e83a5d8650",
         "reason": "exact_active_contract",
         "relationship_type": "explicit_contract",
         "target_repository": "ia-app"
@@ -206,7 +206,7 @@
           }
         ],
         "interface_id": "behavior:gl-allocation-recalculation",
-        "reason": "ci_supports_confirmed_contract",
+        "reason": "ci_observed_exact_source_revision",
         "relationship_type": "ci_observed",
         "target_repository": "intacct/ia-gwdata-gl"
       },
@@ -224,7 +224,7 @@
           }
         ],
         "interface_id": "behavior:gl-allocation-recalculation",
-        "reason": "ci_supports_confirmed_contract",
+        "reason": "ci_observed_exact_source_revision",
         "relationship_type": "ci_observed",
         "target_repository": "intacct/ia-rest-api-testing"
       }
@@ -237,14 +237,14 @@
         "evidence": [
           {
             "kind": "contract",
-            "path": "examples/greenfield/ia-app-pr-49137/replay/step2.contract.yaml",
+            "path": "examples/greenfield/ia-app-pr-49137/replay/generated_behavior_contract.json",
             "repository": "ia-main",
             "revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
-            "sha256": "3b451505d93f1617f492b9b570216c4b1ee5ebf820eebc372b23641344b027f9"
+            "sha256": "6e98cbb005fc419317a328487288c77f414a9442386b66422943be8b615d7aa0"
           }
         ],
-        "interface_id": "behavior:gl-allocation-recalculation",
-        "owner": "gl-platform",
+        "interface_id": "behavior:56d1ddedbff5f0e83a5d8650",
+        "owner": null,
         "owner_repository": "ia-main",
         "reason": null,
         "status": "available",
@@ -298,10 +298,10 @@
         "evidence": [
           {
             "kind": "contract",
-            "path": "examples/greenfield/ia-app-pr-49137/replay/step2.contract.yaml",
+            "path": "examples/greenfield/ia-app-pr-49137/replay/generated_behavior_contract.json",
             "repository": "ia-main",
             "revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
-            "sha256": "3b451505d93f1617f492b9b570216c4b1ee5ebf820eebc372b23641344b027f9"
+            "sha256": "6e98cbb005fc419317a328487288c77f414a9442386b66422943be8b615d7aa0"
           }
         ],
         "observations": [],
@@ -398,7 +398,7 @@
     "related_pr_artifact_sha256": null,
     "rule_set_version": "0.1",
     "semantic_index_sha256": null,
-    "step2_report_sha256": "3fff8636c9b367a317a3f65137bb4c060741041d134904ad460fbf0d0053f8b6"
+    "step2_report_sha256": "6ad7e2d9df1bc4908b5e65915aa642f474fd573b4879d3c6294ac014d60a1cc1"
   },
   "related_pull_requests": {
     "items": [],
@@ -447,13 +447,13 @@
         "evidence": [
           {
             "kind": "contract",
-            "path": "examples/greenfield/ia-app-pr-49137/replay/step2.contract.yaml",
+            "path": "examples/greenfield/ia-app-pr-49137/replay/generated_behavior_contract.json",
             "repository": "ia-main",
             "revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
-            "sha256": "3b451505d93f1617f492b9b570216c4b1ee5ebf820eebc372b23641344b027f9"
+            "sha256": "6e98cbb005fc419317a328487288c77f414a9442386b66422943be8b615d7aa0"
           }
         ],
-        "interface_id": "behavior:gl-allocation-recalculation",
+        "interface_id": "behavior:56d1ddedbff5f0e83a5d8650",
         "reason": "no_normalized_test_evidence",
         "status": "unavailable",
         "target_repository": "ia-app"
