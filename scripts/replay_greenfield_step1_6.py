@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from greenfield.artifact_io import artifact_sha256
+from greenfield.step1_5_trace import validate_trace
 from greenfield.step1_capture import evidence_fingerprint
 from greenfield.step2_candidates import resolve_candidates
 from greenfield.step2_contract import (
@@ -31,7 +32,6 @@ from greenfield.step6_contract import (
     validate_step6_request,
 )
 from greenfield.step6_patch import generate_step6
-from greenfield.step1_5_trace import validate_trace
 from scripts.validate_greenfield_step1 import validate as validate_step1
 from scripts.validate_greenfield_step2 import validate as validate_step2
 from scripts.validate_greenfield_step3 import validate as validate_step3
@@ -272,6 +272,11 @@ def main(argv: list[str] | None = None) -> int:
             ("step4.report.json", step4),
             ("step5.report.json", step5),
         ]
+        if contract_name == "step1.5.contract.json":
+            reports_to_compare[0:0] = [
+                ("step1.5.trace.json", load_json(bundle / "step1.5.trace.json", "Step 1.5 trace")),
+                ("step1.5.contract.json", load_json(bundle / "step1.5.contract.json", "Step 1.5 contract")),
+            ]
         if step6 is not None:
             reports_to_compare.append(("step6.report.json", step6))
         for name, report in reports_to_compare:
@@ -286,6 +291,9 @@ def main(argv: list[str] | None = None) -> int:
             "step4.report.json": step4,
             "step5.report.json": step5,
         }
+        if contract_name == "step1.5.contract.json":
+            reports["step1.5.trace.json"] = load_json(bundle / "step1.5.trace.json", "Step 1.5 trace")
+            reports["step1.5.contract.json"] = load_json(bundle / "step1.5.contract.json", "Step 1.5 contract")
         if step6 is not None:
             reports["step6.report.json"] = step6
         manifest = {

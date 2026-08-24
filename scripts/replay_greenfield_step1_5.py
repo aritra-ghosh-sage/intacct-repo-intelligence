@@ -10,8 +10,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from greenfield.step1_capture import evidence_fingerprint
 from greenfield.step1_5_trace import validate_trace
+from greenfield.step1_capture import evidence_fingerprint
 from greenfield.step2_candidates import resolve_candidates
 from greenfield.step2_contract import (
     load_ci_evidence,
@@ -92,9 +92,10 @@ def main(argv: list[str] | None = None) -> int:
         if trace_path.exists() != contract_path.exists():
             raise ValueError("Step 1.5 bundle must contain both step1.5.trace.json and step1.5.contract.json")
         contract_path = contract_path if contract_path.exists() else _evidence_path(bundle_dir, "step2.contract.yaml")
-        raw_contract = _read_json(contract_path)
-        if trace_path.exists() and raw_contract.get("generation", {}).get("step1_evidence_sha256") != evidence_fingerprint(step1):
-            raise ValueError("retained Step 1.5 contract is not linked to Step 1 evidence")
+        if trace_path.exists():
+            raw_contract = _read_json(contract_path)
+            if raw_contract.get("generation", {}).get("step1_evidence_sha256") != evidence_fingerprint(step1):
+                raise ValueError("retained Step 1.5 contract is not linked to Step 1 evidence")
         contract = load_contract(contract_path)
         if trace_path.exists():
             trace = _read_json(trace_path)
@@ -136,12 +137,22 @@ def main(argv: list[str] | None = None) -> int:
         step5 = recommend_actions(step3, step4)
 
         errors: list[str] = []
+        retained_artifacts = []
+        if trace_path.exists():
+            retained_artifacts = [
+                ("step1.5.trace.json", _read_json(trace_path)),
+                ("step1.5.contract.json", raw_contract),
+            ]
+            for name, artifact in retained_artifacts:
+                _compare(bundle_dir, name, artifact, errors)
         _compare(bundle_dir, "step2.report.json", step2, errors)
         _compare(bundle_dir, "step3.report.json", step3, errors)
         _compare(bundle_dir, "step4.report.json", step4, errors)
         _compare(bundle_dir, "step5.report.json", step5, errors)
 
         if args.output_dir:
+            for name, artifact in retained_artifacts:
+                _write_json(args.output_dir / name, artifact)
             _write_json(args.output_dir / "step2.report.json", step2)
             _write_json(args.output_dir / "step3.report.json", step3)
             _write_json(args.output_dir / "step4.report.json", step4)

@@ -15,7 +15,7 @@
           "path": "examples/greenfield/ia-app-pr-49137/replay/step1.5.contract.json",
           "repository": "ia-main",
           "revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
-          "sha256": "e70aed8a3fbf468afd264ea766872b87b39b41f6a554f1939a5236d580d6fdfd"
+          "sha256": "645072b295858fa02460e33b0d2185379755b32ffa0efb3ba6fd1f7c472912f4"
         }
       ],
       "interface_id": "behavior:56d1ddedbff5f0e83a5d8650",

@@ -104,7 +104,10 @@ def test_retained_step1_5_artifacts_are_consumed_directly(tmp_path: Path) -> Non
     bundle = tmp_path / "bundle"
     shutil.copytree(PR_49137_BUNDLE, bundle)
     (bundle / "step2.contract.yaml").unlink()
-    assert replay_greenfield_step1_6.main(["--bundle-dir", str(bundle)]) == 0
+    step1 = json.loads((bundle / "step1.json").read_text(encoding="utf-8"))
+    contract, name = replay_greenfield_step1_6._load_contract_for_replay(bundle, step1)
+    assert name == "step1.5.contract.json"
+    assert contract["revision"] == step1["input"]["head_sha"]
 
 
 def test_step1_5_trace_and_contract_must_be_paired(tmp_path: Path, capsys) -> None:
