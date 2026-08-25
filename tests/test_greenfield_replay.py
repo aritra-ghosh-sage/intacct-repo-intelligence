@@ -160,7 +160,7 @@ def test_contract_deduplication_keeps_distinct_interfaces() -> None:
     assert not replay_greenfield_step1_5._is_redundant_contract(generated, declared)
 
 
-def test_step7_replay_emits_unavailable_handoff_without_request(tmp_path: Path) -> None:
+def test_step7_replay_blocks_without_strict_step6_evidence(tmp_path: Path) -> None:
     output_dir = tmp_path / "replay"
     assert (
         replay_greenfield_step1_6.main(
@@ -171,11 +171,10 @@ def test_step7_replay_emits_unavailable_handoff_without_request(tmp_path: Path) 
     handoff = json.loads(
         (output_dir / "step7.handoff.json").read_text(encoding="utf-8")
     )
-    assert handoff == {
-        "pr_eligible": False,
-        "reason": "step7_request_not_supplied",
-        "status": "unavailable",
-    }
+    assert handoff["pr_eligible"] is False
+    assert handoff["reason"] == "step6_strict_evidence_unavailable"
+    assert handoff["status"] == "blocked"
+    assert handoff["details"]
 
 
 def test_step7_replay_blocks_when_request_has_no_strict_step6_inputs(
@@ -184,7 +183,6 @@ def test_step7_replay_blocks_when_request_has_no_strict_step6_inputs(
     bundle = tmp_path / "bundle"
     shutil.copytree(BUNDLE, bundle)
     (bundle / "step6.request.json").unlink()
-    (bundle / "step7.request.json").write_text("{}\n", encoding="utf-8")
     output_dir = tmp_path / "output"
     assert (
         replay_greenfield_step1_6.main(

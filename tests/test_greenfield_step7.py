@@ -3,20 +3,33 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import time
 from copy import deepcopy
 from pathlib import Path
 
+import yaml
+
 from greenfield.step6_contract import artifact_sha256 as step6_artifact_sha256
-from greenfield.step7_contract import (
-    artifact_sha256,
-    validate_step7_report,
-    validate_step7_request,
-)
+from greenfield.step7_contract import artifact_sha256, validate_step7_report
+from greenfield.step7_prepare import build_step7_request
+from greenfield.step7_profiles import normalize_profile_registry
+from greenfield.step7_runner import LocalSubprocessRunner, runner_attestation
 from greenfield.step7_validate import validate_step7
 from scripts import validate_greenfield_step7
 
 ROOT = Path(__file__).resolve().parents[1]
 STEP6_GOLDEN = ROOT / "examples/greenfield/ia-app-pr-49156/replay/step6.report.json"
+TARGET_REPOSITORY = "intacct/ia-restapi-automation-tests"
+
+
+class AttestedSandboxRunner(LocalSubprocessRunner):
+    def attestation(self) -> dict[str, object]:
+        return runner_attestation(
+            runner_id="test-sandbox",
+            version="0.1",
+            isolation="sandbox",
+            production_eligible=True,
+        )
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -32,6 +45,7 @@ def _target_repo(tmp_path: Path) -> tuple[Path, str]:
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
     _git(repo, "config", "user.email", "step7@example.invalid")
     _git(repo, "config", "user.name", "Step 7")
+    _git(repo, "remote", "add", "origin", f"git@github.com:{TARGET_REPOSITORY}.git")
     (repo / "features/gl/v1-beta2/input").mkdir(parents=True)
     (repo / "features/gl/v1-beta2/example.feature").write_text(
         "Feature: Example\n\n  Scenario: Existing case\n"
@@ -47,9 +61,10 @@ def _target_repo(tmp_path: Path) -> tuple[Path, str]:
     return repo, _git(repo, "rev-parse", "HEAD")
 
 
-def _step6_report(repo: Path, revision: str) -> dict:
+def _step6_report(revision: str) -> dict:
     report = json.loads(STEP6_GOLDEN.read_text(encoding="utf-8"))
     report["eligibility_profile"] = "step7"
+    report["target"]["repository"] = TARGET_REPOSITORY
     report["target"]["base_revision"] = revision
     report["target"]["files"] = [
         {
@@ -61,7 +76,7 @@ def _step6_report(repo: Path, revision: str) -> dict:
     ]
     evidence = {
         "provider": "github_git_api",
-        "repository": report["target"]["repository"],
+        "repository": TARGET_REPOSITORY,
         "revision": revision,
         "files": [
             {
@@ -110,7 +125,7 @@ def _step6_report(repo: Path, revision: str) -> dict:
             "source_repository": report["source"]["repository"],
             "pr_number": report["source"]["pr_number"],
             "source_revision": report["source"]["head_revision"],
-            "target_repository": report["target"]["repository"],
+            "target_repository": TARGET_REPOSITORY,
             "target_revision": revision,
             "template": report["patch"]["generator"],
             "patch_sha256": report["patch"]["patch_sha256"],
@@ -122,14 +137,14 @@ def _step6_report(repo: Path, revision: str) -> dict:
     return report
 
 
-def _request(step6: dict, revision: str) -> dict:
+def _registry(*, command_code: str = "assert True", timeout: int = 30) -> dict:
     commands = {
         category: [
             {
                 "id": f"{category}-check",
-                "argv": [sys.executable, "-c", "assert True"],
+                "argv": [sys.executable, "-c", command_code],
                 "cwd": ".",
-                "timeout_seconds": 30,
+                "timeout_seconds": timeout,
                 "shell": False,
             }
         ]
@@ -142,218 +157,267 @@ def _request(step6: dict, revision: str) -> dict:
             "regression",
         )
     }
-    return {
-        "schema_version": "0.1",
-        "analysis_kind": "greenfield_pr_impact_step_7_request",
-        "step6_report_sha256": artifact_sha256(step6),
-        "target": {
-            "repository": step6["target"]["repository"],
-            "base_revision": revision,
-        },
-        "commands": commands,
-        "policy": {
-            "diff_limits": {
-                "max_files": 5,
-                "max_added_lines": 20,
-                "max_deleted_lines": 20,
-                "max_bytes": 10000,
-            },
-            "max_output_bytes": 4000,
-            "generated_file_policy": {
-                "mode": "reject",
-                "generated_paths": [],
-                "source_paths": sorted(row["path"] for row in step6["patch"]["files"]),
-                "allowed_generated_paths": [],
-                "unknown_status": "fail",
-            },
-        },
-    }
+    return normalize_profile_registry(
+        {
+            "version": 1,
+            "profiles": [
+                {
+                    "profile_id": "rest-step7",
+                    "profile_version": "0.1",
+                    "repository": TARGET_REPOSITORY,
+                    "enabled": True,
+                    "required_runner": "sandbox",
+                    "commands": commands,
+                    "policy": {
+                        "diff_limits": {
+                            "max_files": 5,
+                            "max_added_lines": 20,
+                            "max_deleted_lines": 20,
+                            "max_bytes": 10000,
+                        },
+                        "max_output_bytes": 4000,
+                        "path_classification": {
+                            "source_prefixes": ["features"],
+                            "generated_prefixes": [],
+                            "allowed_generated_prefixes": [],
+                        },
+                    },
+                }
+            ],
+        }
+    )
 
 
-def test_successful_validation_is_strict_and_reproducible(tmp_path: Path) -> None:
+def _validate(
+    step6: dict,
+    registry: dict,
+    repo: Path,
+    *,
+    runner: LocalSubprocessRunner | None = None,
+) -> dict:
+    request = build_step7_request(step6, registry)
+    return validate_step7(
+        step6,
+        request,
+        repo,
+        profile_registry=registry,
+        runner=runner or LocalSubprocessRunner(),
+    )
+
+
+def test_claimed_sandbox_validation_is_strict_reproducible_but_not_pr_eligible(
+    tmp_path: Path,
+) -> None:
     repo, revision = _target_repo(tmp_path)
-    step6 = _step6_report(repo, revision)
-    request = _request(step6, revision)
-
-    assert validate_step7_request(request) == []
-    first = validate_step7(step6, request, repo)
-    second = validate_step7(step6, request, repo)
-
+    step6 = _step6_report(revision)
+    registry = _registry()
+    first = _validate(step6, registry, repo, runner=AttestedSandboxRunner())
+    second = _validate(step6, registry, repo, runner=AttestedSandboxRunner())
     assert first["status"] == "validated"
-    assert first["pr_eligible"] is True
+    assert first["pr_eligible"] is False
     assert first["generation_fingerprint"] == second["generation_fingerprint"]
     assert first["validation_fingerprint"] == second["validation_fingerprint"]
     assert validate_step7_report(first) == []
     assert _git(repo, "status", "--porcelain") == ""
 
 
-def test_dirty_or_wrong_base_checkout_is_blocked(tmp_path: Path) -> None:
+def test_local_success_is_validated_but_not_pr_eligible(tmp_path: Path) -> None:
     repo, revision = _target_repo(tmp_path)
-    step6 = _step6_report(repo, revision)
-    request = _request(step6, revision)
-    (repo / "unrelated.txt").write_text("dirty\n", encoding="utf-8")
-
-    report = validate_step7(step6, request, repo)
-
-    assert report["status"] == "blocked"
+    report = _validate(_step6_report(revision), _registry(), repo)
+    assert report["status"] == "validated"
     assert report["pr_eligible"] is False
+    assert report["runner"]["isolation"] == "local"
+    assert validate_step7_report(report) == []
+
+
+def test_missing_or_wrong_origin_is_blocked(tmp_path: Path) -> None:
+    repo, revision = _target_repo(tmp_path)
+    step6 = _step6_report(revision)
+    registry = _registry()
+    _git(repo, "remote", "remove", "origin")
+    missing = _validate(step6, registry, repo)
+    assert missing["failures"][0]["code"] == "target_repository_unverified"
+    _git(repo, "remote", "add", "origin", "https://github.com/intacct/wrong.git")
+    wrong = _validate(step6, registry, repo)
+    assert wrong["failures"][0]["code"] == "target_repository_mismatch"
+
+
+def test_dirty_checkout_is_blocked(tmp_path: Path) -> None:
+    repo, revision = _target_repo(tmp_path)
+    (repo / "unrelated.txt").write_text("dirty\n", encoding="utf-8")
+    report = _validate(_step6_report(revision), _registry(), repo)
+    assert report["status"] == "blocked"
     assert report["failures"][0]["code"] == "target_checkout_dirty"
 
 
 def test_failed_command_returns_actionable_report(tmp_path: Path) -> None:
     repo, revision = _target_repo(tmp_path)
-    step6 = _step6_report(repo, revision)
-    request = _request(step6, revision)
-    request["commands"]["targeted"][0]["argv"] = [
-        sys.executable,
-        "-c",
-        "raise SystemExit(3)",
-    ]
-
-    report = validate_step7(step6, request, repo)
-
-    assert report["status"] == "failed"
-    assert report["pr_eligible"] is False
-    assert any(
-        failure["code"] == "validation_command_failed" for failure in report["failures"]
+    report = _validate(
+        _step6_report(revision), _registry(command_code="raise SystemExit(3)"), repo
     )
-    assert report["checks"][3]["status"] == "failed"
+    assert report["status"] == "failed"
+    assert any(row["code"] == "validation_command_failed" for row in report["failures"])
 
 
 def test_command_mutation_is_rejected(tmp_path: Path) -> None:
     repo, revision = _target_repo(tmp_path)
-    step6 = _step6_report(repo, revision)
-    request = _request(step6, revision)
-    request["commands"]["targeted"][0]["argv"] = [
-        sys.executable,
-        "-c",
-        "from pathlib import Path; Path('unrelated.txt').write_text('bad')",
-    ]
-
-    report = validate_step7(step6, request, repo)
-
-    assert report["status"] == "failed"
+    code = "from pathlib import Path; Path('unrelated.txt').write_text('bad')"
+    report = _validate(_step6_report(revision), _registry(command_code=code), repo)
     assert any(
-        failure["code"] == "unexpected_worktree_changes"
-        for failure in report["failures"]
+        row["code"] == "unexpected_worktree_changes" for row in report["failures"]
     )
 
 
 def test_ignored_build_output_does_not_fail_validation(tmp_path: Path) -> None:
     repo, revision = _target_repo(tmp_path)
-    step6 = _step6_report(repo, revision)
-    request = _request(step6, revision)
-    request["commands"]["targeted"][0]["argv"] = [
-        sys.executable,
-        "-c",
-        "from pathlib import Path; Path('.step7-build').mkdir(); Path('.step7-build/result').write_text('ok')",
-    ]
-
-    report = validate_step7(step6, request, repo)
-
+    code = (
+        "from pathlib import Path; Path('.step7-build').mkdir(exist_ok=True); "
+        "Path('.step7-build/result').write_text('ok')"
+    )
+    report = _validate(_step6_report(revision), _registry(command_code=code), repo)
     assert report["status"] == "validated"
 
 
-def test_command_output_limit_is_enforced(tmp_path: Path) -> None:
+def test_output_limit_is_enforced(tmp_path: Path) -> None:
     repo, revision = _target_repo(tmp_path)
-    step6 = _step6_report(repo, revision)
-    request = _request(step6, revision)
-    request["policy"]["max_output_bytes"] = 16
-    request["commands"]["targeted"][0]["argv"] = [
-        sys.executable,
-        "-c",
-        "print('x' * 1000)",
-    ]
-
-    report = validate_step7(step6, request, repo)
-
-    assert report["status"] == "failed"
+    registry = _registry(command_code="print('x' * 10000)")
+    profile = registry["profiles"][0]
+    profile["policy"]["max_output_bytes"] = 16
+    profile["profile_sha256"] = artifact_sha256(
+        {key: value for key, value in profile.items() if key != "profile_sha256"}
+    )
+    report = _validate(_step6_report(revision), registry, repo)
     assert any(
-        failure["code"] == "validation_output_limit_exceeded"
-        for failure in report["failures"]
+        row["code"] == "validation_output_limit_exceeded" for row in report["failures"]
     )
 
 
-def test_validated_report_requires_passed_commands(tmp_path: Path) -> None:
+def test_profile_request_tampering_is_blocked(tmp_path: Path) -> None:
     repo, revision = _target_repo(tmp_path)
-    step6 = _step6_report(repo, revision)
-    request = _request(step6, revision)
-    report = validate_step7(step6, request, repo)
+    step6 = _step6_report(revision)
+    registry = _registry()
+    request = build_step7_request(step6, registry)
+    request["commands"]["targeted"][0]["argv"] = [sys.executable, "-c", "assert False"]
+    report = validate_step7(
+        step6,
+        request,
+        repo,
+        profile_registry=registry,
+        runner=LocalSubprocessRunner(),
+    )
+    assert report["status"] == "blocked"
+    assert report["failures"][0]["code"] == "step7_request_profile_mismatch"
+
+
+def test_symlink_patch_target_is_blocked(tmp_path: Path) -> None:
+    repo, _ = _target_repo(tmp_path)
+    path = repo / "features/gl/v1-beta2/example.feature"
+    content = path.read_text(encoding="utf-8")
+    backing = repo / "backing.feature"
+    backing.write_text(content, encoding="utf-8")
+    path.unlink()
+    path.symlink_to("../../../backing.feature")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "symlink target")
+    revision = _git(repo, "rev-parse", "HEAD")
+    report = _validate(_step6_report(revision), _registry(), repo)
+    assert any(
+        row["code"] == "patch_path_mode_unsupported" for row in report["failures"]
+    )
+
+
+def test_tampered_runner_attestation_is_rejected(tmp_path: Path) -> None:
+    class BadRunner(LocalSubprocessRunner):
+        def attestation(self) -> dict[str, object]:
+            value = super().attestation()
+            value["production_eligible"] = True
+            return value
+
+    repo, revision = _target_repo(tmp_path)
+    try:
+        _validate(_step6_report(revision), _registry(), repo, runner=BadRunner())
+    except ValueError as exc:
+        assert "attestation fingerprint" in str(exc)
+    else:
+        raise AssertionError("tampered runner attestation was accepted")
+
+
+def test_report_tampering_is_rejected(tmp_path: Path) -> None:
+    repo, revision = _target_repo(tmp_path)
+    report = _validate(_step6_report(revision), _registry(), repo)
     tampered = deepcopy(report)
-    tampered["checks"] = [
-        {**row, "status": "not_run", "commands": []} for row in tampered["checks"]
-    ]
-    tampered.pop("report_sha256")
-    tampered["report_sha256"] = artifact_sha256(tampered)
-
-    errors = validate_step7_report(tampered)
-
-    assert any("every check category to pass" in error for error in errors)
+    tampered["checks"][0]["commands"][0]["status"] = "failed"
+    assert validate_step7_report(tampered)
 
 
-def test_generated_file_policy_blocks_declared_generated_path(tmp_path: Path) -> None:
+def test_report_cannot_claim_pr_eligibility_with_a_recomputed_hash(
+    tmp_path: Path,
+) -> None:
     repo, revision = _target_repo(tmp_path)
-    step6 = _step6_report(repo, revision)
-    request = _request(step6, revision)
-    request["policy"]["generated_file_policy"]["generated_paths"] = [
-        step6["patch"]["files"][0]["path"]
-    ]
-
-    report = validate_step7(step6, request, repo)
-
-    assert report["status"] == "blocked"
-    assert report["failures"][0]["code"] == "generated_file_change_rejected"
-
-
-def test_unclassified_changed_path_is_blocked(tmp_path: Path) -> None:
-    repo, revision = _target_repo(tmp_path)
-    step6 = _step6_report(repo, revision)
-    request = _request(step6, revision)
-    request["policy"]["generated_file_policy"]["source_paths"] = []
-
-    report = validate_step7(step6, request, repo)
-
-    assert report["status"] == "blocked"
-    assert report["failures"][0]["code"] == "generated_file_status_unknown"
-
-
-def test_diff_size_policy_blocks_patch(tmp_path: Path) -> None:
-    repo, revision = _target_repo(tmp_path)
-    step6 = _step6_report(repo, revision)
-    request = _request(step6, revision)
-    request["policy"]["diff_limits"]["max_files"] = 1
-
-    report = validate_step7(step6, request, repo)
-
-    assert report["status"] == "failed"
-    assert any(
-        failure["code"] == "diff_file_limit_exceeded" for failure in report["failures"]
+    report = _validate(
+        _step6_report(revision), _registry(), repo, runner=AttestedSandboxRunner()
     )
+    tampered = deepcopy(report)
+    tampered["pr_eligible"] = True
+    unsigned = dict(tampered)
+    unsigned.pop("report_sha256")
+    tampered["report_sha256"] = artifact_sha256(unsigned)
+    assert any("non-PR-eligible" in error for error in validate_step7_report(tampered))
 
 
-def test_cli_writes_report_and_returns_success(tmp_path: Path) -> None:
+def test_local_runner_terminates_descendants_on_timeout(tmp_path: Path) -> None:
+    marker = tmp_path / "late-marker"
+    child = (
+        "import time; from pathlib import Path; time.sleep(1); "
+        f"Path({str(marker)!r}).write_text('bad')"
+    )
+    parent = (
+        "import subprocess,sys,time; "
+        f"subprocess.Popen([sys.executable,'-c',{child!r}]); time.sleep(30)"
+    )
+    result = LocalSubprocessRunner().run(
+        [sys.executable, "-c", parent], cwd=tmp_path, timeout=1, output_limit=1000
+    )
+    assert result.outcome == "timeout"
+    time.sleep(1.2)
+    assert not marker.exists()
+
+
+def test_cli_writes_local_noneligible_report_and_returns_one(tmp_path: Path) -> None:
     repo, revision = _target_repo(tmp_path)
-    step6 = _step6_report(repo, revision)
-    request = _request(step6, revision)
+    step6 = _step6_report(revision)
+    registry = _registry()
+    request = build_step7_request(step6, registry)
     step6_path = tmp_path / "step6.json"
     request_path = tmp_path / "step7.request.json"
+    profiles_path = tmp_path / "profiles.yaml"
     output_path = tmp_path / "step7.report.json"
     step6_path.write_text(json.dumps(step6), encoding="utf-8")
     request_path.write_text(json.dumps(request), encoding="utf-8")
-
-    assert (
-        validate_greenfield_step7.main(
-            [
-                "--step6-report",
-                str(step6_path),
-                "--request",
-                str(request_path),
-                "--target-checkout",
-                str(repo),
-                "--output",
-                str(output_path),
-            ]
-        )
-        == 0
+    raw_profile = deepcopy(registry)
+    raw_profile.pop("registry_sha256")
+    for profile in raw_profile["profiles"]:
+        profile.pop("profile_sha256")
+    profiles_path.write_text(
+        yaml.safe_dump(raw_profile, sort_keys=False), encoding="utf-8"
     )
-    assert validate_step7_report(json.loads(output_path.read_text())) == []
+    result = validate_greenfield_step7.main(
+        [
+            "--step6-report",
+            str(step6_path),
+            "--request",
+            str(request_path),
+            "--profiles",
+            str(profiles_path),
+            "--runner",
+            "local",
+            "--target-checkout",
+            str(repo),
+            "--output",
+            str(output_path),
+        ]
+    )
+    assert result == 1
+    output = json.loads(output_path.read_text(encoding="utf-8"))
+    assert output["status"] == "validated"
+    assert output["pr_eligible"] is False

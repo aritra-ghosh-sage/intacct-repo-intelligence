@@ -165,26 +165,49 @@ def _validate_approvals(value: Any, label: str) -> list[str]:
         if row.get("status") == "approved":
             evidence = row.get("approval_evidence")
             if not isinstance(evidence, Mapping):
-                errors.append(f"{label}[{index}].approval_evidence is required when approved")
+                errors.append(
+                    f"{label}[{index}].approval_evidence is required when approved"
+                )
             else:
-                if not isinstance(evidence.get("provider"), str) or not evidence["provider"].strip():
-                    errors.append(f"{label}[{index}].approval_evidence.provider is required")
-                if not isinstance(evidence.get("record_id"), str) or not evidence["record_id"].strip():
-                    errors.append(f"{label}[{index}].approval_evidence.record_id is required")
-                if not isinstance(evidence.get("sha256"), str) or not SHA256.fullmatch(evidence["sha256"]):
-                    errors.append(f"{label}[{index}].approval_evidence.sha256 is invalid")
+                if (
+                    not isinstance(evidence.get("provider"), str)
+                    or not evidence["provider"].strip()
+                ):
+                    errors.append(
+                        f"{label}[{index}].approval_evidence.provider is required"
+                    )
+                if (
+                    not isinstance(evidence.get("record_id"), str)
+                    or not evidence["record_id"].strip()
+                ):
+                    errors.append(
+                        f"{label}[{index}].approval_evidence.record_id is required"
+                    )
+                if not isinstance(evidence.get("sha256"), str) or not SHA256.fullmatch(
+                    evidence["sha256"]
+                ):
+                    errors.append(
+                        f"{label}[{index}].approval_evidence.sha256 is invalid"
+                    )
             approval_digest = row.get("approval_sha256")
-            if not isinstance(approval_digest, str) or not SHA256.fullmatch(approval_digest):
+            if not isinstance(approval_digest, str) or not SHA256.fullmatch(
+                approval_digest
+            ):
                 errors.append(f"{label}[{index}].approval_sha256 is invalid")
-            elif artifact_sha256(
-                {
-                    "role": row.get("role"),
-                    "status": row.get("status"),
-                    "approver": row.get("approver"),
-                    "approval_evidence": row.get("approval_evidence"),
-                }
-            ) != approval_digest:
-                errors.append(f"{label}[{index}].approval_sha256 does not match approval")
+            elif (
+                artifact_sha256(
+                    {
+                        "role": row.get("role"),
+                        "status": row.get("status"),
+                        "approver": row.get("approver"),
+                        "approval_evidence": row.get("approval_evidence"),
+                    }
+                )
+                != approval_digest
+            ):
+                errors.append(
+                    f"{label}[{index}].approval_sha256 does not match approval"
+                )
     return errors
 
 
@@ -218,9 +241,7 @@ def _validate_target_evidence(
         patch = target.get("patch_files", [])
         target_rows = patch if isinstance(patch, list) else []
     target_files = {
-        row.get("path"): row
-        for row in target_rows
-        if isinstance(row, Mapping)
+        row.get("path"): row for row in target_rows if isinstance(row, Mapping)
     }
     paths: list[str] = []
     for index, item in enumerate(files):
@@ -236,8 +257,13 @@ def _validate_target_evidence(
         if not isinstance(digest, str) or not SHA256.fullmatch(digest):
             errors.append(f"{label}.files[{index}].content_sha256 is invalid")
         elif target_files.get(path, {}).get("sha256") != digest:
-            errors.append(f"{label}.files[{index}].content_sha256 does not match target file")
-        if not isinstance(row.get("blob_or_response_id"), str) or not row["blob_or_response_id"].strip():
+            errors.append(
+                f"{label}.files[{index}].content_sha256 does not match target file"
+            )
+        if (
+            not isinstance(row.get("blob_or_response_id"), str)
+            or not row["blob_or_response_id"].strip()
+        ):
             errors.append(f"{label}.files[{index}].blob_or_response_id is required")
     if paths != sorted(set(paths)):
         errors.append(f"{label}.files must be sorted and unique")

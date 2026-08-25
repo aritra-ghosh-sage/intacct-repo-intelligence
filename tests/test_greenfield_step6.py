@@ -437,9 +437,12 @@ def test_strict_step6_requires_both_owner_approvals_for_pr_output() -> None:
         require_approvals=True,
     )
     assert ready["status"] == "ready_for_ai_pr"
-    assert validate_step6_report(
-        ready, strict_target_evidence=True, require_approvals=True
-    ) == []
+    assert (
+        validate_step6_report(
+            ready, strict_target_evidence=True, require_approvals=True
+        )
+        == []
+    )
 
 
 def test_owner_approval_gate_is_not_bypassed_without_strict_evidence() -> None:
@@ -448,7 +451,14 @@ def test_owner_approval_gate_is_not_bypassed_without_strict_evidence() -> None:
         "intacct/ia-restapi-automation-tests",
         "restapi_existing_case_update_v1",
         files,
-        [{"path": files[0]["path"], "old_text": "old", "new_text": "new", "expected_occurrences": 1}],
+        [
+            {
+                "path": files[0]["path"],
+                "old_text": "old",
+                "new_text": "new",
+                "expected_occurrences": 1,
+            }
+        ],
     )
     blocked = generate_step6(
         request, step1, step3, step4, step5, require_approvals=True
@@ -458,14 +468,24 @@ def test_owner_approval_gate_is_not_bypassed_without_strict_evidence() -> None:
 
 def test_strict_target_evidence_requires_all_target_files() -> None:
     files = sorted(
-        [_file("features/a.feature", "Then old\n"), _file("features/b.feature", "Then other\n")],
+        [
+            _file("features/a.feature", "Then old\n"),
+            _file("features/b.feature", "Then other\n"),
+        ],
         key=lambda row: row["path"],
     )
     request, *_ = _request(
         "intacct/ia-restapi-automation-tests",
         "restapi_existing_case_update_v1",
         files,
-        [{"path": files[0]["path"], "old_text": "old", "new_text": "new", "expected_occurrences": 1}],
+        [
+            {
+                "path": files[0]["path"],
+                "old_text": "old",
+                "new_text": "new",
+                "expected_occurrences": 1,
+            }
+        ],
     )
     revision = "0123456789abcdef0123456789abcdef01234567"
     request["target"]["base_revision"] = revision
@@ -473,11 +493,13 @@ def test_strict_target_evidence_requires_all_target_files() -> None:
         "provider": "github_git_api",
         "repository": request["target"]["repository"],
         "revision": revision,
-        "files": [{
-            "path": files[0]["path"],
-            "content_sha256": files[0]["sha256"],
-            "blob_or_response_id": "blob:example",
-        }],
+        "files": [
+            {
+                "path": files[0]["path"],
+                "content_sha256": files[0]["sha256"],
+                "blob_or_response_id": "blob:example",
+            }
+        ],
     }
     evidence["evidence_sha256"] = artifact_sha256(evidence)
     request["target_evidence"] = evidence

@@ -33,6 +33,9 @@ from greenfield.step6_contract import (
 )
 from greenfield.step6_patch import generate_step6
 from greenfield.step7_contract import validate_step7_report
+from greenfield.step7_prepare import prepare_step7
+from greenfield.step7_profiles import load_profile_registry
+from greenfield.step7_runner import LocalSubprocessRunner
 from greenfield.step7_validate import validate_step7
 from scripts.replay_greenfield_step1_5 import _load_contracts
 from scripts.validate_greenfield_step1 import validate as validate_step1
@@ -151,6 +154,11 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="Optional exact target checkout for conditional Step 7 replay.",
     )
+    parser.add_argument(
+        "--step7-profiles",
+        type=Path,
+        help="Optional central validation-profile registry for conditional Step 7 replay.",
+    )
     args = parser.parse_args(argv)
     bundle = args.bundle_dir
     try:
@@ -259,29 +267,46 @@ def main(argv: list[str] | None = None) -> int:
         step7 = None
         step7_handoff: dict[str, object] = {
             "status": "unavailable",
-            "reason": "step7_request_not_supplied",
+            "reason": "step7_profiles_not_supplied",
             "pr_eligible": False,
         }
-        step7_request_path = bundle / "step7.request.json"
-        if step7_request_path.exists():
-            if step6 is None:
+        if step6 is None:
+            step7_handoff = {
+                "status": "blocked",
+                "reason": "step6_report_not_supplied",
+                "pr_eligible": False,
+            }
+        else:
+            strict_errors = validate_step6_report(
+                step6,
+                strict_target_evidence=True,
+                require_approvals=True,
+                require_step7_eligibility=True,
+            )
+            if strict_errors:
                 step7_handoff = {
                     "status": "blocked",
-                    "reason": "step6_report_not_supplied",
+                    "reason": "step6_strict_evidence_unavailable",
+                    "details": strict_errors,
+                    "pr_eligible": False,
+                }
+            elif args.step7_profiles is None:
+                step7_handoff = {
+                    "status": "unavailable",
+                    "reason": "step7_profiles_not_supplied",
                     "pr_eligible": False,
                 }
             else:
-                strict_errors = validate_step6_report(
-                    step6,
-                    strict_target_evidence=True,
-                    require_approvals=True,
-                    require_step7_eligibility=True,
-                )
-                if strict_errors:
+                profile_registry = load_profile_registry(args.step7_profiles)
+                prepared = prepare_step7(step6, profile_registry)
+                if (
+                    prepared.get("analysis_kind")
+                    != "greenfield_pr_impact_step_7_request"
+                ):
                     step7_handoff = {
                         "status": "blocked",
-                        "reason": "step6_strict_evidence_unavailable",
-                        "details": strict_errors,
+                        "reason": "step7_profile_unavailable",
+                        "details": prepared.get("failures", []),
                         "pr_eligible": False,
                     }
                 elif args.target_checkout is None:
@@ -291,8 +316,13 @@ def main(argv: list[str] | None = None) -> int:
                         "pr_eligible": False,
                     }
                 else:
-                    step7_request = load_json(step7_request_path, "Step 7 request")
-                    step7 = validate_step7(step6, step7_request, args.target_checkout)
+                    step7 = validate_step7(
+                        step6,
+                        prepared,
+                        args.target_checkout,
+                        profile_registry=profile_registry,
+                        runner=LocalSubprocessRunner(),
+                    )
                     step7_errors = validate_step7_report(step7)
                     if step7_errors:
                         raise ValueError(
@@ -301,7 +331,7 @@ def main(argv: list[str] | None = None) -> int:
                         )
                     step7_handoff = {
                         "status": step7["status"],
-                        "reason": "step7_replayed",
+                        "reason": "step7_replayed_local",
                         "pr_eligible": step7["pr_eligible"],
                     }
 

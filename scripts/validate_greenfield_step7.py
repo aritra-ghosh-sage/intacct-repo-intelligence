@@ -15,6 +15,8 @@ from greenfield.step7_contract import (
     load_json,
     validate_step7_report,
 )
+from greenfield.step7_profiles import Step7ProfileError, load_profile_registry
+from greenfield.step7_runner import LocalSubprocessRunner
 from greenfield.step7_validate import validate_step7
 
 
@@ -22,18 +24,27 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--step6-report", required=True, type=Path)
     parser.add_argument("--request", required=True, type=Path)
+    parser.add_argument("--profiles", required=True, type=Path)
+    parser.add_argument("--runner", required=True, choices=("local",))
     parser.add_argument("--target-checkout", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
         step6 = load_json(args.step6_report, "Step 6 report")
         request = load_json(args.request, "Step 7 request")
-        report = validate_step7(step6, request, args.target_checkout)
+        registry = load_profile_registry(args.profiles)
+        report = validate_step7(
+            step6,
+            request,
+            args.target_checkout,
+            profile_registry=registry,
+            runner=LocalSubprocessRunner(),
+        )
         errors = validate_step7_report(report)
         if errors:
             raise Step7Error("generated invalid Step 7 report: " + "; ".join(errors))
         write_json_atomic(args.output, report)
-    except (OSError, Step7Error) as exc:
+    except (OSError, Step7Error, Step7ProfileError) as exc:
         print(f"greenfield Step 7 failed: {exc}", file=sys.stderr)
         return 2
     print(
@@ -46,7 +57,7 @@ def main(argv: list[str] | None = None) -> int:
             sort_keys=True,
         )
     )
-    return 0 if report["status"] == "validated" else 1
+    return 0 if report["pr_eligible"] else 1
 
 
 if __name__ == "__main__":

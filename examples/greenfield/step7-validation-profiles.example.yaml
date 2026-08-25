@@ -1,0 +1,56 @@
+# Documentation-only profile. Production profiles require repository-owner review.
+version: 1
+profiles:
+  - profile_id: example-test-suite-step7
+    profile_version: "0.1"
+    repository: example/test-suite
+    enabled: true
+    required_runner: sandbox
+    commands:
+      format:
+        - id: format-check
+          argv: [python, -c, "assert True"]
+          cwd: .
+          timeout_seconds: 30
+          shell: false
+      lint:
+        - id: lint-check
+          argv: [python, -c, "assert True"]
+          cwd: .
+          timeout_seconds: 30
+          shell: false
+      compile_or_type:
+        - id: compile-check
+          argv: [python, -c, "assert True"]
+          cwd: .
+          timeout_seconds: 30
+          shell: false
+      targeted:
+        - id: targeted-check
+          argv: [python, -c, "assert True"]
+          cwd: .
+          timeout_seconds: 30
+          shell: false
+      integration:
+        - id: integration-check
+          argv: [python, -c, "assert True"]
+          cwd: .
+          timeout_seconds: 30
+          shell: false
+      regression:
+        - id: regression-check
+          argv: [python, -c, "assert True"]
+          cwd: .
+          timeout_seconds: 30
+          shell: false
+    policy:
+      diff_limits:
+        max_files: 5
+        max_added_lines: 100
+        max_deleted_lines: 100
+        max_bytes: 50000
+      max_output_bytes: 100000
+      path_classification:
+        source_prefixes: [tests]
+        generated_prefixes: [generated]
+        allowed_generated_prefixes: [generated/approved]

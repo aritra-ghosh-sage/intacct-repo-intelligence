@@ -58,7 +58,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.step7_eligible and not (
         args.strict_target_evidence and args.require_owner_approvals
     ):
-        parser.error("--step7-eligible requires --strict-target-evidence and --require-owner-approvals")
+        parser.error(
+            "--step7-eligible requires --strict-target-evidence and --require-owner-approvals"
+        )
     try:
         request = load_json(args.request, "Step 6 request")
         if args.step7_eligible:

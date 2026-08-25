@@ -2,25 +2,27 @@
 
 from __future__ import annotations
 
-import os
-import selectors
 import subprocess
 import tempfile
-import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from greenfield.step6_contract import validate_step6_report
 from greenfield.step7_contract import (
     CHECK_CATEGORIES,
     REPORT_ANALYSIS_KIND,
     RULE_SET_VERSION,
+    SCHEMA_VERSION,
     Step7Error,
     artifact_sha256,
     sha256_bytes,
     validate_step7_request,
 )
+from greenfield.step7_prepare import build_step7_request
+from greenfield.step7_profiles import Step7ProfileError
+from greenfield.step7_runner import Step7Runner
 
 
 def _run(
@@ -37,88 +39,6 @@ def _run(
         timeout=timeout,
         shell=False,
     )
-
-
-class _OutputLimitExceeded(RuntimeError):
-    def __init__(self, stdout: bytes, stderr: bytes) -> None:
-        super().__init__("validation command output exceeded the configured limit")
-        self.stdout = stdout
-        self.stderr = stderr
-
-
-def _terminate(process: subprocess.Popen[bytes]) -> None:
-    if process.poll() is None:
-        process.kill()
-    try:
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait()
-    for stream in (process.stdout, process.stderr):
-        if stream is not None:
-            stream.close()
-
-
-def _run_bounded(
-    argv: list[str],
-    *,
-    cwd: Path,
-    timeout: int,
-    output_limit: int,
-) -> subprocess.CompletedProcess[bytes]:
-    process = subprocess.Popen(
-        argv,
-        cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        shell=False,
-    )
-    selector = selectors.DefaultSelector()
-    assert process.stdout is not None
-    assert process.stderr is not None
-    selector.register(process.stdout, selectors.EVENT_READ, "stdout")
-    selector.register(process.stderr, selectors.EVENT_READ, "stderr")
-    output = {"stdout": bytearray(), "stderr": bytearray()}
-    deadline = time.monotonic() + timeout
-    try:
-        while selector.get_map():
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                stdout = bytes(output["stdout"])
-                stderr = bytes(output["stderr"])
-                _terminate(process)
-                raise subprocess.TimeoutExpired(
-                    argv, timeout, output=stdout, stderr=stderr
-                )
-            events = selector.select(remaining)
-            if not events:
-                stdout = bytes(output["stdout"])
-                stderr = bytes(output["stderr"])
-                _terminate(process)
-                raise subprocess.TimeoutExpired(
-                    argv, timeout, output=stdout, stderr=stderr
-                )
-            for key, _ in events:
-                chunk = os.read(key.fileobj.fileno(), 64 * 1024)
-                if not chunk:
-                    selector.unregister(key.fileobj)
-                    key.fileobj.close()
-                    continue
-                stream = output[key.data]
-                if len(stream) + len(chunk) > output_limit:
-                    stdout = bytes(output["stdout"])
-                    stderr = bytes(output["stderr"])
-                    _terminate(process)
-                    raise _OutputLimitExceeded(stdout, stderr)
-                stream.extend(chunk)
-        return subprocess.CompletedProcess(
-            argv,
-            process.wait(),
-            stdout=bytes(output["stdout"]),
-            stderr=bytes(output["stderr"]),
-        )
-    finally:
-        selector.close()
 
 
 def _git(
@@ -173,16 +93,22 @@ def _report(
     failures: list[dict[str, Any]],
     generation_fingerprint: str | None = None,
     validation_fingerprint: str | None = None,
+    runner_attestation: Mapping[str, Any],
 ) -> dict[str, Any]:
     target = step6.get("target", {})
     patch = step6.get("patch", {})
     source = step6.get("source", {})
     report: dict[str, Any] = {
-        "schema_version": "0.1",
+        "schema_version": SCHEMA_VERSION,
         "analysis_kind": REPORT_ANALYSIS_KIND,
         "status": status,
-        "pr_eligible": status == "validated",
+        # A checksum only proves this report's bytes are internally consistent;
+        # it cannot authenticate an external sandbox. Step 8 must independently
+        # verify a trusted runner attestation before it can create a PR.
+        "pr_eligible": False,
         "step6_report_sha256": artifact_sha256(step6),
+        "profile": dict(request.get("profile", {})),
+        "runner": dict(runner_attestation),
         "source": {
             "repository": source.get("repository"),
             "pr_number": source.get("pr_number"),
@@ -219,7 +145,9 @@ def _report(
 
 
 def _fingerprints(
-    step6: Mapping[str, Any], request: Mapping[str, Any]
+    step6: Mapping[str, Any],
+    request: Mapping[str, Any],
+    runner_attestation: Mapping[str, Any],
 ) -> tuple[str, str]:
     patch = step6["patch"]
     generation = artifact_sha256(
@@ -245,6 +173,8 @@ def _fingerprints(
             "target": request["target"],
             "commands": request["commands"],
             "policy": request["policy"],
+            "profile": request["profile"],
+            "runner": dict(runner_attestation),
         }
     )
     return generation, validation
@@ -283,17 +213,39 @@ def _expected_patch_status(checkout: Path, paths: set[str]) -> list[dict[str, An
     return []
 
 
-def _repository_identity_matches(checkout: Path, repository: str) -> bool:
+def _github_identity(remote_url: str) -> str | None:
+    value = remote_url.strip()
+    if value.startswith("git@github.com:"):
+        path = value.removeprefix("git@github.com:")
+    else:
+        parsed = urlparse(value)
+        if parsed.hostname is None or parsed.hostname.lower() != "github.com":
+            return None
+        path = parsed.path.lstrip("/")
+    normalized = path.removesuffix(".git").strip("/").lower()
+    parts = normalized.split("/")
+    return normalized if len(parts) == 2 and all(parts) else None
+
+
+def _repository_identity(checkout: Path) -> str | None:
     remote = _git(checkout, ["remote", "get-url", "origin"])
     if remote.returncode:
-        return True
-    value = remote.stdout.decode("utf-8", errors="replace").strip()
-    normalized = value.removesuffix(".git")
-    if normalized.startswith("git@github.com:"):
-        normalized = normalized.removeprefix("git@github.com:")
-    elif "github.com/" in normalized:
-        normalized = normalized.split("github.com/", 1)[1]
-    return normalized == repository
+        return None
+    return _github_identity(remote.stdout.decode("utf-8", errors="replace"))
+
+
+def _tracked_blob_mode(checkout: Path, revision: str, path: str) -> str | None:
+    result = _git(checkout, ["ls-tree", revision, "--", path])
+    if result.returncode:
+        raise Step7Error(f"git ls-tree failed for {path}")
+    lines = result.stdout.decode("utf-8", errors="replace").splitlines()
+    if len(lines) != 1 or "\t" not in lines[0]:
+        return None
+    metadata, observed_path = lines[0].split("\t", 1)
+    parts = metadata.split()
+    if len(parts) != 3 or observed_path != path or parts[1] != "blob":
+        return None
+    return parts[0]
 
 
 def _diff_stats(checkout: Path) -> tuple[int, int, int]:
@@ -316,6 +268,7 @@ def _run_command(
     command: Mapping[str, Any],
     *,
     output_limit: int,
+    runner: Step7Runner,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     argv = [str(item) for item in command["argv"]]
     checkout_root = checkout.resolve()
@@ -331,26 +284,26 @@ def _run_command(
                 observed=str(cwd.relative_to(checkout_root)),
             ),
         )
-    try:
-        result = _run_bounded(
-            argv,
-            cwd=cwd,
-            timeout=int(command["timeout_seconds"]),
-            output_limit=output_limit,
-        )
-        stdout_sha256 = sha256_bytes(result.stdout)
-        stderr_sha256 = sha256_bytes(result.stderr)
-        row = {
-            "id": command["id"],
-            "argv": argv,
-            "cwd": str(cwd.relative_to(checkout_root)),
-            "status": "passed" if result.returncode == 0 else "failed",
-            "exit_code": result.returncode,
-            "stdout_sha256": stdout_sha256,
-            "stderr_sha256": stderr_sha256,
-            "stdout": _text_output(result.stdout, output_limit),
-            "stderr": _text_output(result.stderr, output_limit),
-        }
+    result = runner.run(
+        argv,
+        cwd=cwd,
+        timeout=int(command["timeout_seconds"]),
+        output_limit=output_limit,
+    )
+    row = {
+        "id": command["id"],
+        "argv": argv,
+        "cwd": str(cwd.relative_to(checkout_root)),
+        "status": "passed"
+        if result.outcome == "completed" and result.returncode == 0
+        else "failed",
+        "stdout_sha256": sha256_bytes(result.stdout),
+        "stderr_sha256": sha256_bytes(result.stderr),
+        "stdout": _text_output(result.stdout, output_limit),
+        "stderr": _text_output(result.stderr, output_limit),
+    }
+    if result.outcome == "completed":
+        row["exit_code"] = result.returncode
         if result.returncode == 0:
             return row, None
         return row, _failure(
@@ -361,19 +314,10 @@ def _run_command(
             expected=0,
             observed=result.returncode,
         )
-    except _OutputLimitExceeded as exc:
+    row["result"] = result.outcome
+    if result.outcome == "output_limit":
         return (
-            {
-                "id": command["id"],
-                "argv": argv,
-                "cwd": str(cwd.relative_to(checkout_root)),
-                "status": "failed",
-                "result": "output_limit",
-                "stdout_sha256": sha256_bytes(exc.stdout),
-                "stderr_sha256": sha256_bytes(exc.stderr),
-                "stdout": _text_output(exc.stdout, output_limit),
-                "stderr": _text_output(exc.stderr, output_limit),
-            },
+            row,
             _failure(
                 "validation_output_limit_exceeded",
                 phase="commands",
@@ -381,21 +325,9 @@ def _run_command(
                 remediation="Reduce validation command output or increase the reviewed output limit.",
             ),
         )
-    except subprocess.TimeoutExpired as exc:
-        stdout = exc.stdout if isinstance(exc.stdout, bytes) else b""
-        stderr = exc.stderr if isinstance(exc.stderr, bytes) else b""
+    if result.outcome == "timeout":
         return (
-            {
-                "id": command["id"],
-                "argv": argv,
-                "cwd": str(cwd.relative_to(checkout_root)),
-                "status": "failed",
-                "result": "timeout",
-                "stdout_sha256": sha256_bytes(stdout),
-                "stderr_sha256": sha256_bytes(stderr),
-                "stdout": _text_output(stdout, output_limit),
-                "stderr": _text_output(stderr, output_limit),
-            },
+            row,
             _failure(
                 "validation_command_timeout",
                 phase="commands",
@@ -403,24 +335,36 @@ def _run_command(
                 remediation="Reduce command scope or increase its declared timeout after review.",
             ),
         )
-    except OSError as exc:
-        return (
-            {"id": command["id"], "argv": argv, "status": "failed"},
-            _failure(
-                "validation_command_unavailable",
-                phase="commands",
-                command=argv,
-                remediation="Install or expose the declared validation tool in the runner environment.",
-                observed=str(exc),
-            ),
-        )
+    return (
+        row,
+        _failure(
+            "validation_command_unavailable",
+            phase="commands",
+            command=argv,
+            remediation="Install or expose the declared validation tool in the runner environment.",
+            observed=result.error or result.outcome,
+        ),
+    )
 
 
 def validate_step7(
     step6_report: Mapping[str, Any],
     request: Mapping[str, Any],
     target_checkout: str | Path,
+    *,
+    profile_registry: Mapping[str, Any],
+    runner: Step7Runner,
 ) -> dict[str, Any]:
+    runner_attestation = runner.attestation()
+    if not isinstance(runner_attestation, Mapping):
+        raise Step7Error("runner attestation must be an object")
+    unsigned_attestation = dict(runner_attestation)
+    attestation_digest = unsigned_attestation.pop("attestation_sha256", None)
+    if (
+        not isinstance(attestation_digest, str)
+        or artifact_sha256(unsigned_attestation) != attestation_digest
+    ):
+        raise Step7Error("runner attestation fingerprint is invalid")
     request_errors = validate_step7_request(request)
     if request_errors:
         raise Step7Error("invalid Step 7 request: " + "; ".join(request_errors))
@@ -431,7 +375,9 @@ def validate_step7(
         require_step7_eligibility=True,
     )
     if step6_errors:
-        generation, validation = _fingerprints(step6_report, request)
+        generation, validation = _fingerprints(
+            step6_report, request, runner_attestation
+        )
         return _report(
             step6_report,
             request,
@@ -447,11 +393,59 @@ def validate_step7(
             ],
             generation_fingerprint=generation,
             validation_fingerprint=validation,
+            runner_attestation=runner_attestation,
+        )
+    try:
+        expected_request = build_step7_request(step6_report, profile_registry)
+    except Step7ProfileError as exc:
+        generation, validation = _fingerprints(
+            step6_report, request, runner_attestation
+        )
+        return _report(
+            step6_report,
+            request,
+            status="blocked",
+            checks=_empty_checks(),
+            failures=[
+                _failure(
+                    "step7_profile_unavailable",
+                    phase="preflight",
+                    remediation="Enable an owner-approved central validation profile.",
+                    observed=str(exc),
+                )
+            ],
+            generation_fingerprint=generation,
+            validation_fingerprint=validation,
+            runner_attestation=runner_attestation,
+        )
+    if artifact_sha256(request) != artifact_sha256(expected_request):
+        generation, validation = _fingerprints(
+            step6_report, request, runner_attestation
+        )
+        return _report(
+            step6_report,
+            request,
+            status="blocked",
+            checks=_empty_checks(),
+            failures=[
+                _failure(
+                    "step7_request_profile_mismatch",
+                    phase="preflight",
+                    remediation="Regenerate the request from the exact central profile and Step 6 report.",
+                    expected=artifact_sha256(expected_request),
+                    observed=artifact_sha256(request),
+                )
+            ],
+            generation_fingerprint=generation,
+            validation_fingerprint=validation,
+            runner_attestation=runner_attestation,
         )
     expected_hash = request["step6_report_sha256"]
     actual_hash = artifact_sha256(step6_report)
     if expected_hash != actual_hash:
-        generation, validation = _fingerprints(step6_report, request)
+        generation, validation = _fingerprints(
+            step6_report, request, runner_attestation
+        )
         return _report(
             step6_report,
             request,
@@ -468,13 +462,16 @@ def validate_step7(
             ],
             generation_fingerprint=generation,
             validation_fingerprint=validation,
+            runner_attestation=runner_attestation,
         )
     target = step6_report["target"]
     request_target = request["target"]
     if target.get("repository") != request_target.get("repository") or target.get(
         "base_revision"
     ) != request_target.get("base_revision"):
-        generation, validation = _fingerprints(step6_report, request)
+        generation, validation = _fingerprints(
+            step6_report, request, runner_attestation
+        )
         return _report(
             step6_report,
             request,
@@ -491,9 +488,10 @@ def validate_step7(
             ],
             generation_fingerprint=generation,
             validation_fingerprint=validation,
+            runner_attestation=runner_attestation,
         )
 
-    generation, validation = _fingerprints(step6_report, request)
+    generation, validation = _fingerprints(step6_report, request, runner_attestation)
     checkout = Path(target_checkout).resolve()
     failures: list[dict[str, Any]] = []
     checks = _empty_checks()
@@ -530,13 +528,24 @@ def validate_step7(
                         observed=actual_head or _text_output(head.stderr, 4000).strip(),
                     )
                 )
-            if not _repository_identity_matches(checkout, target["repository"]):
+            observed_repository = _repository_identity(checkout)
+            if observed_repository is None:
+                failures.append(
+                    _failure(
+                        "target_repository_unverified",
+                        phase="preflight",
+                        remediation="Configure a canonical GitHub origin matching target.repository.",
+                        expected=str(target["repository"]).lower(),
+                    )
+                )
+            elif observed_repository != str(target["repository"]).lower():
                 failures.append(
                     _failure(
                         "target_repository_mismatch",
                         phase="preflight",
                         remediation="Use a checkout whose origin matches target.repository.",
-                        expected=target["repository"],
+                        expected=str(target["repository"]).lower(),
+                        observed=observed_repository,
                     )
                 )
         except (OSError, Step7Error) as exc:
@@ -557,12 +566,38 @@ def validate_step7(
             failures=failures,
             generation_fingerprint=generation,
             validation_fingerprint=validation,
+            runner_attestation=runner_attestation,
         )
 
     patch = step6_report["patch"]
     patch_files = {
         str(row["path"]): row for row in patch["files"] if isinstance(row, Mapping)
     }
+    for path in sorted(patch_files):
+        try:
+            mode = _tracked_blob_mode(checkout, target["base_revision"], path)
+        except Step7Error as exc:
+            failures.append(
+                _failure(
+                    "patch_path_mode_unavailable",
+                    phase="preflight",
+                    path=path,
+                    remediation="Provide an exact checkout where the patch path can be inspected.",
+                    observed=str(exc),
+                )
+            )
+            continue
+        if mode not in {"100644", "100755"}:
+            failures.append(
+                _failure(
+                    "patch_path_mode_unsupported",
+                    phase="preflight",
+                    path=path,
+                    remediation="Use update-only patches against ordinary tracked files.",
+                    expected=["100644", "100755"],
+                    observed=mode,
+                )
+            )
     allowed = set(target["allowed_paths"])
     if set(patch_files) - allowed:
         failures.append(
@@ -620,6 +655,7 @@ def validate_step7(
             failures=failures,
             generation_fingerprint=generation,
             validation_fingerprint=validation,
+            runner_attestation=runner_attestation,
         )
 
     try:
@@ -789,6 +825,7 @@ def validate_step7(
                                     isolated,
                                     command,
                                     output_limit=policy["max_output_bytes"],
+                                    runner=runner,
                                 )
                                 check["commands"].append(row)
                                 if command_failure is not None:
@@ -835,6 +872,7 @@ def validate_step7(
         failures=failures,
         generation_fingerprint=generation,
         validation_fingerprint=validation,
+        runner_attestation=runner_attestation,
     )
 
 

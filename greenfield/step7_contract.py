@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = "0.1"
+SCHEMA_VERSION = "0.2"
 REQUEST_ANALYSIS_KIND = "greenfield_pr_impact_step_7_request"
 REPORT_ANALYSIS_KIND = "greenfield_pr_impact_step_7"
 RULE_SET_VERSION = "0.1"
@@ -200,6 +200,15 @@ def _validate_request(request: Any) -> None:
     if request.get("analysis_kind") != REQUEST_ANALYSIS_KIND:
         raise Step7Error(f"analysis_kind must be {REQUEST_ANALYSIS_KIND}")
     _sha256(request.get("step6_report_sha256"), "step6_report_sha256")
+    profile = request.get("profile")
+    if not isinstance(profile, Mapping):
+        raise Step7Error("profile must be an object")
+    _text(profile.get("id"), "profile.id")
+    _text(profile.get("version"), "profile.version")
+    _sha256(profile.get("sha256"), "profile.sha256")
+    runner = request.get("runner")
+    if not isinstance(runner, Mapping) or runner.get("required_class") != "sandbox":
+        raise Step7Error("runner.required_class must be sandbox")
     target = request.get("target")
     if not isinstance(target, Mapping):
         raise Step7Error("target must be an object")
@@ -227,8 +236,8 @@ def _validate_report(report: Any) -> None:
     status = report.get("status")
     if status not in REPORT_STATUSES:
         raise Step7Error("status is invalid")
-    if report.get("pr_eligible") is not (status == "validated"):
-        raise Step7Error("pr_eligible must match validated status")
+    if not isinstance(report.get("pr_eligible"), bool):
+        raise Step7Error("pr_eligible must be a boolean")
     _sha256(report.get("report_sha256"), "report_sha256")
     unsigned = dict(report)
     unsigned.pop("report_sha256", None)
@@ -237,6 +246,28 @@ def _validate_report(report: Any) -> None:
     _sha256(report.get("step6_report_sha256"), "step6_report_sha256")
     _sha256(report.get("generation_fingerprint"), "generation_fingerprint")
     _sha256(report.get("validation_fingerprint"), "validation_fingerprint")
+    profile = report.get("profile")
+    if not isinstance(profile, Mapping):
+        raise Step7Error("profile must be an object")
+    _text(profile.get("id"), "profile.id")
+    _text(profile.get("version"), "profile.version")
+    _sha256(profile.get("sha256"), "profile.sha256")
+    runner = report.get("runner")
+    if not isinstance(runner, Mapping):
+        raise Step7Error("runner must be an object")
+    _text(runner.get("id"), "runner.id")
+    _text(runner.get("version"), "runner.version")
+    if runner.get("isolation") not in {"local", "sandbox"}:
+        raise Step7Error("runner.isolation is invalid")
+    if not isinstance(runner.get("production_eligible"), bool):
+        raise Step7Error("runner.production_eligible must be a boolean")
+    _sha256(runner.get("attestation_sha256"), "runner.attestation_sha256")
+    unsigned_runner = dict(runner)
+    unsigned_runner.pop("attestation_sha256", None)
+    if artifact_sha256(unsigned_runner) != runner["attestation_sha256"]:
+        raise Step7Error("runner.attestation_sha256 does not match runner")
+    if report.get("pr_eligible") is not False:
+        raise Step7Error("Step 7 reports must remain non-PR-eligible")
     target = report.get("target")
     if not isinstance(target, Mapping):
         raise Step7Error("target must be an object")
@@ -263,6 +294,23 @@ def _validate_report(report: Any) -> None:
         for row in checks
     ):
         raise Step7Error("checks contain an invalid row")
+    for row in checks:
+        for command in row["commands"]:
+            if not isinstance(command, Mapping):
+                raise Step7Error("check command must be an object")
+            _text(command.get("id"), "check command id")
+            if command.get("status") not in {"passed", "failed"}:
+                raise Step7Error("check command status is invalid")
+            argv = command.get("argv")
+            if (
+                not isinstance(argv, list)
+                or not argv
+                or any(not isinstance(item, str) or not item for item in argv)
+            ):
+                raise Step7Error("check command argv is invalid")
+            for field in ("stdout_sha256", "stderr_sha256"):
+                if field in command:
+                    _sha256(command[field], f"check command {field}")
     failures = report.get("failures")
     if not isinstance(failures, list) or any(
         not isinstance(item, Mapping) for item in failures
