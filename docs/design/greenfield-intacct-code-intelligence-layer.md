@@ -474,6 +474,10 @@ If validation fails, return an actionable failure report and do not create a PR.
 
 ### Step 8: Create a Draft Test PR
 
+The implemented guarded contract, trust boundary, idempotent GitHub operation,
+and local non-writing handoff are documented in
+[Greenfield PR Impact Step 8](pr-impact-step-8-greenfield.md).
+
 The draft PR must include:
 
 - Link to the source PR

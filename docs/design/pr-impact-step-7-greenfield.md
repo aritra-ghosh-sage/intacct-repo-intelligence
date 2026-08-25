@@ -17,7 +17,8 @@ artifact. Step 8 remains responsible for branch and draft pull-request creation.
 4. Execute Step 7 through a runner. The local runner is development-only;
    sandbox metadata is retained as execution evidence, but Step 7 cannot
    authenticate an external sandbox attestation or authorize a PR.
-5. Retain the Step 7 report for the future Step 8 handoff.
+5. Retain the Step 7 report for the trusted Step 8 handoff documented in
+   [Greenfield PR Impact Step 8](pr-impact-step-8-greenfield.md).
 
 The central profile, not the caller or AI, owns commands, timeouts, diff limits,
 output limits, and source/generated path classifications. Every patch path must
@@ -45,8 +46,9 @@ The validator:
 
 Any failed or unavailable gate produces an actionable report. Every Step 7
 report has `pr_eligible: false`, including a successful sandbox execution. A
-future trusted Step 8/orchestrator boundary must independently verify a
-production sandbox attestation before it can authorize PR creation.
+trusted Step 8/orchestrator boundary independently verifies a production
+sandbox attestation before it can authorize PR creation. Step 7 itself remains
+non-PR-eligible.
 
 Validation proves integrity of the declared patch and declared checks. It does
 not prove complete change impact, complete test discovery, or business coverage.

@@ -1,0 +1,92 @@
+{
+  "authorization": {
+    "authorized": true,
+    "evidence": {
+      "id": "<trusted authorization record>",
+      "kind": "<production orchestrator decision kind>",
+      "sha256": "<lowercase SHA-256>"
+    },
+    "step7_report_sha256": "<exact Step 7 report SHA-256>",
+    "validation_fingerprint": "<exact Step 7 validation fingerprint>",
+    "verifier": {
+      "id": "<trusted verifier ID>",
+      "version": "<trusted verifier version>"
+    }
+  },
+  "request": {
+    "analysis_kind": "greenfield_pr_impact_step_8_request",
+    "artifacts": {
+      "step3_report_sha256": "<lowercase SHA-256>",
+      "step4_report_sha256": "<lowercase SHA-256>",
+      "step6_report_sha256": "<lowercase SHA-256>",
+      "step7_report_sha256": "<lowercase SHA-256>"
+    },
+    "human_owner_gate": {
+      "required_role": "consumer_test_owner",
+      "status": "pending"
+    },
+    "idempotency_key": "<Step 6 idempotency key>",
+    "operation_id": "<lowercase SHA-256>",
+    "patch_origin": "template_generated",
+    "pr": {
+      "body": "<deterministically rendered Markdown with operation marker>",
+      "body_sha256": "<lowercase SHA-256>",
+      "draft": true,
+      "title": "<deterministic Step 6 title>"
+    },
+    "request_sha256": "<lowercase SHA-256>",
+    "schema_version": "0.1",
+    "target": {
+      "base_branch": "main",
+      "base_revision": "<exact 40-character commit SHA>",
+      "branch": "codex/greenfield-<operation ID prefix>",
+      "repository": "owner/test-repository"
+    }
+  },
+  "result": {
+    "analysis_kind": "greenfield_pr_impact_step_8",
+    "artifacts": {
+      "step3_report_sha256": "<lowercase SHA-256>",
+      "step4_report_sha256": "<lowercase SHA-256>",
+      "step6_report_sha256": "<lowercase SHA-256>",
+      "step7_report_sha256": "<lowercase SHA-256>"
+    },
+    "authorization": "<the authenticated authorization object above>",
+    "failures": [],
+    "human_owner_gate": {
+      "required_role": "consumer_test_owner",
+      "status": "pending"
+    },
+    "mutation_stage": "pull_request",
+    "operation_id": "<request operation ID>",
+    "patch_origin": "template_generated",
+    "provenance": {
+      "approval": "none",
+      "catalog_mutation": "none",
+      "github_writes": true,
+      "merge": "none",
+      "ready_for_review": "none",
+      "rule_set_version": "0.1"
+    },
+    "pull_request": {
+      "base_branch": "main",
+      "draft": true,
+      "head_branch": "codex/greenfield-<operation ID prefix>",
+      "head_sha": "<patch commit SHA>",
+      "number": 123,
+      "state": "open",
+      "url": "https://github.com/owner/test-repository/pull/123"
+    },
+    "report_sha256": "<lowercase SHA-256>",
+    "request_sha256": "<request SHA-256>",
+    "schema_version": "0.1",
+    "status": "created",
+    "target": {
+      "base_branch": "main",
+      "base_revision": "<exact validated target SHA>",
+      "branch": "codex/greenfield-<operation ID prefix>",
+      "patch_commit_sha": "<created patch commit SHA>",
+      "repository": "owner/test-repository"
+    }
+  }
+}
