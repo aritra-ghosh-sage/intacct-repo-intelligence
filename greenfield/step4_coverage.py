@@ -365,7 +365,7 @@ def map_test_coverage(
             })
     coverage.extend(_semantic_rows(semantic_indexes, source_repository, canonical_repository, repo_key, source_revision, changed_paths, gaps, scopes))
     if not scopes:
-        gaps.add("test_coverage_unscoped:no_active_changed_contract")
+        warnings.add("no_matching_test_obligation_for_change")
     if not ci_evidence:
         gaps.add("ci_evidence_not_provided")
     if not contracts:

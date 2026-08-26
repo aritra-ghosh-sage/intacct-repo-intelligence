@@ -249,3 +249,18 @@ def test_report_is_deterministic_and_duplicate_tests_are_deduplicated() -> None:
     same = [item for item in first["coverage"]["items"] if item.get("test", {}).get("id") == "same"]
     assert len(same) == 1
     assert validate_step4_report(first) == []
+
+
+def test_no_matching_contract_scope_is_valid_non_error_outcome() -> None:
+    step3 = _step3()
+    step3["input"]["changed_paths"] = ["app/source/company/AnotherFile.cls"]
+    report = map_test_coverage(
+        step3,
+        contracts=[_contract()],
+        inventory_evidence=[_inventory()],
+    )
+    assert report["status"] == "partial"
+    assert report["coverage"]["status"] == "unavailable"
+    assert report["coverage"]["items"] == []
+    assert "no_matching_test_obligation_for_change" in report["warnings"]
+    assert "test_coverage_unscoped:no_active_changed_contract" not in report["gaps"]

@@ -159,6 +159,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout", type=int, default=300)
     parser.add_argument("--max-file-bytes", type=int, default=120_000)
     parser.add_argument("--ci-evidence", action="append", default=[])
+    parser.add_argument(
+        "--contract",
+        action="append",
+        default=[],
+        help="Additional Step 2/4 contract artifacts to evaluate alongside generated Step 1.5 contract evidence.",
+    )
     parser.add_argument("--inventory-evidence", action="append", default=[])
     parser.add_argument("--semantic-index", action="append", default=[])
     parser.add_argument("--related-pr-evidence")
@@ -291,6 +297,8 @@ def main(argv: list[str] | None = None) -> int:
         ]
         for value in args.repository:
             step2_args.extend(["--repository", value])
+        for value in args.contract:
+            step2_args.extend(["--contract", value])
         for value in args.ci_evidence:
             step2_args.extend(["--ci-evidence", value])
         for value in inventories:
@@ -304,6 +312,10 @@ def main(argv: list[str] | None = None) -> int:
                 "step1": step1_path,
                 "contract": contract_path,
                 "manifest": args.manifest,
+                **{
+                    f"contract_{index:02d}": path
+                    for index, path in enumerate(args.contract)
+                },
                 **{
                     f"inventory_{index:02d}": path
                     for index, path in enumerate(inventories)
@@ -347,6 +359,8 @@ def main(argv: list[str] | None = None) -> int:
             "--output",
             str(step4_path),
         ]
+        for value in args.contract:
+            step4_args.extend(["--contract", value])
         for value in args.ci_evidence:
             step4_args.extend(["--ci-evidence", value])
         for value in inventories:
@@ -359,6 +373,10 @@ def main(argv: list[str] | None = None) -> int:
             inputs={
                 "step3": step3_path,
                 "contract": contract_path,
+                **{
+                    f"contract_{index:02d}": path
+                    for index, path in enumerate(args.contract)
+                },
                 **{
                     f"inventory_{index:02d}": path
                     for index, path in enumerate(inventories)

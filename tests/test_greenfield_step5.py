@@ -138,6 +138,19 @@ def test_candidate_semantic_rows_do_not_create_run_actions() -> None:
     assert not any(item["action_type"] == "run_test_suite" for item in report["actions"])
 
 
+def test_no_matching_contract_scope_does_not_emit_run_actions() -> None:
+    step3 = _step3()
+    step3["input"]["changed_paths"] = ["app/source/company/AnotherFile.cls"]
+    step4 = _step4()
+    step4["input"]["changed_paths"] = ["app/source/company/AnotherFile.cls"]
+    step4["coverage"] = {"status": "unavailable", "items": []}
+    step4["obligations"] = {"status": "not_modelled", "items": []}
+    step4["warnings"] = ["no_matching_test_obligation_for_change"]
+    step4["provenance"]["step3_report_sha256"] = artifact_sha256(step3)
+    report = recommend_actions(step3, step4)
+    assert not any(item["action_type"] == "run_test_suite" for item in report["actions"])
+
+
 def test_source_ranked_candidate_test_creates_validation_action() -> None:
     step3 = _step3()
     step3["test_suites"] = {
