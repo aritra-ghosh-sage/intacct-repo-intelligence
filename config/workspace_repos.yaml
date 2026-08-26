@@ -203,3 +203,66 @@ repositories:
         source_repository: intacct/ia-gwdata-gl
         target_repository: intacct/ia-app
     builders: []
+  - repo_key: ia-gwdata-project
+    name: IA Gateway Project Automation
+    kind: automation
+    language: xml
+    remote_url: git@github.com:intacct/ia-gwdata-project.git
+    local_root: ~/projects/ia-gwdata-project
+    tracked_branch: main
+    enabled: true
+    profile: xml_gateway_automation
+    greenfield_analysis:
+      role: test
+      discovery_eligible: true
+      test_roots:
+        - testdefinitions
+        - testscripts
+      test_formats:
+        - csv
+        - xml
+    depends_on:
+      - ia-main
+    builders: []
+  - repo_key: ia-gwdata-contract
+    name: IA Gateway Contract Automation
+    kind: automation
+    language: xml
+    remote_url: git@github.com:intacct/ia-gwdata-contract.git
+    local_root: ~/projects/ia-gwdata-contract
+    tracked_branch: main
+    enabled: true
+    profile: xml_gateway_automation
+    greenfield_analysis:
+      role: test
+      discovery_eligible: true
+      test_roots:
+        - testdefinitions
+        - testscripts
+      test_formats:
+        - csv
+        - xml
+    depends_on:
+      - ia-main
+    builders: []
+  - repo_key: ia-gwdata-ap
+    name: IA Gateway AP Automation
+    kind: automation
+    language: xml
+    remote_url: git@github.com:intacct/ia-gwdata-ap.git
+    local_root: ~/projects/ia-gwdata-ap
+    tracked_branch: main
+    enabled: true
+    profile: xml_gateway_automation
+    greenfield_analysis:
+      role: test
+      discovery_eligible: true
+      test_roots:
+        - testdefinitions
+        - testscripts
+      test_formats:
+        - csv
+        - xml
+    depends_on:
+      - ia-main
+    builders: []

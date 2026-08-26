@@ -128,7 +128,7 @@ def test_manifest_candidates_include_greenfield_discovery_eligible_test_reposito
         """version: 1
 repositories:
   - repo_key: ia-main
-    remote_url: git@github.com:intacct/ia-app.git
+    remote_url: "git@github.com:intacct/ia-app.git"
     local_root: /tmp/ia-app
     tracked_branch: main
     enabled: true
@@ -154,6 +154,94 @@ repositories:
     )
     assert _manifest_candidates(manifest, "intacct/ia-app", "ia-app") == [
         "intacct/ia-restapi-automation-tests"
+    ]
+
+
+def test_manifest_candidates_include_multiple_gateway_test_repositories(tmp_path: Path) -> None:
+    manifest = tmp_path / "repos.yaml"
+    manifest.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "repositories": [
+                    {
+                        "repo_key": "ia-main",
+                        "remote_url": "git@github.com:intacct/ia-app.git",
+                        "local_root": "/tmp/ia-app",
+                        "tracked_branch": "main",
+                        "enabled": True,
+                        "profile": "intacct_app",
+                        "greenfield_analysis": {
+                            "role": "source",
+                            "discovery_eligible": True,
+                        },
+                    },
+                    {
+                        "repo_key": "ia-gwdata-gl",
+                        "remote_url": "git@github.com:intacct/ia-gwdata-gl.git",
+                        "local_root": "/tmp/ia-gwdata-gl",
+                        "tracked_branch": "main",
+                        "enabled": True,
+                        "profile": "xml_gateway_automation",
+                        "greenfield_analysis": {
+                            "role": "test",
+                            "discovery_eligible": True,
+                            "test_roots": ["testdefinitions"],
+                            "test_formats": ["csv", "xml"],
+                        },
+                    },
+                    {
+                        "repo_key": "ia-gwdata-project",
+                        "remote_url": "git@github.com:intacct/ia-gwdata-project.git",
+                        "local_root": "/tmp/ia-gwdata-project",
+                        "tracked_branch": "main",
+                        "enabled": True,
+                        "profile": "xml_gateway_automation",
+                        "greenfield_analysis": {
+                            "role": "test",
+                            "discovery_eligible": True,
+                            "test_roots": ["testdefinitions"],
+                            "test_formats": ["csv", "xml"],
+                        },
+                    },
+                    {
+                        "repo_key": "ia-gwdata-contract",
+                        "remote_url": "git@github.com:intacct/ia-gwdata-contract.git",
+                        "local_root": "/tmp/ia-gwdata-contract",
+                        "tracked_branch": "main",
+                        "enabled": True,
+                        "profile": "xml_gateway_automation",
+                        "greenfield_analysis": {
+                            "role": "test",
+                            "discovery_eligible": True,
+                            "test_roots": ["testdefinitions"],
+                            "test_formats": ["csv", "xml"],
+                        },
+                    },
+                    {
+                        "repo_key": "ia-gwdata-ap",
+                        "remote_url": "git@github.com:intacct/ia-gwdata-ap.git",
+                        "local_root": "/tmp/ia-gwdata-ap",
+                        "tracked_branch": "main",
+                        "enabled": True,
+                        "profile": "xml_gateway_automation",
+                        "greenfield_analysis": {
+                            "role": "test",
+                            "discovery_eligible": True,
+                            "test_roots": ["testdefinitions"],
+                            "test_formats": ["csv", "xml"],
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert _manifest_candidates(manifest, "intacct/ia-app", "ia-app") == [
+        "intacct/ia-gwdata-ap",
+        "intacct/ia-gwdata-contract",
+        "intacct/ia-gwdata-gl",
+        "intacct/ia-gwdata-project",
     ]
 
 
