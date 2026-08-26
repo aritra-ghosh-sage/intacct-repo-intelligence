@@ -42,5 +42,11 @@ The runner derives downstream repository candidates from explicit
 artifacts, attaches an optional explainable evidence-strength score to Step 2
 candidates, and validates the existing Step 2–5 reports.
 
+The wrapper writes `flow.handoff.json` atomically after every completed stage.
+It binds each stage's named input and output files to SHA-256 digests, records
+the exact source PR identity, and marks the terminal stage if the wrapper
+fails. This handoff is orchestration provenance only: it does not upgrade
+impact, test coverage, runtime validation, or Step 6/7 eligibility.
+
 The evidence score is versioned and is not a probability. It does not replace
 `confirmed`, `candidate`, `unresolved`, or `unavailable` classifications.

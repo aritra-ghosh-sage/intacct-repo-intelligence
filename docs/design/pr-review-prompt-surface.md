@@ -106,7 +106,11 @@ revision and source metadata where available. The prompt explicitly forbids
 copying comment text into the final review Markdown. A valid review with no
 body remains available as comment metadata with unavailable text; it does not
 block analysis. The final LLM response must use
-`docs/review/pr-review-template.md` exactly.
+`docs/review/pr-review-template.md` exactly. The rendered review must retain
+source/base/head identity, assessed-repository scope, ownership availability,
+CI execution classification, and explicit `not_assessed`/unavailable evidence
+states inside the template's existing sections. Repository guidance is advisory
+context only and never evidence of impact, ownership, execution, or coverage.
 
 Missing required CLI values, PR metadata, changed files, source revisions,
 Git objects, or comment collections stop the command before analysis. Errors

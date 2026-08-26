@@ -38,6 +38,29 @@ class RepositoryEvidenceError(RuntimeError):
 Provider = Callable[[str], Any]
 
 
+def classify_ci_execution(*, workflow_runs: list[Any], workflow_jobs: list[Any]) -> dict[str, Any]:
+    """Classify execution without mistaking skipped/control work for test coverage."""
+
+    jobs = [row for row in workflow_jobs if isinstance(row, dict)]
+    text = "\n".join(str(row.get("name", "")) + " " + str(row.get("conclusion", "")) for row in jobs).lower()
+    test_jobs = [row for row in jobs if _TEST_EXECUTION.search(str(row.get("name", "")))]
+    if test_jobs:
+        conclusions = {str(row.get("conclusion", "")).lower() for row in test_jobs}
+        if conclusions & {"failure", "cancelled", "timed_out", "action_required"}:
+            status = "executed_failed"
+        elif conclusions and conclusions <= {"success", "neutral"}:
+            status = "executed_passed"
+        else:
+            status = "not_run"
+    elif "pending review" in text or "pending reviews" in text or "approval" in text:
+        status = "workflow_control_only"
+    elif jobs or workflow_runs:
+        status = "not_run"
+    else:
+        status = "execution_unavailable"
+    return {"execution_status": status, "test_job_count": len(test_jobs), "workflow_job_count": len(jobs)}
+
+
 def _canonical(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -343,6 +366,7 @@ def collect_repository_evidence(
                     if isinstance(artifact.get("id"), int)
                 ),
             },
+            **classify_ci_execution(workflow_runs=runs, workflow_jobs=workflow_jobs),
             "status": "available",
             "gaps": collection_errors,
             "provenance": {
@@ -378,6 +402,8 @@ def collect_target_evidence(
     revision: str,
     paths: list[str],
     provider: Provider | None = None,
+    include_content: bool = False,
+    allow_missing: bool = False,
 ) -> dict[str, Any]:
     """Capture exact target file bytes from a GitHub commit without writes."""
 
@@ -406,19 +432,22 @@ def collect_target_evidence(
         for path in paths:
             entry = by_path.get(path)
             if not isinstance(entry, dict) or not isinstance(entry.get("sha"), str):
+                if allow_missing:
+                    continue
                 raise RepositoryEvidenceError(f"target file is not a blob at revision: {path}")
             blob_sha = entry["sha"]
             blob_endpoint = f"repos/{repository}/git/blobs/{blob_sha}"
             blob = _object(call(blob_endpoint), blob_endpoint)
             endpoints.append(blob_endpoint)
             content = _decode_content(blob)
-            files.append(
-                {
-                    "path": path,
-                    "content_sha256": _sha256(content),
-                    "blob_or_response_id": blob_sha,
-                }
-            )
+            row = {
+                "path": path,
+                "content_sha256": _sha256(content),
+                "blob_or_response_id": blob_sha,
+            }
+            if include_content:
+                row["content"] = content.decode("utf-8", errors="replace")
+            files.append(row)
         report: dict[str, Any] = {
             "schema_version": TARGET_EVIDENCE_SCHEMA_VERSION,
             "evidence_type": "target_snapshot",

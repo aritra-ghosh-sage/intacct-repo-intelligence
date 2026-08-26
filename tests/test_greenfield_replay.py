@@ -272,6 +272,12 @@ def test_runner_step6_handoff_does_not_infer_target_inputs() -> None:
     assert "target repository" in handoff["required_inputs"][1]
 
 
+def test_runner_exposes_wrapper_handoff_artifact() -> None:
+    source = Path(run_greenfield_codex.__file__).read_text(encoding="utf-8")
+    assert "GreenfieldFlowHandoff" in source
+    assert '"flow_handoff": handoff.path' in source
+
+
 def test_step1_5_trace_and_contract_must_be_paired(tmp_path: Path, capsys) -> None:
     bundle = tmp_path / "bundle"
     shutil.copytree(PR_49137_BUNDLE, bundle)

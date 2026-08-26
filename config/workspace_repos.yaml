@@ -10,6 +10,9 @@ repositories:
     tracked_branch: main
     enabled: true
     profile: intacct_app
+    greenfield_analysis:
+      role: source
+      discovery_eligible: true
     depends_on: null
     ignore_paths:
       - app/appconnect
@@ -127,6 +130,13 @@ repositories:
     tracked_branch: main
     enabled: false
     profile: rest_automation
+    greenfield_analysis:
+      role: test
+      discovery_eligible: true
+      test_roots:
+        - src/test/resources/features/rest-api
+      test_formats:
+        - gherkin
     depends_on:
       - ia-main
     builders:
@@ -146,6 +156,13 @@ repositories:
     tracked_branch: main
     enabled: false
     profile: rest_automation
+    greenfield_analysis:
+      role: test
+      discovery_eligible: true
+      test_roots:
+        - features
+      test_formats:
+        - gherkin
     depends_on:
       - ia-main
     pr_impact_contracts:

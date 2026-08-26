@@ -1,0 +1,38 @@
+{
+  "analysis_kind": "greenfield_pr_test_proposal",
+  "findings": [
+    "blocked: Step 4 obligations.status is not_modelled and obligations.items is empty.",
+    "blocked: Step 3 reports test_suites_unavailable:no_normalized_test_evidence; no exact test IDs or test paths are supported.",
+    "blocked: CI evidence was not provided, and the candidate repository intacct/ia-restapi-automation-tests has unavailable CI linkage and no workflow test execution.",
+    "blocked: No evidence-supported validation command is present in the reports."
+  ],
+  "input": {
+    "changed_paths": [
+      "app/db/db_migration_post/db_migration_dml/Nov26/V2611.0.20260824.365475.001__enable_inception_reporting_periods.sql",
+      "app/db/db_migration_post/db_migration_dml/undo/Nov26/U2611.0.20260824.365475.001__enable_inception_reporting_periods.sql",
+      "app/source/setup/create_tmplrepprd.inc"
+    ],
+    "report_sha256": {
+      "step2": "9bd88c9b4cf94a616c43f7fa6521f53df52837d490aab4a5e922baf8c07eab77",
+      "step3": "cf19576f56a662ccfaec6c3a9740fcfab0d2a08f40adf2e49e89be65271229ec",
+      "step4": "820c5697d109ffe4166dd9657a373a675481653383d0eaaffe6fefeb8ccf6729",
+      "step5": "dae0253dfe27889acafd742516a52eac51a8d2ad8cc0c3c91d60f481c3c42891"
+    },
+    "source_repository": "intacct/ia-app",
+    "source_revision": "800c5b1c4307a03059b58416c4286c0ece4d0e50"
+  },
+  "proposals": [],
+  "provenance": {
+    "agent": {
+      "model": "configured",
+      "name": "codex",
+      "timeout_seconds": 600
+    },
+    "catalog_mutation": "none",
+    "context_sha256": "e0c73822346e067c735593862d805ce120f7c14a94ad29f72ecb0312feaa0008",
+    "github_writes": "none",
+    "read_only": true
+  },
+  "schema_version": "0.1",
+  "status": "blocked"
+}

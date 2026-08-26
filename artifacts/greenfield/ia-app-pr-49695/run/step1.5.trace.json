@@ -1,0 +1,276 @@
+{
+  "affected_symbols": [
+    {
+      "line": 5,
+      "path": "app/db/db_migration_post/db_migration_dml/Nov26/V2611.0.20260824.365475.001__enable_inception_reporting_periods.sql",
+      "role": "entry",
+      "symbol": "V2611.0.20260824.365475.001__enable_inception_reporting_periods::<anonymous_block>"
+    },
+    {
+      "line": 5,
+      "path": "app/db/db_migration_post/db_migration_dml/undo/Nov26/U2611.0.20260824.365475.001__enable_inception_reporting_periods.sql",
+      "role": "entry",
+      "symbol": "U2611.0.20260824.365475.001__enable_inception_reporting_periods::<anonymous_block>"
+    },
+    {
+      "line": 23,
+      "path": "app/source/setup/create_tmplrepprd.inc",
+      "role": "entry",
+      "symbol": "CreateTemplateReportingPeriods"
+    }
+  ],
+  "analysis_kind": "greenfield_pr_impact_step_1_5",
+  "behaviors": [
+    {
+      "description": "New company template creation inserts the two inception reporting periods with active status T and aborts the enclosing transaction if either insert fails.",
+      "edges": [
+        {
+          "relationship_type": "CALLS",
+          "resolution": "exact",
+          "source_line": 646,
+          "source_path": "app/source/setup/create_tmplrepprd.inc",
+          "source_revision": "800c5b1c4307a03059b58416c4286c0ece4d0e50",
+          "source_symbol": "CreateTemplateReportingPeriods",
+          "target_line": 1752,
+          "target_path": "app/source/common/backend_util.inc",
+          "target_symbol": "ExecSimpleStmt"
+        },
+        {
+          "relationship_type": "CALLS",
+          "resolution": "exact",
+          "source_line": 648,
+          "source_path": "app/source/setup/create_tmplrepprd.inc",
+          "source_revision": "800c5b1c4307a03059b58416c4286c0ece4d0e50",
+          "source_symbol": "CreateTemplateReportingPeriods",
+          "target_line": 2200,
+          "target_path": "app/source/common/backend_util.inc",
+          "target_symbol": "XACT_ABORT"
+        },
+        {
+          "relationship_type": "CALLS",
+          "resolution": "exact",
+          "source_line": 655,
+          "source_path": "app/source/setup/create_tmplrepprd.inc",
+          "source_revision": "800c5b1c4307a03059b58416c4286c0ece4d0e50",
+          "source_symbol": "CreateTemplateReportingPeriods",
+          "target_line": 1752,
+          "target_path": "app/source/common/backend_util.inc",
+          "target_symbol": "ExecSimpleStmt"
+        },
+        {
+          "relationship_type": "CALLS",
+          "resolution": "exact",
+          "source_line": 657,
+          "source_path": "app/source/setup/create_tmplrepprd.inc",
+          "source_revision": "800c5b1c4307a03059b58416c4286c0ece4d0e50",
+          "source_symbol": "CreateTemplateReportingPeriods",
+          "target_line": 2200,
+          "target_path": "app/source/common/backend_util.inc",
+          "target_symbol": "XACT_ABORT"
+        }
+      ],
+      "entry_symbols": [
+        "CreateTemplateReportingPeriods"
+      ],
+      "kind": "new_company_inception_reporting_period_defaults",
+      "source_paths": [
+        "app/source/setup/create_tmplrepprd.inc"
+      ],
+      "surfaces": {
+        "actionui": "not_run",
+        "database_persistence": "available",
+        "incoming_callers": "unresolved",
+        "new_company_template_creation": "available",
+        "nextgen_ui": "not_run",
+        "tests": "not_run",
+        "xml_api": "not_run"
+      },
+      "symbol_paths": {
+        "CreateTemplateReportingPeriods": "app/source/setup/create_tmplrepprd.inc",
+        "ExecSimpleStmt": "app/source/common/backend_util.inc",
+        "XACT_ABORT": "app/source/common/backend_util.inc"
+      }
+    },
+    {
+      "description": "The forward migration identifies a template schema through its local DBLINK_TPLS entry and commits batches that change the two matching GLBUDGETTYPE rows from status F to T.",
+      "edges": [],
+      "entry_symbols": [
+        "V2611.0.20260824.365475.001__enable_inception_reporting_periods::<anonymous_block>"
+      ],
+      "kind": "existing_template_inception_reporting_period_activation",
+      "source_paths": [
+        "app/db/db_migration_post/db_migration_dml/Nov26/V2611.0.20260824.365475.001__enable_inception_reporting_periods.sql"
+      ],
+      "surfaces": {
+        "database_persistence": "available",
+        "existing_template_schema_migration": "available",
+        "flyway_execution_wiring": "unresolved",
+        "template_schema_detection": "available",
+        "tests": "not_run"
+      },
+      "symbol_paths": {
+        "V2611.0.20260824.365475.001__enable_inception_reporting_periods::<anonymous_block>": "app/db/db_migration_post/db_migration_dml/Nov26/V2611.0.20260824.365475.001__enable_inception_reporting_periods.sql"
+      }
+    },
+    {
+      "description": "The undo migration identifies a template schema through its local DBLINK_TPLS entry and commits batches that change the same two GLBUDGETTYPE rows from status T to F.",
+      "edges": [],
+      "entry_symbols": [
+        "U2611.0.20260824.365475.001__enable_inception_reporting_periods::<anonymous_block>"
+      ],
+      "kind": "existing_template_inception_reporting_period_deactivation",
+      "source_paths": [
+        "app/db/db_migration_post/db_migration_dml/undo/Nov26/U2611.0.20260824.365475.001__enable_inception_reporting_periods.sql"
+      ],
+      "surfaces": {
+        "database_persistence": "available",
+        "flyway_execution_wiring": "unresolved",
+        "template_schema_detection": "available",
+        "tests": "not_run",
+        "undo_migration": "available"
+      },
+      "symbol_paths": {
+        "U2611.0.20260824.365475.001__enable_inception_reporting_periods::<anonymous_block>": "app/db/db_migration_post/db_migration_dml/undo/Nov26/U2611.0.20260824.365475.001__enable_inception_reporting_periods.sql"
+      }
+    }
+  ],
+  "calls": [
+    {
+      "relationship_type": "CALLS",
+      "resolution": "exact",
+      "source_line": 646,
+      "source_path": "app/source/setup/create_tmplrepprd.inc",
+      "source_revision": "800c5b1c4307a03059b58416c4286c0ece4d0e50",
+      "source_symbol": "CreateTemplateReportingPeriods",
+      "target_line": 1752,
+      "target_path": "app/source/common/backend_util.inc",
+      "target_symbol": "ExecSimpleStmt"
+    },
+    {
+      "relationship_type": "CALLS",
+      "resolution": "exact",
+      "source_line": 648,
+      "source_path": "app/source/setup/create_tmplrepprd.inc",
+      "source_revision": "800c5b1c4307a03059b58416c4286c0ece4d0e50",
+      "source_symbol": "CreateTemplateReportingPeriods",
+      "target_line": 2200,
+      "target_path": "app/source/common/backend_util.inc",
+      "target_symbol": "XACT_ABORT"
+    },
+    {
+      "relationship_type": "CALLS",
+      "resolution": "exact",
+      "source_line": 655,
+      "source_path": "app/source/setup/create_tmplrepprd.inc",
+      "source_revision": "800c5b1c4307a03059b58416c4286c0ece4d0e50",
+      "source_symbol": "CreateTemplateReportingPeriods",
+      "target_line": 1752,
+      "target_path": "app/source/common/backend_util.inc",
+      "target_symbol": "ExecSimpleStmt"
+    },
+    {
+      "relationship_type": "CALLS",
+      "resolution": "exact",
+      "source_line": 657,
+      "source_path": "app/source/setup/create_tmplrepprd.inc",
+      "source_revision": "800c5b1c4307a03059b58416c4286c0ece4d0e50",
+      "source_symbol": "CreateTemplateReportingPeriods",
+      "target_line": 2200,
+      "target_path": "app/source/common/backend_util.inc",
+      "target_symbol": "XACT_ABORT"
+    }
+  ],
+  "changed_paths": [
+    "app/db/db_migration_post/db_migration_dml/Nov26/V2611.0.20260824.365475.001__enable_inception_reporting_periods.sql",
+    "app/db/db_migration_post/db_migration_dml/undo/Nov26/U2611.0.20260824.365475.001__enable_inception_reporting_periods.sql",
+    "app/source/setup/create_tmplrepprd.inc"
+  ],
+  "findings": [
+    {
+      "evidence": "The changed function is defined at app/source/setup/create_tmplrepprd.inc:23, but incoming call sites were not established by the bounded source inspection.",
+      "next_check": "Search exact target revision 800c5b1c4307a03059b58416c4286c0ece4d0e50 for direct and dynamically-dispatched callers of CreateTemplateReportingPeriods.",
+      "status": "unresolved",
+      "subject": "CreateTemplateReportingPeriods",
+      "surface": "incoming_callers"
+    },
+    {
+      "evidence": "The added scripts state that Flyway runs them for schemalet owners, but migration loader configuration and execution ordering were not examined.",
+      "next_check": "Inspect the exact target-revision Flyway locations, naming rules, and Nov26 migration ordering for both added paths.",
+      "status": "unresolved",
+      "subject": "Forward and undo migration discovery",
+      "surface": "flyway_execution_wiring"
+    },
+    {
+      "evidence": "The supplied changed-file bytes show reads, inserts, and updates of GLBUDGETTYPE but do not contain its schema definition.",
+      "next_check": "Inspect the exact target-revision GLBUDGETTYPE schema, indexes, constraints, and triggers, especially columns STATUS, DATETYPE, NAME, CNY#, and RECORD#.",
+      "status": "unavailable",
+      "subject": "GLBUDGETTYPE constraints, indexes, and triggers",
+      "surface": "database_schema"
+    },
+    {
+      "evidence": "The changed PHP function contains instance calls whose runtime receiver types were not resolved exactly; no edges were asserted for them.",
+      "next_check": "Resolve the exact target-revision construction and runtime types of Globals::$g->gErr and Globals::$g->gTx before asserting those call edges.",
+      "status": "unresolved",
+      "subject": "Globals::$g->gErr->addError and transaction-manager instance calls",
+      "surface": "dynamic_dispatch"
+    },
+    {
+      "evidence": "Only the source repository was authorized for inspection, so no cross-repository relationship is established.",
+      "next_check": "Use separately authorized, revision-pinned repository evidence before making any downstream impact claim.",
+      "status": "unavailable",
+      "subject": "Downstream consumers",
+      "surface": "cross_repository"
+    },
+    {
+      "evidence": "No tests were executed and no exact target-revision test mapping was established.",
+      "next_check": "Locate and run revision-pinned tests covering new-company reporting-period creation, template-schema detection, batched status activation, rollback behavior, and undo deactivation.",
+      "status": "unresolved",
+      "subject": "New-company defaults, forward migration, and undo migration",
+      "surface": "tests"
+    }
+  ],
+  "input": {
+    "base_sha": "d6d5e20d10c914cda13f8433448740b32bebe66b",
+    "changed_paths": [
+      "app/db/db_migration_post/db_migration_dml/Nov26/V2611.0.20260824.365475.001__enable_inception_reporting_periods.sql",
+      "app/db/db_migration_post/db_migration_dml/undo/Nov26/U2611.0.20260824.365475.001__enable_inception_reporting_periods.sql",
+      "app/source/setup/create_tmplrepprd.inc"
+    ],
+    "head_sha": "800c5b1c4307a03059b58416c4286c0ece4d0e50",
+    "pr_number": 49695,
+    "repo_key": "ia-main",
+    "repository": "intacct/ia-app"
+  },
+  "provenance": {
+    "agent": {
+      "model": "configured",
+      "name": "codex",
+      "timeout_seconds": 600
+    },
+    "catalog_mutation": "none",
+    "context_sha256": "1234cb5d0b5a1b39dc1daf3cb88d97f79fbea36c7013bf289c0e8169879c4fe8",
+    "github_writes": "none",
+    "read_only": true,
+    "source_revision": "800c5b1c4307a03059b58416c4286c0ece4d0e50",
+    "step1_evidence_sha256": "fab01ab7716c24b0319c6bb743500363be54a8917d039ae153b9d51649d8ed58",
+    "trace_sha256": "06987b172da927776be81dcc1fa7c7c1e0581e99a16037e9e766c0d7855c7c30"
+  },
+  "repository": "intacct/ia-app",
+  "revision": "800c5b1c4307a03059b58416c4286c0ece4d0e50",
+  "schema_version": "0.1",
+  "surfaces": {
+    "actionui": "not_run",
+    "cross_repository": "unavailable",
+    "database_glbudgettype_status_updates": "available",
+    "database_schema": "unavailable",
+    "existing_template_schema_migration": "available",
+    "flyway_execution_wiring": "unresolved",
+    "incoming_callers": "unresolved",
+    "new_company_template_creation": "available",
+    "nextgen_ui": "not_run",
+    "permissions_workflows": "not_run",
+    "tests": "not_run",
+    "undo_migration": "available",
+    "xml_api": "not_run"
+  }
+}

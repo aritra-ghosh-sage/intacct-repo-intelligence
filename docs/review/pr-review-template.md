@@ -4,6 +4,9 @@
 **Scope:** [1-2 sentence description]
 **Risk Level:** Low | Medium | High | Critical
 
+**Evidence identity:** Source repository `[repo]` | Base `[sha]` | Head `[sha]`
+**Assessment boundary:** Repositories assessed `[list]` | Owner evidence `[available/unavailable]` | CI execution `[status]`
+
 ---
 
 ## 📊 Changes at a Glance
@@ -45,6 +48,7 @@
 **Coverage gaps:**
 
 - [Exact missing, stale, unavailable, or weak coverage]
+- [Use `not_assessed` when a nominated test repository lacks a confirmed relation and revision-bound test evidence]
 
 ---
 
@@ -84,5 +88,6 @@
 **Gaps/Assumptions:**
 - [Explicit unresolved, unavailable, stale, or deferred evidence]
 - [Evidence scope and target revision limitation]
+- [AI guidance files are advisory context and never establish impact, ownership, or coverage]
 
 **Next Reviewer:** @team-compliance (domain experts for e-invoicing logic)

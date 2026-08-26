@@ -1,0 +1,388 @@
+{
+  "artifact_kind": "generated_behavior_contract",
+  "changed_symbols": [
+    "CreateTemplateReportingPeriods",
+    "ExecSimpleStmt",
+    "U2611.0.20260824.365475.001__enable_inception_reporting_periods::<anonymous_block>",
+    "V2611.0.20260824.365475.001__enable_inception_reporting_periods::<anonymous_block>",
+    "XACT_ABORT"
+  ],
+  "entry_surfaces": {
+    "actionui": {
+      "evidence": "source_trace",
+      "status": "not_run"
+    },
+    "database_persistence": {
+      "evidence": "source_trace",
+      "status": "confirmed"
+    },
+    "existing_template_schema_migration": {
+      "evidence": "source_trace",
+      "status": "confirmed"
+    },
+    "flyway_execution_wiring": {
+      "evidence": "source_trace",
+      "status": "unresolved"
+    },
+    "incoming_callers": {
+      "evidence": "source_trace",
+      "status": "unresolved"
+    },
+    "new_company_template_creation": {
+      "evidence": "source_trace",
+      "status": "confirmed"
+    },
+    "nextgen_ui": {
+      "evidence": "source_trace",
+      "status": "not_run"
+    },
+    "template_schema_detection": {
+      "evidence": "source_trace",
+      "status": "confirmed"
+    },
+    "tests": {
+      "evidence": "source_trace",
+      "status": "not_run"
+    },
+    "undo_migration": {
+      "evidence": "source_trace",
+      "status": "confirmed"
+    },
+    "xml_api": {
+      "evidence": "source_trace",
+      "status": "not_run"
+    }
+  },
+  "evidence": {
+    "path": "<generated>",
+    "sha256": "26ee9da3f70cd17c0cea4090b22dc8f37a7462833c26ca2bb4cbbd75573cb45c"
+  },
+  "generation": {
+    "bounds": {
+      "max_edges": 2000,
+      "max_hops": 3,
+      "max_nodes": 500
+    },
+    "diagnostics": [],
+    "edges": [
+      {
+        "evidence_sha256": "f4f31904706f33631e302fbfea6d2269bd2386d01fc40987a9fb7564b0f78d8e",
+        "relationship_type": "CALLS",
+        "resolution": "exact",
+        "source_line": 646,
+        "source_path": "app/source/setup/create_tmplrepprd.inc",
+        "source_revision": "800c5b1c4307a03059b58416c4286c0ece4d0e50",
+        "source_symbol": "CreateTemplateReportingPeriods",
+        "target_path": "app/source/common/backend_util.inc",
+        "target_symbol": "ExecSimpleStmt"
+      },
+      {
+        "evidence_sha256": "3a8295e0cc4dbdc869ce94ce7cd04118fbf17091da29af3399519a3da65b0e09",
+        "relationship_type": "CALLS",
+        "resolution": "exact",
+        "source_line": 655,
+        "source_path": "app/source/setup/create_tmplrepprd.inc",
+        "source_revision": "800c5b1c4307a03059b58416c4286c0ece4d0e50",
+        "source_symbol": "CreateTemplateReportingPeriods",
+        "target_path": "app/source/common/backend_util.inc",
+        "target_symbol": "ExecSimpleStmt"
+      },
+      {
+        "evidence_sha256": "7468712883a07d33218b931f1d5bbf46f3efcbf8d5cd959c10d2e49171386807",
+        "relationship_type": "CALLS",
+        "resolution": "exact",
+        "source_line": 648,
+        "source_path": "app/source/setup/create_tmplrepprd.inc",
+        "source_revision": "800c5b1c4307a03059b58416c4286c0ece4d0e50",
+        "source_symbol": "CreateTemplateReportingPeriods",
+        "target_path": "app/source/common/backend_util.inc",
+        "target_symbol": "XACT_ABORT"
+      },
+      {
+        "evidence_sha256": "368b3d4e01185d3080fcc400844ef9a4b99c70941c93610610a23c07a8f272ce",
+        "relationship_type": "CALLS",
+        "resolution": "exact",
+        "source_line": 657,
+        "source_path": "app/source/setup/create_tmplrepprd.inc",
+        "source_revision": "800c5b1c4307a03059b58416c4286c0ece4d0e50",
+        "source_symbol": "CreateTemplateReportingPeriods",
+        "target_path": "app/source/common/backend_util.inc",
+        "target_symbol": "XACT_ABORT"
+      }
+    ],
+    "flow": {
+      "edges": [
+        {
+          "evidence_sha256": "f4f31904706f33631e302fbfea6d2269bd2386d01fc40987a9fb7564b0f78d8e",
+          "relationship_type": "CALLS",
+          "resolution": "exact",
+          "source_line": 646,
+          "source_path": "app/source/setup/create_tmplrepprd.inc",
+          "source_revision": "800c5b1c4307a03059b58416c4286c0ece4d0e50",
+          "source_symbol": "CreateTemplateReportingPeriods",
+          "target_path": "app/source/common/backend_util.inc",
+          "target_symbol": "ExecSimpleStmt"
+        },
+        {
+          "evidence_sha256": "3a8295e0cc4dbdc869ce94ce7cd04118fbf17091da29af3399519a3da65b0e09",
+          "relationship_type": "CALLS",
+          "resolution": "exact",
+          "source_line": 655,
+          "source_path": "app/source/setup/create_tmplrepprd.inc",
+          "source_revision": "800c5b1c4307a03059b58416c4286c0ece4d0e50",
+          "source_symbol": "CreateTemplateReportingPeriods",
+          "target_path": "app/source/common/backend_util.inc",
+          "target_symbol": "ExecSimpleStmt"
+        },
+        {
+          "evidence_sha256": "7468712883a07d33218b931f1d5bbf46f3efcbf8d5cd959c10d2e49171386807",
+          "relationship_type": "CALLS",
+          "resolution": "exact",
+          "source_line": 648,
+          "source_path": "app/source/setup/create_tmplrepprd.inc",
+          "source_revision": "800c5b1c4307a03059b58416c4286c0ece4d0e50",
+          "source_symbol": "CreateTemplateReportingPeriods",
+          "target_path": "app/source/common/backend_util.inc",
+          "target_symbol": "XACT_ABORT"
+        },
+        {
+          "evidence_sha256": "368b3d4e01185d3080fcc400844ef9a4b99c70941c93610610a23c07a8f272ce",
+          "relationship_type": "CALLS",
+          "resolution": "exact",
+          "source_line": 657,
+          "source_path": "app/source/setup/create_tmplrepprd.inc",
+          "source_revision": "800c5b1c4307a03059b58416c4286c0ece4d0e50",
+          "source_symbol": "CreateTemplateReportingPeriods",
+          "target_path": "app/source/common/backend_util.inc",
+          "target_symbol": "XACT_ABORT"
+        }
+      ],
+      "status": "complete"
+    },
+    "generator_version": "0.1",
+    "nodes": [
+      {
+        "role": "entry",
+        "source_paths": [
+          "app/source/setup/create_tmplrepprd.inc"
+        ],
+        "symbol": "CreateTemplateReportingPeriods"
+      },
+      {
+        "role": "impacted",
+        "source_paths": [
+          "app/source/common/backend_util.inc"
+        ],
+        "symbol": "ExecSimpleStmt"
+      },
+      {
+        "role": "entry",
+        "source_paths": [
+          "app/db/db_migration_post/db_migration_dml/undo/Nov26/U2611.0.20260824.365475.001__enable_inception_reporting_periods.sql"
+        ],
+        "symbol": "U2611.0.20260824.365475.001__enable_inception_reporting_periods::<anonymous_block>"
+      },
+      {
+        "role": "entry",
+        "source_paths": [
+          "app/db/db_migration_post/db_migration_dml/Nov26/V2611.0.20260824.365475.001__enable_inception_reporting_periods.sql"
+        ],
+        "symbol": "V2611.0.20260824.365475.001__enable_inception_reporting_periods::<anonymous_block>"
+      },
+      {
+        "role": "impacted",
+        "source_paths": [
+          "app/source/common/backend_util.inc"
+        ],
+        "symbol": "XACT_ABORT"
+      }
+    ],
+    "rule_set_version": "0.1",
+    "source_trace_path": "artifacts/greenfield/ia-app-pr-49695/run/step1.5.trace.json",
+    "source_trace_sha256": "c0e00ef3e20ca5bad00f57a67802e2258095fab0dc291494a91c5361412d58e4",
+    "status": "complete",
+    "step1_evidence_sha256": "fab01ab7716c24b0319c6bb743500363be54a8917d039ae153b9d51649d8ed58",
+    "surfaces": {
+      "actionui": {
+        "evidence": "source_trace",
+        "status": "not_run"
+      },
+      "database_persistence": {
+        "evidence": "source_trace",
+        "status": "confirmed"
+      },
+      "existing_template_schema_migration": {
+        "evidence": "source_trace",
+        "status": "confirmed"
+      },
+      "flyway_execution_wiring": {
+        "evidence": "source_trace",
+        "status": "unresolved"
+      },
+      "incoming_callers": {
+        "evidence": "source_trace",
+        "status": "unresolved"
+      },
+      "new_company_template_creation": {
+        "evidence": "source_trace",
+        "status": "confirmed"
+      },
+      "nextgen_ui": {
+        "evidence": "source_trace",
+        "status": "not_run"
+      },
+      "template_schema_detection": {
+        "evidence": "source_trace",
+        "status": "confirmed"
+      },
+      "tests": {
+        "evidence": "source_trace",
+        "status": "not_run"
+      },
+      "undo_migration": {
+        "evidence": "source_trace",
+        "status": "confirmed"
+      },
+      "xml_api": {
+        "evidence": "source_trace",
+        "status": "not_run"
+      }
+    }
+  },
+  "impacted_files": [
+    {
+      "path": "app/db/db_migration_post/db_migration_dml/Nov26/V2611.0.20260824.365475.001__enable_inception_reporting_periods.sql",
+      "status": "confirmed",
+      "symbols": [
+        "V2611.0.20260824.365475.001__enable_inception_reporting_periods::<anonymous_block>"
+      ]
+    },
+    {
+      "path": "app/db/db_migration_post/db_migration_dml/undo/Nov26/U2611.0.20260824.365475.001__enable_inception_reporting_periods.sql",
+      "status": "confirmed",
+      "symbols": [
+        "U2611.0.20260824.365475.001__enable_inception_reporting_periods::<anonymous_block>"
+      ]
+    },
+    {
+      "path": "app/source/common/backend_util.inc",
+      "status": "confirmed",
+      "symbols": [
+        "ExecSimpleStmt",
+        "XACT_ABORT"
+      ]
+    },
+    {
+      "path": "app/source/setup/create_tmplrepprd.inc",
+      "status": "confirmed",
+      "symbols": [
+        "CreateTemplateReportingPeriods"
+      ]
+    }
+  ],
+  "input": {
+    "base_sha": "d6d5e20d10c914cda13f8433448740b32bebe66b",
+    "changed_paths": [
+      "app/db/db_migration_post/db_migration_dml/Nov26/V2611.0.20260824.365475.001__enable_inception_reporting_periods.sql",
+      "app/db/db_migration_post/db_migration_dml/undo/Nov26/U2611.0.20260824.365475.001__enable_inception_reporting_periods.sql",
+      "app/source/setup/create_tmplrepprd.inc"
+    ],
+    "head_sha": "800c5b1c4307a03059b58416c4286c0ece4d0e50",
+    "pr_number": 49695,
+    "repo_key": "ia-main",
+    "repository": "intacct/ia-app"
+  },
+  "provenance": {
+    "catalog_mutation": "none",
+    "github_writes": "none",
+    "read_only": true,
+    "source_revision": "800c5b1c4307a03059b58416c4286c0ece4d0e50"
+  },
+  "relations": [
+    {
+      "consumer_repository": "ia-app",
+      "entry_surfaces": [
+        "actionui",
+        "database_persistence",
+        "incoming_callers",
+        "new_company_template_creation",
+        "nextgen_ui",
+        "tests",
+        "xml_api"
+      ],
+      "interface_id": "behavior:fcb3c86a6645a52da7d653b9",
+      "owner": null,
+      "owner_repository": "ia-main",
+      "protected_behavior": "New company template creation inserts the two inception reporting periods with active status T and aborts the enclosing transaction if either insert fails.",
+      "relationship_type": "behavior_contract",
+      "source_paths": [
+        "app/source/setup/create_tmplrepprd.inc"
+      ],
+      "source_symbols": [
+        "CreateTemplateReportingPeriods"
+      ],
+      "status": "active",
+      "test_obligations": []
+    },
+    {
+      "consumer_repository": "ia-app",
+      "entry_surfaces": [
+        "actionui",
+        "database_persistence",
+        "existing_template_schema_migration",
+        "flyway_execution_wiring",
+        "incoming_callers",
+        "new_company_template_creation",
+        "nextgen_ui",
+        "template_schema_detection",
+        "tests",
+        "xml_api"
+      ],
+      "interface_id": "behavior:fb2f647030bc169facc75e0b",
+      "owner": null,
+      "owner_repository": "ia-main",
+      "protected_behavior": "The forward migration identifies a template schema through its local DBLINK_TPLS entry and commits batches that change the two matching GLBUDGETTYPE rows from status F to T.",
+      "relationship_type": "behavior_contract",
+      "source_paths": [
+        "app/db/db_migration_post/db_migration_dml/Nov26/V2611.0.20260824.365475.001__enable_inception_reporting_periods.sql"
+      ],
+      "source_symbols": [
+        "V2611.0.20260824.365475.001__enable_inception_reporting_periods::<anonymous_block>"
+      ],
+      "status": "active",
+      "test_obligations": []
+    },
+    {
+      "consumer_repository": "ia-app",
+      "entry_surfaces": [
+        "actionui",
+        "database_persistence",
+        "existing_template_schema_migration",
+        "flyway_execution_wiring",
+        "incoming_callers",
+        "new_company_template_creation",
+        "nextgen_ui",
+        "template_schema_detection",
+        "tests",
+        "undo_migration",
+        "xml_api"
+      ],
+      "interface_id": "behavior:662feb013fec66b8198cee67",
+      "owner": null,
+      "owner_repository": "ia-main",
+      "protected_behavior": "The undo migration identifies a template schema through its local DBLINK_TPLS entry and commits batches that change the same two GLBUDGETTYPE rows from status T to F.",
+      "relationship_type": "behavior_contract",
+      "source_paths": [
+        "app/db/db_migration_post/db_migration_dml/undo/Nov26/U2611.0.20260824.365475.001__enable_inception_reporting_periods.sql"
+      ],
+      "source_symbols": [
+        "U2611.0.20260824.365475.001__enable_inception_reporting_periods::<anonymous_block>"
+      ],
+      "status": "active",
+      "test_obligations": []
+    }
+  ],
+  "repository": "ia-main",
+  "revision": "800c5b1c4307a03059b58416c4286c0ece4d0e50",
+  "schema_version": "0.1"
+}
