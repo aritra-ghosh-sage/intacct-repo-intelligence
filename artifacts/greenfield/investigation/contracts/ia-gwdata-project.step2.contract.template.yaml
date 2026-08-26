@@ -1,0 +1,23 @@
+# Draft template only. Do not treat as verified contract evidence.
+# Replace placeholders with exact Step 1 source-backed values before use.
+schema_version: "0.1"
+repository: intacct/ia-app
+revision: f914d9892a51c1d34eadfd0e4da89f8418ed2c59
+relations:
+  - interface_id: gw.project.time-expense.select-to-reimburse
+    owner_repository: intacct/ia-app
+    consumer_repository: intacct/ia-gwdata-project
+    relationship_type: validates_gateway_behavior_of
+    source_paths:
+      - __REQUIRED_EXACT_IA_APP_PATH__
+    source_symbols: []
+    status: inactive
+    owner: __REQUIRED_OWNER__
+    protected_behavior: __REQUIRED_BEHAVIOR_DESCRIPTION__
+    test_obligations:
+      - id: gw-project-update-employee-09
+        path: testscripts/Time_And_Expenses/Select_To_Reimburse/test_Update_Employee_09.xml
+        required_change: assertion
+        behavior_id: gw.project.time-expense.select-to-reimburse
+        test_owner: __REQUIRED_TEST_OWNER__
+        test_command: unavailable
