@@ -26,6 +26,10 @@ validation/*.txt
 docs/*.txt
 docs/*.csv
 docs/*.json
+
+# Large generated artifacts
+artifacts/greenfield/**/semantic-index.json
+
 catalog/catalog - Copy.db:Zone.Identifier
 
 # Local phase databases
