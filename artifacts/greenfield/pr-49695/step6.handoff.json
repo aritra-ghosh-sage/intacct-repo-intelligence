@@ -1,0 +1,20 @@
+{
+  "analysis_kind": "greenfield_pr_impact_step_6_handoff",
+  "inference_policy": "no_repository_revision_owner_approval_or_edit_inference",
+  "invoked": false,
+  "pr_eligible": false,
+  "provenance": {
+    "catalog_mutation": "none",
+    "github_writes": "none",
+    "read_only": true
+  },
+  "reason": "step6_request_and_target_evidence_not_supplied",
+  "required_inputs": [
+    "explicit Step 6 request",
+    "exact target repository and base revision",
+    "target-evidence package bound to that revision",
+    "required owner and approval evidence"
+  ],
+  "schema_version": "0.1",
+  "status": "unavailable"
+}

@@ -154,7 +154,7 @@ repositories:
     remote_url: git@github.com:intacct/ia-restapi-automation-tests.git
     local_root: ~/projects/ia-restapi-automation-tests
     tracked_branch: main
-    enabled: false
+    enabled: true
     profile: rest_automation
     greenfield_analysis:
       role: test
@@ -186,7 +186,20 @@ repositories:
     tracked_branch: main
     enabled: true
     profile: xml_gateway_automation
+    greenfield_analysis:
+      role: test
+      discovery_eligible: true
+      test_roots:
+        - testdefinitions
+        - testscripts
+      test_formats:
+        - csv
+        - xml
     storage: sidecar
     depends_on:
       - ia-main
+    pr_impact_contracts:
+      - type: validates_gateway_behavior_of
+        source_repository: intacct/ia-gwdata-gl
+        target_repository: intacct/ia-app
     builders: []

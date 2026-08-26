@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts import run_greenfield_codex
 from greenfield.github_repository_evidence import (
     RepositoryEvidenceError,
     collect_repository_evidence,
@@ -15,7 +16,7 @@ from greenfield.semantic_index import build_semantic_index_from_files
 from greenfield.step2_candidates import _evidence_score, resolve_candidates
 from greenfield.step2_contract import EvidenceError, load_ci_evidence, load_contract
 from greenfield.step2_likelihood import build_source_anchors, rank_likely_tests
-from scripts.trace_greenfield_step2 import _unavailable_inventory
+from scripts.trace_greenfield_step2 import _manifest_candidates, _unavailable_inventory
 from scripts.validate_greenfield_step2 import validate
 
 TARGET = "a" * 40
@@ -68,6 +69,107 @@ def test_validator_rejects_tampered_evidence_score(tmp_path: Path) -> None:
     assert validate(report) == []
     report["candidates"][0]["evidence_score"]["score"] = 0
     assert any("evidence_score" in error for error in validate(report))
+
+
+def test_manifest_candidates_include_greenfield_discovery_eligible_test_repository(tmp_path: Path) -> None:
+    manifest = tmp_path / "repos.yaml"
+    manifest.write_text(
+        """version: 1
+repositories:
+  - repo_key: ia-main
+    remote_url: git@github.com:intacct/ia-app.git
+    local_root: /tmp/ia-app
+    tracked_branch: main
+    enabled: true
+    profile: intacct_app
+    greenfield_analysis:
+      role: source
+      discovery_eligible: true
+  - repo_key: ia-restapi-automation-tests
+    remote_url: git@github.com:intacct/ia-restapi-automation-tests.git
+    local_root: /tmp/ia-restapi-automation-tests
+    tracked_branch: main
+    enabled: true
+    profile: rest_automation
+    greenfield_analysis:
+      role: test
+      discovery_eligible: true
+      test_roots:
+        - features
+      test_formats:
+        - gherkin
+""",
+        encoding="utf-8",
+    )
+    assert _manifest_candidates(manifest, "intacct/ia-app", "ia-app") == [
+        "intacct/ia-restapi-automation-tests"
+    ]
+
+
+def test_manifest_candidates_exclude_disabled_test_repository(tmp_path: Path) -> None:
+    manifest = tmp_path / "repos.yaml"
+    manifest.write_text(
+        """version: 1
+repositories:
+  - repo_key: ia-main
+    remote_url: git@github.com:intacct/ia-app.git
+    local_root: /tmp/ia-app
+    tracked_branch: main
+    enabled: true
+    profile: intacct_app
+    greenfield_analysis:
+      role: source
+      discovery_eligible: true
+  - repo_key: ia-restapi-automation-tests
+    remote_url: git@github.com:intacct/ia-restapi-automation-tests.git
+    local_root: /tmp/ia-restapi-automation-tests
+    tracked_branch: main
+    enabled: false
+    profile: rest_automation
+    greenfield_analysis:
+      role: test
+      discovery_eligible: true
+      test_roots:
+        - features
+      test_formats:
+        - gherkin
+""",
+        encoding="utf-8",
+    )
+    assert _manifest_candidates(manifest, "intacct/ia-app", "ia-app") == []
+
+
+def test_run_greenfield_codex_manifest_candidates_exclude_disabled_test_repository(tmp_path: Path) -> None:
+    manifest = tmp_path / "repos.yaml"
+    manifest.write_text(
+        """version: 1
+repositories:
+  - repo_key: ia-main
+    remote_url: git@github.com:intacct/ia-app.git
+    local_root: /tmp/ia-app
+    tracked_branch: main
+    enabled: true
+    profile: intacct_app
+    greenfield_analysis:
+      role: source
+      discovery_eligible: true
+  - repo_key: ia-restapi-automation-tests
+    remote_url: git@github.com:intacct/ia-restapi-automation-tests.git
+    local_root: /tmp/ia-restapi-automation-tests
+    tracked_branch: main
+    enabled: false
+    profile: rest_automation
+    greenfield_analysis:
+      role: test
+      discovery_eligible: true
+      test_roots:
+        - features
+      test_formats:
+        - gherkin
+""",
+        encoding="utf-8",
+    )
+    assert run_greenfield_codex._manifest_candidates(manifest, "intacct/ia-app", "ia-app") == []
 
 
 def write_contract(path: Path, revision: str = TARGET) -> None:

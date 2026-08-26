@@ -1,0 +1,23 @@
+{
+  "analysis_kind": "greenfield_pr_test_proposal",
+  "findings": [
+    "no qualified test repository and revision-bound test evidence"
+  ],
+  "input": {
+    "changed_paths": [
+      "app/db/db_migration_post/db_migration_dml/Nov26/V2611.0.20260824.365475.001__enable_inception_reporting_periods.sql",
+      "app/db/db_migration_post/db_migration_dml/undo/Nov26/U2611.0.20260824.365475.001__enable_inception_reporting_periods.sql",
+      "app/source/setup/create_tmplrepprd.inc"
+    ],
+    "source_repository": "intacct/ia-app",
+    "source_revision": "800c5b1c4307a03059b58416c4286c0ece4d0e50"
+  },
+  "proposals": [],
+  "provenance": {
+    "catalog_mutation": "none",
+    "github_writes": "none",
+    "read_only": true
+  },
+  "schema_version": "0.1",
+  "status": "partial"
+}

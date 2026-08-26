@@ -1,0 +1,27 @@
+{
+  "analysis_kind": "greenfield_test_assessment",
+  "assessments": [],
+  "claims": [
+    {
+      "evidence": [
+        {
+          "artifact": "impact-discovery.json"
+        }
+      ],
+      "evidence_status": "unavailable",
+      "inspected_revision": "800c5b1c4307a03059b58416c4286c0ece4d0e50",
+      "rationale": "test assessment is limited to evidence-gated candidates",
+      "repository": "intacct/ia-app"
+    }
+  ],
+  "gaps": [
+    "test_repository_not_assessed"
+  ],
+  "provenance": {
+    "catalog_mutation": "none",
+    "github_writes": "none",
+    "read_only": true
+  },
+  "schema_version": "0.1",
+  "status": "partial"
+}

@@ -47,6 +47,8 @@ def _manifest_candidates(
     for row in rows:
         if not isinstance(row, dict):
             continue
+        if row.get("enabled") is False:
+            continue
         analysis = row.get("greenfield_analysis")
         # A declared test role only nominates a repository.  It is not evidence
         # of impact and is never auto-collected as coverage inventory.

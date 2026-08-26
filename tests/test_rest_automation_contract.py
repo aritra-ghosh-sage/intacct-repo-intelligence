@@ -136,6 +136,33 @@ class RestAutomationContractTests(unittest.TestCase):
             ]
             self.assertEqual(0, contract["coverage_contract_version"])
 
+    def test_manifest_allows_greenfield_analysis_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = root / "repos.yaml"
+            manifest.write_text(
+                "version: 1\nrepositories:\n"
+                "  - repo_key: ia-restapi-automation-tests\n"
+                f"    local_root: {root / 'target'}\n"
+                "    tracked_branch: main\n"
+                "    enabled: true\n"
+                "    profile: rest_automation\n"
+                "    greenfield_analysis:\n"
+                "      role: test\n"
+                "      discovery_eligible: true\n"
+                "      test_roots:\n"
+                "        - features\n"
+                "      test_formats:\n"
+                "        - gherkin\n"
+                "    rest_automation:\n"
+                "      features_root: features\n"
+                "      object_mapping: object-mapping.json\n",
+                encoding="utf-8",
+            )
+            entry = load_workspace_manifest(manifest)["repositories"][0]
+            self.assertEqual("test", entry["greenfield_analysis"]["role"])
+            self.assertTrue(entry["greenfield_analysis"]["discovery_eligible"])
+
     def test_contract_v1_json_rejects_duplicate_unknown_wrong_type_and_noncanonical_values(
         self,
     ) -> None:

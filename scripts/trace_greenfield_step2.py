@@ -71,7 +71,11 @@ def _unavailable_inventory(
 def _manifest_candidates(
     path: str | Path, canonical_repository: str, source_repo_key: str
 ) -> list[str]:
-    """Return only explicit pr_impact_contracts consumers from the local manifest."""
+    """Return eligible downstream evidence targets declared in the local manifest.
+
+    This includes explicit `pr_impact_contracts` consumers and also repository
+    entries whose Greenfield metadata marks them as eligible discovery targets.
+    """
 
     data: Any = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     repositories = data.get("repositories") if isinstance(data, dict) else None
@@ -81,18 +85,32 @@ def _manifest_candidates(
     for entry in repositories:
         if not isinstance(entry, dict):
             continue
+        remote = str(entry.get("remote_url", ""))
+        if "github.com:" in remote:
+            remote = remote.split("github.com:", 1)[1]
+        elif "github.com/" in remote:
+            remote = remote.split("github.com/", 1)[1]
+        repo_name = remote.removesuffix(".git")
+        if not repo_name:
+            continue
+
+        if entry.get("enabled") is False:
+            continue
+
+        analysis = entry.get("greenfield_analysis")
+        if isinstance(analysis, dict):
+            role = analysis.get("role")
+            discovery_eligible = analysis.get("discovery_eligible")
+            if role == "test" and discovery_eligible is True and repo_name != canonical_repository:
+                result.add(repo_name)
+
         for contract in entry.get("pr_impact_contracts", []):
             if not isinstance(contract, dict):
                 continue
             target = str(contract.get("target_repository", ""))
             if target not in {canonical_repository, source_repo_key}:
                 continue
-            remote = str(entry.get("remote_url", ""))
-            if "github.com:" in remote:
-                remote = remote.split("github.com:", 1)[1]
-            elif "github.com/" in remote:
-                remote = remote.split("github.com/", 1)[1]
-            result.add(remote.removesuffix(".git"))
+            result.add(repo_name)
     return sorted(result)
 
 

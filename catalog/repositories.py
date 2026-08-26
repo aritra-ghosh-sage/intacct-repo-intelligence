@@ -48,6 +48,7 @@ _REPOSITORY_KEYS = frozenset(
         "rest_automation",
         "pr_impact_contracts",
         "storage",
+        "greenfield_analysis",
     }
 )
 _PR_IMPACT_RELATION_TYPES = frozenset(
@@ -444,6 +445,58 @@ def _normalize_pr_impact_contracts(
     return contracts
 
 
+def _normalize_greenfield_analysis(repo_key: str, raw_analysis: Any) -> dict[str, Any] | None:
+    if raw_analysis is None:
+        return None
+    if not isinstance(raw_analysis, dict):
+        raise RepositoryError(f"repository {repo_key} greenfield_analysis must be a mapping")
+
+    allowed = frozenset({"role", "discovery_eligible", "test_roots", "test_formats"})
+    _reject_unknown_keys(raw_analysis, allowed, f"repository {repo_key} greenfield_analysis")
+
+    role = raw_analysis.get("role")
+    if role not in {"source", "test"}:
+        raise RepositoryError(
+            f"repository {repo_key} greenfield_analysis.role must be 'source' or 'test'"
+        )
+
+    discovery_eligible = raw_analysis.get("discovery_eligible")
+    if not isinstance(discovery_eligible, bool):
+        raise RepositoryError(
+            f"repository {repo_key} greenfield_analysis.discovery_eligible must be a boolean"
+        )
+
+    test_roots = raw_analysis.get("test_roots")
+    if test_roots is not None:
+        if not isinstance(test_roots, list) or not all(
+            isinstance(item, str) and item.strip() for item in test_roots
+        ):
+            raise RepositoryError(
+                f"repository {repo_key} greenfield_analysis.test_roots must be a list of non-empty strings"
+            )
+        test_roots = [item.strip() for item in test_roots]
+
+    test_formats = raw_analysis.get("test_formats")
+    if test_formats is not None:
+        if not isinstance(test_formats, list) or not all(
+            isinstance(item, str) and item.strip() for item in test_formats
+        ):
+            raise RepositoryError(
+                f"repository {repo_key} greenfield_analysis.test_formats must be a list of non-empty strings"
+            )
+        test_formats = [item.strip() for item in test_formats]
+
+    normalized = {
+        "role": role,
+        "discovery_eligible": discovery_eligible,
+    }
+    if test_roots is not None:
+        normalized["test_roots"] = test_roots
+    if test_formats is not None:
+        normalized["test_formats"] = test_formats
+    return normalized
+
+
 def _validate_dependency_cycles(dependencies: dict[str, list[str] | None]) -> None:
     permanent: set[str] = set()
     visiting: list[str] = []
@@ -569,6 +622,9 @@ def load_workspace_manifest(path: str | Path) -> dict[str, Any]:
         entry["depends_on"] = dependencies[repo_key]
         entry["pr_impact_contracts"] = _normalize_pr_impact_contracts(
             repo_key, entry.get("pr_impact_contracts")
+        )
+        entry["greenfield_analysis"] = _normalize_greenfield_analysis(
+            repo_key, entry.get("greenfield_analysis")
         )
 
         rest_config = _normalize_rest_automation(
