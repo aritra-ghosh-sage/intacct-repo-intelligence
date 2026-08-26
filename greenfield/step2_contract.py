@@ -16,6 +16,7 @@ from greenfield.semantic_contract import load_index
 CONTRACT_SCHEMA_VERSION = "0.1"
 CI_SCHEMA_VERSION = "0.1"
 INVENTORY_SCHEMA_VERSION = "0.1"
+TEST_REPOSITORY_FAMILIES = frozenset({"rest_automation", "xml_gateway_automation"})
 SHA = re.compile(r"^[0-9a-f]{40}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -330,6 +331,13 @@ def load_ci_evidence(path: str | Path, *, strict: bool = False) -> dict[str, Any
             "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
         },
     }
+    if "repository_family" in data:
+        repository_family = _text(
+            data["repository_family"], "repository_family"
+        )
+        if repository_family not in TEST_REPOSITORY_FAMILIES:
+            raise EvidenceError("ci evidence repository_family is invalid")
+        normalized["repository_family"] = repository_family
     if normalized["status"] not in {"available", "empty", "unavailable", "stale"}:
         raise EvidenceError("ci evidence status is invalid")
     if strict and normalized["status"] == "available":

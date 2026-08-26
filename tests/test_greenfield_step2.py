@@ -58,6 +58,57 @@ def test_evidence_score_is_explainable_and_not_probability() -> None:
     }
 
 
+def test_ci_evidence_accepts_external_test_repository_family(tmp_path: Path) -> None:
+    evidence_path = tmp_path / "gateway-ci.json"
+    evidence_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "0.1",
+                "evidence_id": "ia-gwdata-gl:run-123",
+                "repository": "ia-gwdata-gl",
+                "repository_family": "xml_gateway_automation",
+                "commit_sha": CONSUMER,
+                "source_repository": "ia-app",
+                "source_revision": TARGET,
+                "interface_id": "behavior:gl-allocation-recalculation",
+                "status": "empty",
+                "tests": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    evidence = load_ci_evidence(evidence_path)
+
+    assert evidence["repository_family"] == "xml_gateway_automation"
+
+
+def test_ci_evidence_rejects_unknown_external_test_repository_family(
+    tmp_path: Path,
+) -> None:
+    evidence_path = tmp_path / "unknown-ci.json"
+    evidence_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "0.1",
+                "evidence_id": "unknown:run-123",
+                "repository": "unknown-tests",
+                "repository_family": "custom_unknown",
+                "commit_sha": CONSUMER,
+                "source_repository": "ia-app",
+                "source_revision": TARGET,
+                "interface_id": "behavior:unknown",
+                "status": "unavailable",
+                "tests": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EvidenceError, match="repository_family"):
+        load_ci_evidence(evidence_path)
+
+
 def test_validator_rejects_tampered_evidence_score(tmp_path: Path) -> None:
     contract_path = tmp_path / "contract.yaml"
     write_contract(contract_path)

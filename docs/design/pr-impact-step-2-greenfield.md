@@ -109,6 +109,23 @@ candidate repository. Generic `depends_on`, `enabled`, repository registration,
 workflow names, and pass-only status checks do not establish impact or test
 coverage. No changes are required in downstream repositories.
 
+To capture a reproducible read-only inventory for a downstream repository, use:
+
+```bash
+PYTHONPATH=. ./.venv/bin/python scripts/capture_greenfield_repository_evidence.py \
+  --repository intacct/ia-gwdata-gl \
+  --source-repository intacct/ia-app \
+  --source-revision <40-character-commit-sha> \
+  --output artifacts/greenfield/investigation/ia-gwdata-gl-evidence.json
+```
+
+The command preserves workflow, run, job, check, artifact, endpoint, and
+source-binding evidence from the GitHub API. It does not download or normalize
+artifact contents. `artifact_status`, `execution_status`, and `ci_linkage` must
+be reviewed before treating the result as CI evidence. Repository names,
+successful status workflows, and unlinked artifacts remain inventory evidence
+or explicit gaps only.
+
 ## Semantic sidecar input
 
 Build a committed-revision sidecar for `ia-main` with:
