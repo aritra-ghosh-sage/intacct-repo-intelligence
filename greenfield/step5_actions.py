@@ -166,16 +166,17 @@ def recommend_actions(step3: Mapping[str, Any], step4: Mapping[str, Any]) -> dic
         test = item.get("test")
         classification = item.get("classification")
         evidence = _evidence(item) or _evidence(interfaces.get((target, interface_id))) or fallback
-        if classification in {"covered", "indirectly_covered"} and isinstance(test, Mapping):
+        if classification in {"covered", "indirectly_covered", "candidate"} and isinstance(test, Mapping):
             test_id = _text(test.get("id"), "test id")
             test_path = _text(test.get("path"), "test path")
+            discovered_only = classification == "candidate"
             action = _make_action(
                 action_type="run_test_suite",
                 target_repository=target,
                 owner=owner,
                 scope={"interface_id": interface_id, "test_id": test_id, "test_path": test_path, "target_revision": item.get("target_revision")},
                 evidence=evidence,
-                reason=f"{classification}_test_evidence",
+                reason=("source_ranked_test_without_execution_proof" if discovered_only else f"{classification}_test_evidence"),
                 completion_condition=f"The named test {test_id} at {test_path} passes against the target revision.",
             )
             action["test_owner"] = _test_owner(item.get("test_owner"))

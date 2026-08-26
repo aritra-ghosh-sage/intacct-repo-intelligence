@@ -64,6 +64,38 @@
       "target_revision": null
     },
     {
+      "action_id": "0608fbcd4d468e21e9e3dad1d1f7861fadd90c9959296f902f7818509140ffd7",
+      "action_type": "run_test_suite",
+      "approval_required": true,
+      "completion_condition": "The named test po-process-transactions at tests/purchasing/po_process_transactions_test.py passes against the target revision.",
+      "evidence": [
+        {
+          "kind": "step3_report",
+          "sha256": "d2e4cf99fc8c4a8c7d6cdab8f1d9ba239ce88d48d4a3b789099b36a3addc0705"
+        }
+      ],
+      "owner": {
+        "identity": "purchasing-platform",
+        "status": "available"
+      },
+      "reason": "source_ranked_test_without_execution_proof",
+      "rule_set_version": "0.1",
+      "scope": {
+        "interface_id": "purchasing.transactions.filter",
+        "target_revision": null,
+        "test_id": "po-process-transactions",
+        "test_path": "tests/purchasing/po_process_transactions_test.py"
+      },
+      "status": "recommended",
+      "target_repository": "intacct/ia-restapi-automation-tests",
+      "target_revision": null,
+      "test_command": null,
+      "test_owner": {
+        "identity": null,
+        "status": "unavailable"
+      }
+    },
+    {
       "action_id": "1a9e60ca017467b031fdca1c3df4c61fd56394b7428474b0fecd65a75ceae902",
       "action_type": "run_test_suite",
       "approval_required": true,
@@ -123,6 +155,38 @@
       "status": "recommended",
       "target_repository": "intacct/ia-restapi-automation-tests",
       "target_revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "test_command": null,
+      "test_owner": {
+        "identity": null,
+        "status": "unavailable"
+      }
+    },
+    {
+      "action_id": "eac5365c359e8fd195457d80d7ed84d1d661d1b206739862f4eae8dd1e70d719",
+      "action_type": "run_test_suite",
+      "approval_required": true,
+      "completion_condition": "The named test po-process-transactions-legacy at tests/purchasing/legacy_po_test.py passes against the target revision.",
+      "evidence": [
+        {
+          "kind": "step3_report",
+          "sha256": "d2e4cf99fc8c4a8c7d6cdab8f1d9ba239ce88d48d4a3b789099b36a3addc0705"
+        }
+      ],
+      "owner": {
+        "identity": "purchasing-platform",
+        "status": "available"
+      },
+      "reason": "source_ranked_test_without_execution_proof",
+      "rule_set_version": "0.1",
+      "scope": {
+        "interface_id": "purchasing.transactions.filter",
+        "target_revision": null,
+        "test_id": "po-process-transactions-legacy",
+        "test_path": "tests/purchasing/legacy_po_test.py"
+      },
+      "status": "recommended",
+      "target_repository": "intacct/ia-restapi-automation-tests",
+      "target_revision": null,
       "test_command": null,
       "test_owner": {
         "identity": null,

@@ -61,7 +61,7 @@
     "draft": true,
     "title": "Update tests for purchasing.transactions.filter"
   },
-  "proposal_id": "962d24f1fffdf05de0041807cba435e9f7d479f3348bb5c028ceb9d01b6195cb",
+  "proposal_id": "a60e46a08811f67d0e69d4e694f91e682e21ff00523cc4fe020eedb7227b8035",
   "provenance": {
     "catalog_mutation": "none",
     "github_writes": "none",
@@ -70,7 +70,7 @@
     "step1_report_sha256": "7c031593df96f7a93a317e503919061f4dde8e0f64cdc5ad4b790baf31226378",
     "step3_report_sha256": "d2e4cf99fc8c4a8c7d6cdab8f1d9ba239ce88d48d4a3b789099b36a3addc0705",
     "step4_report_sha256": "c137c22e8af87764ad733f1337220e533a7658125fae28ac4e3e162dbaf199b8",
-    "step5_report_sha256": "17f9e1404bb6317b6eeab909fe68cd9112d8f66747504798ec7852a43b6fb0ad"
+    "step5_report_sha256": "1576e5dec56a169cb14fa448f2231999735e6996f1f5ce4b3601d2ef7dbda681"
   },
   "reason": "deterministic_template_generated_patch",
   "schema_version": "0.1",

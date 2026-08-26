@@ -138,6 +138,38 @@ def test_candidate_semantic_rows_do_not_create_run_actions() -> None:
     assert not any(item["action_type"] == "run_test_suite" for item in report["actions"])
 
 
+def test_source_ranked_candidate_test_creates_validation_action() -> None:
+    step3 = _step3()
+    step3["test_suites"] = {
+        "status": "partial",
+        "items": [{
+            "target_repository": "intacct/ia-restapi-automation-tests",
+            "interface_id": "company.config.preference",
+            "status": "available",
+            "reason": "source_ranked_test_without_execution_proof",
+            "test": {"id": "likely", "path": "features/company.feature"},
+            "evidence": [{"kind": "repository_inventory", "sha256": "e" * 64}],
+        }],
+    }
+    step4 = _step4()
+    step4["coverage"]["items"] = [{
+        "target_repository": "intacct/ia-restapi-automation-tests",
+        "interface_id": "company.config.preference",
+        "classification": "candidate",
+        "reason": "source_ranked_test_without_execution_proof",
+        "test": {"id": "likely", "path": "features/company.feature"},
+        "source_repository": "ia-app",
+        "source_revision": TARGET,
+        "evidence": [{"kind": "repository_inventory", "digest": "e" * 64}],
+    }]
+    step4["provenance"]["step3_report_sha256"] = artifact_sha256(step3)
+    report = recommend_actions(step3, step4)
+    actions = [item for item in report["actions"] if item["action_type"] == "run_test_suite"]
+    assert len(actions) == 1
+    assert actions[0]["reason"] == "source_ranked_test_without_execution_proof"
+    assert actions[0]["scope"]["test_path"] == "features/company.feature"
+
+
 def test_reports_must_match_exact_source_context() -> None:
     step4 = _step4()
     step4["input"]["target_revision"] = "f" * 40

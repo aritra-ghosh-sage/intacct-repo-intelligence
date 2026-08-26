@@ -537,6 +537,33 @@ def _aggregate_tests(
                     }
                 )
                 gaps.append("test_suites_unavailable:malformed_test_evidence")
+        likely_tests = candidate.get("likely_tests", [])
+        if isinstance(likely_tests, list):
+            known_tests = {
+                (test.get("id"), test.get("path"))
+                for test in tests
+                if isinstance(test, dict)
+            }
+            for test in likely_tests:
+                if not isinstance(test, dict):
+                    continue
+                test_key = (test.get("id"), test.get("path"))
+                if test_key in known_tests:
+                    continue
+                if not isinstance(test.get("id"), str) or not test["id"].strip():
+                    continue
+                if not isinstance(test.get("path"), str) or not test["path"].strip():
+                    continue
+                rows.append(
+                    {
+                        "target_repository": candidate["target_repository"],
+                        "interface_id": candidate["interface_id"],
+                        "status": "candidate",
+                        "reason": "source_ranked_test_without_execution_proof",
+                        "test": test,
+                        "evidence": _evidence_refs(candidate),
+                    }
+                )
         if not tests:
             rows.append(
                 {
