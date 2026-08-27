@@ -8,8 +8,9 @@ artifact. Step 8 remains responsible for branch and draft pull-request creation.
 
 ## Operational sequence
 
-1. Produce a strict Step 6 report with exact target evidence, both owner
-   approvals, and `eligibility_profile: step7`.
+1. Produce a strict Step 6 report with exact target evidence and
+   `eligibility_profile: step7`. Owner approval is not required to validate or
+   create a draft.
 2. Select an enabled repository profile from
    `config/greenfield_step7_profiles.yaml` and prepare a schema `0.2` request.
 3. Supply a clean target checkout whose GitHub `origin` and `HEAD` exactly match

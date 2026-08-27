@@ -1,4 +1,4 @@
-"""Generate a deterministic Greenfield Step 6 patch handoff."""
+"""Generate a bounded Greenfield Step 6 patch compatibility artifact."""
 
 from __future__ import annotations
 
@@ -42,25 +42,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--strict-target-evidence",
         action="store_true",
-        help="Require exact GitHub Git API target evidence for Step 7 eligibility.",
+        help="Require exact captured target evidence for Step 7 eligibility.",
     )
     parser.add_argument(
         "--require-owner-approvals",
         action="store_true",
-        help="Block PR-producing output until both owner roles approve.",
+        help="Deprecated compatibility flag; owner approval is not a draft gate.",
     )
     parser.add_argument(
         "--step7-eligible",
         action="store_true",
-        help="Require the strict target-evidence and owner-approval gates.",
+        help="Require the strict target-evidence gate.",
     )
     args = parser.parse_args(argv)
-    if args.step7_eligible and not (
-        args.strict_target_evidence and args.require_owner_approvals
-    ):
-        parser.error(
-            "--step7-eligible requires --strict-target-evidence and --require-owner-approvals"
-        )
+    if args.step7_eligible and not args.strict_target_evidence:
+        parser.error("--step7-eligible requires --strict-target-evidence")
     try:
         request = load_json(args.request, "Step 6 request")
         if args.step7_eligible:
@@ -72,12 +68,12 @@ def main(argv: list[str] | None = None) -> int:
             load_json(args.step4_report, "Step 4 report"),
             load_json(args.step5_report, "Step 5 report"),
             strict_target_evidence=args.strict_target_evidence,
-            require_approvals=args.require_owner_approvals,
+            require_approvals=False,
         )
         errors = validate_step6_report(
             report,
             strict_target_evidence=args.strict_target_evidence,
-            require_approvals=args.require_owner_approvals,
+            require_approvals=False,
             require_step7_eligibility=args.step7_eligible,
         )
         if errors:

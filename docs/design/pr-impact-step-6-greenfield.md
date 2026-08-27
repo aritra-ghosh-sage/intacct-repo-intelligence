@@ -1,13 +1,14 @@
 # Greenfield PR Impact Step 6
 
-Step 6 generates a deterministic test-patch proposal and a handoff artifact
-for a downstream AI agent. It does not capture target evidence, modify a
+Step 6 generates a bounded test-patch compatibility artifact from the
+`analysis-report.json` action selected by the orchestrator. It does not modify a
 checkout, call GitHub, create branches, or create pull requests.
 
 ## Inputs
 
-Step 6 consumes validated Step 1, Step 3, Step 4, and Step 5 reports, plus a
-separate request containing:
+Step 6 consumes validated Step 1, Step 3, Step 4, and Step 5 reports. The
+four-phase runner automatically builds its compatibility request from an
+eligible Strands action and captured target repository containing:
 
 - source PR identity, revisions, changed paths, and diff fingerprint;
 - exact report fingerprints and Step 5 action identity;
@@ -17,22 +18,25 @@ separate request containing:
 - a registered template and validation plan.
 
 The target/edit evidence package is an upstream prerequisite. Missing or
-inconsistent evidence blocks generation; Step 6 does not repair or infer it.
+inconsistent evidence blocks generation.
 
-## v1 templates
+## Patch Generators
 
-The application-owned template registry provides update-only templates:
+The application-owned registry provides:
 
 - `gwdata_gl_existing_case_update_v1`: one CSV test-definition file and its
   explicitly paired request/response XML files under `testdefinitions/` and
   `testscripts/`.
 - `restapi_existing_case_update_v1`: one Gherkin feature and explicitly
   referenced JSON fixtures under `features/`.
+- `strands_bounded_test_edit_v1`: evidence-backed edits to 1-10 captured test
+  files with exact old/new fragments and a central validation plan.
 
 Templates apply exact old/new fragments exactly once. They preserve unrelated
 content and do not create files, infer pairings, or reformat complete files.
-New-test actions, rename/removal actions, and compatibility-failure actions are
-not generated in v1.
+Both existing-test updates and missing-test additions are supported inside
+captured existing files. Adding a new repository file remains outside the
+current mutation contract.
 
 ## Output
 

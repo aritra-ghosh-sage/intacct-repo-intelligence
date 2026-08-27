@@ -2,16 +2,16 @@
 
 ## Document Status
 
-Proposed greenfield architecture. This document intentionally does not depend
-on the current implementation of this repository.
+Current Greenfield Strands architecture. The retained Step 1-8 artifacts are
+compatibility and audit views inside the four-phase automated flow.
 
 ## Objective
 
 Build an intelligence layer for the `intacct` GitHub organization that makes
 cross-repository change impact visible and actionable.
 
-When a pull request changes one repository, the system should deterministically
-identify:
+When a pull request changes one repository, the system should identify with
+revision-bound, inspectable evidence:
 
 - The changed files and symbols
 - The affected contracts, components, and interfaces
@@ -23,9 +23,11 @@ identify:
 - Whether a test update should be generated
 - Whether a validated draft pull request can be opened in a test repository
 
-AI should improve explanation and authoring speed. It must not be the source of
-truth for repository relationships, test discovery, PR discovery, or impact
-classification.
+Strands is the primary discovery and recommendation agent. It navigates
+revision-bound repository handbooks and approved read-only tools to discover,
+infer, rank, and explain impact. Live source and recorded tool results are the
+factual substrate for its claims; deterministic boundaries validate identity,
+revision, evidence shape, patch scope, validation, and writes.
 
 ## Problem Statement
 
@@ -59,13 +61,12 @@ Every result must be backed by an immutable source reference such as:
 - Workflow run, job, check, or artifact identifier
 - Test identifier and test source path
 
-### Deterministic Actions
+### Reproducible Evidence Boundaries
 
-The same input revision and evidence snapshot must produce the same candidates,
-classifications, and recommended actions.
-
-The rules must be versioned. Every result must record the rule-set version and
-the evidence revision used to produce it.
+The same input revision and evidence snapshot must retain the same source and
+tool evidence. Model ranking and semantic recommendations may vary and must
+record the model, tool ledger, and evidence revision. Write eligibility rules
+remain versioned and reproducible.
 
 ### Explicit Uncertainty
 
@@ -85,11 +86,12 @@ Repository onboarding should require central registration and, where possible,
 one reusable CI workflow. A team should not need to build a custom parser or
 maintain a bespoke service integration.
 
-### AI Behind a Deterministic Boundary
+### Evidence-Backed Agent Discovery
 
-AI may summarize evidence, rank already identified candidates, draft test
-changes, and explain recommended actions. AI may not create authoritative
-relationships from semantic similarity alone.
+Strands may discover, infer, and rank candidate relationships through approved
+tools. `confirmed` and `strong_candidate` claims must cite exact source or tool
+results. Repository eligibility, embeddings, names, and path proximity alone
+remain candidate signals and cannot authorize a write.
 
 ## Target Architecture
 
@@ -100,23 +102,26 @@ GitHub events and reconciliation
 Immutable PR, commit, workflow, and artifact records
               |
               v
-Repository contracts and CI test evidence
+Repository handbooks, contracts, CI evidence, and read-only tools
               |
               v
-Deterministic impact and coverage rules
+Strands impact, coverage, and action analysis
               |
               v
-Impact outcome and actionable recommendations
+Evidence-bound analysis report
               |
               +--> AI explanation and review summary
               |
               +--> Guarded test patch generation
                               |
                               v
-                     Targeted validation
+                     Exact targeted validation
                               |
                               v
                     Draft test-repository PR
+                              |
+                              v
+                  Human ready/merge decision
 ```
 
 GitHub provides the primary ingestion primitives: pull request metadata and
@@ -344,6 +349,19 @@ tests, confirmed CI coverage, or runtime business impact.
 
 ## PR Impact Analysis Flow
 
+The supported operator-facing flow is:
+
+```text
+Capture
+  -> Analyze with Strands, repository handbooks, and read-only tools
+  -> Propose and validate remediation
+  -> Publish GitHub Check, PR comment, and optional draft PR
+  -> Human decides ready-for-review or merge
+```
+
+The Step 1-8 sections below describe retained evidence and mutation contracts
+inside those phases. They are not separate operator handoffs.
+
 ### Step 1: Capture the Source PR
 
 Greenfield Step 1 is a repository-neutral evidence-capture boundary. It is not
@@ -367,16 +385,15 @@ context only.
 
 ### Step 2: Resolve Impact Candidates
 
-Apply deterministic rules in a fixed order:
+Use a two-tier candidate funnel:
 
-1. Explicit contract mappings
-2. Published dependency relationships
-3. CI evidence relationships
-4. Reviewed static-code relationships, if available
-5. Historical co-change evidence, labeled as candidate only
+1. Deep-inspect explicit contract mappings first.
+2. Cheaply screen every enabled `discovery_eligible` test repository.
+3. Deep-inspect a screened repository only when Strands finds supporting
+   handbook, source, contract, CI, or test evidence.
 
-Each candidate must include the relationship type, evidence references, and
-rule-set version.
+Eligibility alone is not impact evidence. Each ranked candidate records its
+evidence state, exact citations, model identity, and tool ledger.
 
 ### Step 3: Produce the Blast-Radius Outcome
 
@@ -420,7 +437,8 @@ The report should answer:
 
 ### Step 5: Recommend Actions
 
-Recommendations must be generated from deterministic conditions. Examples:
+Strands recommends actions from the evidence-backed analysis. Deterministic code
+validates the action schema and any later automation boundary. Examples:
 
 - Run a named test suite in a named repository.
 - Request review from the owner of an impacted interface.
@@ -434,8 +452,9 @@ condition.
 
 ### Step 6: Generate a Test Patch When Justified
 
-Test-PR generation is allowed only when a deterministic rule identifies a
-specific required update, such as:
+Test-PR generation is allowed for `confirmed` or `strong_candidate` analysis
+when the target repository, base SHA, bounded paths, supporting tool citations,
+and validation profile are exact. Qualifying reasons include:
 
 - A declared contract changed
 - An API or schema changed
@@ -444,16 +463,18 @@ specific required update, such as:
 - A required test category is missing
 - A confirmed compatibility failure requires a test update
 
-Patch generation priority:
+Patch generation options:
 
 1. Deterministic templates
 2. AST or structured transformations
 3. Existing fixture-generation utilities
-4. AI-generated patch as a bounded fallback
+4. Strands-generated bounded edits grounded in inspected target files
 
-The AI receives only a bounded evidence package containing the source diff,
-source SHA, target test-repository SHA, relevant test files, contract changes,
-test conventions, and allowed paths.
+Strands receives bounded read-only tools over the source diff, source SHA,
+target test-repository SHA, relevant test files, contract changes, test
+conventions, and allowed paths. New tests may initially be inserted into an
+existing captured test file; adding new repository files requires a separate
+mutation-policy extension.
 
 ### Step 7: Validate the Patch
 
@@ -494,28 +515,41 @@ GitHub supports creating a branch from a specific commit and creating a pull
 request from that branch. See [create a Git reference](https://docs.github.com/en/rest/git/refs)
 and [create a pull request](https://docs.github.com/en/rest/pulls/pulls).
 
-The generated PR should be draft by default. A human owner of the test
-repository must approve it before it becomes ready for review or merge.
+The generated PR is always a draft. Owner approval is not required to create the
+draft. A human owner of the test repository must approve it before it becomes
+ready for review or merge.
+
+### Publish The Outcome
+
+`publication.json` is the canonical user-facing outcome. It drives one GitHub
+Check for machine-readable status and one marker-bound, idempotently updated PR
+comment for the human narrative. A dashboard is deferred; any future dashboard
+must consume this same outcome rather than create another truth model.
 
 ## AI Responsibilities and Restrictions
 
 AI may:
 
-- Summarize the deterministic impact result
+- Navigate repository handbooks and revision-bound source tools
+- Discover and infer evidence-backed repository and test relationships
 - Explain evidence paths in plain language
-- Rank already identified candidates
+- Rank candidates and choose investigation order
 - Suggest investigation steps
-- Propose a bounded test patch
+- Propose bounded existing-test updates and missing tests
 - Draft the test PR title and description
 
 AI may not:
 
-- Invent repository relationships
+- Assert confirmed or strong-candidate relationships without recorded evidence
 - Treat embeddings or naming similarity as proof
 - Decide that missing evidence means no impact
 - Expand the patch beyond approved files
 - Merge or approve its generated PR
 - Replace deterministic validation
+
+Allowed evidence states are `confirmed`, `strong_candidate`, `candidate`,
+`unresolved`, `unavailable`, and `no_evidence`. Ranking is advisory and never
+silently promotes an evidence state.
 
 ## Repository Onboarding Model
 
@@ -548,14 +582,14 @@ indexing and runtime coverage should remain optional enhancements.
 
 ### Phase 3: Impact and Action Reports
 
-- Blast-radius rules
+- Strands blast-radius analysis with recorded tool evidence
 - Related PR discovery
 - Test-gap analysis
 - Owner and action recommendations
-- GitHub check or PR comment presentation
+- Canonical GitHub Check and idempotent PR comment presentation
 
 GitHub Apps can create check runs with annotations on a commit, which is useful
-for presenting deterministic impact findings directly on the source PR. See
+for presenting evidence-backed impact findings directly on the source PR. See
 the [Checks API](https://docs.github.com/en/rest/checks/runs).
 
 ### Phase 4: Guarded Test-PR Generation
@@ -587,7 +621,7 @@ the [Checks API](https://docs.github.com/en/rest/checks/runs).
 
 Measure the system by outcomes rather than model quality alone:
 
-- Percentage of PRs with a deterministic impact report
+- Percentage of PRs with an evidence-backed impact report
 - Percentage of cross-repository relationships with explicit evidence
 - Precision of confirmed impacted-repository candidates
 - Percentage of impacted PRs with identified tests

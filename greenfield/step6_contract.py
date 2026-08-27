@@ -35,8 +35,9 @@ ACTION_TYPES = {
 TEMPLATE_IDS = {
     "gwdata_gl_existing_case_update_v1",
     "restapi_existing_case_update_v1",
+    "strands_bounded_test_edit_v1",
 }
-TARGET_EVIDENCE_PROVIDERS = {"github_git_api"}
+TARGET_EVIDENCE_PROVIDERS = {"github_git_api", "git_object_database"}
 APPROVAL_ROLES = {"source_interface_owner", "consumer_test_owner"}
 ELIGIBILITY_PROFILES = {"replay", "step7"}
 
@@ -220,7 +221,9 @@ def _validate_target_evidence(
         return [f"{label} must be an object"]
     errors: list[str] = []
     if value.get("provider") not in TARGET_EVIDENCE_PROVIDERS:
-        errors.append(f"{label}.provider must be github_git_api")
+        errors.append(
+            f"{label}.provider must be one of {sorted(TARGET_EVIDENCE_PROVIDERS)}"
+        )
     if value.get("repository") != target.get("repository"):
         errors.append(f"{label}.repository must match target.repository")
     revision = value.get("revision")
@@ -524,7 +527,7 @@ def _validate_report(
     approval_errors = _validate_approvals(root.get("approvals"), "approvals")
     if approval_errors:
         raise Step6Error("; ".join(approval_errors))
-    if (require_approvals or require_step7_eligibility) and status == "ready_for_ai_pr":
+    if require_approvals and status == "ready_for_ai_pr":
         missing = sorted(APPROVAL_ROLES - _approved_roles(root.get("approvals")))
         if missing:
             raise Step6Error("approved owner roles are missing: " + ", ".join(missing))

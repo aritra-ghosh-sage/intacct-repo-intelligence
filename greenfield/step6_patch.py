@@ -24,8 +24,14 @@ from greenfield.step6_templates import validate_template
 from scripts.validate_greenfield_step1 import validate as validate_step1
 from scripts.validate_greenfield_step3 import validate as validate_step3
 
-SUPPORTED_ACTIONS = {"update_test_obligation"}
-SUPPORTED_TRIGGERS = {"fixture_contract_mismatch", "api_or_schema_changed"}
+SUPPORTED_ACTIONS = {"update_test_obligation", "add_integration_test"}
+SUPPORTED_TRIGGERS = {
+    "fixture_contract_mismatch",
+    "api_or_schema_changed",
+    "required_test_category_missing",
+    "renamed_or_removed_symbol",
+    "confirmed_compatibility_failure",
+}
 
 
 def _approved_roles(value: Any) -> set[str]:
@@ -293,6 +299,10 @@ def generate_step6(
         return _base_report(
             request, status="not_generated", reason="trigger_not_supported_in_v1"
         )
+    if not request["edit_operations"]:
+        return _base_report(
+            request, status="not_generated", reason="bounded_edit_package_missing"
+        )
     try:
         validate_template(request)
         changes = _apply_operations(request)
@@ -314,7 +324,11 @@ def generate_step6(
         return _base_report(
             request,
             status="ready_for_ai_pr",
-            reason="deterministic_template_generated_patch",
+            reason=(
+                "strands_tool_guided_patch"
+                if request["template"]["id"] == "strands_bounded_test_edit_v1"
+                else "deterministic_template_generated_patch"
+            ),
             files=file_rows,
             unified_diff=_unified_diff(changes),
         )

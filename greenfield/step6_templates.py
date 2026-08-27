@@ -11,6 +11,7 @@ from greenfield.step6_contract import Step6Error
 TEMPLATE_VERSIONS = {
     "gwdata_gl_existing_case_update_v1": "0.1",
     "restapi_existing_case_update_v1": "0.1",
+    "strands_bounded_test_edit_v1": "0.1",
 }
 
 
@@ -89,10 +90,29 @@ def _validate_rest(request: Mapping[str, Any]) -> None:
                 )
 
 
+def _validate_strands_bounded_edit(request: Mapping[str, Any]) -> None:
+    paths = _paths(request)
+    if not paths or len(paths) > 10:
+        raise Step6Error("bounded Strands edit requires 1-10 existing test files")
+    if any(
+        not path.endswith((".csv", ".feature", ".json", ".xml", ".yaml", ".yml"))
+        for path in paths
+    ):
+        raise Step6Error("bounded Strands edit contains an unsupported test file type")
+    operation_paths = {
+        str(row.get("path"))
+        for row in request.get("edit_operations", [])
+        if isinstance(row, Mapping)
+    }
+    if not operation_paths or not operation_paths.issubset(set(paths)):
+        raise Step6Error("bounded Strands edit operations must target captured files")
+
+
 TemplateValidator = Callable[[Mapping[str, Any]], None]
 TEMPLATE_VALIDATORS: dict[str, TemplateValidator] = {
     "gwdata_gl_existing_case_update_v1": _validate_gwdata,
     "restapi_existing_case_update_v1": _validate_rest,
+    "strands_bounded_test_edit_v1": _validate_strands_bounded_edit,
 }
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import inspect
 import json
 import subprocess
 from collections.abc import Callable, Mapping
@@ -105,7 +106,9 @@ Context JSON:
 """
 
 
-def _default_agent_factory(model: str | None) -> Callable[[str], Any]:
+def _default_agent_factory(
+    model: str | None, *, tools: list[Any] | None = None
+) -> Callable[[str], Any]:
     try:
         from strands import Agent
     except ImportError as exc:
@@ -113,7 +116,12 @@ def _default_agent_factory(model: str | None) -> Callable[[str], Any]:
             "strands-agents is not installed; run `uv sync` after updating dependencies"
         ) from exc
     try:
-        agent = Agent(model=model) if model else Agent()
+        options: dict[str, Any] = {}
+        if model:
+            options["model"] = model
+        if tools is not None:
+            options["tools"] = tools
+        agent = Agent(**options)
     except Exception as exc:  # pragma: no cover - provider-specific failure shape
         raise StrandsAgentError(f"Strands agent initialization failed: {exc}") from exc
     return agent
@@ -158,9 +166,14 @@ def _run_strands_json(
     model: str | None,
     timeout: float,
     agent_factory: Callable[[str | None], Callable[[str], Any]] | None = None,
+    tools: list[Any] | None = None,
 ) -> dict[str, Any]:
     factory = agent_factory or _default_agent_factory
-    agent = factory(model)
+    if factory is _default_agent_factory:
+        agent = _default_agent_factory(model, tools=tools)
+    else:
+        parameters = inspect.signature(factory).parameters
+        agent = factory(model, tools=tools) if "tools" in parameters else factory(model)
     executor: concurrent.futures.ThreadPoolExecutor | None = (
         concurrent.futures.ThreadPoolExecutor(max_workers=1)
     )
@@ -171,7 +184,9 @@ def _run_strands_json(
         future.cancel()
         executor.shutdown(wait=False, cancel_futures=True)
         executor = None
-        raise StrandsAgentError(f"Strands execution timed out after {timeout}s") from exc
+        raise StrandsAgentError(
+            f"Strands execution timed out after {timeout}s"
+        ) from exc
     except StrandsAgentError:
         raise
     except Exception as exc:  # pragma: no cover - provider-specific failure shape
@@ -193,6 +208,7 @@ def run_strands_trace(
     timeout: int = 300,
     max_file_bytes: int = 120_000,
     agent_factory: Callable[[str | None], Callable[[str], Any]] | None = None,
+    tools: list[Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Run Strands and return (validated_trace, exact context)."""
 
@@ -203,6 +219,7 @@ def run_strands_trace(
         model=model,
         timeout=timeout,
         agent_factory=agent_factory,
+        tools=tools,
     )
     metadata = {
         "name": "strands",
@@ -221,6 +238,83 @@ def run_strands_trace(
     return trace, context
 
 
+def _analysis_prompt(
+    run_context: Mapping[str, Any], compatibility_summary: Mapping[str, Any]
+) -> str:
+    return f"""You are the Strands analyst for the Greenfield Analyze phase.
+
+Use the available read-only tools to investigate repository behavior, impacted
+test repositories, existing coverage, and missing coverage. Follow this order:
+1. inspect explicit-contract candidates;
+2. screen every discovery_eligible repository;
+3. deep-inspect a screened repository only after finding supporting evidence;
+4. route through a repository handbook when one is available, then verify the
+   current source at the captured revision.
+
+Return only a JSON object with repository_impacts, actions, coverage,
+recommendation, gaps, and agent. Allowed evidence states are confirmed,
+strong_candidate, candidate, unresolved, unavailable, and no_evidence.
+Confirmed and strong_candidate rows must cite exact tool results using their
+tool_call_id. Naming similarity and repository eligibility are never proof.
+
+Actions use only run_test_suite, update_existing_test, add_missing_test,
+request_owner_review, or block_automation. Each action must contain action_id,
+action_type, target_repository, target_revision, evidence_state, scope,
+evidence, rationale, completion_condition, and draft_eligible. Set
+draft_eligible=true only for confirmed or strong_candidate update_existing_test
+or add_missing_test actions with exact target revision and bounded file scope.
+For a draft-eligible remediation, scope must include sorted allowed_paths,
+edit_operations with path, old_text, new_text, and expected_occurrences=1, plus
+the central validation_plan. New tests may be added to an existing captured test
+file; creating a new repository file is not yet permitted by the mutation gate.
+Owner uncertainty does not block a draft; unknown target revision, ambiguous
+path scope, or unavailable validation does.
+
+Run context:
+```json
+{json.dumps(run_context, sort_keys=True, indent=2)}
+```
+
+Compatibility analysis summary:
+```json
+{json.dumps(compatibility_summary, sort_keys=True, indent=2)}
+```
+"""
+
+
+def run_strands_analysis(
+    run_context: Mapping[str, Any],
+    compatibility_summary: Mapping[str, Any],
+    toolbox: Any,
+    *,
+    model: str | None = None,
+    timeout: int = 300,
+    agent_factory: Callable[[str | None], Callable[[str], Any]] | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Run tool-guided semantic analysis and return its output plus tool ledger."""
+
+    try:
+        from strands import tool
+    except ImportError as exc:
+        if agent_factory is None:
+            raise StrandsAgentError(
+                "strands-agents is not installed; run `uv sync` after updating dependencies"
+            ) from exc
+
+        def tool(value: Callable[..., Any]) -> Callable[..., Any]:
+            return value
+
+    tools = toolbox.as_strands_tools(tool)
+    raw = _run_strands_json(
+        _analysis_prompt(run_context, compatibility_summary),
+        model=model,
+        timeout=timeout,
+        agent_factory=agent_factory,
+        tools=tools,
+    )
+    return raw, toolbox.ledger()
+
+
 def generate_contract(
     step1: Mapping[str, Any], trace: Mapping[str, Any], trace_path: str
 ) -> dict[str, Any]:
@@ -231,5 +325,6 @@ __all__ = [
     "StrandsAgentError",
     "build_context",
     "generate_contract",
+    "run_strands_analysis",
     "run_strands_trace",
 ]

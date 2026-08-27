@@ -1,66 +1,96 @@
-# Greenfield Behavior Handbook V1
+# Greenfield Repository Behavior Handbook
 
 ## Purpose
 
-The Greenfield behavior handbook is a deterministic, read-only navigation view
-over the retained Step 1.5 through Step 5 artifacts. It organizes exact evidence
-as a run summary, behavior register, implementation locators, impact, coverage,
-and actions.
+The repository behavior handbook is a revision-bound L1/L2/L3 navigation
+package used by Strands before and during PR analysis. It organizes source by
+runtime behavior rather than by file and gives the agent progressively disclosed
+routes to current implementation locations.
 
-The handbook is not an evidence source. The retained Greenfield artifacts and
-revision-bound source remain authoritative, and the handbook cannot affect
-Step 6 eligibility or the Step 7 and Step 8 write boundaries.
+The handbook guides discovery; it does not replace source inspection. Strands
+must verify candidate locations against the captured repository revision before
+using them as confirmed or strong-candidate evidence.
 
-## Inputs And Outputs
+This follows the Harness Handbook pattern:
 
-The builder consumes `step1.5.contract.json` and the Step 2, Step 3, Step 4, and
-Step 5 JSON reports for one source repository and target revision. It rejects
-schema, repository identity, revision, or changed-path mismatches.
+- L1 is a compact system and behavior-stage index.
+- L2 lists behavior components and their relationships.
+- L3 contains source-backed behavior entries with paths, optional lines,
+  symbols, excerpts, and source hashes.
 
-It emits:
+## Contract
 
-- `behavior-handbook.json`, the machine-readable V1 report.
-- `behavior-handbook.md`, the progressively disclosed human view.
-
-The JSON report uses `schema_version: "0.1"` and
-`analysis_kind: "greenfield_behavior_handbook"`. Its top-level fields are
-`status`, `input`, `summary`, `register`, `behaviors`, `unassigned_evidence`,
-`gaps`, `warnings`, and `provenance`.
-
-## Evidence Rules
-
-An active generated `behavior_contract` relation supplies the behavior ID,
-description, entry symbols, and source paths. Revision-bound generated contract
-edges supply line locators. A source path without an exact edge line remains
-explicitly path-only.
-
-Downstream evidence is attached only when its interface ID equals the behavior
-ID or a revision-bound Step 2 source anchor explicitly contains both IDs. Path
-overlap, names, token similarity, and repository proximity do not create links.
-Rows without an exact join remain in `unassigned_evidence`.
-Repository-level and related-pull-request Step 3 rows have no behavior interface
-key in V1, so they are retained there rather than inferred onto a behavior.
-
-The projection preserves upstream classifications and statuses, including
-`candidate`, `unresolved`, `stale`, `unavailable`, `unknown`, `missing`,
-`not_modelled`, and `not_run`. It does not promote evidence.
-
-## Status And Provenance
-
-A handbook is complete only when all upstream reports are complete, no gaps or
-unassigned rows remain, and every behavior is complete. All other valid reports
-are partial.
-
-Provenance records canonical SHA-256 values for all five inputs, the handbook
-rule-set version, and the required non-writing boundary:
+The machine-readable artifact uses:
 
 ```text
-read_only: true
-catalog_mutation: none
-github_writes: none
+schema_version: "0.1"
+artifact_kind: "greenfield_repository_behavior_handbook"
+repository: <repository identity>
+revision: <lowercase 40-character Git SHA>
+leaf_mode: "behavior"
+sections:
+  index: <L1>
+  behaviors: <L2>
+  behavior:<id>: <L3>
 ```
 
-## Standalone Rendering
+Every L3 locator contains the repository-relative path, captured revision,
+source SHA-256, current excerpt, and excerpt line range. A line locator is
+accepted only when it resolves inside the source blob at that revision.
+
+The initial builder consumes a generated behavior contract and revision-bound
+Git source:
+
+```bash
+PYTHONPATH=. ./.venv/bin/python \
+  scripts/build_greenfield_repository_handbook.py \
+  --contract <step1.5.contract.json> \
+  --source-root <repository-checkout> \
+  --output <repository-handbook.json>
+```
+
+## Strands Navigation
+
+The captured `run-context.json` identifies available repository handbooks and
+their fingerprints. The Strands `read_handbook` tool exposes one section at a
+time:
+
+1. Read `index` to select relevant behaviors.
+2. Read `behaviors` to narrow the implementation area.
+3. Read only the selected `behavior:<id>` L3 entries.
+4. Open the real source through `read_source` or `codegraph_explore`.
+5. Cite the resulting tool call when making a confirmed or strong-candidate
+   claim.
+
+Missing, stale, or unresolvable handbook entries remain explicit unavailable
+evidence. The agent may continue with other approved repository tools, but it
+must not present an unavailable handbook as proof of no impact.
+
+## Resynchronization
+
+Every non-empty repository diff triggers handbook resynchronization. The current
+implementation rebuilds the affected behavior projection, records the previous
+handbook fingerprint and sorted changed paths, and verifies all resulting
+locators against the new revision. An empty diff reuses the existing handbook.
+
+Production storage, retention, and asynchronous resynchronization workers remain
+infrastructure decisions. The artifact contract is independent of that storage
+choice.
+
+## Behavior Impact Report
+
+The per-PR artifact previously called `behavior-handbook.json` is not a
+repository handbook. It is now:
+
+- `behavior-impact-report.json`
+- `behavior-impact-report.md`
+- `analysis_kind: "greenfield_behavior_impact_report"`
+
+This report is built after compatibility Steps 2-5. It joins the current PR's
+behavior, impact, coverage, action, gap, and provenance evidence for review and
+replay. It cannot route the earlier analysis and cannot authorize writes.
+
+The standalone compatibility renderer remains:
 
 ```bash
 PYTHONPATH=. ./.venv/bin/python scripts/render_greenfield_handbook.py \
@@ -69,9 +99,6 @@ PYTHONPATH=. ./.venv/bin/python scripts/render_greenfield_handbook.py \
   --step3 <bundle>/step3.json \
   --step4 <bundle>/step4.json \
   --step5 <bundle>/step5.json \
-  --output-json <bundle>/behavior-handbook.json \
-  --output-markdown <bundle>/behavior-handbook.md
+  --output-json <bundle>/behavior-impact-report.json \
+  --output-markdown <bundle>/behavior-impact-report.md
 ```
-
-The command returns `0` for a valid complete or partial handbook. Invalid,
-stale, or mismatched inputs return `2` before either output is written.

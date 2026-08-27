@@ -1,4 +1,4 @@
-"""Render a deterministic behavior handbook from Greenfield Steps 1.5-5."""
+"""Render a deterministic behavior impact report from Greenfield Steps 1.5-5."""
 
 from __future__ import annotations
 

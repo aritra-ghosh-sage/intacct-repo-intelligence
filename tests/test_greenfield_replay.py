@@ -275,11 +275,13 @@ def test_runner_step6_handoff_does_not_infer_target_inputs() -> None:
 def test_runner_exposes_wrapper_handoff_artifact() -> None:
     source = Path(run_greenfield_strands.__file__).read_text(encoding="utf-8")
     assert "GreenfieldFlowHandoff" in source
-    assert 'current_stage = "behavior_handbook"' in source
+    assert 'current_stage = "behavior_impact_report"' in source
+    assert 'current_stage = "analyze"' in source
+    assert 'current_stage = "publish"' in source
     assert 'current_stage = "step7_handoff"' in source
     assert 'current_stage = "step8_handoff"' in source
-    assert '"behavior_handbook": handbook_path' in source
-    assert '"behavior_handbook_markdown": handbook_markdown_path' in source
+    assert '"behavior_impact_report": handbook_path' in source
+    assert '"behavior_impact_report_markdown": handbook_markdown_path' in source
     assert 'artifact_paths["step7_handoff"] = step7_handoff_path' in source
     assert 'artifact_paths["step8_handoff"] = step8_handoff_path' in source
     assert '"flow_handoff": handoff.path' in source

@@ -371,7 +371,7 @@ def validate_step7(
     step6_errors = validate_step6_report(
         step6_report,
         strict_target_evidence=True,
-        require_approvals=True,
+        require_approvals=False,
         require_step7_eligibility=True,
     )
     if step6_errors:
@@ -387,7 +387,7 @@ def validate_step7(
                 _failure(
                     "step6_report_invalid",
                     phase="preflight",
-                    remediation="Regenerate a strict Step 6 report with exact target evidence and both approvals.",
+                    remediation="Regenerate a strict Step 6 report with exact target evidence.",
                     observed=step6_errors,
                 )
             ],

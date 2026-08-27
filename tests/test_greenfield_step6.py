@@ -528,7 +528,7 @@ def test_multiple_old_fragments_fail_closed() -> None:
         generate_step6(request, step1, step3, step4, step5)
 
 
-def test_unsupported_trigger_is_not_generated() -> None:
+def test_missing_test_trigger_can_generate_bounded_patch() -> None:
     files = [_file("features/example.feature", "Then old\n")]
     request, step1, step3, step4, step5 = _request(
         "intacct/ia-restapi-automation-tests",
@@ -545,8 +545,8 @@ def test_unsupported_trigger_is_not_generated() -> None:
     )
     request["trigger"]["kind"] = "required_test_category_missing"
     report = generate_step6(request, step1, step3, step4, step5)
-    assert report["status"] == "not_generated"
-    assert not report["patch"]["files"]
+    assert report["status"] == "ready_for_ai_pr"
+    assert report["patch"]["files"]
     assert validate_step6_report(report) == []
 
 
@@ -649,6 +649,7 @@ def test_unsupported_action_without_edit_package_is_not_generated() -> None:
     assert validate_step6_request(request) == []
     report = generate_step6(request, step1, step3, step4, step5)
     assert report["status"] == "not_generated"
+    assert report["reason"] == "bounded_edit_package_missing"
 
 
 def test_template_pairing_and_fixture_reference_are_required() -> None:

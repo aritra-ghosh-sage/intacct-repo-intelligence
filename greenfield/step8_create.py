@@ -81,6 +81,38 @@ class RejectingStep8Authorizer:
         }
 
 
+class ValidatedDraftAuthorizer:
+    """Authorize draft creation from exact successful Step 7 evidence, not owner approval."""
+
+    def authorize(
+        self,
+        request: Mapping[str, Any],
+        step6_report: Mapping[str, Any],
+        step7_report: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        del step6_report
+        validated = step7_report.get("status") == "validated"
+        evidence_sha = artifact_sha256(step7_report)
+        return {
+            "authorized": validated,
+            **({"reason": "step7_validation_not_passed"} if not validated else {}),
+            "verifier": {"id": "greenfield-step7-draft-policy", "version": "0.1"},
+            "step7_report_sha256": request["artifacts"]["step7_report_sha256"],
+            "validation_fingerprint": step7_report["validation_fingerprint"],
+            **(
+                {
+                    "evidence": {
+                        "kind": "validated_step7_report",
+                        "id": step7_report["validation_fingerprint"],
+                        "sha256": evidence_sha,
+                    }
+                }
+                if validated
+                else {}
+            ),
+        }
+
+
 class NoWriteGitHubWriter:
     """Sentinel used by local preparation to prove authorization precedes I/O."""
 
@@ -777,5 +809,6 @@ __all__ = [
     "NoWriteGitHubWriter",
     "RejectingStep8Authorizer",
     "Step8Authorizer",
+    "ValidatedDraftAuthorizer",
     "create_step8",
 ]

@@ -191,6 +191,62 @@ and MCP/query review surfaces should use that file as the source template and
 preserve its sections for review summaries, findings, checklist, confidence,
 recommendation, and assumptions.
 
+## Greenfield Strands Flow
+
+The supported Greenfield entry point is:
+
+```bash
+PYTHONPATH=. ./.venv/bin/python scripts/run_greenfield.py \
+  --source-root "$HOME/projects/main" \
+  --output-dir <immutable-bundle> \
+  --pr <number>
+```
+
+`scripts/run_greenfield_strands.py` is the implementation entry point behind
+that command. `scripts/run_greenfield_codex.py` is a deprecated compatibility
+shim and must not acquire independent flow behavior.
+
+The operator-facing flow has four phases:
+
+1. `Capture` writes `run-context.json` with source identity, immutable evidence,
+   candidate scope, repository handbook revisions, and tool budgets.
+2. `Analyze` lets Strands navigate repository handbooks and approved read-only
+   tools, then writes `analysis-report.json` with ranked impact, coverage,
+   actions, citations, and explicit gaps.
+3. `Remediate and validate` converts an eligible analysis action into the
+   retained Step 6-7 compatibility artifacts and runs an enabled central
+   validation profile.
+4. `Publish` writes `publication.json`, optionally creates a validated draft
+   test PR, and creates or updates the canonical GitHub Check and one marker-bound
+   PR comment.
+
+The retained Step 1-8 artifacts are internal compatibility, replay, and audit
+views. They are not manual workflow gates. The per-PR projection formerly named
+the behavior handbook is `behavior-impact-report.json`; a repository behavior
+handbook is a separate revision-bound L1/L2/L3 artifact.
+
+Strands is the primary discovery and recommendation agent. It may infer and rank
+relationships by using captured handbooks, revision-bound source, CodeGraph,
+contracts, CI evidence, test inventories, and related-PR evidence. Every
+`confirmed` or `strong_candidate` claim must cite a recorded source or tool
+result. Repository eligibility and semantic naming alone never prove impact.
+
+Allowed evidence states are `confirmed`, `strong_candidate`, `candidate`,
+`unresolved`, `unavailable`, and `no_evidence`. Only `confirmed` and
+`strong_candidate` remediation may reach automatic draft creation, and only
+with an exact target repository, target SHA, bounded existing file paths,
+recorded edit operations, and an enabled validation profile.
+
+Draft PR creation does not require owner approval. Exact source/target identity,
+blob evidence, path policy, clean application, validation, base-movement checks,
+and service authorization remain mandatory. Human approval is required before
+the draft becomes ready for review or is merged. The system must never approve
+or merge its own PR.
+
+The GitHub Check is the canonical user-facing status. The PR comment is an
+idempotent human-readable projection of the same `publication.json`; do not
+create an independent dashboard data model.
+
 ## When Editing
 
 - Keep changes evidence-backed and minimal.

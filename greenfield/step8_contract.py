@@ -222,6 +222,11 @@ def _render_pr_body(
             *evidence_links,
         }
     )
+    patch_origin = (
+        "strands-tool-guided"
+        if step6.get("reason") == "strands_tool_guided_patch"
+        else "template-generated"
+    )
     lines = [
         "## Source change",
         "",
@@ -236,7 +241,7 @@ def _render_pr_body(
         f"- Required because: {_code_span(justification['trigger'])}",
         f"- Step 5 action: {_code_span(justification['step5_action_id'])}",
         f"- Test obligation: {_code_span(justification['test_id'])} at {_code_span(justification['test_path'])}",
-        "- Patch origin: `template-generated`",
+        f"- Patch origin: `{patch_origin}`",
         f"- Generator: {_code_span(f'{step6["patch"]["generator"]["id"]}@{step6["patch"]["generator"]["version"]}')}",
         "",
         "## Tests added or changed",
@@ -306,7 +311,7 @@ def prepare_step8_request(
             validate_step6_report(
                 step6,
                 strict_target_evidence=True,
-                require_approvals=True,
+                require_approvals=False,
                 require_step7_eligibility=True,
             ),
         ),
@@ -359,8 +364,13 @@ def prepare_step8_request(
         for row in step6["patch"]["files"]
     ):
         raise Step8Error("Step 8 v1 does not modify GitHub workflow files")
-    if step6.get("reason") != "deterministic_template_generated_patch":
-        raise Step8Error("Step 8 v1 accepts template-generated patches only")
+    patch_origins = {
+        "deterministic_template_generated_patch": "template_generated",
+        "strands_tool_guided_patch": "strands_tool_guided",
+    }
+    patch_origin = patch_origins.get(str(step6.get("reason")))
+    if patch_origin is None:
+        raise Step8Error("Step 8 accepts only validated bounded patches")
 
     target_repository = _github_repository(
         step6["target"]["repository"], "target.repository"
@@ -408,7 +418,7 @@ def prepare_step8_request(
             ),
             "branch": branch,
         },
-        "patch_origin": "template_generated",
+        "patch_origin": patch_origin,
         "pr": {
             "draft": True,
             "title": title,
@@ -474,8 +484,11 @@ def validate_step8_request(request: Any) -> list[str]:
             raise Step8Error("operation_id does not match request inputs")
         if target["branch"] != f"strands/greenfield-{request['operation_id'][:16]}":
             raise Step8Error("target.branch does not match operation_id")
-        if request.get("patch_origin") != "template_generated":
-            raise Step8Error("patch_origin must be template_generated")
+        if request.get("patch_origin") not in {
+            "template_generated",
+            "strands_tool_guided",
+        }:
+            raise Step8Error("patch_origin is invalid")
         pr = request.get("pr")
         if not isinstance(pr, Mapping) or pr.get("draft") is not True:
             raise Step8Error("pr.draft must be true")
@@ -497,10 +510,12 @@ def validate_step8_request(request: Any) -> list[str]:
             "## Remaining uncertainty",
             "## Evidence links",
             "## Human owner gate",
-            "Patch origin: `template-generated`",
         )
         if any(section not in body for section in required_sections):
             raise Step8Error("pr.body is missing a required Step 8 section")
+        expected_origin = str(request["patch_origin"]).replace("_", "-")
+        if f"Patch origin: `{expected_origin}`" not in body:
+            raise Step8Error("pr.body patch origin does not match request")
         marker = f"<!-- greenfield-step8:{request['operation_id']} -->"
         if marker not in body:
             raise Step8Error("pr.body is missing the operation marker")
@@ -553,8 +568,11 @@ def validate_step8_report(report: Any) -> list[str]:
             "step7_report_sha256",
         ):
             _sha256(artifacts.get(field), f"artifacts.{field}")
-        if report.get("patch_origin") != "template_generated":
-            raise Step8Error("patch_origin must be template_generated")
+        if report.get("patch_origin") not in {
+            "template_generated",
+            "strands_tool_guided",
+        }:
+            raise Step8Error("patch_origin is invalid")
         target = report.get("target")
         if not isinstance(target, Mapping):
             raise Step8Error("target must be an object")

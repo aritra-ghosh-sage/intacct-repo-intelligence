@@ -22,7 +22,7 @@ authenticated `gh api` transport.
 
 Before authorization or GitHub access, Step 8 validates:
 
-- strict Step 6 target evidence, both owner approvals, and `eligibility_profile: step7`;
+- strict Step 6 target evidence and `eligibility_profile: step7`;
 - a successful, untampered Step 7 report with every validation category passed;
 - Step 3/4/6/7 artifact fingerprint linkage;
 - exact target repository, patch, generator, and path identity;
@@ -71,7 +71,7 @@ Result statuses are:
 - `failed`: GitHub was unavailable or rejected an operation.
 
 Every successful result retains `human_owner_gate.status: pending`. Earlier
-approvals authorize generation and validation only. A human owner of the test
+service authorization and successful validation authorize draft creation. A human owner of the test
 repository controls the later ready-for-review decision.
 
 ## Local preparation CLI

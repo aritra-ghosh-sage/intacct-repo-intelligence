@@ -62,6 +62,22 @@ def _artifacts(tmp_path: Path) -> tuple[dict, dict, dict, dict]:
     return step3, step4, step6, step7
 
 
+def test_draft_request_does_not_require_owner_approvals(tmp_path: Path) -> None:
+    checkout, revision = _target_repo(tmp_path)
+    step3 = json.loads(STEP3.read_text(encoding="utf-8"))
+    step4 = json.loads(STEP4.read_text(encoding="utf-8"))
+    step6 = _step6_report(revision)
+    step6.pop("approvals")
+    unsigned = dict(step6)
+    unsigned.pop("proposal_id")
+    step6["proposal_id"] = artifact_sha256(unsigned)
+    step7 = _validate(step6, _registry(), checkout, runner=AttestedSandboxRunner())
+    assert step7["status"] == "validated"
+    request = prepare_step8_request(step3, step4, step6, step7, base_branch="main")
+    assert request["pr"]["draft"] is True
+    assert request["human_owner_gate"]["status"] == "pending"
+
+
 class TrustedAuthorizer:
     def authorize(self, request: dict, step6: dict, step7: dict) -> dict[str, Any]:
         del step6

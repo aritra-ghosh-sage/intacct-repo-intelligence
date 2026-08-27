@@ -1,4 +1,4 @@
-"""Deterministic behavior-centric navigation over Greenfield evidence."""
+"""Deterministic per-PR behavior impact projection over Greenfield evidence."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from scripts.validate_greenfield_step2 import validate as validate_step2_report
 from scripts.validate_greenfield_step3 import validate as validate_step3_report
 
 SCHEMA_VERSION = "0.1"
-ANALYSIS_KIND = "greenfield_behavior_handbook"
+ANALYSIS_KIND = "greenfield_behavior_impact_report"
 RULE_SET_VERSION = "0.1"
 SHA = re.compile(r"^[0-9a-f]{40}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -36,7 +36,7 @@ UNCERTAIN_STATES = {
 
 
 class BehaviorHandbookError(ValueError):
-    """Raised when Greenfield evidence cannot form a trustworthy handbook."""
+    """Raised when Greenfield evidence cannot form a trustworthy impact report."""
 
 
 def _canonical(value: object) -> str:
