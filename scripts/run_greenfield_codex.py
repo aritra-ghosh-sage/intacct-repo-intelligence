@@ -12,6 +12,12 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from greenfield.artifact_io import read_json_object, write_json_atomic
+from greenfield.behavior_handbook import (
+    BehaviorHandbookError,
+    build_behavior_handbook,
+    render_behavior_handbook_markdown,
+    validate_behavior_handbook,
+)
 from greenfield.codex_agent import (
     generate_contract,
     run_codex_trace,
@@ -52,7 +58,11 @@ def _manifest_candidates(
         analysis = row.get("greenfield_analysis")
         # A declared test role only nominates a repository.  It is not evidence
         # of impact and is never auto-collected as coverage inventory.
-        if not isinstance(analysis, dict) or analysis.get("role") != "test" or not analysis.get("discovery_eligible"):
+        if (
+            not isinstance(analysis, dict)
+            or analysis.get("role") != "test"
+            or not analysis.get("discovery_eligible")
+        ):
             continue
         remote = str(row.get("remote_url", ""))
         if "github.com:" in remote:
@@ -221,7 +231,9 @@ def main(argv: list[str] | None = None) -> int:
             },
         )
         handoff.complete_stage(
-            "request", inputs={"step1": step1_path}, outputs={"request": request_path, "identity": identity_path}
+            "request",
+            inputs={"step1": step1_path},
+            outputs={"request": request_path, "identity": identity_path},
         )
         current_stage = "step1_5"
         trace, context = run_codex_trace(
@@ -253,17 +265,28 @@ def main(argv: list[str] | None = None) -> int:
         )
         write_json_atomic(context_path, repository_context)
         handoff.complete_stage(
-            "repository_context", inputs={"request": request_path}, outputs={"context": context_path}
+            "repository_context",
+            inputs={"request": request_path},
+            outputs={"context": context_path},
         )
         current_stage = "impact_discovery"
         discovery_path = args.output_dir / "impact-discovery.json"
-        discovery = discover_from_trace(request=request, trace=trace, contract=read_json_object(contract_path))
+        discovery = discover_from_trace(
+            request=request, trace=trace, contract=read_json_object(contract_path)
+        )
         discovery_errors = validate_discovery(discovery)
         if discovery_errors:
             raise ValueError("invalid impact discovery: " + "; ".join(discovery_errors))
         write_json_atomic(discovery_path, discovery)
         handoff.complete_stage(
-            "impact_discovery", inputs={"request": request_path, "trace": trace_path, "contract": contract_path, "context": context_path}, outputs={"discovery": discovery_path}
+            "impact_discovery",
+            inputs={
+                "request": request_path,
+                "trace": trace_path,
+                "contract": contract_path,
+                "context": context_path,
+            },
+            outputs={"discovery": discovery_path},
         )
         current_stage = "inventory"
         inventories = _collect_inventories(
@@ -278,8 +301,7 @@ def main(argv: list[str] | None = None) -> int:
             "inventory",
             inputs={"step1": step1_path, "manifest": args.manifest},
             outputs={
-                f"inventory_{index:02d}": path
-                for index, path in enumerate(inventories)
+                f"inventory_{index:02d}": path for index, path in enumerate(inventories)
             },
         )
         current_stage = "step2"
@@ -410,6 +432,39 @@ def main(argv: list[str] | None = None) -> int:
             inputs={"step3": step3_path, "step4": step4_path},
             outputs={"step5": step5_path},
         )
+        current_stage = "behavior_handbook"
+        handbook = build_behavior_handbook(
+            read_json_object(contract_path),
+            read_json_object(step2_path),
+            read_json_object(step3_path),
+            read_json_object(step4_path),
+            read_json_object(step5_path),
+        )
+        handbook_errors = validate_behavior_handbook(handbook)
+        if handbook_errors:
+            raise BehaviorHandbookError(
+                "generated invalid behavior handbook: " + "; ".join(handbook_errors)
+            )
+        handbook_path = args.output_dir / "behavior-handbook.json"
+        handbook_markdown_path = args.output_dir / "behavior-handbook.md"
+        write_json_atomic(handbook_path, handbook)
+        handbook_markdown_path.write_text(
+            render_behavior_handbook_markdown(handbook), encoding="utf-8"
+        )
+        handoff.complete_stage(
+            "behavior_handbook",
+            inputs={
+                "contract": contract_path,
+                "step2": step2_path,
+                "step3": step3_path,
+                "step4": step4_path,
+                "step5": step5_path,
+            },
+            outputs={
+                "handbook": handbook_path,
+                "markdown": handbook_markdown_path,
+            },
+        )
         current_stage = "test_assessment"
         assessment_path = args.output_dir / "test-assessment.json"
         # A source-only discovery has no qualified downstream test repository.
@@ -425,14 +480,29 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError("invalid test assessment: " + "; ".join(assessment_errors))
         write_json_atomic(assessment_path, assessment)
         handoff.complete_stage(
-            "test_assessment", inputs={"discovery": discovery_path, "step4": step4_path}, outputs={"assessment": assessment_path}
+            "test_assessment",
+            inputs={"discovery": discovery_path, "step4": step4_path},
+            outputs={"assessment": assessment_path},
         )
         current_stage = "test_proposal"
         proposal = {
-            "schema_version": "0.1", "analysis_kind": "greenfield_pr_test_proposal", "status": "partial",
-            "input": {"source_repository": request["source_repository"], "source_revision": request["head_revision"], "changed_paths": request["changed_paths"]},
-            "proposals": [], "findings": ["no qualified test repository and revision-bound test evidence"],
-            "provenance": {"read_only": True, "catalog_mutation": "none", "github_writes": "none"},
+            "schema_version": "0.1",
+            "analysis_kind": "greenfield_pr_test_proposal",
+            "status": "partial",
+            "input": {
+                "source_repository": request["source_repository"],
+                "source_revision": request["head_revision"],
+                "changed_paths": request["changed_paths"],
+            },
+            "proposals": [],
+            "findings": [
+                "no qualified test repository and revision-bound test evidence"
+            ],
+            "provenance": {
+                "read_only": True,
+                "catalog_mutation": "none",
+                "github_writes": "none",
+            },
         }
         proposal_errors = validate_test_proposal(proposal)
         if proposal_errors:
@@ -454,14 +524,29 @@ def main(argv: list[str] | None = None) -> int:
         )
         current_stage = "pr_review"
         review_path = args.output_dir / "pr-review.json"
-        review = render_review(request=request, discovery=discovery, assessment=assessment, ci_evidence=[read_json_object(path) for path in args.ci_evidence], contexts=[repository_context])
+        review = render_review(
+            request=request,
+            discovery=discovery,
+            assessment=assessment,
+            ci_evidence=[read_json_object(path) for path in args.ci_evidence],
+            contexts=[repository_context],
+        )
         review_errors = validate_review(review)
         if review_errors:
             raise ValueError("invalid PR review: " + "; ".join(review_errors))
         write_json_atomic(review_path, review)
         review_markdown_path = args.output_dir / "pr-review.md"
         review_markdown_path.write_text(str(review["markdown"]), encoding="utf-8")
-        handoff.complete_stage("pr_review", inputs={"request": request_path, "discovery": discovery_path, "assessment": assessment_path, "context": context_path}, outputs={"review": review_path, "markdown": review_markdown_path})
+        handoff.complete_stage(
+            "pr_review",
+            inputs={
+                "request": request_path,
+                "discovery": discovery_path,
+                "assessment": assessment_path,
+                "context": context_path,
+            },
+            outputs={"review": review_path, "markdown": review_markdown_path},
+        )
         current_stage = "step6_handoff"
         step3_report = read_json_object(step3_path)
         step4_report = read_json_object(step4_path)
@@ -519,6 +604,8 @@ def main(argv: list[str] | None = None) -> int:
                             "step3": step3_path,
                             "step4": step4_path,
                             "step5": step5_path,
+                            "behavior_handbook": handbook_path,
+                            "behavior_handbook_markdown": handbook_markdown_path,
                             "test_proposal": proposal_path,
                             "test_assessment": assessment_path,
                             "pr_review": review_path,
