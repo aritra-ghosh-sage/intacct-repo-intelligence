@@ -2,14 +2,22 @@ from __future__ import annotations
 
 import copy
 import json
+import threading
+import time
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from greenfield.codex_agent import CodexAgentError, build_context, run_codex_trace
 from greenfield.step1_5_trace import normalize_trace, validate_trace
 from greenfield.step1_capture import evidence_fingerprint
+from greenfield.strands_agent import (
+    StrandsAgentError,
+    _run_strands_json,
+    build_context,
+    run_strands_trace,
+)
+from greenfield.strands_config import StrandsConfigError, load_strands_config
 from scripts import trace_greenfield_step1_5, trace_greenfield_step2
 from scripts.validate_greenfield_test_proposal import validate as validate_test_proposal
 
@@ -63,7 +71,7 @@ def _trace() -> dict[str, object]:
     )
 
 
-def test_codex_trace_validation_preserves_exact_surface_states() -> None:
+def test_strands_trace_validation_preserves_exact_surface_states() -> None:
     trace = _trace()
     assert validate_trace(STEP1, trace) == []
     assert trace["surfaces"]["xml_api"] == "not_run"
@@ -146,7 +154,7 @@ def test_context_reads_target_revision_only(tmp_path: Path) -> None:
     step1["provenance"]["evidence_sha256"] = evidence_fingerprint(step1)
     context = build_context(step1, repo)
     assert context["changed_files"][0]["content"] == "<?php echo 'target';\n"
-    with pytest.raises(CodexAgentError, match="max_file_bytes"):
+    with pytest.raises(StrandsAgentError, match="max_file_bytes"):
         build_context(step1, repo, max_file_bytes=5)
 
 
@@ -154,16 +162,23 @@ def test_runner_writes_trace_and_contract(tmp_path: Path) -> None:
     trace = _trace()
     trace_path = tmp_path / "trace.json"
     contract_path = tmp_path / "contract.json"
+    config_path = tmp_path / "strands.yaml"
+    config_path.write_text(
+        "region: us-east-1\nmodel: test-model\ntimeout_seconds: 12\n",
+        encoding="utf-8",
+    )
     with patch(
-        "scripts.trace_greenfield_step1_5.run_codex_trace",
+        "scripts.trace_greenfield_step1_5.run_strands_trace",
         return_value=(trace, {"context_sha256": "a" * 64}),
-    ):
+    ) as run_trace:
         result = trace_greenfield_step1_5.main(
             [
                 "--step1-report",
                 str(ROOT / "examples/greenfield/ia-app-pr-49137/replay/step1.json"),
                 "--source-root",
                 str(tmp_path),
+                "--strands-config",
+                str(config_path),
                 "--trace-output",
                 str(trace_path),
                 "--contract-output",
@@ -171,6 +186,8 @@ def test_runner_writes_trace_and_contract(tmp_path: Path) -> None:
             ]
         )
     assert result == 0
+    assert run_trace.call_args.kwargs["model"] == "test-model"
+    assert run_trace.call_args.kwargs["timeout"] == 12
     assert (
         json.loads(trace_path.read_text())["analysis_kind"]
         == "greenfield_pr_impact_step_1_5"
@@ -181,9 +198,53 @@ def test_runner_writes_trace_and_contract(tmp_path: Path) -> None:
     )
 
 
-def test_codex_failure_is_explicit() -> None:
-    with pytest.raises(CodexAgentError):
-        run_codex_trace(STEP1, "/path/that/does/not/exist", timeout=1)
+def test_strands_failure_is_explicit() -> None:
+    with pytest.raises(StrandsAgentError):
+        run_strands_trace(STEP1, "/path/that/does/not/exist", timeout=1)
+
+
+def test_strands_timeout_returns_without_waiting_for_blocked_agent() -> None:
+    release = threading.Event()
+
+    def factory(_model: str | None):
+        def agent(_prompt: str) -> str:
+            release.wait(5)
+            return "{}"
+
+        return agent
+
+    started = time.monotonic()
+    try:
+        with pytest.raises(StrandsAgentError, match="timed out"):
+            _run_strands_json("prompt", model=None, timeout=0.01, agent_factory=factory)
+    finally:
+        release.set()
+    assert time.monotonic() - started < 1
+
+
+def test_strands_config_rejects_repo_secrets(tmp_path: Path) -> None:
+    config_path = tmp_path / "strands.yaml"
+    config_path.write_text(
+        "region: us-east-1\naws_secret_access_key: should-not-be-here\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(StrandsConfigError, match="must not contain secret fields"):
+        load_strands_config(config_path)
+
+
+def test_strands_config_rejects_nested_repo_secrets(tmp_path: Path) -> None:
+    config_path = tmp_path / "strands.yaml"
+    config_path.write_text(
+        "providers:\n  - name: bedrock\n    token: should-not-be-here\n"
+        "aws:\n  secret_key: also-not-here\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(StrandsConfigError) as excinfo:
+        load_strands_config(config_path)
+    message = str(excinfo.value)
+    assert "<root>.providers[0].token" in message
+    assert "<root>.aws.secret_key" in message
+    assert "should-not-be-here" not in message
 
 
 def test_test_proposal_requires_exact_target_and_evidence() -> None:

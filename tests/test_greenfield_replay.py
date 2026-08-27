@@ -10,7 +10,7 @@ from greenfield.step5_actions import validate_step5_report
 from scripts import (
     replay_greenfield_step1_5,
     replay_greenfield_step1_6,
-    run_greenfield_codex,
+    run_greenfield_strands,
     trace_greenfield_step2,
     trace_greenfield_step3,
     trace_greenfield_step4,
@@ -264,7 +264,7 @@ def test_validation_summary_checks_impact_classification_states() -> None:
 
 
 def test_runner_step6_handoff_does_not_infer_target_inputs() -> None:
-    handoff = run_greenfield_codex._step6_handoff()
+    handoff = run_greenfield_strands._step6_handoff()
     assert handoff["status"] == "unavailable"
     assert handoff["invoked"] is False
     assert handoff["pr_eligible"] is False
@@ -273,12 +273,38 @@ def test_runner_step6_handoff_does_not_infer_target_inputs() -> None:
 
 
 def test_runner_exposes_wrapper_handoff_artifact() -> None:
-    source = Path(run_greenfield_codex.__file__).read_text(encoding="utf-8")
+    source = Path(run_greenfield_strands.__file__).read_text(encoding="utf-8")
     assert "GreenfieldFlowHandoff" in source
     assert 'current_stage = "behavior_handbook"' in source
+    assert 'current_stage = "step7_handoff"' in source
+    assert 'current_stage = "step8_handoff"' in source
     assert '"behavior_handbook": handbook_path' in source
     assert '"behavior_handbook_markdown": handbook_markdown_path' in source
+    assert 'artifact_paths["step7_handoff"] = step7_handoff_path' in source
+    assert 'artifact_paths["step8_handoff"] = step8_handoff_path' in source
     assert '"flow_handoff": handoff.path' in source
+
+
+def test_runner_reports_malformed_strands_config(tmp_path: Path, capsys) -> None:
+    config_path = tmp_path / "strands.yaml"
+    config_path.write_text("aws:\n  token: should-not-be-here\n", encoding="utf-8")
+    result = run_greenfield_strands.main(
+        [
+            "--step1-report",
+            str(BUNDLE / "step1.json"),
+            "--source-root",
+            str(tmp_path),
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--strands-config",
+            str(config_path),
+        ]
+    )
+    assert result == 2
+    stderr = capsys.readouterr().err
+    assert "greenfield Strands pipeline failed" in stderr
+    assert "<root>.aws.token" in stderr
+    assert "should-not-be-here" not in stderr
 
 
 def test_step1_5_trace_and_contract_must_be_paired(tmp_path: Path, capsys) -> None:

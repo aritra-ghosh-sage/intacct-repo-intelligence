@@ -1,4 +1,4 @@
-"""Validation and deterministic normalization for the Codex Step 1.5 trace."""
+"""Validation and deterministic normalization for the Greenfield Step 1.5 trace."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ SURFACE_STATES = {
 
 
 class TraceError(ValueError):
-    """Raised when the Codex trace cannot safely become evidence."""
+    """Raised when the Step 1.5 trace cannot safely become evidence."""
 
 
 def _text(value: Any, label: str) -> str:
@@ -115,7 +115,7 @@ def _call_key(
 
 
 def validate_trace(step1: Mapping[str, Any], trace: Mapping[str, Any]) -> list[str]:
-    """Return stable validation errors for the Codex-generated trace."""
+    """Return stable validation errors for the generated trace."""
 
     errors: list[str] = []
     try:
@@ -227,7 +227,7 @@ def normalize_trace(
     agent_metadata: Mapping[str, Any],
     context_sha256: str,
 ) -> dict[str, Any]:
-    """Attach trusted Step 1/Codex provenance without trusting model metadata."""
+    """Attach trusted Step 1 provenance without trusting model metadata."""
 
     trace = copy.deepcopy(dict(raw))
     source = step1["input"]

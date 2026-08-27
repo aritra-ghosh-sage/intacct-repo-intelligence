@@ -382,7 +382,7 @@ def prepare_step8_request(
             "target_revision": step6["target"]["base_revision"],
         }
     )
-    branch = f"codex/greenfield-{operation_id[:16]}"
+    branch = f"strands/greenfield-{operation_id[:16]}"
     title = " ".join(_text(step6["pr_request"]["title"], "pr_request.title").split())
     if len(title) > 256:
         raise Step8Error("pr_request.title exceeds the 256-character Step 8 limit")
@@ -472,7 +472,7 @@ def validate_step8_request(request: Any) -> list[str]:
         )
         if request["operation_id"] != expected_operation_id:
             raise Step8Error("operation_id does not match request inputs")
-        if target["branch"] != f"codex/greenfield-{request['operation_id'][:16]}":
+        if target["branch"] != f"strands/greenfield-{request['operation_id'][:16]}":
             raise Step8Error("target.branch does not match operation_id")
         if request.get("patch_origin") != "template_generated":
             raise Step8Error("patch_origin must be template_generated")
@@ -562,7 +562,7 @@ def validate_step8_report(report: Any) -> list[str]:
         _branch(target.get("base_branch"), "target.base_branch")
         _branch(target.get("branch"), "target.branch")
         _sha(target.get("base_revision"), "target.base_revision")
-        if target["branch"] != f"codex/greenfield-{report['operation_id'][:16]}":
+        if target["branch"] != f"strands/greenfield-{report['operation_id'][:16]}":
             raise Step8Error("target.branch does not match operation_id")
         if target.get("patch_commit_sha") is not None:
             _sha(target["patch_commit_sha"], "target.patch_commit_sha")

@@ -1,8 +1,8 @@
 # Greenfield PR Impact Step 1.5
 
-Step 1.5 is the active Codex source-impact analysis stage. It consumes a
+Step 1.5 is the active Strands source-impact analysis stage. It consumes a
 validated Greenfield Step 1 report and reads only exact target-revision source
-blobs. Codex returns a structured trace containing affected symbols, exact
+blobs. Strands returns a structured trace containing affected symbols, exact
 calls, behaviors, analyzed surfaces, and explicit unresolved or unavailable
 findings.
 
@@ -10,6 +10,13 @@ The repository validates the response before it becomes evidence. Every edge
 must use an exact changed/source path and target revision. AI output cannot
 establish a cross-repository relationship, executed test coverage, ownership,
 or a no-impact result.
+
+The Strands runtime uses the standard AWS credential provider chain. Operators
+may set `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, optional
+`AWS_SESSION_TOKEN`, `AWS_PROFILE`, and `AWS_REGION`, or rely on shared AWS
+configuration and role-based credentials. Repository config must store only
+non-secret defaults such as region, model, and timeout; see
+`config/greenfield_strands.example.yaml` for the expected shape.
 
 The validated trace is written as `step1.5.trace.json`. The existing behavior
 contract generator then writes `step1.5.contract.json`; Step 2 consumes that
@@ -30,12 +37,29 @@ PYTHONPATH=. ./.venv/bin/python scripts/trace_greenfield_step1_5.py \
 Run Step 1.5 through Step 5:
 
 ```bash
-PYTHONPATH=. ./.venv/bin/python scripts/run_greenfield_codex.py \
+PYTHONPATH=. ./.venv/bin/python scripts/run_greenfield_strands.py \
   --step1-report step1.json \
   --source-root /Users/aritra.ghosh/projects/main \
   --manifest config/workspace_repos.yaml \
   --output-dir artifacts/greenfield/run
 ```
+
+Run the one-call flow as far as the evidence gates allow:
+
+```bash
+PYTHONPATH=. ./.venv/bin/python scripts/run_greenfield_strands.py \
+  --step1-report step1.json \
+  --source-root /Users/aritra.ghosh/projects/main \
+  --manifest config/workspace_repos.yaml \
+  --output-dir artifacts/greenfield/run
+```
+
+When Step 6, Step 7, or Step 8 inputs are missing, the runner writes explicit
+handoff artifacts such as `step6.handoff.json`, `step7.handoff.json`, and
+`step8.handoff.json` with the reason and required next inputs. Supplying a
+strict Step 6 request, Step 7 profiles, a target checkout, and Step 8 base
+branch allows the same command to continue through local validation and no-write
+Step 8 preparation.
 
 The runner derives downstream repository candidates from explicit
 `pr_impact_contracts` entries. It writes and reuses repository inventory

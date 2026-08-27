@@ -39,7 +39,7 @@
     "target": {
       "base_branch": "main",
       "base_revision": "<exact 40-character commit SHA>",
-      "branch": "codex/greenfield-<operation ID prefix>",
+      "branch": "strands/greenfield-<operation ID prefix>",
       "repository": "owner/test-repository"
     }
   },
@@ -71,7 +71,7 @@
     "pull_request": {
       "base_branch": "main",
       "draft": true,
-      "head_branch": "codex/greenfield-<operation ID prefix>",
+      "head_branch": "strands/greenfield-<operation ID prefix>",
       "head_sha": "<patch commit SHA>",
       "number": 123,
       "state": "open",
@@ -84,7 +84,7 @@
     "target": {
       "base_branch": "main",
       "base_revision": "<exact validated target SHA>",
-      "branch": "codex/greenfield-<operation ID prefix>",
+      "branch": "strands/greenfield-<operation ID prefix>",
       "patch_commit_sha": "<created patch commit SHA>",
       "repository": "owner/test-repository"
     }

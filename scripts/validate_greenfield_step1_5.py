@@ -1,4 +1,4 @@
-"""Validate a persisted Codex-agent Greenfield Step 1.5 trace."""
+"""Validate a persisted Strands-agent Greenfield Step 1.5 trace."""
 
 from __future__ import annotations
 

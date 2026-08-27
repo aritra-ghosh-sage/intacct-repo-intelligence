@@ -1,0 +1,8 @@
+# Non-secret defaults for the Greenfield Strands runtime.
+# Do not store AWS access keys, secret keys, session tokens, or API tokens here.
+# Supply credentials through the standard AWS provider chain instead.
+
+region: us-east-1
+profile: null
+model: null
+timeout_seconds: 300

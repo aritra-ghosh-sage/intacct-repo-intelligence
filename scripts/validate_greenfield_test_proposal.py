@@ -1,4 +1,4 @@
-"""Validate a Codex Greenfield test-proposal artifact."""
+"""Validate a Greenfield test-proposal artifact."""
 
 from __future__ import annotations
 

@@ -153,7 +153,7 @@ class FakeGitHub:
             return {"truncated": False, "tree": self.base_entries}
         if method == "GET" and "/pulls?state=all" in endpoint:
             return self.pulls
-        if method == "GET" and "/git/ref/heads/codex/" in endpoint:
+        if method == "GET" and "/git/ref/heads/strands/" in endpoint:
             if self.existing_commit is None:
                 raise GitHubApiError("not found", status=404)
             return {"object": {"sha": self.existing_commit}}
@@ -221,7 +221,7 @@ def test_prepare_request_renders_required_draft_pr_evidence(tmp_path: Path) -> N
     step3, step4, step6, step7 = _artifacts(tmp_path)
     request = prepare_step8_request(step3, step4, step6, step7, base_branch="main")
 
-    assert request["target"]["branch"].startswith("codex/greenfield-")
+    assert request["target"]["branch"].startswith("strands/greenfield-")
     assert request["pr"]["draft"] is True
     assert request["patch_origin"] == "template_generated"
     assert request["human_owner_gate"]["status"] == "pending"

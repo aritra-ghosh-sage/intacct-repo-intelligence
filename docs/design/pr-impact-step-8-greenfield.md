@@ -32,7 +32,7 @@ Before authorization or GitHub access, Step 8 validates:
 
 ## GitHub operation
 
-The deterministic branch is `codex/greenfield-<operation-id-prefix>`. After
+The deterministic branch is `strands/greenfield-<operation-id-prefix>`. After
 authorization, Step 8:
 
 1. verifies the target base branch still points to the validated target SHA;

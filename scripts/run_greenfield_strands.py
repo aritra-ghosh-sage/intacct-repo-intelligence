@@ -1,4 +1,4 @@
-"""Run the Codex-backed Greenfield Step 1.5 through deterministic Step 5."""
+"""Run the Strands-backed Greenfield flow through gated Step 8 handoff."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -18,10 +19,6 @@ from greenfield.behavior_handbook import (
     render_behavior_handbook_markdown,
     validate_behavior_handbook,
 )
-from greenfield.codex_agent import (
-    generate_contract,
-    run_codex_trace,
-)
 from greenfield.flow_handoff import GreenfieldFlowHandoff
 from greenfield.github_repository_evidence import (
     RepositoryEvidenceError,
@@ -33,6 +30,21 @@ from greenfield.pr_review import render_review, validate_review
 from greenfield.replay_validation import validation_summary
 from greenfield.repository_context import collect_repository_context
 from greenfield.step2_contract import normalize_repository_inventory
+from greenfield.step6_contract import Step6Error, load_json, validate_step6_report
+from greenfield.step6_patch import generate_step6
+from greenfield.step7_contract import Step7Error, validate_step7_report
+from greenfield.step7_prepare import prepare_step7
+from greenfield.step7_profiles import Step7ProfileError, load_profile_registry
+from greenfield.step7_runner import LocalSubprocessRunner
+from greenfield.step7_validate import validate_step7
+from greenfield.step8_contract import Step8Error, prepare_step8_request
+from greenfield.step8_create import (
+    NoWriteGitHubWriter,
+    RejectingStep8Authorizer,
+    create_step8,
+)
+from greenfield.strands_agent import generate_contract, run_strands_trace
+from greenfield.strands_config import apply_strands_environment, load_strands_config
 from greenfield.test_assessment import build_assessment, validate_assessment
 from scripts import (
     trace_greenfield_step1,
@@ -153,6 +165,32 @@ def _step6_handoff() -> dict[str, object]:
     }
 
 
+def _blocked_handoff(
+    *,
+    analysis_kind: str,
+    status: str,
+    reason: str,
+    required_inputs: list[str],
+    details: list[str] | None = None,
+) -> dict[str, object]:
+    artifact: dict[str, object] = {
+        "schema_version": "0.1",
+        "analysis_kind": analysis_kind,
+        "status": status,
+        "reason": reason,
+        "required_inputs": required_inputs,
+        "pr_eligible": False,
+        "provenance": {
+            "read_only": True,
+            "github_writes": "none",
+            "catalog_mutation": "none",
+        },
+    }
+    if details:
+        artifact["details"] = details
+    return artifact
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
@@ -164,9 +202,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--source-root", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--codex-binary", default="codex")
+    parser.add_argument("--strands-config", type=Path)
     parser.add_argument("--model")
-    parser.add_argument("--timeout", type=int, default=300)
+    parser.add_argument("--timeout", type=int)
     parser.add_argument("--max-file-bytes", type=int, default=120_000)
     parser.add_argument("--ci-evidence", action="append", default=[])
     parser.add_argument(
@@ -179,10 +217,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--semantic-index", action="append", default=[])
     parser.add_argument("--related-pr-evidence")
     parser.add_argument("--repository", action="append", default=[])
+    parser.add_argument("--step6-request", type=Path)
+    parser.add_argument("--strict-target-evidence", action="store_true")
+    parser.add_argument("--require-owner-approvals", action="store_true")
+    parser.add_argument("--step7-eligible", action="store_true")
+    parser.add_argument("--step7-profiles", type=Path)
+    parser.add_argument("--step7-runner", choices=("local",), default="local")
+    parser.add_argument("--target-checkout", type=Path)
+    parser.add_argument("--step8-base-branch")
     args = parser.parse_args(argv)
     handoff: GreenfieldFlowHandoff | None = None
     current_stage = "initialization"
     try:
+        strands_config = load_strands_config(args.strands_config)
+        apply_strands_environment(strands_config)
+        model = args.model or strands_config.model
+        timeout = args.timeout or strands_config.timeout_seconds
         args.output_dir.mkdir(parents=True, exist_ok=True)
         step1_path = args.step1_report or args.output_dir / "step1.json"
         current_stage = "step1"
@@ -236,12 +286,11 @@ def main(argv: list[str] | None = None) -> int:
             outputs={"request": request_path, "identity": identity_path},
         )
         current_stage = "step1_5"
-        trace, context = run_codex_trace(
+        trace, context = run_strands_trace(
             step1,
             args.source_root,
-            codex_binary=args.codex_binary,
-            model=args.model,
-            timeout=args.timeout,
+            model=model,
+            timeout=timeout,
             max_file_bytes=args.max_file_bytes,
         )
         trace_path = args.output_dir / "step1.5.trace.json"
@@ -507,7 +556,7 @@ def main(argv: list[str] | None = None) -> int:
         proposal_errors = validate_test_proposal(proposal)
         if proposal_errors:
             raise ValueError(
-                "invalid Codex test proposal: " + "; ".join(proposal_errors)
+                "invalid Strands test proposal: " + "; ".join(proposal_errors)
             )
         proposal_path = args.output_dir / "test-proposal.json"
         write_json_atomic(proposal_path, proposal)
@@ -547,23 +596,248 @@ def main(argv: list[str] | None = None) -> int:
             },
             outputs={"review": review_path, "markdown": review_markdown_path},
         )
-        current_stage = "step6_handoff"
         step3_report = read_json_object(step3_path)
         step4_report = read_json_object(step4_path)
-        step6_handoff = _step6_handoff()
-        step6_handoff_path = args.output_dir / "step6.handoff.json"
-        write_json_atomic(step6_handoff_path, step6_handoff)
-        handoff.complete_stage(
-            "step6_handoff",
-            inputs={
-                "step3": step3_path,
-                "step4": step4_path,
-                "step5": step5_path,
-                "test_proposal": proposal_path,
-                "pr_review": review_path,
-            },
-            outputs={"step6_handoff": step6_handoff_path},
-        )
+        step5_report = read_json_object(step5_path)
+        if args.step7_eligible and not (
+            args.strict_target_evidence and args.require_owner_approvals
+        ):
+            raise ValueError(
+                "--step7-eligible requires --strict-target-evidence and "
+                "--require-owner-approvals"
+            )
+
+        step6_report: dict[str, Any] | None = None
+        step6_artifact_path: Path
+        step6_artifact_name: str
+        if args.step6_request is None:
+            current_stage = "step6_handoff"
+            step6_artifact = _step6_handoff()
+            step6_artifact_path = args.output_dir / "step6.handoff.json"
+            step6_artifact_name = "step6_handoff"
+            write_json_atomic(step6_artifact_path, step6_artifact)
+            handoff.complete_stage(
+                "step6_handoff",
+                inputs={
+                    "step3": step3_path,
+                    "step4": step4_path,
+                    "step5": step5_path,
+                    "test_proposal": proposal_path,
+                    "pr_review": review_path,
+                },
+                outputs={step6_artifact_name: step6_artifact_path},
+            )
+        else:
+            current_stage = "step6"
+            step6_request = load_json(args.step6_request, "Step 6 request")
+            if args.step7_eligible:
+                step6_request["_step7_eligibility"] = True
+            step6_report = generate_step6(
+                step6_request,
+                step1,
+                step3_report,
+                step4_report,
+                step5_report,
+                strict_target_evidence=args.strict_target_evidence,
+                require_approvals=args.require_owner_approvals,
+            )
+            step6_errors = validate_step6_report(
+                step6_report,
+                strict_target_evidence=args.strict_target_evidence,
+                require_approvals=args.require_owner_approvals,
+                require_step7_eligibility=args.step7_eligible,
+            )
+            if step6_errors:
+                raise Step6Error(
+                    "generated invalid Step 6 report: " + "; ".join(step6_errors)
+                )
+            step6_artifact_path = args.output_dir / "step6.report.json"
+            step6_artifact_name = "step6"
+            write_json_atomic(step6_artifact_path, step6_report)
+            handoff.complete_stage(
+                "step6",
+                inputs={
+                    "request": args.step6_request,
+                    "step1": step1_path,
+                    "step3": step3_path,
+                    "step4": step4_path,
+                    "step5": step5_path,
+                },
+                outputs={step6_artifact_name: step6_artifact_path},
+            )
+
+        step7_report: dict[str, Any] | None = None
+        step7_handoff: dict[str, object] | None = None
+        step7_handoff_path: Path | None = None
+        step7_request_path: Path | None = None
+        step7_report_path: Path | None = None
+        current_stage = "step7_handoff"
+        if step6_report is None:
+            step7_handoff = _blocked_handoff(
+                analysis_kind="greenfield_pr_impact_step_7_handoff",
+                status="blocked",
+                reason="step6_report_not_supplied",
+                required_inputs=["valid strict Step 6 report"],
+            )
+        else:
+            strict_step6_errors = validate_step6_report(
+                step6_report,
+                strict_target_evidence=True,
+                require_approvals=True,
+                require_step7_eligibility=True,
+            )
+            if strict_step6_errors:
+                step7_handoff = _blocked_handoff(
+                    analysis_kind="greenfield_pr_impact_step_7_handoff",
+                    status="blocked",
+                    reason="step6_strict_evidence_unavailable",
+                    required_inputs=[
+                        "exact target evidence",
+                        "source interface owner approval",
+                        "consumer test owner approval",
+                        "Step 6 eligibility_profile=step7",
+                    ],
+                    details=strict_step6_errors,
+                )
+            elif args.step7_profiles is None:
+                step7_handoff = _blocked_handoff(
+                    analysis_kind="greenfield_pr_impact_step_7_handoff",
+                    status="unavailable",
+                    reason="step7_profiles_not_supplied",
+                    required_inputs=["central Step 7 validation profile registry"],
+                )
+            else:
+                registry = load_profile_registry(args.step7_profiles)
+                prepared = prepare_step7(step6_report, registry)
+                if prepared.get("analysis_kind") != "greenfield_pr_impact_step_7_request":
+                    step7_handoff = _blocked_handoff(
+                        analysis_kind="greenfield_pr_impact_step_7_handoff",
+                        status="blocked",
+                        reason="step7_profile_unavailable",
+                        required_inputs=["enabled Step 7 validation profile"],
+                        details=[str(row) for row in prepared.get("failures", [])],
+                    )
+                    step7_request_path = args.output_dir / "step7.blocked.json"
+                    write_json_atomic(step7_request_path, prepared)
+                elif args.target_checkout is None:
+                    step7_handoff = _blocked_handoff(
+                        analysis_kind="greenfield_pr_impact_step_7_handoff",
+                        status="unavailable",
+                        reason="target_checkout_not_supplied",
+                        required_inputs=[
+                            "clean target checkout at Step 6 target base revision"
+                        ],
+                    )
+                    step7_request_path = args.output_dir / "step7.request.json"
+                    write_json_atomic(step7_request_path, prepared)
+                else:
+                    current_stage = "step7"
+                    step7_request_path = args.output_dir / "step7.request.json"
+                    write_json_atomic(step7_request_path, prepared)
+                    step7_report = validate_step7(
+                        step6_report,
+                        prepared,
+                        args.target_checkout,
+                        profile_registry=registry,
+                        runner=LocalSubprocessRunner(),
+                    )
+                    step7_errors = validate_step7_report(step7_report)
+                    if step7_errors:
+                        raise Step7Error(
+                            "generated invalid Step 7 report: "
+                            + "; ".join(step7_errors)
+                        )
+                    step7_report_path = args.output_dir / "step7.report.json"
+                    write_json_atomic(step7_report_path, step7_report)
+                    handoff.complete_stage(
+                        "step7",
+                        inputs={
+                            "step6": step6_artifact_path,
+                            "profiles": args.step7_profiles,
+                            "target_checkout": args.target_checkout,
+                        },
+                        outputs={
+                            "request": step7_request_path,
+                            "report": step7_report_path,
+                        },
+                    )
+        if step7_handoff is not None:
+            step7_handoff_path = args.output_dir / "step7.handoff.json"
+            write_json_atomic(step7_handoff_path, step7_handoff)
+            outputs: dict[str, Path] = {"handoff": step7_handoff_path}
+            if step7_request_path is not None:
+                outputs["request_or_blocked"] = step7_request_path
+            handoff.complete_stage(
+                "step7_handoff",
+                inputs={"step6": step6_artifact_path},
+                outputs=outputs,
+            )
+
+        step8_result: dict[str, Any] | None = None
+        step8_handoff: dict[str, object] | None = None
+        step8_request_path: Path | None = None
+        step8_result_path: Path | None = None
+        current_stage = "step8_handoff"
+        if step7_report is None:
+            step8_handoff = _blocked_handoff(
+                analysis_kind="greenfield_pr_impact_step_8_handoff",
+                status="blocked",
+                reason="step7_report_not_supplied",
+                required_inputs=["validated Step 7 report from an approved runner"],
+                details=[str(step7_handoff.get("reason"))]
+                if step7_handoff is not None
+                else None,
+            )
+        elif args.step8_base_branch is None:
+            step8_handoff = _blocked_handoff(
+                analysis_kind="greenfield_pr_impact_step_8_handoff",
+                status="unavailable",
+                reason="step8_base_branch_not_supplied",
+                required_inputs=["target repository base branch name"],
+            )
+        else:
+            current_stage = "step8_preparation"
+            step8_request = prepare_step8_request(
+                step3_report,
+                step4_report,
+                step6_report,
+                step7_report,
+                base_branch=args.step8_base_branch,
+            )
+            step8_result = create_step8(
+                step3_report,
+                step4_report,
+                step6_report,
+                step7_report,
+                base_branch=args.step8_base_branch,
+                authorizer=RejectingStep8Authorizer(),
+                github=NoWriteGitHubWriter(),
+            )
+            step8_request_path = args.output_dir / "step8.request.json"
+            step8_result_path = args.output_dir / "step8.blocked.json"
+            write_json_atomic(step8_request_path, step8_request)
+            write_json_atomic(step8_result_path, step8_result)
+            handoff.complete_stage(
+                "step8_preparation",
+                inputs={
+                    "step3": step3_path,
+                    "step4": step4_path,
+                    "step6": step6_artifact_path,
+                    "step7": step7_report_path,
+                },
+                outputs={"request": step8_request_path, "result": step8_result_path},
+            )
+        if step8_handoff is not None:
+            step8_handoff_path = args.output_dir / "step8.handoff.json"
+            write_json_atomic(step8_handoff_path, step8_handoff)
+            handoff.complete_stage(
+                "step8_handoff",
+                inputs={
+                    "step6": step6_artifact_path,
+                    **({"step7": step7_report_path} if step7_report_path else {}),
+                },
+                outputs={"handoff": step8_handoff_path},
+            )
         handoff.finish()
         # This small pointer is the sole mutable convenience artifact; all
         # evidence remains in the immutable, identity-bound bundle directory.
@@ -581,38 +855,74 @@ def main(argv: list[str] | None = None) -> int:
             provenance_revision_consistency="passed",
             step3=step3_report,
             step4=step4_report,
-            runtime_status="unavailable",
-            runtime_reason="step7_inputs_unavailable",
+            step7=step7_report,
+            runtime_status=(
+                str(step8_result.get("status"))
+                if step8_result is not None
+                else str(step8_handoff.get("status"))
+                if step8_handoff is not None
+                else None
+            ),
+            runtime_reason=(
+                str(step8_result.get("authorization", {}).get("reason"))
+                if step8_result is not None
+                else str(step8_handoff.get("reason"))
+                if step8_handoff is not None
+                else None
+            ),
         )
+        artifact_paths = {
+            "step1": step1_path,
+            "request": request_path,
+            "trace": trace_path,
+            "contract": contract_path,
+            "repository_context": context_path,
+            "impact_discovery": discovery_path,
+            "step2": step2_path,
+            "step3": step3_path,
+            "step4": step4_path,
+            "step5": step5_path,
+            "behavior_handbook": handbook_path,
+            "behavior_handbook_markdown": handbook_markdown_path,
+            "test_proposal": proposal_path,
+            "test_assessment": assessment_path,
+            "pr_review": review_path,
+            "pr_review_markdown": review_markdown_path,
+            step6_artifact_name: step6_artifact_path,
+            "flow_handoff": handoff.path,
+        }
+        if step7_handoff_path is not None:
+            artifact_paths["step7_handoff"] = step7_handoff_path
+        if step7_request_path is not None:
+            artifact_paths["step7_request"] = step7_request_path
+        if step7_report_path is not None:
+            artifact_paths["step7_report"] = step7_report_path
+        if step8_request_path is not None:
+            artifact_paths["step8_request"] = step8_request_path
+        if step8_result_path is not None:
+            artifact_paths["step8_result"] = step8_result_path
+        if step8_handoff is not None:
+            artifact_paths["step8_handoff"] = step8_handoff_path
         print(
             json.dumps(
                 {
                     "status": "complete",
                     "context_sha256": context["context_sha256"],
-                    "step6_handoff": step6_handoff,
+                    "step6": {
+                        "status": step6_report.get("status")
+                        if step6_report is not None
+                        else "unavailable",
+                        "artifact": str(step6_artifact_path),
+                    },
+                    "step7": step7_report
+                    if step7_report is not None
+                    else step7_handoff,
+                    "step8": step8_result
+                    if step8_result is not None
+                    else step8_handoff,
                     "validation": categories,
                     "artifacts": {
-                        name: str(path)
-                        for name, path in {
-                            "step1": step1_path,
-                            "request": request_path,
-                            "trace": trace_path,
-                            "contract": contract_path,
-                            "repository_context": context_path,
-                            "impact_discovery": discovery_path,
-                            "step2": step2_path,
-                            "step3": step3_path,
-                            "step4": step4_path,
-                            "step5": step5_path,
-                            "behavior_handbook": handbook_path,
-                            "behavior_handbook_markdown": handbook_markdown_path,
-                            "test_proposal": proposal_path,
-                            "test_assessment": assessment_path,
-                            "pr_review": review_path,
-                            "pr_review_markdown": review_markdown_path,
-                            "step6_handoff": step6_handoff_path,
-                            "flow_handoff": handoff.path,
-                        }.items()
+                        name: str(path) for name, path in artifact_paths.items()
                     },
                 },
                 sort_keys=True,
@@ -622,7 +932,7 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, ValueError, TypeError, json.JSONDecodeError, RuntimeError) as exc:
         if handoff is not None:
             handoff.fail(current_stage, exc)
-        print(f"greenfield Codex pipeline failed: {exc}", file=sys.stderr)
+        print(f"greenfield Strands pipeline failed: {exc}", file=sys.stderr)
         return 2
 
 

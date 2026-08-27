@@ -1,4 +1,4 @@
-"""Generate and validate a Codex-agent Greenfield Step 1.5 trace."""
+"""Generate and validate a Strands-agent Greenfield Step 1.5 trace."""
 
 from __future__ import annotations
 
@@ -11,8 +11,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from greenfield.artifact_io import read_json_object, write_json_atomic
 from greenfield.behavior_contract import BehaviorContractError
-from greenfield.codex_agent import CodexAgentError, generate_contract, run_codex_trace
 from greenfield.step1_5_trace import TraceError, validate_trace
+from greenfield.strands_agent import (
+    StrandsAgentError,
+    generate_contract,
+    run_strands_trace,
+)
+from greenfield.strands_config import apply_strands_environment, load_strands_config
 from scripts.validate_greenfield_step1 import validate as validate_step1
 
 
@@ -22,22 +27,25 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source-root", required=True, type=Path)
     parser.add_argument("--trace-output", required=True, type=Path)
     parser.add_argument("--contract-output", required=True, type=Path)
-    parser.add_argument("--codex-binary", default="codex")
+    parser.add_argument("--strands-config", type=Path)
     parser.add_argument("--model")
-    parser.add_argument("--timeout", type=int, default=300)
+    parser.add_argument("--timeout", type=int)
     parser.add_argument("--max-file-bytes", type=int, default=0)
     args = parser.parse_args(argv)
     try:
+        strands_config = load_strands_config(args.strands_config)
+        apply_strands_environment(strands_config)
+        model = args.model or strands_config.model
+        timeout = args.timeout or strands_config.timeout_seconds
         step1 = read_json_object(args.step1_report)
         errors = validate_step1(step1)
         if errors:
             raise TraceError("invalid Step 1 report: " + "; ".join(errors))
-        trace, context = run_codex_trace(
+        trace, context = run_strands_trace(
             step1,
             args.source_root,
-            codex_binary=args.codex_binary,
-            model=args.model,
-            timeout=args.timeout,
+            model=model,
+            timeout=timeout,
             max_file_bytes=args.max_file_bytes,
         )
         if validate_trace(step1, trace):
@@ -52,7 +60,7 @@ def main(argv: list[str] | None = None) -> int:
             "contract": str(args.contract_output),
         }, sort_keys=True))
         return 0
-    except (OSError, TypeError, ValueError, json.JSONDecodeError, CodexAgentError, TraceError, BehaviorContractError) as exc:
+    except (OSError, TypeError, ValueError, json.JSONDecodeError, StrandsAgentError, TraceError, BehaviorContractError) as exc:
         print(f"greenfield Step 1.5 failed: {exc}", file=sys.stderr)
         return 2
 

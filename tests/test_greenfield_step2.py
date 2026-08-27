@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts import run_greenfield_codex
+from scripts import run_greenfield_strands
 from greenfield.github_repository_evidence import (
     RepositoryEvidenceError,
     collect_repository_evidence,
@@ -278,7 +278,7 @@ repositories:
     assert _manifest_candidates(manifest, "intacct/ia-app", "ia-app") == []
 
 
-def test_run_greenfield_codex_manifest_candidates_exclude_disabled_test_repository(tmp_path: Path) -> None:
+def test_run_greenfield_strands_manifest_candidates_exclude_disabled_test_repository(tmp_path: Path) -> None:
     manifest = tmp_path / "repos.yaml"
     manifest.write_text(
         """version: 1
@@ -308,7 +308,7 @@ repositories:
 """,
         encoding="utf-8",
     )
-    assert run_greenfield_codex._manifest_candidates(manifest, "intacct/ia-app", "ia-app") == []
+    assert run_greenfield_strands._manifest_candidates(manifest, "intacct/ia-app", "ia-app") == []
 
 
 def write_contract(path: Path, revision: str = TARGET) -> None:
