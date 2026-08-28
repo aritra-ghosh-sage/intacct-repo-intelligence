@@ -35,7 +35,7 @@ UNCERTAIN_STATES = {
 }
 
 
-class BehaviorHandbookError(ValueError):
+class BehaviorImpactReportError(ValueError):
     """Raised when Greenfield evidence cannot form a trustworthy impact report."""
 
 
@@ -51,30 +51,30 @@ def _canonical(value: object) -> str:
 
 def _object(value: Any, label: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
-        raise BehaviorHandbookError(f"{label} must be an object")
+        raise BehaviorImpactReportError(f"{label} must be an object")
     return value
 
 
 def _text(value: Any, label: str) -> str:
     if not isinstance(value, str) or not value.strip():
-        raise BehaviorHandbookError(f"{label} must be a non-empty string")
+        raise BehaviorImpactReportError(f"{label} must be a non-empty string")
     return value.strip()
 
 
 def _rows(value: Any, label: str) -> list[Mapping[str, Any]]:
     if not isinstance(value, list):
-        raise BehaviorHandbookError(f"{label} must be a list")
+        raise BehaviorImpactReportError(f"{label} must be a list")
     if any(not isinstance(item, Mapping) for item in value):
-        raise BehaviorHandbookError(f"{label} must contain objects")
+        raise BehaviorImpactReportError(f"{label} must contain objects")
     return list(value)
 
 
 def _sorted_strings(value: Any, label: str, *, allow_empty: bool = False) -> list[str]:
     if not isinstance(value, list) or (not allow_empty and not value):
-        raise BehaviorHandbookError(f"{label} must be a list")
+        raise BehaviorImpactReportError(f"{label} must be a list")
     result = [_text(item, f"{label} item") for item in value]
     if result != sorted(set(result)):
-        raise BehaviorHandbookError(f"{label} must be sorted and unique")
+        raise BehaviorImpactReportError(f"{label} must be sorted and unique")
     return result
 
 
@@ -88,24 +88,30 @@ def _validate_upstream_reports(reports: Mapping[str, Mapping[str, Any]]) -> None
     for name, validator in validators.items():
         errors = validator(reports[name])
         if errors:
-            raise BehaviorHandbookError(f"invalid {name} report: {'; '.join(errors)}")
+            raise BehaviorImpactReportError(
+                f"invalid {name} report: {'; '.join(errors)}"
+            )
 
 
 def _validate_inputs(
     contract: Mapping[str, Any], reports: Mapping[str, Mapping[str, Any]]
 ) -> dict[str, Any]:
     if contract.get("schema_version") != "0.1":
-        raise BehaviorHandbookError("contract schema_version must be 0.1")
+        raise BehaviorImpactReportError("contract schema_version must be 0.1")
     if contract.get("artifact_kind") != "generated_behavior_contract":
-        raise BehaviorHandbookError("contract must be a generated behavior contract")
+        raise BehaviorImpactReportError(
+            "contract must be a generated behavior contract"
+        )
     revision = _text(contract.get("revision"), "contract.revision")
     if not SHA.fullmatch(revision):
-        raise BehaviorHandbookError(
+        raise BehaviorImpactReportError(
             "contract.revision must be a lowercase 40-character SHA"
         )
     contract_input = _object(contract.get("input"), "contract.input")
     if contract_input.get("head_sha") != revision:
-        raise BehaviorHandbookError("contract input head_sha does not match revision")
+        raise BehaviorImpactReportError(
+            "contract input head_sha does not match revision"
+        )
     changed_paths = _sorted_strings(
         contract_input.get("changed_paths"), "contract.input.changed_paths"
     )
@@ -115,40 +121,44 @@ def _validate_inputs(
     repo_key = _text(contract_input.get("repo_key"), "contract.input.repo_key")
     contract_repository = _text(contract.get("repository"), "contract.repository")
     if contract_repository not in {repo_key, canonical_repository}:
-        raise BehaviorHandbookError("contract repository identity does not match input")
+        raise BehaviorImpactReportError(
+            "contract repository identity does not match input"
+        )
     generation = _object(contract.get("generation"), "contract.generation")
     if generation.get("status") not in {"complete", "partial"}:
-        raise BehaviorHandbookError("contract generation status is invalid")
+        raise BehaviorImpactReportError("contract generation status is invalid")
 
     for name, report in reports.items():
         if report.get("schema_version") != "0.1":
-            raise BehaviorHandbookError(f"{name} schema_version must be 0.1")
+            raise BehaviorImpactReportError(f"{name} schema_version must be 0.1")
         if report.get("analysis_kind") != EXPECTED_KINDS[name]:
-            raise BehaviorHandbookError(f"{name} analysis_kind is invalid")
+            raise BehaviorImpactReportError(f"{name} analysis_kind is invalid")
         if report.get("status") not in {"complete", "partial"}:
-            raise BehaviorHandbookError(f"{name} status is invalid")
+            raise BehaviorImpactReportError(f"{name} status is invalid")
         report_input = _object(report.get("input"), f"{name}.input")
         if report_input.get("source_repository") != repo_key:
-            raise BehaviorHandbookError(
+            raise BehaviorImpactReportError(
                 f"{name} source repository does not match contract"
             )
         if report_input.get("source_repo_key", repo_key) != repo_key:
-            raise BehaviorHandbookError(
+            raise BehaviorImpactReportError(
                 f"{name} source repo key does not match contract"
             )
         if (
             report_input.get("canonical_repository", canonical_repository)
             != canonical_repository
         ):
-            raise BehaviorHandbookError(
+            raise BehaviorImpactReportError(
                 f"{name} canonical repository does not match contract"
             )
         if report_input.get("target_revision") != revision:
-            raise BehaviorHandbookError(
+            raise BehaviorImpactReportError(
                 f"{name} target revision does not match contract"
             )
         if report_input.get("changed_paths") != changed_paths:
-            raise BehaviorHandbookError(f"{name} changed paths do not match contract")
+            raise BehaviorImpactReportError(
+                f"{name} changed paths do not match contract"
+            )
 
     source = {
         "source_repository": canonical_repository,
@@ -175,12 +185,12 @@ def _active_behaviors(
         and relation.get("status") == "active"
     ]
     if not behaviors:
-        raise BehaviorHandbookError("contract has no active behavior relations")
+        raise BehaviorImpactReportError("contract has no active behavior relations")
     ids = [
         _text(row.get("interface_id"), "behavior interface_id") for _, row in behaviors
     ]
     if len(ids) != len(set(ids)):
-        raise BehaviorHandbookError("contract contains duplicate behavior IDs")
+        raise BehaviorImpactReportError("contract contains duplicate behavior IDs")
     return sorted(behaviors, key=lambda item: str(item[1].get("interface_id")))
 
 
@@ -200,10 +210,12 @@ def _behavior_edges(
             if source not in reachable:
                 continue
             if edge.get("source_revision") != revision:
-                raise BehaviorHandbookError("contract edge source revision is stale")
+                raise BehaviorImpactReportError(
+                    "contract edge source revision is stale"
+                )
             line = edge.get("source_line")
             if isinstance(line, bool) or not isinstance(line, int) or line < 1:
-                raise BehaviorHandbookError("contract edge source line is invalid")
+                raise BehaviorImpactReportError("contract edge source line is invalid")
             normalized = dict(edge)
             selected[_canonical(normalized)] = normalized
             if isinstance(target, str) and target and target not in reachable:
@@ -440,7 +452,7 @@ def _behavior_gaps(
     return sorted(gaps)
 
 
-def build_behavior_handbook(
+def build_behavior_impact_report(
     contract: Mapping[str, Any],
     step2: Mapping[str, Any],
     step3: Mapping[str, Any],
@@ -622,15 +634,15 @@ def build_behavior_handbook(
             "github_writes": "none",
         },
     }
-    errors = validate_behavior_handbook(report)
+    errors = validate_behavior_impact_report(report)
     if errors:
-        raise BehaviorHandbookError(
+        raise BehaviorImpactReportError(
             "generated invalid behavior handbook: " + "; ".join(errors)
         )
     return report
 
 
-def validate_behavior_handbook(report: Any) -> list[str]:
+def validate_behavior_impact_report(report: Any) -> list[str]:
     """Validate the public V1 handbook contract without consulting ambient state."""
 
     if not isinstance(report, Mapping):
@@ -838,12 +850,12 @@ def _row_label(row: Mapping[str, Any]) -> str:
     )
 
 
-def render_behavior_handbook_markdown(report: Mapping[str, Any]) -> str:
+def render_behavior_impact_report_markdown(report: Mapping[str, Any]) -> str:
     """Render a compact progressive view of a validated handbook."""
 
-    errors = validate_behavior_handbook(report)
+    errors = validate_behavior_impact_report(report)
     if errors:
-        raise BehaviorHandbookError(
+        raise BehaviorImpactReportError(
             "cannot render invalid behavior handbook: " + "; ".join(errors)
         )
     source = report["input"]
@@ -958,8 +970,8 @@ __all__ = [
     "ANALYSIS_KIND",
     "RULE_SET_VERSION",
     "SCHEMA_VERSION",
-    "BehaviorHandbookError",
-    "build_behavior_handbook",
-    "render_behavior_handbook_markdown",
-    "validate_behavior_handbook",
+    "BehaviorImpactReportError",
+    "build_behavior_impact_report",
+    "render_behavior_impact_report_markdown",
+    "validate_behavior_impact_report",
 ]

@@ -45,11 +45,6 @@ def main(argv: list[str] | None = None) -> int:
         help="Require exact captured target evidence for Step 7 eligibility.",
     )
     parser.add_argument(
-        "--require-owner-approvals",
-        action="store_true",
-        help="Deprecated compatibility flag; owner approval is not a draft gate.",
-    )
-    parser.add_argument(
         "--step7-eligible",
         action="store_true",
         help="Require the strict target-evidence gate.",
@@ -68,12 +63,10 @@ def main(argv: list[str] | None = None) -> int:
             load_json(args.step4_report, "Step 4 report"),
             load_json(args.step5_report, "Step 5 report"),
             strict_target_evidence=args.strict_target_evidence,
-            require_approvals=False,
         )
         errors = validate_step6_report(
             report,
             strict_target_evidence=args.strict_target_evidence,
-            require_approvals=False,
             require_step7_eligibility=args.step7_eligible,
         )
         if errors:

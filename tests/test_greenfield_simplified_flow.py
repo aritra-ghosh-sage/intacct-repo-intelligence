@@ -227,6 +227,32 @@ def test_toolbox_rejects_changed_and_oversized_captured_evidence(
         GreenfieldToolbox(bounded).read_evidence_artifact(oversized.name)
 
 
+def test_analysis_retains_step3_repository_impacts(tmp_path: Path) -> None:
+    context, _ = _context(tmp_path)
+    report = build_analysis_report(
+        context,
+        step2={"gaps": []},
+        step3={
+            "potentially_affected_repositories": {
+                "items": [
+                    {
+                        "target_repository": "intacct/explicit-tests",
+                        "classification": "candidate",
+                        "rationale": "The captured behavior is affected.",
+                        "evidence": [],
+                    }
+                ]
+            },
+            "gaps": [],
+        },
+        step4={"coverage": {}, "gaps": []},
+        step5={"actions": [], "gaps": []},
+    )
+    assert [row["repository"] for row in report["repository_impacts"]] == [
+        "intacct/explicit-tests"
+    ]
+
+
 def test_strands_analysis_receives_bounded_tools(tmp_path: Path) -> None:
     context, _ = _context(tmp_path)
     toolbox = GreenfieldToolbox(context)
@@ -370,6 +396,52 @@ def test_analysis_rejects_out_of_scope_strong_candidate(tmp_path: Path) -> None:
                 "agent": {"status": "complete"},
             },
             tool_calls=toolbox.ledger(),
+        )
+
+
+def test_analysis_rejects_strong_evidence_without_captured_revision(
+    tmp_path: Path,
+) -> None:
+    context, _ = _context(tmp_path)
+    candidate = context["candidate_repositories"][0]
+    candidate["inspected_revision"] = None
+    unsigned_context = dict(context)
+    unsigned_context.pop("context_sha256")
+    context["context_sha256"] = artifact_sha256(unsigned_context)
+    result = {
+        "status": "available",
+        "repository": candidate["repository"],
+        "source_revision": "a" * 40,
+    }
+    with pytest.raises(AnalysisReportError, match="captured repository revision"):
+        build_analysis_report(
+            context,
+            step2={"gaps": []},
+            step3={"potentially_affected_repositories": {"items": []}, "gaps": []},
+            step4={"coverage": {}, "gaps": []},
+            step5={"actions": [], "gaps": []},
+            agent_analysis={
+                "repository_impacts": [
+                    {
+                        "repository": candidate["repository"],
+                        "evidence_state": "strong_candidate",
+                        "rank": 1,
+                        "rationale": "Unsupported revision binding.",
+                        "evidence": [{"tool_call_id": "call-1"}],
+                    }
+                ],
+                "actions": [],
+                "coverage": {},
+                "gaps": [],
+                "agent": {"status": "complete"},
+            },
+            tool_calls=[
+                {
+                    "tool_call_id": "call-1",
+                    "result_sha256": artifact_sha256(result),
+                    "result": result,
+                }
+            ],
         )
 
 

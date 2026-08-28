@@ -20,10 +20,15 @@ from greenfield.llm_env import (
 from greenfield.planning_contract import TASK_TYPES, build_planning_report
 from greenfield.strands_agent import StrandsAgentError, run_strands_analysis
 from greenfield.strands_tools import GreenfieldToolbox
+from greenfield.telemetry import redact
 
 
 class NexAUPlannerError(ValueError):
     """Raised when the optional planner cannot produce a safe lifecycle."""
+
+
+def _redacted_error(value: Any) -> str:
+    return str(redact(str(value)))[:500]
 
 
 def load_planner_config(path: str | Path | None) -> dict[str, Any]:
@@ -111,7 +116,9 @@ def _default_planner_factory(
 
     env_path = load_greenfield_env()
     model = str(config.get("model") or os.environ.get("LLM_MODEL") or "").strip()
-    base_url = str(config.get("base_url") or os.environ.get("LLM_BASE_URL") or "").strip()
+    base_url = str(
+        config.get("base_url") or os.environ.get("LLM_BASE_URL") or ""
+    ).strip()
     try:
         validate_greenfield_llm_env(
             model=model or None,
@@ -152,16 +159,22 @@ def _default_planner_factory(
         if operation == "read_handbook" and repository:
             return toolbox.read_handbook(repository, section or "index")
         if operation == "read_source" and repository and path:
-            return toolbox.read_source(repository, path, start_line or 1, end_line or 200)
+            return toolbox.read_source(
+                repository, path, start_line or 1, end_line or 200
+            )
         if operation == "search_source" and repository and query:
             return toolbox.search_source(repository, query, path or "")
         if operation == "read_evidence_artifact" and path:
             return toolbox.read_evidence_artifact(path)
         if operation == "codegraph_explore" and repository and query:
             return toolbox.codegraph_explore(repository, query)
-        raise NexAUPlannerError("planner evidence tool requires valid captured-scope arguments")
+        raise NexAUPlannerError(
+            "planner evidence tool requires valid captured-scope arguments"
+        )
 
-    tool_path = Path(__file__).with_name("nexau_tools") / "greenfield_evidence.tool.yaml"
+    tool_path = (
+        Path(__file__).with_name("nexau_tools") / "greenfield_evidence.tool.yaml"
+    )
     evidence_tool = Tool.from_yaml(tool_path, binding=greenfield_evidence)
     agent = Agent(
         config=AgentConfig(
@@ -195,7 +208,9 @@ def _run_planner_call(runner: Callable[[str], Any], prompt: str) -> Any:
     except NexAUPlannerError:
         raise
     except Exception as exc:  # pragma: no cover - provider-specific failure shape
-        raise NexAUPlannerError(f"NexAU planner execution failed: {exc}") from exc
+        raise NexAUPlannerError(
+            f"NexAU planner execution failed: {_redacted_error(exc)}"
+        ) from exc
 
 
 def _parse_tasks(
@@ -242,9 +257,15 @@ def _parse_tasks(
                 **({"repository": str(repository)} if repository is not None else {}),
             }
         )
-    if ensure_synthesis and not any(row["task_type"] == "synthesize_review" for row in tasks):
+    if ensure_synthesis and not any(
+        row["task_type"] == "synthesize_review" for row in tasks
+    ):
         tasks.append(
-            {"task_id": "planner-synthesis", "task_type": "synthesize_review", "question": "Summarize only evidence-backed review results."}
+            {
+                "task_id": "planner-synthesis",
+                "task_type": "synthesize_review",
+                "question": "Summarize only evidence-backed review results.",
+            }
         )
     return tasks
 
@@ -262,14 +283,19 @@ def _dispatch_task(
     """Give Strands a single scoped question; all evidence stays in the shared ledger."""
 
     if task["task_type"] == "synthesize_review":
-        return {"evidence_refs": [], "findings": {}}
+        return {"evidence_refs": [], "findings": {}, "status": "complete"}
     scoped = {**summary, "planner_task": dict(task)}
     previous_ids = {str(row["tool_call_id"]) for row in toolbox.ledger()}
     try:
         findings, _ = run_strands_analysis(
-            run_context, scoped, toolbox, model=model, timeout=timeout, agent_factory=strands_factory
+            run_context,
+            scoped,
+            toolbox,
+            model=model,
+            timeout=timeout,
+            agent_factory=strands_factory,
         )
-    except StrandsAgentError as exc:
+    except (StrandsAgentError, RuntimeError, ValueError, OSError) as exc:
         return {
             "evidence_refs": [
                 {
@@ -281,15 +307,16 @@ def _dispatch_task(
             ],
             "findings": {},
             "status": "unavailable",
-            "error": str(exc),
+            "error": _redacted_error(exc),
         }
     return {
         "evidence_refs": [
-        {"tool_call_id": row["tool_call_id"], "result_sha256": row["result_sha256"]}
+            {"tool_call_id": row["tool_call_id"], "result_sha256": row["result_sha256"]}
             for row in toolbox.ledger()
             if str(row["tool_call_id"]) not in previous_ids
         ],
         "findings": findings,
+        "status": "complete",
     }
 
 
@@ -360,6 +387,25 @@ def _required_challenge_tasks(findings: Mapping[str, Any]) -> list[dict[str, Any
     return tasks
 
 
+def _downgrade_incomplete_findings(findings: dict[str, Any], *, reason: str) -> None:
+    """Keep incomplete planner lifecycles from retaining automatic claims."""
+    for row in findings.get("repository_impacts", []):
+        if isinstance(row, Mapping) and row.get("evidence_state") in {
+            "confirmed",
+            "strong_candidate",
+        }:
+            row["evidence_state"] = "candidate"
+            row.pop("challenge_task_id", None)
+    for row in findings.get("actions", []):
+        if not isinstance(row, Mapping):
+            continue
+        row["draft_eligible"] = False
+        if row.get("evidence_state") in {"confirmed", "strong_candidate"}:
+            row["evidence_state"] = "candidate"
+        row.pop("challenge_task_id", None)
+    findings["gaps"].add(reason)
+
+
 def run_nexau_planner(
     run_context: Mapping[str, Any],
     summary: Mapping[str, Any],
@@ -372,10 +418,10 @@ def run_nexau_planner(
     model: str | None = None,
     timeout: int = 300,
 ) -> dict[str, Any]:
-    """Run the optional planner and retain every decision as non-authoritative audit evidence."""
+    """Run NexAU as the default bounded orchestrator for Analyze."""
 
-    if mode not in {"shadow", "active"}:
-        raise NexAUPlannerError("planner mode must be shadow or active")
+    if mode not in {"default", "shadow", "active"}:
+        raise NexAUPlannerError("planner mode must be default")
     settings = dict(config or {})
     started = monotonic()
     runner = (
@@ -397,6 +443,7 @@ def run_nexau_planner(
         "gaps": set(),
     }
     completed_ids: set[str] = set()
+    all_task_ids: set[str] = set()
     try:
         max_cycles = int(settings.get("max_cycles", 32))
     except (TypeError, ValueError) as exc:
@@ -411,15 +458,30 @@ def run_nexau_planner(
         task_id = str(task["task_id"])
         if task_id in completed_ids:
             continue
+        if task_id in all_task_ids:
+            raise NexAUPlannerError(
+                f"planner task IDs must be globally unique: {task_id}"
+            )
+        all_task_ids.add(task_id)
         completed_ids.add(task_id)
         result = _dispatch_task(
-            task, run_context, summary, toolbox, model=model, timeout=timeout, strands_factory=strands_factory
+            task,
+            run_context,
+            summary,
+            toolbox,
+            model=model,
+            timeout=timeout,
+            strands_factory=strands_factory,
         )
         task_findings = result.get("findings", {})
         if isinstance(task_findings, Mapping):
             _merge_findings(findings, task_findings)
         if result.get("status") == "unavailable":
             findings["gaps"].add(f"planner_task_unavailable:{task_id}")
+        if task["task_type"] == "challenge_claim" and not result.get("evidence_refs"):
+            result["status"] = "failed"
+            result["error"] = "challenge task produced no toolbox evidence"
+            findings["gaps"].add(f"planner_challenge_evidence_missing:{task_id}")
         if task["task_type"] == "synthesize_review":
             terminal = True
             decision = "complete"
@@ -435,7 +497,7 @@ def run_nexau_planner(
                             **findings,
                             "gaps": sorted(findings["gaps"]),
                         },
-                    )
+                    ),
                 ),
                 run_context,
             )
@@ -463,7 +525,11 @@ def run_nexau_planner(
                 if existing["task_type"] == "synthesize_review"
             ]
             queue = [
-                *[existing for existing in queue if existing["task_type"] != "synthesize_review"],
+                *[
+                    existing
+                    for existing in queue
+                    if existing["task_type"] != "synthesize_review"
+                ],
                 *appended,
                 *synthesis_tasks,
             ]
@@ -475,7 +541,7 @@ def run_nexau_planner(
                 "decision": decision,
                 **(
                     {"status": result["status"], "error": result["error"]}
-                    if result.get("status") == "unavailable"
+                    if result.get("status") in {"unavailable", "failed", "partial"}
                     else {}
                 ),
             }
@@ -483,11 +549,26 @@ def run_nexau_planner(
         if terminal:
             break
     if not terminal:
-        stop_reason = "planner_cycle_budget_exhausted" if queue else "planner_stopped_without_synthesis"
+        stop_reason = (
+            "planner_cycle_budget_exhausted"
+            if queue
+            else "planner_stopped_without_synthesis"
+        )
         status = "blocked" if queue else "partial"
     else:
         status = "partial" if findings["gaps"] else "complete"
+    if status != "complete":
+        _downgrade_incomplete_findings(findings, reason="nexau_planner_incomplete")
     findings["gaps"] = sorted(findings["gaps"])
+    for row in findings["repository_impacts"]:
+        if isinstance(row, Mapping) and row.get("evidence_state") in {
+            "confirmed",
+            "strong_candidate",
+        }:
+            row["challenge_task_id"] = f"challenge-impact-{row.get('repository')}"
+    for row in findings["actions"]:
+        if isinstance(row, Mapping) and row.get("draft_eligible") is True:
+            row["challenge_task_id"] = f"challenge-action-{row.get('action_id')}"
     findings["agent"] = {
         "status": "complete" if status == "complete" else "partial",
         "name": "nexau",
@@ -496,14 +577,17 @@ def run_nexau_planner(
     report = build_planning_report(
         run_context,
         mode=mode,
-        planner={"name": "nexau", "model": settings.get("model") or "configured", "elapsed_ms": int((monotonic() - started) * 1000)},
+        planner={
+            "name": "nexau",
+            "model": settings.get("model") or "configured",
+            "elapsed_ms": int((monotonic() - started) * 1000),
+        },
         cycles=cycles,
         status=status,
         stop_reason=stop_reason,
         gaps=findings["gaps"],
+        analysis=findings,
     )
-    report["analysis"] = findings
-    report["planning_sha256"] = artifact_sha256({key: value for key, value in report.items() if key != "planning_sha256"})
     return report
 
 

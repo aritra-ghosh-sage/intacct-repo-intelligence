@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -15,11 +17,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from greenfield.analysis_report import AnalysisReportError, build_analysis_report
 from greenfield.artifact_io import read_json_object, write_json_atomic
-from greenfield.behavior_handbook import (
-    BehaviorHandbookError,
-    build_behavior_handbook,
-    render_behavior_handbook_markdown,
-    validate_behavior_handbook,
+from greenfield.behavior_impact_report import (
+    BehaviorImpactReportError,
+    build_behavior_impact_report,
+    render_behavior_impact_report_markdown,
+    validate_behavior_impact_report,
 )
 from greenfield.flow_handoff import GreenfieldFlowHandoff
 from greenfield.github_repository_evidence import (
@@ -27,19 +29,21 @@ from greenfield.github_repository_evidence import (
     collect_repository_evidence,
 )
 from greenfield.impact_discovery import discover_from_trace, validate_discovery
-from greenfield.nexau_planner import (
-    NexAUPlannerError,
-    load_planner_config,
-    run_nexau_planner,
+from greenfield.llm_env import (
+    GreenfieldEnvError,
+    load_greenfield_env,
+    validate_greenfield_llm_env,
 )
+from greenfield.nexau_planner import NexAUPlannerError, run_nexau_planner
+from greenfield.planning_contract import build_planning_report
 from greenfield.pr_analysis_contract import make_request
 from greenfield.pr_review import render_review, validate_review
 from greenfield.publish import build_publication, publish_github
 from greenfield.remediation import build_automatic_step6_request
 from greenfield.replay_validation import validation_summary
 from greenfield.repository_context import collect_repository_context
+from greenfield.repository_handbook import resynchronize_repository_handbook_at_revision
 from greenfield.run_context import build_run_context
-from greenfield.llm_env import load_greenfield_env, validate_greenfield_llm_env
 from greenfield.step2_contract import normalize_repository_inventory
 from greenfield.step6_contract import Step6Error, load_json, validate_step6_report
 from greenfield.step6_patch import generate_step6
@@ -47,7 +51,7 @@ from greenfield.step7_contract import Step7Error, validate_step7_report
 from greenfield.step7_prepare import prepare_step7
 from greenfield.step7_profiles import load_profile_registry
 from greenfield.step7_runner import LocalSubprocessRunner
-from greenfield.step7_validate import validate_step7
+from greenfield.step7_validate import create_ephemeral_revision, validate_step7
 from greenfield.step8_contract import Step8Error, prepare_step8_request
 from greenfield.step8_create import (
     GhApiWriter,
@@ -57,14 +61,15 @@ from greenfield.step8_create import (
     create_step8,
 )
 from greenfield.strands_agent import (
-    StrandsAgentError,
     Step1TraceFailure,
+    StrandsAgentError,
     generate_contract,
     run_strands_analysis,
     run_strands_trace,
 )
 from greenfield.strands_config import apply_strands_environment, load_strands_config
 from greenfield.strands_tools import GreenfieldToolbox
+from greenfield.telemetry import GreenfieldTelemetry, redact
 from greenfield.test_assessment import build_assessment, validate_assessment
 from scripts import (
     trace_greenfield_step1,
@@ -174,6 +179,26 @@ def _repository_handbooks(values: list[str]) -> dict[str, Path]:
     return result
 
 
+def _manifest_handbook_values(path: Path) -> list[str]:
+    """Read optional revision-bound handbook paths from central repository metadata."""
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    values: list[str] = []
+    for row in data.get("repositories", []) if isinstance(data, dict) else []:
+        if not isinstance(row, Mapping):
+            continue
+        analysis = row.get("greenfield_analysis")
+        handbook = (
+            analysis.get("repository_handbook")
+            if isinstance(analysis, Mapping)
+            else None
+        )
+        if isinstance(handbook, str) and handbook.strip():
+            remote = str(row.get("remote_url") or "")
+            repository = remote.split("github.com:", 1)[-1].split("github.com/", 1)[-1]
+            values.append(f"{repository.removesuffix('.git')}={handbook}")
+    return values
+
+
 def _captured_candidate(
     run_context: dict[str, Any], repository: str
 ) -> dict[str, Any] | None:
@@ -192,19 +217,25 @@ def _resolve_llm_runtime(
     cli_model: str | None,
     strands_config: Any,
     planner_config: dict[str, Any],
-    planner_mode: str,
+    planner_mode: str = "default",
 ) -> tuple[str, str | None]:
-    model = (cli_model or strands_config.model or os.environ.get("LLM_MODEL") or "").strip()
+    model = (
+        cli_model or strands_config.model or os.environ.get("LLM_MODEL") or ""
+    ).strip()
     if not model:
         raise ValueError(
             "Greenfield LLM model is not configured; supply --model, set model in the Greenfield config, or export LLM_MODEL"
         )
     base_url = (
-        str(planner_config.get("base_url") or strands_config.base_url or os.environ.get("LLM_BASE_URL") or "")
-        .strip()
+        str(
+            planner_config.get("base_url")
+            or strands_config.base_url
+            or os.environ.get("LLM_BASE_URL")
+            or ""
+        ).strip()
         or None
     )
-    if planner_mode != "off" and not base_url:
+    if not base_url:
         raise ValueError(
             "NexAU is enabled but no base URL is configured; set base_url in the planner config or export LLM_BASE_URL"
         )
@@ -222,6 +253,100 @@ def _execution_context(
     if base_url is not None:
         context["base_url"] = base_url
     return context
+
+
+def _capability_preflight(
+    *,
+    model: str,
+    base_url: str | None,
+    env_path: Path,
+    planner_config: Mapping[str, Any],
+) -> dict[str, Any]:
+    diagnostics: list[dict[str, str]] = []
+    try:
+        validate_greenfield_llm_env(
+            model=model or None, base_url=base_url, env_path=env_path
+        )
+    except GreenfieldEnvError as exc:
+        diagnostics.append(
+            {
+                "component": "llm",
+                "code": "configuration_unavailable",
+                "message": redact(str(exc)),
+            }
+        )
+    if not isinstance(planner_config, Mapping):
+        diagnostics.append(
+            {
+                "component": "planner_config",
+                "code": "invalid",
+                "message": "planner config must be an object",
+            }
+        )
+    try:
+        import nexau  # noqa: F401
+    except ImportError:
+        diagnostics.append(
+            {
+                "component": "nexau",
+                "code": "dependency_unavailable",
+                "message": "pinned NexAU dependency is unavailable",
+            }
+        )
+    try:
+        import strands  # noqa: F401
+    except ImportError:
+        diagnostics.append(
+            {
+                "component": "strands",
+                "code": "dependency_unavailable",
+                "message": "Strands dependency is unavailable",
+            }
+        )
+    return {
+        "status": "ready" if not diagnostics else "unavailable",
+        "nexau": "ready"
+        if not any(row["component"] == "nexau" for row in diagnostics)
+        else "unavailable",
+        "strands": "ready"
+        if not any(row["component"] == "strands" for row in diagnostics)
+        else "unavailable",
+        "diagnostics": diagnostics,
+    }
+
+
+def _downgrade_incomplete_analysis(
+    value: Mapping[str, Any], *, reason: str
+) -> dict[str, Any]:
+    """Prevent partial planner/Strands lifecycles from retaining draft claims."""
+    result = json.loads(json.dumps(value))
+    for row in result.get("repository_impacts", []):
+        if isinstance(row, dict) and row.get("evidence_state") in {
+            "confirmed",
+            "strong_candidate",
+        }:
+            row["evidence_state"] = "candidate"
+            row.pop("challenge_task_id", None)
+    for row in result.get("actions", []):
+        if isinstance(row, dict):
+            row["draft_eligible"] = False
+            if row.get("evidence_state") in {"confirmed", "strong_candidate"}:
+                row["evidence_state"] = "candidate"
+            row.pop("challenge_task_id", None)
+    gaps = result.setdefault("gaps", [])
+    if reason not in gaps:
+        gaps.append(reason)
+    result["agent"] = {**result.get("agent", {}), "status": "partial", "reason": reason}
+    return result
+
+
+def _require_draft_step8_success(step8_result: Mapping[str, Any] | None) -> None:
+    """Fail closed unless Step 8 created or recovered the draft PR."""
+    if not isinstance(step8_result, Mapping) or step8_result.get("status") not in {
+        "created",
+        "reused",
+    }:
+        raise RuntimeError("draft blocked: Step 8 did not create or reuse the draft PR")
 
 
 def _step6_handoff(
@@ -282,93 +407,83 @@ def _blocked_handoff(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    source = parser.add_mutually_exclusive_group(required=True)
-    source.add_argument("--step1-report", type=Path)
-    source.add_argument("--pr", type=int)
-    parser.add_argument("--repo-key", default="ia-main")
-    parser.add_argument(
-        "--manifest", type=Path, default=Path("config/workspace_repos.yaml")
-    )
+    parser.add_argument("--pr", type=int, required=True)
     parser.add_argument("--source-root", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--strands-config", type=Path)
     parser.add_argument(
-        "--planner-mode",
-        choices=("off", "shadow", "active"),
-        default="off",
-        help="Optional NexAU planning mode. Shadow never controls remediation or publication.",
-    )
-    parser.add_argument("--planner-config", type=Path)
-    parser.add_argument("--model")
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--timeout", type=int)
-    parser.add_argument("--max-file-bytes", type=int, default=120_000)
-    parser.add_argument("--ci-evidence", action="append", default=[])
-    parser.add_argument(
-        "--contract",
-        action="append",
-        default=[],
-        help="Additional Step 2/4 contract artifacts to evaluate alongside generated Step 1.5 contract evidence.",
-    )
-    parser.add_argument("--inventory-evidence", action="append", default=[])
-    parser.add_argument("--semantic-index", action="append", default=[])
-    parser.add_argument("--related-pr-evidence")
-    parser.add_argument("--repository", action="append", default=[])
-    parser.add_argument(
-        "--repository-handbook",
-        action="append",
-        default=[],
-        help="Revision-bound repository handbook as repository=/path.",
-    )
-    parser.add_argument("--step6-request", type=Path)
-    parser.add_argument("--strict-target-evidence", action="store_true")
-    parser.add_argument(
-        "--require-owner-approvals",
-        action="store_true",
-        help="Deprecated compatibility flag; draft creation no longer requires owner approval.",
-    )
-    parser.add_argument("--step7-eligible", action="store_true")
-    parser.add_argument("--step7-profiles", type=Path)
-    parser.add_argument("--step7-runner", choices=("local",), default="local")
-    parser.add_argument("--target-checkout", type=Path)
-    parser.add_argument("--step8-base-branch")
-    parser.add_argument(
-        "--create-draft-pr",
-        action="store_true",
-        help="Create the validated draft PR through the authenticated GitHub service boundary.",
-    )
-    parser.add_argument(
-        "--publish-github",
-        action="store_true",
-        help="Create or update the canonical GitHub Check and PR comment.",
+        "--mode", choices=("analyze", "publish", "draft"), default="analyze"
     )
     args = parser.parse_args(argv)
+    # Operator flags intentionally stop at the four public flow controls.  The
+    # remaining values are centrally owned defaults used by internal stages.
+    args.step1_report = None
+    args.repo_key = "ia-main"
+    args.manifest = (
+        Path(__file__).resolve().parents[1] / "config" / "workspace_repos.yaml"
+    )
+    args.strands_config = None
+    args.planner_config = None
+    args.model = None
+    args.dry_run = args.mode == "analyze"
+    args.timeout = None
+    args.max_file_bytes = 120_000
+    args.ci_evidence = []
+    args.contract = []
+    args.inventory_evidence = []
+    args.semantic_index = []
+    args.related_pr_evidence = None
+    args.repository = []
+    args.repository_handbook = []
+    args.step6_request = None
+    args.strict_target_evidence = args.mode == "draft"
+    args.step7_eligible = args.mode == "draft"
+    args.step7_profiles = (
+        Path(__file__).resolve().parents[1]
+        / "config"
+        / "greenfield_step7_profiles.yaml"
+    )
+    args.step7_runner = "local"
+    args.target_checkout = None
+    args.step8_base_branch = None
+    args.create_draft_pr = args.mode == "draft"
+    args.publish_github = args.mode in {"publish", "draft"}
+    args.repository_handbook = _manifest_handbook_values(args.manifest)
     handoff: GreenfieldFlowHandoff | None = None
     current_stage = "initialization"
     try:
         env_path = load_greenfield_env()
         strands_config = load_strands_config(args.strands_config)
         apply_strands_environment(strands_config)
-        planner_config = (
-            load_planner_config(args.planner_config) if args.planner_mode != "off" else {}
-        )
-        model, base_url = _resolve_llm_runtime(
-            cli_model=args.model,
-            strands_config=strands_config,
-            planner_config=planner_config,
-            planner_mode=args.planner_mode,
-        )
-        if args.dry_run and (args.publish_github or args.create_draft_pr):
-            raise ValueError("--dry-run cannot be combined with GitHub write flags")
+        planner_config = {}
+        model = (strands_config.model or os.environ.get("LLM_MODEL") or "").strip()
+        base_url = (
+            strands_config.base_url or os.environ.get("LLM_BASE_URL") or ""
+        ).strip() or None
         dry_run = args.dry_run or not (args.publish_github or args.create_draft_pr)
         timeout = args.timeout or strands_config.timeout_seconds
-        if args.planner_mode != "off":
-            validate_greenfield_llm_env(
-                model=model,
-                base_url=base_url,
-                env_path=env_path,
-            )
         args.output_dir.mkdir(parents=True, exist_ok=True)
+        telemetry = GreenfieldTelemetry(args.output_dir)
+        preflight = _capability_preflight(
+            model=model,
+            base_url=base_url,
+            env_path=env_path,
+            planner_config=planner_config,
+        )
+        telemetry.emit("capability_preflight", mode=args.mode, **preflight)
+        if args.mode == "draft" and preflight["status"] != "ready":
+            print(
+                json.dumps(
+                    {
+                        "status": "blocked",
+                        "reason": "capability_preflight_unavailable",
+                        "diagnostics": preflight["diagnostics"],
+                    },
+                    sort_keys=True,
+                ),
+                file=sys.stderr,
+            )
+            return 2
+        args.planner_mode = "default"
         step1_path = args.step1_report or args.output_dir / "step1.json"
         current_stage = "step1"
         if (
@@ -700,64 +815,77 @@ def main(argv: list[str] | None = None) -> int:
         }
         planning_report: dict[str, Any] | None = None
         planning_path: Path | None = None
-        if args.planner_mode != "off":
-            current_stage = "nexau_planning"
-            try:
-                planning_report = run_nexau_planner(
-                    run_context,
-                    compatibility_summary,
-                    toolbox,
-                    mode=args.planner_mode,
-                    config={
-                        **planner_config,
-                        "model": model,
-                        **({"base_url": base_url} if base_url is not None else {}),
-                    },
-                    model=model,
-                    timeout=timeout,
-                )
-            except NexAUPlannerError as exc:
-                planning_report = {
-                    "schema_version": "0.1",
-                    "analysis_kind": "greenfield_analysis_plan",
-                    "status": "unavailable",
-                    "mode": args.planner_mode,
-                    "source": dict(run_context["source"]),
-                    "run_context_sha256": run_context["context_sha256"],
-                    "planner": {"name": "nexau", "reason": str(exc)},
-                    "cycles": [],
-                    "gaps": ["nexau_planner_unavailable"],
-                    "stop_reason": "planner_runtime_unavailable",
-                    "provenance": {
-                        "read_only": True,
-                        "catalog_mutation": "none",
-                        "github_writes": "none",
-                    },
-                }
-                from greenfield.artifact_io import artifact_sha256
-
-                planning_report["planning_sha256"] = artifact_sha256(planning_report)
-            planning_path = args.output_dir / "planning-report.json"
-            write_json_atomic(planning_path, planning_report)
-            handoff.complete_stage(
-                "nexau_planning",
-                inputs={
-                    "run_context": run_context_path,
-                    "step2": step2_path,
-                    "step3": step3_path,
-                    "step4": step4_path,
-                    "step5": step5_path,
+        current_stage = "nexau_planning"
+        telemetry.emit(
+            "analysis_inputs",
+            context_sha256=run_context["context_sha256"],
+            summary=compatibility_summary,
+        )
+        try:
+            planning_report = run_nexau_planner(
+                run_context,
+                compatibility_summary,
+                toolbox,
+                mode=args.planner_mode,
+                config={
+                    **planner_config,
+                    "model": model,
+                    **({"base_url": base_url} if base_url else {}),
                 },
-                outputs={"planning_report": planning_path},
+                model=model,
+                timeout=timeout,
             )
+            telemetry.emit(
+                "nexau_plan_generated",
+                status=planning_report.get("status"),
+                planning_sha256=planning_report.get("planning_sha256"),
+                tasks=[
+                    cycle.get("task") for cycle in planning_report.get("cycles", [])
+                ],
+            )
+        except NexAUPlannerError as exc:
+            planning_report = build_planning_report(
+                run_context,
+                mode="default",
+                planner={
+                    "name": "nexau",
+                    "status": "unavailable",
+                    "reason": redact(str(exc)),
+                },
+                cycles=[],
+                status="unavailable",
+                stop_reason="planner_runtime_unavailable",
+                gaps=["nexau_planner_unavailable"],
+            )
+            telemetry.emit("nexau_planner_unavailable", reason=redact(str(exc)))
+        planning_path = args.output_dir / "planning-report.json"
+        write_json_atomic(planning_path, planning_report)
+        handoff.complete_stage(
+            "nexau_planning",
+            inputs={
+                "run_context": run_context_path,
+                "step2": step2_path,
+                "step3": step3_path,
+                "step4": step4_path,
+                "step5": step5_path,
+            },
+            outputs={"planning_report": planning_path},
+        )
         try:
             planned_analysis = (
                 planning_report.get("analysis")
-                if args.planner_mode == "active"
+                if args.planner_mode == "default"
                 and isinstance(planning_report, dict)
-                and planning_report.get("status") == "complete"
+                and planning_report.get("status") in {"complete", "partial"}
                 else None
             )
+            if (
+                isinstance(planned_analysis, dict)
+                and planning_report.get("status") != "complete"
+            ):
+                planned_analysis = _downgrade_incomplete_analysis(
+                    planned_analysis, reason="nexau_planner_incomplete"
+                )
             if isinstance(planned_analysis, dict):
                 analysis = build_analysis_report(
                     run_context,
@@ -767,6 +895,8 @@ def main(argv: list[str] | None = None) -> int:
                     step5=step5_report,
                     agent_analysis=planned_analysis,
                     tool_calls=toolbox.ledger(),
+                    planning=planning_report,
+                    lifecycle_complete=planning_report.get("status") == "complete",
                 )
             else:
                 agent_analysis, tool_calls = run_strands_analysis(
@@ -776,6 +906,9 @@ def main(argv: list[str] | None = None) -> int:
                     model=model,
                     timeout=timeout,
                 )
+                agent_analysis = _downgrade_incomplete_analysis(
+                    agent_analysis, reason="nexau_planner_unavailable"
+                )
                 analysis = build_analysis_report(
                     run_context,
                     step2=step2_report,
@@ -784,6 +917,8 @@ def main(argv: list[str] | None = None) -> int:
                     step5=step5_report,
                     agent_analysis=agent_analysis,
                     tool_calls=tool_calls,
+                    planning=planning_report,
+                    lifecycle_complete=False,
                 )
         except (AnalysisReportError, StrandsAgentError, ValueError) as exc:
             analysis = build_analysis_report(
@@ -797,38 +932,17 @@ def main(argv: list[str] | None = None) -> int:
                     "gaps": ["strands_tool_analysis_unavailable"],
                 },
                 tool_calls=toolbox.ledger(),
+                planning=planning_report,
+                lifecycle_complete=False,
             )
         analysis_path = args.output_dir / "analysis-report.json"
         write_json_atomic(analysis_path, analysis)
-        shadow_analysis_path: Path | None = None
-        if args.planner_mode == "shadow":
-            shadow_status = (
-                "unavailable"
-                if not isinstance(planning_report, dict)
-                or planning_report.get("status") == "unavailable"
-                else "shadow"
-            )
-            shadow_analysis = build_analysis_report(
-                run_context,
-                step2=step2_report,
-                step3=step3_report,
-                step4=step4_report,
-                step5=step5_report,
-                agent_analysis={
-                    "agent": {
-                        "status": shadow_status,
-                        "name": "nexau",
-                        "mode": "shadow",
-                        "planning_sha256": planning_report.get("planning_sha256")
-                        if isinstance(planning_report, dict)
-                        else None,
-                    },
-                    "gaps": ["nexau_planner_shadow_only"],
-                },
-                tool_calls=toolbox.ledger(),
-            )
-            shadow_analysis_path = args.output_dir / "analysis-report.nexau.json"
-            write_json_atomic(shadow_analysis_path, shadow_analysis)
+        telemetry.emit(
+            "analysis_report_written",
+            status=analysis.get("status"),
+            report_sha256=analysis.get("report_sha256"),
+            tool_call_count=len(analysis.get("tool_calls", [])),
+        )
         handoff.complete_stage(
             "analyze",
             inputs={
@@ -840,31 +954,27 @@ def main(argv: list[str] | None = None) -> int:
             },
             outputs={
                 "analysis_report": analysis_path,
-                **(
-                    {"nexau_shadow_analysis": shadow_analysis_path}
-                    if shadow_analysis_path
-                    else {}
-                ),
+                "planning_report": planning_path,
             },
         )
         current_stage = "behavior_impact_report"
-        handbook = build_behavior_handbook(
+        handbook = build_behavior_impact_report(
             read_json_object(contract_path),
             read_json_object(step2_path),
             read_json_object(step3_path),
             read_json_object(step4_path),
             read_json_object(step5_path),
         )
-        handbook_errors = validate_behavior_handbook(handbook)
+        handbook_errors = validate_behavior_impact_report(handbook)
         if handbook_errors:
-            raise BehaviorHandbookError(
+            raise BehaviorImpactReportError(
                 "generated invalid behavior handbook: " + "; ".join(handbook_errors)
             )
         handbook_path = args.output_dir / "behavior-impact-report.json"
         handbook_markdown_path = args.output_dir / "behavior-impact-report.md"
         write_json_atomic(handbook_path, handbook)
         handbook_markdown_path.write_text(
-            render_behavior_handbook_markdown(handbook), encoding="utf-8"
+            render_behavior_impact_report_markdown(handbook), encoding="utf-8"
         )
         handoff.complete_stage(
             "behavior_impact_report",
@@ -1086,12 +1196,10 @@ def main(argv: list[str] | None = None) -> int:
                 step4_report,
                 step5_report,
                 strict_target_evidence=args.strict_target_evidence,
-                require_approvals=False,
             )
             step6_errors = validate_step6_report(
                 step6_report,
                 strict_target_evidence=args.strict_target_evidence,
-                require_approvals=False,
                 require_step7_eligibility=args.step7_eligible,
             )
             if step6_errors:
@@ -1118,6 +1226,10 @@ def main(argv: list[str] | None = None) -> int:
         step7_handoff_path: Path | None = None
         step7_request_path: Path | None = None
         step7_report_path: Path | None = None
+        handbook_resynchronization: dict[str, Any] = {
+            "status": "not_applicable",
+            "reason": "no_validated_remediation_diff",
+        }
         current_stage = "step7_handoff"
         if step6_report is None:
             step7_handoff = _blocked_handoff(
@@ -1130,7 +1242,6 @@ def main(argv: list[str] | None = None) -> int:
             strict_step6_errors = validate_step6_report(
                 step6_report,
                 strict_target_evidence=True,
-                require_approvals=False,
                 require_step7_eligibility=True,
             )
             if strict_step6_errors:
@@ -1219,6 +1330,84 @@ def main(argv: list[str] | None = None) -> int:
                             "report": step7_report_path,
                         },
                     )
+                    if (
+                        args.mode != "analyze"
+                        and step7_report.get("status") == "validated"
+                    ):
+                        patch_paths = [
+                            str(row.get("path"))
+                            for row in step6_report.get("patch", {}).get("files", [])
+                            if isinstance(row, Mapping)
+                        ]
+                        if patch_paths:
+                            target_repository = str(
+                                step6_report["target"]["repository"]
+                            )
+                            captured_handbook = next(
+                                (
+                                    row
+                                    for row in run_context.get(
+                                        "repository_handbooks", []
+                                    )
+                                    if isinstance(row, Mapping)
+                                    and row.get("repository") == target_repository
+                                ),
+                                None,
+                            )
+                            if not captured_handbook:
+                                handbook_resynchronization = {
+                                    "status": "unavailable",
+                                    "reason": "handbook_resynchronization_unavailable",
+                                    "repository": target_repository,
+                                }
+                            else:
+                                ephemeral_revision, isolated_checkout = (
+                                    create_ephemeral_revision(
+                                        step6_report, target_checkout
+                                    )
+                                )
+                                try:
+                                    captured = read_json_object(
+                                        Path(str(captured_handbook["path"]))
+                                    )
+                                    refreshed = (
+                                        resynchronize_repository_handbook_at_revision(
+                                            captured,
+                                            isolated_checkout,
+                                            revision=ephemeral_revision,
+                                            changed_paths=patch_paths,
+                                        )
+                                    )
+                                finally:
+                                    shutil.rmtree(
+                                        isolated_checkout.parent, ignore_errors=True
+                                    )
+                                resync_path = (
+                                    args.output_dir
+                                    / "repository-handbook-resynchronization.json"
+                                )
+                                write_json_atomic(resync_path, refreshed)
+                                handbook_resynchronization = {
+                                    "status": "complete",
+                                    "repository": target_repository,
+                                    "revision": ephemeral_revision,
+                                    "artifact": str(resync_path),
+                                    "handbook_sha256": refreshed["handbook_sha256"],
+                                }
+                                telemetry.emit(
+                                    "handbook_resynchronized",
+                                    **handbook_resynchronization,
+                                )
+                        else:
+                            handbook_resynchronization = {
+                                "status": "reused",
+                                "reason": "empty_diff",
+                            }
+                    elif args.mode != "analyze" and step6_report is not None:
+                        handbook_resynchronization = {
+                            "status": "unavailable",
+                            "reason": "handbook_resynchronization_unavailable",
+                        }
         if step7_handoff is not None:
             step7_handoff_path = args.output_dir / "step7.handoff.json"
             write_json_atomic(step7_handoff_path, step7_handoff)
@@ -1327,6 +1516,20 @@ def main(argv: list[str] | None = None) -> int:
                 },
                 outputs={"handoff": step8_handoff_path},
             )
+        if args.mode == "draft":
+            if planning_report.get("status") != "complete":
+                raise RuntimeError("draft blocked: NexAU planning is not complete")
+            if step7_report is None or step7_report.get("status") != "validated":
+                raise RuntimeError("draft blocked: Step 7 validation did not pass")
+            _require_draft_step8_success(step8_result)
+            if handbook_resynchronization.get("status") == "unavailable" and any(
+                isinstance(row, Mapping)
+                and row.get("repository") == str(step6_report["target"]["repository"])
+                for row in run_context.get("repository_handbooks", [])
+            ):
+                raise RuntimeError(
+                    "draft blocked: handbook resynchronization unavailable"
+                )
         current_stage = "publish"
         publication = build_publication(
             analysis,
@@ -1334,6 +1537,8 @@ def main(argv: list[str] | None = None) -> int:
             draft_pr=step8_result,
             validation=step7_report,
             review=review,
+            planning=planning_report,
+            handbook_resynchronization=handbook_resynchronization,
         )
         publication_path = args.output_dir / "publication.json"
         write_json_atomic(publication_path, publication)
@@ -1414,6 +1619,7 @@ def main(argv: list[str] | None = None) -> int:
             "pr_review_markdown": review_markdown_path,
             step6_artifact_name: step6_artifact_path,
             "flow_handoff": handoff.path,
+            "telemetry": telemetry.path,
         }
         if step7_handoff_path is not None:
             artifact_paths["step7_handoff"] = step7_handoff_path
@@ -1429,6 +1635,17 @@ def main(argv: list[str] | None = None) -> int:
             artifact_paths["step8_handoff"] = step8_handoff_path
         if publication_result_path is not None:
             artifact_paths["publication_result"] = publication_result_path
+        telemetry.emit(
+            "run_complete",
+            mode=args.mode,
+            analysis_status=analysis.get("status"),
+            planning_status=planning_report.get("status")
+            if planning_report
+            else "not_run",
+            step7_status=step7_report.get("status") if step7_report else "not_run",
+            handbook_resynchronization=handbook_resynchronization,
+            artifacts={name: str(path) for name, path in artifact_paths.items()},
+        )
         print(
             json.dumps(
                 {

@@ -6,6 +6,7 @@ import hashlib
 import re
 import subprocess
 from collections.abc import Mapping
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -212,10 +213,63 @@ def resynchronize_repository_handbook(
     return updated
 
 
+def resynchronize_repository_handbook_at_revision(
+    existing: Mapping[str, Any],
+    source_root: str | Path,
+    *,
+    revision: str,
+    changed_paths: list[str],
+) -> dict[str, Any]:
+    """Refresh captured L3 locators against a validated temporary revision."""
+    if not SHA.fullmatch(revision):
+        raise RepositoryHandbookError("resynchronization revision is invalid")
+    errors = validate_repository_handbook(existing)
+    if errors:
+        raise RepositoryHandbookError(
+            "invalid captured repository handbook: " + "; ".join(errors)
+        )
+    updated = deepcopy(dict(existing))
+    updated["revision"] = revision
+    for name, section in updated.get("sections", {}).items():
+        if not isinstance(section, dict) or section.get("level") != "L3":
+            continue
+        locators = section.get("locators", [])
+        refreshed = []
+        for locator in locators:
+            if not isinstance(locator, Mapping) or not locator.get("path"):
+                raise RepositoryHandbookError(
+                    f"stale or unresolvable locator in {name}"
+                )
+            refreshed.append(
+                _source_locator(
+                    Path(source_root).resolve(),
+                    revision,
+                    str(locator["path"]),
+                    locator.get("line"),
+                )
+            )
+        section["locators"] = refreshed
+    updated["resynchronization"] = {
+        "previous_handbook_sha256": existing.get("handbook_sha256"),
+        "changed_paths": sorted(set(changed_paths)),
+        "mode": "validated_ephemeral_revision",
+        "revision": revision,
+    }
+    updated.pop("handbook_sha256", None)
+    updated["handbook_sha256"] = artifact_sha256(updated)
+    errors = validate_repository_handbook(updated)
+    if errors:
+        raise RepositoryHandbookError(
+            "invalid resynchronized handbook: " + "; ".join(errors)
+        )
+    return updated
+
+
 __all__ = [
     "ARTIFACT_KIND",
     "RepositoryHandbookError",
     "build_repository_handbook",
     "resynchronize_repository_handbook",
+    "resynchronize_repository_handbook_at_revision",
     "validate_repository_handbook",
 ]

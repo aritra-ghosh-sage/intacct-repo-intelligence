@@ -104,3 +104,38 @@ def test_nexau_planner_replans_before_synthesis(tmp_path: Path) -> None:
     assert task_types == ["screen_repository", "challenge_claim", "synthesize_review"]
     assert report["analysis"]["agent"]["name"] == "nexau"
     assert validate_planning_report(report) == []
+
+
+def test_incomplete_planner_downgrades_automatic_claims(tmp_path: Path) -> None:
+    context, _ = _context(tmp_path)
+
+    def planner_factory(_config: dict):
+        return lambda _prompt: (
+            '{"tasks": [{"task_id": "screen", "task_type": "screen_repository", '
+            '"repository": "intacct/explicit-tests", "question": "Screen it."}]}'
+        )
+
+    def strands_factory(_model: str | None, *, tools: list[object]):
+        def agent(_prompt: str) -> str:
+            tools[0]()
+            return (
+                '{"repository_impacts": [{"repository": "intacct/explicit-tests", '
+                '"evidence_state": "strong_candidate", "rank": 1, '
+                '"rationale": "claim", "evidence": []}], "actions": [], '
+                '"coverage": {}, "gaps": [], "agent": {"status": "complete"}}'
+            )
+
+        return agent
+
+    report = run_nexau_planner(
+        context,
+        {"gaps": []},
+        GreenfieldToolbox(context),
+        mode="default",
+        config={"max_cycles": 1},
+        planner_factory=planner_factory,
+        strands_factory=strands_factory,
+    )
+    assert report["status"] == "blocked"
+    assert report["analysis"]["repository_impacts"][0]["evidence_state"] == "candidate"
+    assert validate_planning_report(report) == []

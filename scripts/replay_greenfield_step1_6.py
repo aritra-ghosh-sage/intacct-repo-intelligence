@@ -280,7 +280,6 @@ def main(argv: list[str] | None = None) -> int:
             strict_errors = validate_step6_report(
                 step6,
                 strict_target_evidence=True,
-                require_approvals=False,
                 require_step7_eligibility=True,
             )
             if strict_errors:

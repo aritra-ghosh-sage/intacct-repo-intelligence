@@ -440,14 +440,12 @@ def validate_step6_report(
     report: Any,
     *,
     strict_target_evidence: bool = False,
-    require_approvals: bool = False,
     require_step7_eligibility: bool = False,
 ) -> list[str]:
     try:
         _validate_report(
             report,
             strict_target_evidence=strict_target_evidence,
-            require_approvals=require_approvals,
             require_step7_eligibility=require_step7_eligibility,
         )
     except Step6Error as exc:
@@ -459,7 +457,6 @@ def _validate_report(
     report: Any,
     *,
     strict_target_evidence: bool = False,
-    require_approvals: bool = False,
     require_step7_eligibility: bool = False,
 ) -> None:
     root = _object(report, "report")
@@ -527,10 +524,8 @@ def _validate_report(
     approval_errors = _validate_approvals(root.get("approvals"), "approvals")
     if approval_errors:
         raise Step6Error("; ".join(approval_errors))
-    if require_approvals and status == "ready_for_ai_pr":
-        missing = sorted(APPROVAL_ROLES - _approved_roles(root.get("approvals")))
-        if missing:
-            raise Step6Error("approved owner roles are missing: " + ", ".join(missing))
+    # Approval metadata is descriptive/replay-only.  Human transition remains
+    # represented by Step 8 and is never used to authorize Step 6/7.
 
     justification = _object(root.get("justification"), "justification")
     _sha256(justification.get("step5_action_id"), "justification.step5_action_id")

@@ -352,7 +352,7 @@ def test_strict_target_evidence_requires_real_revision_and_file_identity() -> No
     assert validate_step6_report(report, strict_target_evidence=True) == []
 
 
-def test_strict_step6_requires_both_owner_approvals_for_pr_output() -> None:
+def test_strict_step6_does_not_require_owner_approval_for_pr_output() -> None:
     files = [_file("features/example.feature", "Then old\n")]
     request, step1, step3, step4, step5 = _request(
         "intacct/ia-restapi-automation-tests",
@@ -383,18 +383,16 @@ def test_strict_step6_requires_both_owner_approvals_for_pr_output() -> None:
     }
     evidence["evidence_sha256"] = artifact_sha256(evidence)
     request["target_evidence"] = evidence
-    blocked = generate_step6(
+    ready = generate_step6(
         request,
         step1,
         step3,
         step4,
         step5,
         strict_target_evidence=True,
-        require_approvals=True,
     )
-    assert blocked["status"] == "blocked"
-    assert "owner_approval_pending" in blocked["reason"]
-    assert validate_step6_report(blocked, strict_target_evidence=True) == []
+    assert ready["status"] == "ready_for_ai_pr"
+    assert validate_step6_report(ready, strict_target_evidence=True) == []
 
     request["approvals"] = [
         {
@@ -434,18 +432,12 @@ def test_strict_step6_requires_both_owner_approvals_for_pr_output() -> None:
         step4,
         step5,
         strict_target_evidence=True,
-        require_approvals=True,
     )
     assert ready["status"] == "ready_for_ai_pr"
-    assert (
-        validate_step6_report(
-            ready, strict_target_evidence=True, require_approvals=True
-        )
-        == []
-    )
+    assert validate_step6_report(ready, strict_target_evidence=True) == []
 
 
-def test_owner_approval_gate_is_not_bypassed_without_strict_evidence() -> None:
+def test_step6_still_requires_strict_evidence_without_owner_approval() -> None:
     files = [_file("features/example.feature", "Then old\n")]
     request, step1, step3, step4, step5 = _request(
         "intacct/ia-restapi-automation-tests",
@@ -460,10 +452,8 @@ def test_owner_approval_gate_is_not_bypassed_without_strict_evidence() -> None:
             }
         ],
     )
-    blocked = generate_step6(
-        request, step1, step3, step4, step5, require_approvals=True
-    )
-    assert blocked["status"] == "blocked"
+    ready = generate_step6(request, step1, step3, step4, step5)
+    assert ready["status"] == "ready_for_ai_pr"
 
 
 def test_strict_target_evidence_requires_all_target_files() -> None:

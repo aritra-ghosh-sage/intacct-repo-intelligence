@@ -199,12 +199,13 @@ The supported Greenfield entry point is:
 PYTHONPATH=. ./.venv/bin/python scripts/run_greenfield.py \
   --source-root "$HOME/projects/main" \
   --output-dir <immutable-bundle> \
-  --pr <number>
+  --pr <number> \
+  --mode analyze
 ```
 
 `scripts/run_greenfield_strands.py` is the implementation entry point behind
-that command. `scripts/run_greenfield_codex.py` is a deprecated compatibility
-shim and must not acquire independent flow behavior.
+that command. NexAU is the default internal Analyze orchestrator; direct
+Strands is a recorded partial fallback only when NexAU is unavailable.
 
 The operator-facing flow has four phases:
 

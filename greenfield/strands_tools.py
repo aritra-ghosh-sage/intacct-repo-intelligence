@@ -298,6 +298,7 @@ class GreenfieldToolbox:
             result = {
                 "status": "available" if selected is not None else "unavailable",
                 "repository": repository,
+                "source_revision": self._repositories[repository]["inspected_revision"],
                 "handbook_sha256": artifact_sha256(value),
                 "section": section,
                 "content": selected,

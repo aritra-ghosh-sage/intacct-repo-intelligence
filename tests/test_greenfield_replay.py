@@ -4,6 +4,8 @@ import json
 import shutil
 from pathlib import Path
 
+import pytest
+
 from greenfield.replay_validation import validation_summary
 from greenfield.step4_contract import validate_step4_report
 from greenfield.step5_actions import validate_step5_report
@@ -16,6 +18,7 @@ from scripts import (
     trace_greenfield_step4,
     trace_greenfield_step5,
 )
+from scripts.run_greenfield_strands import _require_draft_step8_success
 
 ROOT = Path(__file__).resolve().parents[1]
 BUNDLE = ROOT / "examples" / "greenfield" / "ia-app-pr-49156" / "replay"
@@ -287,26 +290,16 @@ def test_runner_exposes_wrapper_handoff_artifact() -> None:
     assert '"flow_handoff": handoff.path' in source
 
 
-def test_runner_reports_malformed_strands_config(tmp_path: Path, capsys) -> None:
-    config_path = tmp_path / "strands.yaml"
-    config_path.write_text("aws:\n  token: should-not-be-here\n", encoding="utf-8")
-    result = run_greenfield_strands.main(
-        [
-            "--step1-report",
-            str(BUNDLE / "step1.json"),
-            "--source-root",
-            str(tmp_path),
-            "--output-dir",
-            str(tmp_path / "out"),
-            "--strands-config",
-            str(config_path),
-        ]
-    )
-    assert result == 2
-    stderr = capsys.readouterr().err
-    assert "greenfield Strands pipeline failed" in stderr
-    assert "<root>.aws.token" in stderr
-    assert "should-not-be-here" not in stderr
+def test_runner_exposes_only_public_flow_controls() -> None:
+    with pytest.raises(SystemExit):
+        run_greenfield_strands.main(["--step1-report", str(BUNDLE / "step1.json")])
+
+
+def test_draft_requires_successful_step8_result() -> None:
+    with pytest.raises(RuntimeError, match="Step 8 did not create or reuse"):
+        _require_draft_step8_success({"status": "failed"})
+    _require_draft_step8_success({"status": "created"})
+    _require_draft_step8_success({"status": "reused"})
 
 
 def test_step1_5_trace_and_contract_must_be_paired(tmp_path: Path, capsys) -> None:

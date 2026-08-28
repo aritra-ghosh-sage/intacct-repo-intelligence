@@ -9,11 +9,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from greenfield.artifact_io import read_json_object, write_json_atomic
-from greenfield.behavior_handbook import (
-    BehaviorHandbookError,
-    build_behavior_handbook,
-    render_behavior_handbook_markdown,
-    validate_behavior_handbook,
+from greenfield.behavior_impact_report import (
+    BehaviorImpactReportError,
+    build_behavior_impact_report,
+    render_behavior_impact_report_markdown,
+    validate_behavior_impact_report,
 )
 
 
@@ -28,19 +28,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-markdown", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
-        report = build_behavior_handbook(
+        report = build_behavior_impact_report(
             read_json_object(args.contract),
             read_json_object(args.step2),
             read_json_object(args.step3),
             read_json_object(args.step4),
             read_json_object(args.step5),
         )
-        errors = validate_behavior_handbook(report)
+        errors = validate_behavior_impact_report(report)
         if errors:
-            raise BehaviorHandbookError(
+            raise BehaviorImpactReportError(
                 "generated invalid behavior handbook: " + "; ".join(errors)
             )
-        markdown = render_behavior_handbook_markdown(report)
+        markdown = render_behavior_impact_report_markdown(report)
     except (OSError, TypeError, ValueError) as exc:
         print(f"greenfield behavior handbook failed: {exc}", file=sys.stderr)
         return 2

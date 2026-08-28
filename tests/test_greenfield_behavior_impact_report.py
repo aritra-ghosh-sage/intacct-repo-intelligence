@@ -6,13 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from greenfield.behavior_handbook import (
-    BehaviorHandbookError,
-    build_behavior_handbook,
-    render_behavior_handbook_markdown,
-    validate_behavior_handbook,
+from greenfield.behavior_impact_report import (
+    BehaviorImpactReportError,
+    build_behavior_impact_report,
+    render_behavior_impact_report_markdown,
+    validate_behavior_impact_report,
 )
-from scripts import render_greenfield_handbook
+from scripts import render_greenfield_behavior_impact
 
 ROOT = Path(__file__).resolve().parents[1]
 BUNDLE = ROOT / "examples" / "greenfield" / "ia-app-pr-49137" / "replay"
@@ -35,13 +35,13 @@ def _inputs() -> tuple[dict, dict, dict, dict, dict]:
 
 
 def _build() -> dict:
-    return build_behavior_handbook(*_inputs())
+    return build_behavior_impact_report(*_inputs())
 
 
 def test_bundle_builds_exact_and_shared_anchor_behavior_links() -> None:
     report = _build()
 
-    assert validate_behavior_handbook(report) == []
+    assert validate_behavior_impact_report(report) == []
     assert report["status"] == "partial"
     assert len(report["behaviors"]) == 1
     behavior = report["behaviors"][0]
@@ -103,7 +103,7 @@ def test_unmatched_and_repository_only_evidence_remains_unassigned() -> None:
         ],
     }
 
-    report = build_behavior_handbook(contract, step2, step3, step4, step5)
+    report = build_behavior_impact_report(contract, step2, step3, step4, step5)
 
     behavior_impact = report["behaviors"][0]["impact"]["items"]
     assert similar not in behavior_impact
@@ -123,8 +123,8 @@ def test_malformed_upstream_report_fails_closed_before_projection() -> None:
     contract, step2, step3, step4, step5 = _inputs()
     step2["candidates"][0].pop("evidence")
 
-    with pytest.raises(BehaviorHandbookError, match="invalid step2 report"):
-        build_behavior_handbook(contract, step2, step3, step4, step5)
+    with pytest.raises(BehaviorImpactReportError, match="invalid step2 report"):
+        build_behavior_impact_report(contract, step2, step3, step4, step5)
 
 
 def test_candidate_unavailable_and_not_run_states_are_preserved() -> None:
@@ -159,8 +159,8 @@ def test_identity_mismatches_fail_closed(
     inputs = [deepcopy(value) for value in _inputs()]
     inputs[report_index]["input"][field] = value
 
-    with pytest.raises(BehaviorHandbookError, match=message):
-        build_behavior_handbook(*inputs)
+    with pytest.raises(BehaviorImpactReportError, match=message):
+        build_behavior_impact_report(*inputs)
 
 
 def test_output_and_markdown_are_deterministic_with_exact_line_locators() -> None:
@@ -176,8 +176,8 @@ def test_output_and_markdown_are_deterministic_with_exact_line_locators() -> Non
         "symbol": "GLBatchManager::glTranslateApplyAllocation",
         "source_revision": "42942af6221c1e974a7e266e96b3199cb95aa448",
     } in locators
-    markdown = render_behavior_handbook_markdown(first)
-    assert markdown == render_behavior_handbook_markdown(second)
+    markdown = render_behavior_impact_report_markdown(first)
+    assert markdown == render_behavior_impact_report_markdown(second)
     assert "app/source/gl/GLBatchManager.cls:1" in markdown
     assert "path-only" in markdown
 
@@ -187,7 +187,7 @@ def test_validator_rejects_promoted_complete_status() -> None:
     report["status"] = "complete"
     report["behaviors"][0]["status"] = "complete"
 
-    errors = validate_behavior_handbook(report)
+    errors = validate_behavior_impact_report(report)
 
     assert any("uncertain evidence" in error for error in errors)
     assert "complete handbook contains incomplete evidence" in errors
@@ -215,8 +215,8 @@ def test_cli_writes_valid_artifacts_and_fails_before_writing_for_stale_input(
         str(output_markdown),
     ]
 
-    assert render_greenfield_handbook.main(args) == 0
-    assert validate_behavior_handbook(json.loads(output_json.read_text())) == []
+    assert render_greenfield_behavior_impact.main(args) == 0
+    assert validate_behavior_impact_report(json.loads(output_json.read_text())) == []
     assert output_markdown.read_text(encoding="utf-8").startswith(
         "# Greenfield Behavior Handbook"
     )
@@ -232,6 +232,6 @@ def test_cli_writes_valid_artifacts_and_fails_before_writing_for_stale_input(
     stale_args[-3] = str(stale_json)
     stale_args[-1] = str(stale_markdown)
 
-    assert render_greenfield_handbook.main(stale_args) == 2
+    assert render_greenfield_behavior_impact.main(stale_args) == 2
     assert not stale_json.exists()
     assert not stale_markdown.exists()

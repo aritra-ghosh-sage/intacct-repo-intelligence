@@ -11,7 +11,6 @@ from greenfield.step4_contract import artifact_sha256 as step4_artifact_sha256
 from greenfield.step4_contract import validate_step4_report
 from greenfield.step5_actions import validate_step5_report
 from greenfield.step6_contract import (
-    APPROVAL_ROLES,
     REPORT_ANALYSIS_KIND,
     REPORT_SCHEMA_VERSION,
     RULE_SET_VERSION,
@@ -270,7 +269,6 @@ def generate_step6(
     step5: Mapping[str, Any],
     *,
     strict_target_evidence: bool = False,
-    require_approvals: bool = False,
 ) -> dict[str, Any]:
     errors = validate_step6_request(
         request, strict_target_evidence=strict_target_evidence
@@ -279,16 +277,9 @@ def generate_step6(
         raise Step6Error("invalid Step 6 request: " + "; ".join(errors))
     _upstream_context(request, step1, step3, step4, step5)
     action = request["action"]
-    if require_approvals:
-        missing_roles = sorted(
-            APPROVAL_ROLES - _approved_roles(request.get("approvals"))
-        )
-        if missing_roles:
-            return _base_report(
-                request,
-                status="blocked",
-                reason="owner_approval_pending:" + ",".join(missing_roles),
-            )
+    # Owner approval is a human transition control retained in Step 8, not a
+    # Step 6 evidence or eligibility gate.  The argument remains accepted for
+    # replay callers but is intentionally ignored.
     if action["status"] != "recommended":
         return _base_report(request, status="blocked", reason="step5_action_blocked")
     if action["action_type"] not in SUPPORTED_ACTIONS:

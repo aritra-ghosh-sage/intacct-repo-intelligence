@@ -90,10 +90,10 @@ This report is built after compatibility Steps 2-5. It joins the current PR's
 behavior, impact, coverage, action, gap, and provenance evidence for review and
 replay. It cannot route the earlier analysis and cannot authorize writes.
 
-The standalone compatibility renderer remains:
+The standalone compatibility renderer is:
 
 ```bash
-PYTHONPATH=. ./.venv/bin/python scripts/render_greenfield_handbook.py \
+PYTHONPATH=. ./.venv/bin/python scripts/render_greenfield_behavior_impact.py \
   --contract <bundle>/step1.5.contract.json \
   --step2 <bundle>/step2.json \
   --step3 <bundle>/step3.json \

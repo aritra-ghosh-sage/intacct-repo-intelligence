@@ -371,7 +371,6 @@ def validate_step7(
     step6_errors = validate_step6_report(
         step6_report,
         strict_target_evidence=True,
-        require_approvals=False,
         require_step7_eligibility=True,
     )
     if step6_errors:
@@ -876,4 +875,62 @@ def validate_step7(
     )
 
 
-__all__ = ["validate_step7"]
+def create_ephemeral_revision(
+    step6_report: Mapping[str, Any], target_checkout: str | Path
+) -> tuple[str, Path]:
+    """Create an unpushed commit in temporary storage from a validated patch.
+
+    The returned checkout must be consumed by the caller before its temporary
+    parent is removed.  No branch, remote, or source checkout is modified.
+    """
+    temporary = Path(tempfile.mkdtemp(prefix="greenfield-resync-"))
+    isolated = temporary / "target"
+    clone = _run(
+        [
+            "git",
+            "clone",
+            "--local",
+            "--no-hardlinks",
+            str(Path(target_checkout).resolve()),
+            str(isolated),
+        ],
+        cwd=Path(target_checkout).resolve(),
+        timeout=120,
+    )
+    if clone.returncode:
+        raise Step7Error("unable to create ephemeral target checkout")
+    target = step6_report["target"]
+    checkout = _git(isolated, ["checkout", "--detach", str(target["base_revision"])])
+    if checkout.returncode:
+        raise Step7Error("unable to check out ephemeral target base")
+    for row in step6_report["patch"]["files"]:
+        path = isolated / str(row["path"])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(str(row["after"]), encoding="utf-8")
+    added = _git(
+        isolated,
+        ["add", "--", *[str(row["path"]) for row in step6_report["patch"]["files"]]],
+    )
+    if added.returncode:
+        raise Step7Error("unable to stage ephemeral target patch")
+    for key, value in (
+        ("user.email", "greenfield-resync@example.invalid"),
+        ("user.name", "Greenfield resynchronization"),
+    ):
+        configured = _git(isolated, ["config", key, value])
+        if configured.returncode:
+            raise Step7Error("unable to configure ephemeral commit identity")
+    committed = _git(
+        isolated,
+        ["commit", "--no-verify", "-m", "Greenfield validated resynchronization"],
+    )
+    if committed.returncode:
+        raise Step7Error("unable to create ephemeral resynchronization commit")
+    revision = _git(isolated, ["rev-parse", "HEAD"])
+    value = revision.stdout.decode("utf-8", errors="replace").strip()
+    if not value or len(value) != 40:
+        raise Step7Error("ephemeral resynchronization revision is invalid")
+    return value, isolated
+
+
+__all__ = ["create_ephemeral_revision", "validate_step7"]

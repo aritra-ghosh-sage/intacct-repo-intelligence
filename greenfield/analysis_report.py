@@ -68,6 +68,8 @@ def build_analysis_report(
     step5: Mapping[str, Any],
     agent_analysis: Mapping[str, Any] | None = None,
     tool_calls: list[Mapping[str, Any]] | None = None,
+    planning: Mapping[str, Any] | None = None,
+    lifecycle_complete: bool = True,
 ) -> dict[str, Any]:
     """Fold compatibility step artifacts and Strands guidance into one report."""
 
@@ -90,9 +92,12 @@ def build_analysis_report(
         repository = str(row.get("target_repository") or row.get("repository") or "")
         if not repository:
             continue
+        state = _evidence_state(row)
+        if not lifecycle_complete and state in AUTOMATIC_DRAFT_STATES:
+            state = "candidate"
         repositories[repository] = {
             "repository": repository,
-            "evidence_state": _evidence_state(row),
+            "evidence_state": state,
             "rank": None,
             "rationale": str(
                 row.get("rationale") or row.get("reason") or "Step 3 impact outcome"
@@ -110,6 +115,8 @@ def build_analysis_report(
         target = str(row.get("target_repository") or "")
         if target in repositories:
             state = repositories[target]["evidence_state"]
+        if not lifecycle_complete and state in AUTOMATIC_DRAFT_STATES:
+            state = "candidate"
         actions.append(
             {
                 "action_id": row.get("action_id"),
@@ -122,7 +129,8 @@ def build_analysis_report(
                 "evidence": _evidence(row.get("evidence"), fallback),
                 "rationale": str(row.get("reason") or "Step 5 recommendation"),
                 "completion_condition": row.get("completion_condition"),
-                "draft_eligible": state in AUTOMATIC_DRAFT_STATES
+                "draft_eligible": lifecycle_complete
+                and state in AUTOMATIC_DRAFT_STATES
                 and action_type in {"update_existing_test", "add_missing_test"},
             }
         )
@@ -181,9 +189,24 @@ def build_analysis_report(
                 for row in run_context["candidate_repositories"]
                 if isinstance(row, Mapping) and row.get("repository")
             ],
+            "candidate_revisions": {
+                str(row["repository"]): row.get("inspected_revision")
+                for row in run_context["candidate_repositories"]
+                if isinstance(row, Mapping) and row.get("repository")
+            },
             "read_only": True,
             "github_writes": "none",
             "catalog_mutation": "none",
+            **(
+                {
+                    "planning": {
+                        "status": planning.get("status"),
+                        "planning_sha256": planning.get("planning_sha256"),
+                    }
+                }
+                if isinstance(planning, Mapping)
+                else {}
+            ),
         },
     }
     report["report_sha256"] = artifact_sha256(report)
@@ -193,40 +216,90 @@ def build_analysis_report(
     return report
 
 
+def _evidence_binding_errors(
+    row: Mapping[str, Any],
+    tool_calls: Mapping[str, Mapping[str, Any]],
+    *,
+    expected_revision: str | None,
+) -> list[str]:
+    errors: list[str] = []
+    evidence = row.get("evidence")
+    if not isinstance(evidence, list) or not evidence:
+        return ["evidence must be a non-empty list"]
+    valid = False
+    expected_repository = str(
+        row.get("repository") or row.get("target_repository") or ""
+    )
+    for index, item in enumerate(evidence):
+        item_valid = True
+        if not isinstance(item, Mapping):
+            errors.append(f"evidence[{index}] must be an object")
+            item_valid = False
+            continue
+        call_id = item.get("tool_call_id")
+        if not call_id:
+            errors.append(f"evidence[{index}] requires tool_call_id")
+            item_valid = False
+            continue
+        call = tool_calls.get(str(call_id))
+        if call is None:
+            errors.append(
+                f"evidence[{index}] references missing toolbox result: {call_id}"
+            )
+            item_valid = False
+            continue
+        result = call.get("result")
+        result_digest = call.get("result_sha256")
+        if not isinstance(result, Mapping) or not isinstance(result_digest, str):
+            errors.append(f"evidence[{index}] references an incomplete toolbox result")
+            item_valid = False
+            continue
+        if artifact_sha256(result) != result_digest:
+            errors.append(f"evidence[{index}] toolbox result digest is invalid")
+            item_valid = False
+            continue
+        if (
+            item.get("result_sha256") is not None
+            and item.get("result_sha256") != result_digest
+        ):
+            errors.append(
+                f"evidence[{index}] result_sha256 does not match toolbox result"
+            )
+            item_valid = False
+        if result.get("status") in {"unavailable", "failed"}:
+            errors.append(f"evidence[{index}] references unavailable toolbox result")
+            item_valid = False
+        if expected_repository and result.get("repository") != expected_repository:
+            errors.append(
+                f"evidence[{index}] repository does not match claimed repository"
+            )
+            item_valid = False
+        if expected_revision is None:
+            errors.append(
+                f"evidence[{index}] captured repository revision is unavailable"
+            )
+            item_valid = False
+        elif result.get("source_revision") != expected_revision:
+            errors.append(
+                f"evidence[{index}] source revision does not match captured revision"
+            )
+            item_valid = False
+        if item_valid:
+            valid = True
+    if not valid:
+        errors.append("no valid toolbox evidence binding")
+    return errors
+
+
 def _has_evidence_binding(
     row: Mapping[str, Any],
     tool_calls: Mapping[str, Mapping[str, Any]],
     *,
-    strict: bool,
+    expected_revision: str | None,
 ) -> bool:
-    evidence = row.get("evidence")
-    if not isinstance(evidence, list) or not evidence:
-        return False
-    for item in evidence:
-        if not isinstance(item, Mapping):
-            continue
-        call_id = item.get("tool_call_id")
-        call = tool_calls.get(str(call_id)) if call_id else None
-        if call is not None:
-            result = call.get("result")
-            result_digest = call.get("result_sha256")
-            if (
-                isinstance(result, Mapping)
-                and isinstance(result_digest, str)
-                and artifact_sha256(result) == result_digest
-                and (
-                    item.get("result_sha256") is None
-                    or item.get("result_sha256") == result_digest
-                )
-            ):
-                return True
-        if (
-            not strict
-            and item.get("kind") in {"artifact", "source", "tool"}
-            and (item.get("sha256") or item.get("source_revision"))
-        ):
-            return True
-    return False
+    return not _evidence_binding_errors(
+        row, tool_calls, expected_revision=expected_revision
+    )
 
 
 def _tool_call_map(calls: Any, errors: list[str]) -> dict[str, Mapping[str, Any]]:
@@ -267,15 +340,27 @@ def validate_analysis_report(value: Any) -> list[str]:
     provenance = value.get("provenance", {})
     agent = provenance.get("agent", {}) if isinstance(provenance, Mapping) else {}
     strict_agent = isinstance(agent, Mapping) and agent.get("status") == "complete"
-    allowed_repositories = {
-        str(value).lower()
-        for value in ([value.get("repository")] if isinstance(value, Mapping) else [])
-    }
+    source = value.get("source", {})
+    allowed_repositories = (
+        {str(source.get("repository")).lower()}
+        if isinstance(source, Mapping) and source.get("repository")
+        else set()
+    )
+    revisions = {}
     if isinstance(provenance, Mapping):
         allowed_repositories.update(
             str(repository).lower()
             for repository in provenance.get("candidate_repositories", [])
         )
+        revisions = {
+            str(repository).lower(): revision
+            for repository, revision in provenance.get(
+                "candidate_revisions", {}
+            ).items()
+            if isinstance(revision, str)
+        }
+    if isinstance(source, Mapping) and source.get("repository"):
+        revisions[str(source["repository"]).lower()] = source.get("head_revision")
     impacts = value.get("repository_impacts")
     if not isinstance(impacts, list):
         errors.append("repository_impacts must be a list")
@@ -294,10 +379,17 @@ def validate_analysis_report(value: Any) -> list[str]:
             errors.append(
                 f"repository_impacts[{index}].repository is outside captured scope"
             )
-        if state in AUTOMATIC_DRAFT_STATES and not _has_evidence_binding(
-            row, call_map, strict=strict_agent
-        ):
-            errors.append(f"repository_impacts[{index}] lacks bound evidence")
+        if state in AUTOMATIC_DRAFT_STATES:
+            binding_errors = _evidence_binding_errors(
+                row,
+                call_map,
+                expected_revision=revisions.get(str(row.get("repository", "")).lower()),
+            )
+            if binding_errors:
+                errors.append(f"repository_impacts[{index}] lacks bound evidence")
+                errors.extend(
+                    f"repository_impacts[{index}]: {error}" for error in binding_errors
+                )
     actions = value.get("actions")
     if not isinstance(actions, list):
         errors.append("actions must be a list")
@@ -325,8 +417,17 @@ def validate_analysis_report(value: Any) -> list[str]:
         }
         if row.get("draft_eligible") is not expected:
             errors.append(f"actions[{index}].draft_eligible is inconsistent")
-        if expected and not _has_evidence_binding(row, call_map, strict=strict_agent):
-            errors.append(f"actions[{index}] lacks bound evidence")
+        if expected:
+            binding_errors = _evidence_binding_errors(
+                row,
+                call_map,
+                expected_revision=revisions.get(
+                    str(row.get("target_repository", "")).lower()
+                ),
+            )
+            if binding_errors:
+                errors.append(f"actions[{index}] lacks bound evidence")
+                errors.extend(f"actions[{index}]: {error}" for error in binding_errors)
     digest = value.get("report_sha256")
     unsigned = dict(value)
     unsigned.pop("report_sha256", None)

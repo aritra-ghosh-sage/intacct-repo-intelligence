@@ -49,7 +49,6 @@ def build_step7_request(
     errors = validate_step6_report(
         step6_report,
         strict_target_evidence=True,
-        require_approvals=False,
         require_step7_eligibility=True,
     )
     if errors:

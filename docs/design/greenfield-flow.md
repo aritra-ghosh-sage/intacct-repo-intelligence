@@ -6,7 +6,8 @@
 PYTHONPATH=. ./.venv/bin/python scripts/run_greenfield.py \
   --source-root "$HOME/projects/main" \
   --output-dir <immutable-bundle> \
-  --pr <number>
+  --pr <number> \
+  --mode analyze
 ```
 
 The resolved source root for the current workspace convention is
@@ -19,9 +20,10 @@ Existing shell values win over file values. Use the shared `.env` for:
   optional `AWS_SESSION_TOKEN`, `AWS_PROFILE`, and `AWS_REGION`
 - NexAU planner settings such as `LLM_API_KEY`, `LLM_MODEL`, and `LLM_BASE_URL`
 
-If the planner is enabled and any of the required `LLM_*` values are missing,
-the runner fails fast with a message that points to the checked `.env` path and
-the checked-in example file.
+NexAU is the default Analyze orchestrator. Startup writes redacted capability
+diagnostics to `telemetry.jsonl`; Analyze and Publish fall back to direct
+Strands with an explicit `nexau_planner_unavailable` gap, while Draft fails
+closed. Credentials never enter command output or artifacts.
 
 ## Phases
 
@@ -33,32 +35,31 @@ locally inspected candidate revisions, and read-only tool budgets.
 
 ### Analyze
 
-Strands uses repository handbooks and bounded tools to inspect explicit
-contracts first and then screen all enabled `discovery_eligible` repositories.
-It writes `analysis-report.json`. Confirmed and strong-candidate rows require
-recorded source or tool evidence.
-
-`--planner-mode shadow` optionally records a NexAU `planning-report.json` and
-`analysis-report.nexau.json` beside the authoritative Strands report. Shadow
-planning is read-only and cannot reach remediation, publication, or GitHub.
-`--planner-mode active` is reserved for a separately accepted rollout and still
-uses the same captured-scope and analysis-report validators.
+NexAU creates a bounded investigation plan, Strands executes each task through
+the shared revision-bound toolbox, and the planner performs mandatory
+challenge and synthesis tasks before `analysis-report.json` is finalized.
+`planning-report.json` is audit provenance, not impact evidence; every
+confirmed or strong-candidate claim remains bound to recorded toolbox results.
 
 ### Remediate And Validate
 
 An eligible `update_existing_test` or `add_missing_test` action is converted into
 the retained Step 6 patch contract. Exact target evidence, bounded existing
 paths, clean application, central profiles, and Step 7 checks remain mandatory.
-Owner approval is not a draft-creation prerequisite.
+Owner approval is not a draft-creation prerequisite; the Step 8 human gate
+remains required before ready-for-review or merge.
 
 ### Publish
 
-Writes `publication.json`, optionally creates the validated draft test PR, and
+`analyze` writes local artifacts only. `publish` writes `publication.json` and
 creates or updates one canonical GitHub Check and one marker-bound PR comment.
-Humans remain responsible for ready-for-review and merge.
+`draft` requires complete planning, strict evidence, validation, and the
+authorization boundary before the same idempotent publication writes. Humans
+remain responsible for ready-for-review and merge.
 
 ## Compatibility Artifacts
 
 Step 1-8 reports remain inspectable for replay and debugging, but callers should
-not assemble them manually. `scripts/run_greenfield_strands.py` implements the
-flow; `scripts/run_greenfield_codex.py` is only a deprecated shim.
+not assemble them manually. `scripts/run_greenfield.py` is the supported
+operator entry point and `scripts/run_greenfield_strands.py` is its internal
+implementation.

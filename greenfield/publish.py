@@ -26,6 +26,8 @@ def build_publication(
     draft_pr: Mapping[str, Any] | None = None,
     validation: Mapping[str, Any] | None = None,
     review: Mapping[str, Any] | None = None,
+    planning: Mapping[str, Any] | None = None,
+    handbook_resynchronization: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     errors = validate_analysis_report(analysis)
     if errors:
@@ -104,6 +106,12 @@ def build_publication(
         "validation_status": validation.get("status")
         if isinstance(validation, Mapping)
         else "not_run",
+        "planning_status": planning.get("status")
+        if isinstance(planning, Mapping)
+        else "not_run",
+        "handbook_resynchronization": dict(
+            handbook_resynchronization or {"status": "not_run"}
+        ),
         "provenance": {
             "analysis_report_sha256": analysis["report_sha256"],
             "artifact_bundle": artifact_bundle,
