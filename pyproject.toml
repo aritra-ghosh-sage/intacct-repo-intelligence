@@ -20,6 +20,19 @@ dependencies = [
     "strands-agents>=1.53.0",
 ]
 
+[project.optional-dependencies]
+nexau-planner = [
+    "nexau @ git+https://github.com/nex-agi/NexAU.git@v0.4.1",
+]
+
+[tool.uv]
+conflicts = [
+    [
+        { extra = "nexau-planner" },
+        { group = "dev" },
+    ],
+]
+
 [dependency-groups]
 dev = [
     "deepeval[inspect]>=2.5.5",

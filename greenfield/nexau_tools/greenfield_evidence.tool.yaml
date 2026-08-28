@@ -1,0 +1,31 @@
+type: tool
+name: greenfield_evidence
+description: Read revision-bound Greenfield evidence. This tool cannot write files, use GitHub, or access repositories outside the captured run context.
+input_schema:
+  type: object
+  properties:
+    operation:
+      type: string
+      enum:
+        - list_candidate_repositories
+        - repository_metadata
+        - read_handbook
+        - read_source
+        - search_source
+        - read_evidence_artifact
+        - codegraph_explore
+    repository:
+      type: string
+    path:
+      type: string
+    query:
+      type: string
+    section:
+      type: string
+    start_line:
+      type: integer
+    end_line:
+      type: integer
+  required:
+    - operation
+  additionalProperties: false

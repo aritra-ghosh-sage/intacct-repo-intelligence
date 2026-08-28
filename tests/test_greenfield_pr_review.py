@@ -9,3 +9,21 @@ def test_review_keeps_canonical_template_and_explicit_gap() -> None:
     assert "## 🧪 Test Coverage & Obligations" in review["markdown"]
     assert "test_repository_not_assessed" in review["markdown"]
     assert validate_review(review) == []
+
+
+def test_review_retains_validated_analysis_and_planning_provenance() -> None:
+    request = {"source_repository": "intacct/ia-app", "base_revision": "a" * 40, "head_revision": "b" * 40}
+    discovery = {"claims": [], "gaps": []}
+    review = render_review(
+        request=request,
+        discovery=discovery,
+        assessment={"gaps": []},
+        ci_evidence=[],
+        contexts=[],
+        analysis={"report_sha256": "c" * 64, "repository_impacts": [{"repository": "intacct/tests", "evidence_state": "candidate"}], "coverage": {"status": "candidate"}, "gaps": ["coverage_unbound"]},
+        behavior_impact={"handbook_sha256": "d" * 64},
+        planning={"planning_sha256": "e" * 64, "status": "complete", "cycles": [{}], "gaps": []},
+    )
+    assert "Ranked impact" in review["markdown"]
+    assert "Planner lifecycle" in review["markdown"]
+    assert review["provenance"]["analysis_report_sha256"] == "c" * 64

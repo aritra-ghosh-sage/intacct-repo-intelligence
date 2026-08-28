@@ -135,7 +135,7 @@ def build_analysis_report(
         if not repository:
             continue
         repositories[repository] = deepcopy(dict(row))
-    if isinstance(supplied.get("actions"), list):
+    if isinstance(supplied.get("actions"), list) and supplied["actions"]:
         actions = [
             deepcopy(dict(row))
             for row in supplied["actions"]

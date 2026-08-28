@@ -7,6 +7,7 @@ from typing import Any, Protocol
 
 from greenfield.analysis_report import validate_analysis_report
 from greenfield.artifact_io import artifact_sha256
+from greenfield.pr_review import validate_review
 
 CHECK_NAME = "Greenfield impact analysis"
 COMMENT_MARKER = "<!-- greenfield-impact-analysis -->"
@@ -24,10 +25,15 @@ def build_publication(
     artifact_bundle: str,
     draft_pr: Mapping[str, Any] | None = None,
     validation: Mapping[str, Any] | None = None,
+    review: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     errors = validate_analysis_report(analysis)
     if errors:
         raise ValueError("invalid analysis report: " + "; ".join(errors))
+    if isinstance(review, Mapping):
+        review_errors = validate_review(review)
+        if review_errors:
+            raise ValueError("invalid PR review: " + "; ".join(review_errors))
     source = analysis["source"]
     impacts = analysis["repository_impacts"]
     actions = analysis["actions"]
@@ -71,6 +77,8 @@ def build_publication(
     if draft_url:
         lines.append(f"Draft test PR: {draft_url}")
     comment = "\n".join(lines) + "\n"
+    if isinstance(review, Mapping) and isinstance(review.get("markdown"), str):
+        comment = COMMENT_MARKER + "\n" + str(review["markdown"])
     publication: dict[str, Any] = {
         "schema_version": "0.1",
         "analysis_kind": "greenfield_github_publication",
@@ -99,6 +107,9 @@ def build_publication(
         "provenance": {
             "analysis_report_sha256": analysis["report_sha256"],
             "artifact_bundle": artifact_bundle,
+            "pr_review_sha256": review.get("review_sha256")
+            if isinstance(review, Mapping)
+            else None,
         },
     }
     publication["publication_sha256"] = artifact_sha256(publication)

@@ -26,6 +26,11 @@ from greenfield.github_repository_evidence import (
     collect_repository_evidence,
 )
 from greenfield.impact_discovery import discover_from_trace, validate_discovery
+from greenfield.nexau_planner import (
+    NexAUPlannerError,
+    load_planner_config,
+    run_nexau_planner,
+)
 from greenfield.pr_analysis_contract import make_request
 from greenfield.pr_review import render_review, validate_review
 from greenfield.publish import build_publication, publish_github
@@ -247,6 +252,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source-root", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--strands-config", type=Path)
+    parser.add_argument(
+        "--planner-mode",
+        choices=("off", "shadow", "active"),
+        default="off",
+        help="Optional NexAU planning mode. Shadow never controls remediation or publication.",
+    )
+    parser.add_argument("--planner-config", type=Path)
     parser.add_argument("--model")
     parser.add_argument("--timeout", type=int)
     parser.add_argument("--max-file-bytes", type=int, default=120_000)
@@ -602,23 +614,89 @@ def main(argv: list[str] | None = None) -> int:
                 for row in run_context["candidate_repositories"]
             ],
         }
+        planning_report: dict[str, Any] | None = None
+        planning_path: Path | None = None
+        if args.planner_mode != "off":
+            current_stage = "nexau_planning"
+            try:
+                planning_report = run_nexau_planner(
+                    run_context,
+                    compatibility_summary,
+                    toolbox,
+                    mode=args.planner_mode,
+                    config=load_planner_config(args.planner_config),
+                    model=model,
+                    timeout=timeout,
+                )
+            except NexAUPlannerError as exc:
+                planning_report = {
+                    "schema_version": "0.1",
+                    "analysis_kind": "greenfield_analysis_plan",
+                    "status": "unavailable",
+                    "mode": args.planner_mode,
+                    "source": dict(run_context["source"]),
+                    "run_context_sha256": run_context["context_sha256"],
+                    "planner": {"name": "nexau", "reason": str(exc)},
+                    "cycles": [],
+                    "gaps": ["nexau_planner_unavailable"],
+                    "stop_reason": "planner_runtime_unavailable",
+                    "provenance": {
+                        "read_only": True,
+                        "catalog_mutation": "none",
+                        "github_writes": "none",
+                    },
+                }
+                from greenfield.artifact_io import artifact_sha256
+
+                planning_report["planning_sha256"] = artifact_sha256(planning_report)
+            planning_path = args.output_dir / "planning-report.json"
+            write_json_atomic(planning_path, planning_report)
+            handoff.complete_stage(
+                "nexau_planning",
+                inputs={
+                    "run_context": run_context_path,
+                    "step2": step2_path,
+                    "step3": step3_path,
+                    "step4": step4_path,
+                    "step5": step5_path,
+                },
+                outputs={"planning_report": planning_path},
+            )
         try:
-            agent_analysis, tool_calls = run_strands_analysis(
-                run_context,
-                compatibility_summary,
-                toolbox,
-                model=model,
-                timeout=timeout,
+            planned_analysis = (
+                planning_report.get("analysis")
+                if args.planner_mode == "active"
+                and isinstance(planning_report, dict)
+                and planning_report.get("status") == "complete"
+                else None
             )
-            analysis = build_analysis_report(
-                run_context,
-                step2=step2_report,
-                step3=step3_report,
-                step4=step4_report,
-                step5=step5_report,
-                agent_analysis=agent_analysis,
-                tool_calls=tool_calls,
-            )
+            if isinstance(planned_analysis, dict):
+                analysis = build_analysis_report(
+                    run_context,
+                    step2=step2_report,
+                    step3=step3_report,
+                    step4=step4_report,
+                    step5=step5_report,
+                    agent_analysis=planned_analysis,
+                    tool_calls=toolbox.ledger(),
+                )
+            else:
+                agent_analysis, tool_calls = run_strands_analysis(
+                    run_context,
+                    compatibility_summary,
+                    toolbox,
+                    model=model,
+                    timeout=timeout,
+                )
+                analysis = build_analysis_report(
+                    run_context,
+                    step2=step2_report,
+                    step3=step3_report,
+                    step4=step4_report,
+                    step5=step5_report,
+                    agent_analysis=agent_analysis,
+                    tool_calls=tool_calls,
+                )
         except (AnalysisReportError, StrandsAgentError, ValueError) as exc:
             analysis = build_analysis_report(
                 run_context,
@@ -634,6 +712,35 @@ def main(argv: list[str] | None = None) -> int:
             )
         analysis_path = args.output_dir / "analysis-report.json"
         write_json_atomic(analysis_path, analysis)
+        shadow_analysis_path: Path | None = None
+        if args.planner_mode == "shadow":
+            shadow_status = (
+                "unavailable"
+                if not isinstance(planning_report, dict)
+                or planning_report.get("status") == "unavailable"
+                else "shadow"
+            )
+            shadow_analysis = build_analysis_report(
+                run_context,
+                step2=step2_report,
+                step3=step3_report,
+                step4=step4_report,
+                step5=step5_report,
+                agent_analysis={
+                    "agent": {
+                        "status": shadow_status,
+                        "name": "nexau",
+                        "mode": "shadow",
+                        "planning_sha256": planning_report.get("planning_sha256")
+                        if isinstance(planning_report, dict)
+                        else None,
+                    },
+                    "gaps": ["nexau_planner_shadow_only"],
+                },
+                tool_calls=toolbox.ledger(),
+            )
+            shadow_analysis_path = args.output_dir / "analysis-report.nexau.json"
+            write_json_atomic(shadow_analysis_path, shadow_analysis)
         handoff.complete_stage(
             "analyze",
             inputs={
@@ -643,7 +750,14 @@ def main(argv: list[str] | None = None) -> int:
                 "step4": step4_path,
                 "step5": step5_path,
             },
-            outputs={"analysis_report": analysis_path},
+            outputs={
+                "analysis_report": analysis_path,
+                **(
+                    {"nexau_shadow_analysis": shadow_analysis_path}
+                    if shadow_analysis_path
+                    else {}
+                ),
+            },
         )
         current_stage = "behavior_impact_report"
         handbook = build_behavior_handbook(
@@ -796,6 +910,13 @@ def main(argv: list[str] | None = None) -> int:
             assessment=assessment,
             ci_evidence=[read_json_object(path) for path in args.ci_evidence],
             contexts=[repository_context],
+            analysis=analysis,
+            behavior_impact=handbook,
+            step2=step2_report,
+            step3=step3_report,
+            step4=step4_report,
+            step5=step5_report,
+            planning=planning_report,
         )
         review_errors = validate_review(review)
         if review_errors:
@@ -810,6 +931,9 @@ def main(argv: list[str] | None = None) -> int:
                 "discovery": discovery_path,
                 "assessment": assessment_path,
                 "context": context_path,
+                "analysis_report": analysis_path,
+                "behavior_impact_report": handbook_path,
+                **({"planning_report": planning_path} if planning_path else {}),
             },
             outputs={"review": review_path, "markdown": review_markdown_path},
         )
@@ -1121,6 +1245,7 @@ def main(argv: list[str] | None = None) -> int:
             artifact_bundle=str(args.output_dir),
             draft_pr=step8_result,
             validation=step7_report,
+            review=review,
         )
         publication_path = args.output_dir / "publication.json"
         write_json_atomic(publication_path, publication)
@@ -1133,6 +1258,7 @@ def main(argv: list[str] | None = None) -> int:
             "publish",
             inputs={
                 "analysis_report": analysis_path,
+                "pr_review": review_path,
                 **({"step7": step7_report_path} if step7_report_path else {}),
                 **({"step8": step8_result_path} if step8_result_path else {}),
             },

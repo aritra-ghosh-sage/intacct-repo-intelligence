@@ -27,6 +27,12 @@ contracts first and then screen all enabled `discovery_eligible` repositories.
 It writes `analysis-report.json`. Confirmed and strong-candidate rows require
 recorded source or tool evidence.
 
+`--planner-mode shadow` optionally records a NexAU `planning-report.json` and
+`analysis-report.nexau.json` beside the authoritative Strands report. Shadow
+planning is read-only and cannot reach remediation, publication, or GitHub.
+`--planner-mode active` is reserved for a separately accepted rollout and still
+uses the same captured-scope and analysis-report validators.
+
 ### Remediate And Validate
 
 An eligible `update_existing_test` or `add_missing_test` action is converted into
