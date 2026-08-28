@@ -151,6 +151,30 @@ def test_capture_promotes_repository_named_by_supplied_contract(tmp_path: Path) 
     assert discovery["priority"] == "explicit_contract"
 
 
+def test_run_context_records_explicit_execution_mode(tmp_path: Path) -> None:
+    context, _ = _context(tmp_path)
+    execution = {
+        "dry_run": True,
+        "planner_mode": "shadow",
+        "model": "shared-model",
+        "base_url": "https://shared.example/v1",
+    }
+
+    explicit = build_run_context(
+        _step1(
+            Path(context["source"]["local_root"]),
+            context["source"]["base_revision"],
+            context["source"]["head_revision"],
+        ),
+        context["manifest"]["path"],
+        source_root=context["source"]["local_root"],
+        execution=execution,
+    )
+
+    assert validate_run_context(explicit) == []
+    assert explicit["execution"] == execution
+
+
 def test_toolbox_reads_only_captured_revision_and_records_evidence(
     tmp_path: Path,
 ) -> None:

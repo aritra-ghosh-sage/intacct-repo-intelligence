@@ -21,6 +21,7 @@ class StrandsRuntimeConfig:
     region: str | None = None
     profile: str | None = None
     model: str | None = None
+    base_url: str | None = None
     timeout_seconds: int = 300
 
     def environment(self) -> dict[str, str]:
@@ -92,6 +93,7 @@ def load_strands_config(path: str | Path | None = None) -> StrandsRuntimeConfig:
         region=str(data["region"]).strip() if data.get("region") else None,
         profile=str(data["profile"]).strip() if data.get("profile") else None,
         model=str(data["model"]).strip() if data.get("model") else None,
+        base_url=str(data["base_url"]).strip() if data.get("base_url") else None,
         timeout_seconds=_positive_int(timeout, "timeout_seconds"),
     )
 

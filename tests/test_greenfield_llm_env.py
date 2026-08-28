@@ -15,8 +15,9 @@ from greenfield.llm_env import (
 )
 from greenfield.nexau_planner import run_nexau_planner
 from greenfield.strands_config import credential_status
+from greenfield.strands_config import StrandsRuntimeConfig
 from greenfield.strands_tools import GreenfieldToolbox
-from scripts import trace_greenfield_step1_5
+from scripts import run_greenfield_strands, trace_greenfield_step1_5
 from tests.test_greenfield_step1_5 import _trace as build_trace
 from tests.test_greenfield_simplified_flow import _context
 
@@ -176,6 +177,39 @@ def test_shared_env_values_are_available_to_strands_and_nexau(
 
     assert report["analysis"]["agent"]["name"] == "nexau"
     assert report["status"] == "complete"
+
+
+def test_llm_model_resolution_prefers_cli_over_config_and_env(monkeypatch) -> None:
+    monkeypatch.setenv("LLM_MODEL", "env-model")
+    monkeypatch.setenv("LLM_BASE_URL", "https://env.example/v1")
+    strands_config = StrandsRuntimeConfig(
+        model="config-model", base_url="https://config.example/v1"
+    )
+    model, base_url = run_greenfield_strands._resolve_llm_runtime(
+        cli_model="cli-model",
+        strands_config=strands_config,
+        planner_config={
+            "model": "planner-model",
+            "base_url": "https://planner.example/v1",
+        },
+        planner_mode="shadow",
+    )
+
+    assert model == "cli-model"
+    assert base_url == "https://planner.example/v1"
+
+
+def test_llm_model_resolution_fails_when_unconfigured(monkeypatch) -> None:
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+    monkeypatch.delenv("LLM_BASE_URL", raising=False)
+
+    with pytest.raises(ValueError, match="model is not configured"):
+        run_greenfield_strands._resolve_llm_runtime(
+            cli_model=None,
+            strands_config=StrandsRuntimeConfig(),
+            planner_config={},
+            planner_mode="off",
+        )
 
 
 def test_missing_env_file_does_not_block_step1_5_runner(

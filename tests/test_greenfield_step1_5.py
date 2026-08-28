@@ -10,9 +10,11 @@ from unittest.mock import patch
 
 import pytest
 
+from greenfield.artifact_io import artifact_sha256
 from greenfield.step1_5_trace import normalize_trace, validate_trace
 from greenfield.step1_capture import evidence_fingerprint
 from greenfield.strands_agent import (
+    Step1TraceFailure,
     StrandsAgentError,
     _prompt,
     _run_strands_json,
@@ -73,6 +75,42 @@ def _trace() -> dict[str, object]:
     )
 
 
+def _trace_repo(tmp_path: Path) -> tuple[Path, str, str]:
+    repo = tmp_path / "source"
+    repo.mkdir()
+    import subprocess
+
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.email", "test@example.test"],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "Test"], check=True)
+    paths = {
+        "app/source/company/AllocationTxnHelper.cls": "<?php echo 'base-alloc';\n",
+        "app/source/gl/GLBatchManager.cls": "<?php echo 'base-gl';\n",
+    }
+    for path, content in paths.items():
+        file_path = repo / path
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(content, encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "base"], check=True)
+    base = subprocess.check_output(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+    ).strip()
+    for path, content in {
+        "app/source/company/AllocationTxnHelper.cls": "<?php echo 'head-alloc';\n",
+        "app/source/gl/GLBatchManager.cls": "<?php echo 'head-gl';\n",
+    }.items():
+        (repo / path).write_text(content, encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "commit", "-qam", "head"], check=True)
+    head = subprocess.check_output(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+    ).strip()
+    return repo, base, head
+
+
 def test_strands_trace_validation_preserves_exact_surface_states() -> None:
     trace = _trace()
     assert validate_trace(STEP1, trace) == []
@@ -120,6 +158,41 @@ def test_normalize_trace_accepts_legacy_call_kind() -> None:
     assert validate_trace(STEP1, normalized) == []
 
 
+def test_normalize_trace_accepts_behavior_symbol_path_records() -> None:
+    raw = _trace()
+    raw["behaviors"][0]["symbol_paths"] = [
+        {
+            "symbol": "AllocationTxnHelper::applyAllocation",
+            "path": "app/source/company/AllocationTxnHelper.cls",
+            "line": 42,
+            "revision": STEP1["input"]["head_sha"],
+            "notes": "provider metadata is ignored",
+        },
+        {
+            "symbol": "GLBatchManager::glTranslateApplyAllocation",
+            "path": "app/source/gl/GLBatchManager.cls",
+            "line": 18,
+            "revision": STEP1["input"]["head_sha"],
+        },
+    ]
+    edge = raw["behaviors"][0]["edges"][0]
+    edge["kind"] = edge.pop("relationship_type")
+
+    normalized = normalize_trace(
+        STEP1,
+        raw,
+        agent_metadata={"name": "fixture", "model": "fixture", "timeout_seconds": 1},
+        context_sha256="a" * 64,
+    )
+
+    assert normalized["behaviors"][0]["symbol_paths"] == {
+        "AllocationTxnHelper::applyAllocation": "app/source/company/AllocationTxnHelper.cls",
+        "GLBatchManager::glTranslateApplyAllocation": "app/source/gl/GLBatchManager.cls",
+    }
+    assert normalized["behaviors"][0]["edges"][0]["relationship_type"] == "CALLS"
+    assert validate_trace(STEP1, normalized) == []
+
+
 def test_normalize_trace_rejects_conflicting_call_relation_keys() -> None:
     raw = _trace()
     raw["calls"][0]["kind"] = "STATIC_CALLS"
@@ -164,11 +237,133 @@ def test_normalize_trace_rejects_malformed_surface_records(
         )
 
 
+def test_normalize_trace_rejects_malformed_line_evidence() -> None:
+    raw = _trace()
+    raw["calls"][0]["source_line"] = None
+
+    with pytest.raises(ValueError, match="source_line must be a positive integer"):
+        normalize_trace(
+            STEP1,
+            raw,
+            agent_metadata={"name": "fixture", "model": "fixture", "timeout_seconds": 1},
+            context_sha256="a" * 64,
+        )
+
+
+def test_normalize_trace_rejects_unbound_symbol_path() -> None:
+    raw = _trace()
+    raw["behaviors"][0]["symbol_paths"][
+        "GLBatchManager::glTranslateApplyAllocation"
+    ] = "app/source/not-captured.cls"
+
+    with pytest.raises(ValueError, match="unbound path"):
+        normalize_trace(
+            STEP1,
+            raw,
+            agent_metadata={"name": "fixture", "model": "fixture", "timeout_seconds": 1},
+            context_sha256="a" * 64,
+        )
+
+
+def test_normalize_trace_rejects_wildcard_target_path() -> None:
+    raw = _trace()
+    raw["behaviors"][0]["edges"][0]["target_path"] = "app/source/**/*.cls"
+
+    with pytest.raises(ValueError, match="target_path must be an exact path"):
+        normalize_trace(
+            STEP1,
+            raw,
+            agent_metadata={"name": "fixture", "model": "fixture", "timeout_seconds": 1},
+            context_sha256="a" * 64,
+        )
+
+
+def test_validate_trace_rejects_nested_edge_revision_and_line() -> None:
+    trace = _trace()
+    edge = trace["behaviors"][0]["edges"][0]
+    edge["target_revision"] = "0" * 40
+    unsigned = copy.deepcopy(trace)
+    unsigned["provenance"].pop("trace_sha256", None)
+    trace["provenance"]["trace_sha256"] = artifact_sha256(unsigned)
+
+    errors = validate_trace(STEP1, trace)
+
+    assert any("target_revision" in error for error in errors)
+
+    trace = _trace()
+    trace["behaviors"][0]["edges"][0]["target_line"] = 0
+    unsigned = copy.deepcopy(trace)
+    unsigned["provenance"].pop("trace_sha256", None)
+    trace["provenance"]["trace_sha256"] = artifact_sha256(unsigned)
+    errors = validate_trace(STEP1, trace)
+    assert any("target_line" in error for error in errors)
+
+
+def test_run_strands_trace_persists_failure_diagnostic(tmp_path: Path) -> None:
+    repo, base, head = _trace_repo(tmp_path)
+    step1 = copy.deepcopy(STEP1)
+    step1["input"].update(
+        {
+            "target_revision": head,
+            "head_sha": head,
+            "base_revision": base,
+            "base_sha": base,
+            "changed_paths": [
+                "app/source/company/AllocationTxnHelper.cls",
+                "app/source/gl/GLBatchManager.cls",
+            ],
+        }
+    )
+    step1["changed_files"] = [
+        {
+            "path": "app/source/company/AllocationTxnHelper.cls",
+            "filename": "app/source/company/AllocationTxnHelper.cls",
+            "status": "modified",
+        },
+        {
+            "path": "app/source/gl/GLBatchManager.cls",
+            "filename": "app/source/gl/GLBatchManager.cls",
+            "status": "modified",
+        },
+    ]
+    step1["pr_metadata"]["base_revision"] = base
+    step1["pr_metadata"]["target_revision"] = head
+    step1["provenance"]["evidence_sha256"] = evidence_fingerprint(step1)
+    raw = _trace()
+    raw["surfaces"] = ["not-an-object"]
+    diagnostic_path = tmp_path / "step1.5.diagnostic.json"
+    contract_path = tmp_path / "step1.5.contract.json"
+
+    def factory(_model: str | None, *, tools: list[object] | None = None):
+        def agent(_prompt: str) -> str:
+            return json.dumps(raw)
+
+        return agent
+
+    with pytest.raises(Step1TraceFailure, match="surfaces\\[0\\] must be an object"):
+        run_strands_trace(
+            step1,
+            repo,
+            model="test-model",
+            contract_path=contract_path,
+            diagnostic_output=diagnostic_path,
+            agent_factory=factory,
+        )
+
+    diagnostic = json.loads(diagnostic_path.read_text(encoding="utf-8"))
+    assert diagnostic["analysis_kind"] == "greenfield_pr_impact_step_1_5_diagnostic"
+    assert diagnostic["stage"] == "normalize_trace"
+    assert diagnostic["contract_path"] == str(contract_path)
+    assert diagnostic["raw_provider_response"]["surfaces"] == ["not-an-object"]
+    assert diagnostic["source"]["target_revision"] == head
+
+
 def test_step1_5_prompt_requires_canonical_surface_map() -> None:
     prompt = _prompt({"changed_files": []}, ROOT)
 
-    assert '"surfaces": {"http_qrequest": "available", "rest_api": "not_run"}' in prompt
-    assert "Do not return surfaces as a list of records" in prompt
+    assert "surfaces must be an object/map, not a list" in prompt
+    assert "relationship_type, not kind" in prompt
+    assert "symbol_paths as an object/map, not a list" in prompt
 
 
 def test_trace_provenance_bindings_are_fail_closed() -> None:

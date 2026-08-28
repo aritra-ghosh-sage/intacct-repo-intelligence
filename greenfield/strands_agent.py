@@ -10,9 +10,14 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
-from greenfield.artifact_io import artifact_sha256
+from greenfield.artifact_io import artifact_sha256, write_json_atomic
 from greenfield.behavior_contract import generate_behavior_contract
-from greenfield.step1_5_trace import TraceError, normalize_trace, validate_trace
+from greenfield.step1_5_trace import (
+    TraceError,
+    build_trace_rejection_diagnostic,
+    normalize_trace,
+    validate_trace,
+)
 from greenfield.step1_capture import evidence_fingerprint
 from greenfield.strands_config import credential_status
 from scripts.validate_greenfield_step1 import validate as validate_step1
@@ -20,6 +25,23 @@ from scripts.validate_greenfield_step1 import validate as validate_step1
 
 class StrandsAgentError(ValueError):
     """Raised when Strands cannot produce a valid Step 1.5 trace."""
+
+
+class Step1TraceFailure(StrandsAgentError):
+    """Raised when a Step 1.5 provider response is rejected at the boundary."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        stage: str,
+        contract_path: str | None,
+        diagnostic_path: Path | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.stage = stage
+        self.contract_path = contract_path
+        self.diagnostic_path = diagnostic_path
 
 
 def _git(source_root: Path, *args: str) -> str:
@@ -86,27 +108,34 @@ target-revision file bytes; use these bytes as the primary source evidence.
 Do not modify files, checkout another revision, call GitHub, or invent
 cross-repository facts.
 
-Return only JSON matching the supplied Greenfield Step 1.5 trace schema. Produce:
-- affected_symbols: exact symbols in changed paths with source lines;
-- calls: exact objects with source_symbol, target_symbol, relationship_type
-  (CALLS or STATIC_CALLS), source_path, source_line, source_revision,
-  target_path, and resolution='exact'; for example:
+Return only JSON matching the supplied Greenfield Step 1.5 trace schema.
+
+Canonical output examples:
+- surfaces must be an object/map, not a list:
+  {{"surfaces": {{"http_qrequest": "available", "rest_api": "not_run"}}}}
+  Allowed statuses are available, empty, unavailable, not_run, unresolved,
+  ambiguous, and dynamic. Provider metadata such as path, lines, or notes is
+  not trusted evidence and must not change the persisted status map.
+- calls must use relationship_type, not kind:
   {{"source_symbol": "A", "target_symbol": "B", "relationship_type": "CALLS",
   "source_path": "app/source/a.cls", "source_line": 10,
   "source_revision": "<target revision>", "target_path": "app/source/b.cls",
-  "resolution": "exact"}};
-  do not use `kind` as a replacement for `relationship_type`;
-- behaviors: non-empty behavior groups compatible with the existing Greenfield
-  behavior contract, including entry_symbols, source_paths, symbol_paths,
-  exact edges, and a concise description;
-- surfaces: an object mapping each surface name to one of the statuses
-  available, empty, unavailable, not_run, unresolved, ambiguous, or dynamic,
-  with no claim that an unexamined surface is unaffected. For example:
-  {{"surfaces": {{"http_qrequest": "available", "rest_api": "not_run"}}}}.
-  Do not return surfaces as a list of records;
-- findings: explicit unresolved or unavailable evidence and next checks.
+  "target_line": 42, "target_revision": "<target revision>",
+  "resolution": "exact"}}
+  Supported relationship_type values are CALLS and STATIC_CALLS. Do not guess
+  line numbers or revisions. If line evidence is missing or ambiguous, mark it
+  unavailable rather than inventing values.
+- behaviors must keep symbol_paths as an object/map, not a list:
+  {{"symbol_paths": {{"Example.method": {{"path": "app/source/example.cls",
+  "line": 42, "revision": "<target revision>"}}}}}}
+  The boundary persists only the existing canonical symbol-to-path mapping;
+  provider-only path/line/revision metadata must not be treated as trusted
+  evidence.
+- findings should explain explicit unresolved or unavailable evidence and the
+  next checks.
 
-Every asserted edge must have exact source evidence and resolution='exact'.
+Every asserted edge must preserve exact source evidence, use resolution="exact",
+and keep provider-only metadata out of the persisted contract.
 Use the target revision from the context and preserve all changed paths.
 
 Context JSON:
@@ -217,6 +246,8 @@ def run_strands_trace(
     model: str | None = None,
     timeout: int = 300,
     max_file_bytes: int = 120_000,
+    contract_path: str | Path | None = None,
+    diagnostic_output: str | Path | None = None,
     agent_factory: Callable[[str | None], Callable[[str], Any]] | None = None,
     tools: list[Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -224,27 +255,92 @@ def run_strands_trace(
 
     root = Path(source_root).resolve()
     context = build_context(step1, root, max_file_bytes=max_file_bytes)
-    raw = _run_strands_json(
-        _prompt(context, root),
-        model=model,
-        timeout=timeout,
-        agent_factory=agent_factory,
-        tools=tools,
-    )
+    diagnostic_path = Path(diagnostic_output) if diagnostic_output is not None else None
+    try:
+        raw = _run_strands_json(
+            _prompt(context, root),
+            model=model,
+            timeout=timeout,
+            agent_factory=agent_factory,
+            tools=tools,
+        )
+    except StrandsAgentError as exc:
+        if diagnostic_path is not None:
+            write_json_atomic(
+                diagnostic_path,
+                build_trace_rejection_diagnostic(
+                    step1,
+                    stage="provider_call",
+                    reason=str(exc),
+                    contract_path=contract_path,
+                    provider_name="strands",
+                    provider_model=model or "configured",
+                    context_sha256=str(context["context_sha256"]),
+                ),
+            )
+        raise Step1TraceFailure(
+            str(exc),
+            stage="provider_call",
+            contract_path=str(contract_path) if contract_path is not None else None,
+            diagnostic_path=diagnostic_path,
+        ) from exc
     metadata = {
         "name": "strands",
         "model": model or "configured",
         "timeout_seconds": timeout,
     }
-    trace = normalize_trace(
-        step1,
-        raw,
-        agent_metadata=metadata,
-        context_sha256=str(context["context_sha256"]),
-    )
+    try:
+        trace = normalize_trace(
+            step1,
+            raw,
+            agent_metadata=metadata,
+            context_sha256=str(context["context_sha256"]),
+        )
+    except TraceError as exc:
+        if diagnostic_path is not None:
+            write_json_atomic(
+                diagnostic_path,
+                build_trace_rejection_diagnostic(
+                    step1,
+                    stage="normalize_trace",
+                    reason=str(exc),
+                    contract_path=contract_path,
+                    provider_name="strands",
+                    provider_model=model or "configured",
+                    raw_provider_response=raw,
+                    context_sha256=str(context["context_sha256"]),
+                ),
+            )
+        raise Step1TraceFailure(
+            str(exc),
+            stage="normalize_trace",
+            contract_path=str(contract_path) if contract_path is not None else None,
+            diagnostic_path=diagnostic_path,
+        ) from exc
     errors = validate_trace(step1, trace)
     if errors:
-        raise TraceError("invalid Strands Step 1.5 trace: " + "; ".join(errors))
+        reason = "invalid Strands Step 1.5 trace: " + "; ".join(errors)
+        if diagnostic_path is not None:
+            write_json_atomic(
+                diagnostic_path,
+                build_trace_rejection_diagnostic(
+                    step1,
+                    stage="validate_trace",
+                    reason=reason,
+                    contract_path=contract_path,
+                    provider_name="strands",
+                    provider_model=model or "configured",
+                    raw_provider_response=raw,
+                    normalized_trace=trace,
+                    context_sha256=str(context["context_sha256"]),
+                ),
+            )
+        raise Step1TraceFailure(
+            reason,
+            stage="validate_trace",
+            contract_path=str(contract_path) if contract_path is not None else None,
+            diagnostic_path=diagnostic_path,
+        )
     return trace, context
 
 
@@ -333,6 +429,7 @@ def generate_contract(
 
 __all__ = [
     "StrandsAgentError",
+    "Step1TraceFailure",
     "build_context",
     "generate_contract",
     "run_strands_analysis",

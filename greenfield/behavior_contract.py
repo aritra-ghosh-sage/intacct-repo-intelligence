@@ -160,9 +160,6 @@ def _validate_trace(
             )
             for symbol, path in symbol_paths.items()
         }
-        for path in normalized_symbol_paths.values():
-            if "*" in path or "?" in path:
-                raise BehaviorContractError(f"behavior {index}.symbol_paths must contain exact paths")
         for edge in edges:
             if not isinstance(edge, Mapping):
                 raise BehaviorContractError("source trace edges must be objects")
@@ -193,6 +190,8 @@ def _validate_trace(
                     ),
                     "resolution": _text(edge.get("resolution", "exact"), "edge resolution"),
                 }
+            if "*" in fact["target_path"] or "?" in fact["target_path"]:
+                raise BehaviorContractError("edge target_path must contain an exact path")
             if source_revision != revision:
                 raise BehaviorContractError("edge source_revision does not match Step 1")
             if fact["resolution"] != "exact":
@@ -205,6 +204,14 @@ def _validate_trace(
             if fact["evidence_sha256"] != _fact_hash({key: value for key, value in fact.items() if key != "evidence_sha256"}):
                 raise BehaviorContractError("edge evidence_sha256 does not match source fact")
             normalized_edges.append(fact)
+        edge_target_paths = {edge["target_path"] for edge in normalized_edges}
+        for path in normalized_symbol_paths.values():
+            if "*" in path or "?" in path:
+                raise BehaviorContractError(f"behavior {index}.symbol_paths must contain exact paths")
+            if path not in changed_paths and path not in edge_target_paths:
+                raise BehaviorContractError(
+                    f"behavior {index}.symbol_paths contains an unbound path"
+                )
         normalized.append(
             {
                 "kind": _text(raw.get("kind", "behavior"), "behavior kind"),

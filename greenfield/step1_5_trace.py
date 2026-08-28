@@ -5,6 +5,8 @@ from __future__ import annotations
 import copy
 import re
 from collections.abc import Mapping
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from greenfield.artifact_io import artifact_sha256
@@ -27,6 +29,7 @@ SURFACE_STATES = {
     "ambiguous",
     "dynamic",
 }
+CALL_RELATION_TYPES = {"CALLS", "STATIC_CALLS"}
 
 
 class TraceError(ValueError):
@@ -53,6 +56,12 @@ def _paths(value: Any, label: str) -> list[str]:
     if any("*" in item or "?" in item for item in result):
         raise TraceError(f"{label} must contain exact paths")
     return result
+
+
+def _positive_int(value: Any, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise TraceError(f"{label} must be a positive integer")
+    return value
 
 
 def _validate_symbol_rows(value: Any, changed_paths: set[str]) -> list[dict[str, Any]]:
@@ -117,30 +126,180 @@ def _normalize_surfaces(value: Any) -> dict[str, str]:
     return _validate_surfaces(normalized)
 
 
-def _normalize_calls(value: Any) -> list[dict[str, Any]]:
-    """Normalize the provider's legacy call relation key at the trust boundary."""
+def _normalize_symbol_paths(value: Any, label: str) -> dict[str, str]:
+    if isinstance(value, list):
+        normalized: dict[str, str] = {}
+        for index, item in enumerate(value):
+            if not isinstance(item, Mapping):
+                raise TraceError(f"{label}[{index}] must be an object")
+            symbol = _text(item.get("symbol"), f"{label}[{index}].symbol")
+            if symbol in normalized:
+                raise TraceError(f"duplicate symbol path: {symbol}")
+            path = _text(item.get("path"), f"{label}[{index}].path")
+            if "*" in path or "?" in path:
+                raise TraceError(f"{label} must contain exact paths")
+            normalized[symbol] = path
+        return dict(sorted(normalized.items()))
+    if not isinstance(value, Mapping):
+        raise TraceError(f"{label} must be an object")
+    normalized = {}
+    for symbol, raw in value.items():
+        key = _text(symbol, f"{label} key")
+        if key in normalized:
+            raise TraceError(f"duplicate symbol path: {key}")
+        if isinstance(raw, Mapping):
+            path = _text(raw.get("path"), f"{label}[{key}].path")
+        else:
+            path = _text(raw, f"{label}[{key}]")
+        if "*" in path or "?" in path:
+            raise TraceError(f"{label} must contain exact paths")
+        normalized[key] = path
+    return dict(sorted(normalized.items()))
 
+
+def _symbols(value: Any, label: str) -> list[str]:
     if not isinstance(value, list):
-        raise TraceError("calls must be a list")
-    normalized: list[dict[str, Any]] = []
-    for index, item in enumerate(value):
-        if not isinstance(item, Mapping):
-            raise TraceError(f"calls[{index}] must be an object")
-        call = dict(item)
-        legacy_kind = call.get("kind")
-        relationship_type = call.get("relationship_type")
-        if relationship_type is None and legacy_kind is not None:
-            call["relationship_type"] = legacy_kind
-        elif (
-            relationship_type is not None
-            and legacy_kind is not None
-            and relationship_type != legacy_kind
-        ):
-            raise TraceError(
-                f"calls[{index}] has conflicting relationship_type and kind"
-            )
-        normalized.append(call)
+        raise TraceError(f"{label} must be a list")
+    return sorted({_text(item, f"{label} item") for item in value})
+
+
+def _normalize_call(
+    value: Any,
+    *,
+    label: str,
+    revision: str,
+    changed_paths: set[str] | None = None,
+) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise TraceError(f"{label} must be an object")
+    call = dict(value)
+    legacy_kind = call.get("kind")
+    relationship_type = call.get("relationship_type")
+    if relationship_type is None and legacy_kind is not None:
+        call["relationship_type"] = legacy_kind
+    elif (
+        relationship_type is not None
+        and legacy_kind is not None
+        and relationship_type != legacy_kind
+    ):
+        raise TraceError(f"{label} has conflicting relationship_type and kind")
+    call.pop("kind", None)
+    call["source_symbol"] = _text(call.get("source_symbol"), f"{label}.source_symbol")
+    call["target_symbol"] = _text(call.get("target_symbol"), f"{label}.target_symbol")
+    call["relationship_type"] = _text(
+        call.get("relationship_type"), f"{label}.relationship_type"
+    )
+    if call["relationship_type"] not in CALL_RELATION_TYPES:
+        raise TraceError(f"{label}.relationship_type is invalid")
+    call["source_path"] = _text(call.get("source_path"), f"{label}.source_path")
+    if changed_paths is not None and call["source_path"] not in changed_paths:
+        raise TraceError(f"{label}.source_path must reference a changed path")
+    call["source_line"] = _positive_int(call.get("source_line"), f"{label}.source_line")
+    source_revision = call.get("source_revision", revision)
+    call["source_revision"] = _sha(source_revision, f"{label}.source_revision")
+    if call["source_revision"] != revision:
+        raise TraceError(f"{label}.source_revision does not match Step 1")
+    call["target_path"] = _text(call.get("target_path"), f"{label}.target_path")
+    if "*" in call["target_path"] or "?" in call["target_path"]:
+        raise TraceError(f"{label}.target_path must be an exact path")
+    if "target_line" in call and call["target_line"] is not None:
+        call["target_line"] = _positive_int(call.get("target_line"), f"{label}.target_line")
+    if "target_revision" in call and call["target_revision"] is not None:
+        call["target_revision"] = _sha(
+            call.get("target_revision"), f"{label}.target_revision"
+        )
+        if call["target_revision"] != revision:
+            raise TraceError(f"{label}.target_revision does not match Step 1")
+    call["resolution"] = _text(call.get("resolution"), f"{label}.resolution")
+    if call["resolution"] != "exact":
+        raise TraceError(f"{label}.resolution must be exact")
+    return call
+
+
+def _normalize_calls(
+    value: Any,
+    *,
+    revision: str,
+    changed_paths: set[str],
+    label: str = "calls",
+) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise TraceError(f"{label} must be a list")
+    normalized = [
+        _normalize_call(
+            item,
+            label=f"{label}[{index}]",
+            revision=revision,
+            changed_paths=changed_paths,
+        )
+        for index, item in enumerate(value)
+    ]
     return normalized
+
+
+def _normalize_behavior(
+    value: Any,
+    *,
+    index: int,
+    revision: str,
+    changed_paths: set[str],
+) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise TraceError(f"behaviors[{index}] must be an object")
+    behavior = dict(value)
+    behavior["kind"] = _text(behavior.get("kind", "behavior"), f"behaviors[{index}].kind")
+    behavior["entry_symbols"] = _symbols(
+        behavior.get("entry_symbols"), f"behaviors[{index}].entry_symbols"
+    )
+    if not behavior["entry_symbols"]:
+        raise TraceError(f"behaviors[{index}].entry_symbols must be non-empty")
+    behavior["source_paths"] = _paths(
+        behavior.get("source_paths"), f"behaviors[{index}].source_paths"
+    )
+    if not set(behavior["source_paths"]).issubset(changed_paths):
+        raise TraceError(f"behaviors[{index}].source_paths contains an unchanged path")
+    behavior["symbol_paths"] = _normalize_symbol_paths(
+        behavior.get("symbol_paths", {}), f"behaviors[{index}].symbol_paths"
+    )
+    behavior["edges"] = _normalize_calls(
+        behavior.get("edges", []),
+        revision=revision,
+        changed_paths=set(behavior["source_paths"]),
+        label=f"behaviors[{index}].edges",
+    )
+    edge_target_paths = {edge["target_path"] for edge in behavior["edges"]}
+    if any(
+        path not in changed_paths and path not in edge_target_paths
+        for path in behavior["symbol_paths"].values()
+    ):
+        raise TraceError(
+            f"behaviors[{index}].symbol_paths contains an unbound path"
+        )
+    behavior["surfaces"] = _normalize_surfaces(behavior.get("surfaces", {}))
+    if "description" in behavior and behavior["description"] is not None:
+        behavior["description"] = _text(
+            behavior["description"], f"behaviors[{index}].description"
+        )
+    return behavior
+
+
+def _normalize_behaviors(
+    value: Any,
+    *,
+    revision: str,
+    changed_paths: set[str],
+) -> list[dict[str, Any]]:
+    if not isinstance(value, list) or not value:
+        raise TraceError("behaviors must be a non-empty list")
+    return [
+        _normalize_behavior(
+            item,
+            index=index,
+            revision=revision,
+            changed_paths=changed_paths,
+        )
+        for index, item in enumerate(value)
+    ]
 
 
 def _call_key(
@@ -156,6 +315,40 @@ def _call_key(
         _text(value.get("target_path"), "call target_path"),
         _text(value.get("resolution"), "call resolution"),
     )
+
+
+def _validate_call(
+    value: Any,
+    *,
+    label: str,
+    revision: str,
+    changed_paths: set[str],
+) -> None:
+    if not isinstance(value, Mapping):
+        raise TraceError(f"{label} must be an object")
+    _text(value.get("source_symbol"), f"{label}.source_symbol")
+    _text(value.get("target_symbol"), f"{label}.target_symbol")
+    if value.get("relationship_type") not in CALL_RELATION_TYPES:
+        raise TraceError(f"{label}.relationship_type is invalid")
+    source_path = _text(value.get("source_path"), f"{label}.source_path")
+    if source_path not in changed_paths:
+        raise TraceError(f"{label}.source_path must reference a changed path")
+    _positive_int(value.get("source_line"), f"{label}.source_line")
+    if _sha(value.get("source_revision"), f"{label}.source_revision") != revision:
+        raise TraceError(f"{label}.source_revision does not match Step 1")
+    target_path = _text(value.get("target_path"), f"{label}.target_path")
+    if "*" in target_path or "?" in target_path:
+        raise TraceError(f"{label}.target_path must be an exact path")
+    target_line = value.get("target_line")
+    if target_line is not None:
+        _positive_int(target_line, f"{label}.target_line")
+    target_revision = value.get("target_revision")
+    if target_revision is not None and _sha(
+        target_revision, f"{label}.target_revision"
+    ) != revision:
+        raise TraceError(f"{label}.target_revision does not match Step 1")
+    if value.get("resolution") != "exact":
+        raise TraceError(f"{label}.resolution must be exact")
 
 
 def validate_trace(step1: Mapping[str, Any], trace: Mapping[str, Any]) -> list[str]:
@@ -216,28 +409,57 @@ def validate_trace(step1: Mapping[str, Any], trace: Mapping[str, Any]) -> list[s
         if not isinstance(calls, list):
             raise TraceError("calls must be a list")
         for index, call in enumerate(calls):
-            if not isinstance(call, Mapping):
-                raise TraceError(f"calls[{index}] must be an object")
-            if call.get("relationship_type") not in {"CALLS", "STATIC_CALLS"}:
-                raise TraceError(f"calls[{index}].relationship_type is invalid")
-            if (
-                isinstance(call.get("source_line"), bool)
-                or not isinstance(call.get("source_line"), int)
-                or call["source_line"] < 1
-            ):
-                raise TraceError(f"calls[{index}].source_line must be positive")
-            if (
-                _sha(call.get("source_revision"), f"calls[{index}].source_revision")
-                != revision
-            ):
-                raise TraceError(
-                    f"calls[{index}].source_revision does not match Step 1"
-                )
-            if call.get("resolution") != "exact":
-                raise TraceError(f"calls[{index}].resolution must be exact")
+            _validate_call(
+                call,
+                label=f"calls[{index}]",
+                revision=revision,
+                changed_paths=changed_paths,
+            )
         behaviors = trace.get("behaviors")
         if not isinstance(behaviors, list) or not behaviors:
             raise TraceError("behaviors must be a non-empty list")
+        for behavior_index, behavior in enumerate(behaviors):
+            if not isinstance(behavior, Mapping):
+                raise TraceError(f"behaviors[{behavior_index}] must be an object")
+            behavior_paths = set(
+                _paths(
+                    behavior.get("source_paths"),
+                    f"behaviors[{behavior_index}].source_paths",
+                )
+            )
+            if not behavior_paths.issubset(changed_paths):
+                raise TraceError(
+                    f"behaviors[{behavior_index}].source_paths contains an unchanged path"
+                )
+            symbol_paths = behavior.get("symbol_paths", {})
+            if not isinstance(symbol_paths, Mapping):
+                raise TraceError(
+                    f"behaviors[{behavior_index}].symbol_paths must be an object"
+                )
+            edges = behavior.get("edges", [])
+            if not isinstance(edges, list):
+                raise TraceError(f"behaviors[{behavior_index}].edges must be a list")
+            edge_target_paths: set[str] = set()
+            for edge_index, edge in enumerate(edges):
+                _validate_call(
+                    edge,
+                    label=f"behaviors[{behavior_index}].edges[{edge_index}]",
+                    revision=revision,
+                    changed_paths=behavior_paths,
+                )
+                edge_target_paths.add(str(edge["target_path"]))
+            for symbol, path in symbol_paths.items():
+                _text(symbol, f"behaviors[{behavior_index}].symbol_paths key")
+                normalized_path = _text(
+                    path, f"behaviors[{behavior_index}].symbol_paths value"
+                )
+                if (
+                    normalized_path not in changed_paths
+                    and normalized_path not in edge_target_paths
+                ):
+                    raise TraceError(
+                        f"behaviors[{behavior_index}].symbol_paths contains an unbound path"
+                    )
         contract = generate_behavior_contract(step1, trace)
         expected_calls = {_call_key(edge) for edge in contract["generation"]["edges"]}
         actual_calls = {_call_key(call) for call in calls}
@@ -297,7 +519,16 @@ def normalize_trace(
         trace.get("affected_symbols", []), set(trace["changed_paths"])
     )
     trace["surfaces"] = _normalize_surfaces(trace.get("surfaces", {}))
-    trace["calls"] = _normalize_calls(trace.get("calls", []))
+    trace["behaviors"] = _normalize_behaviors(
+        trace.get("behaviors", []),
+        revision=trace["revision"],
+        changed_paths=set(trace["changed_paths"]),
+    )
+    trace["calls"] = _normalize_calls(
+        trace.get("calls", []),
+        revision=trace["revision"],
+        changed_paths=set(trace["changed_paths"]),
+    )
     trace["provenance"] = {
         "read_only": True,
         "catalog_mutation": "none",
@@ -311,3 +542,56 @@ def normalize_trace(
     unsigned["provenance"].pop("trace_sha256", None)
     trace["provenance"]["trace_sha256"] = artifact_sha256(unsigned)
     return trace
+
+
+def build_trace_rejection_diagnostic(
+    step1: Mapping[str, Any],
+    *,
+    stage: str,
+    reason: str,
+    contract_path: str | Path | None,
+    provider_name: str,
+    provider_model: str | None,
+    raw_provider_response: Any | None = None,
+    normalized_trace: Mapping[str, Any] | None = None,
+    context_sha256: str | None = None,
+) -> dict[str, Any]:
+    source = step1.get("input") if isinstance(step1, Mapping) else {}
+    if not isinstance(source, Mapping):
+        source = {}
+    diagnostic: dict[str, Any] = {
+        "schema_version": SCHEMA_VERSION,
+        "analysis_kind": "greenfield_pr_impact_step_1_5_diagnostic",
+        "status": "rejected",
+        "stage": stage,
+        "reason": reason,
+        "contract_path": str(contract_path) if contract_path is not None else None,
+        "provider": {
+            "name": provider_name,
+            "model": provider_model,
+        },
+        "source": {
+            "repository": source.get("repository") or source.get("repo_key"),
+            "repo_key": source.get("repo_key") or source.get("source_repo_key"),
+            "pr_number": source.get("pr_number"),
+            "base_revision": source.get("base_sha") or source.get("base_revision"),
+            "target_revision": source.get("target_revision") or source.get("head_sha"),
+            "changed_paths": source.get("changed_paths")
+            or [row.get("path") for row in step1.get("changed_files", [])],
+        },
+        "provenance": {
+            "read_only": True,
+            "catalog_mutation": "none",
+            "github_writes": "none",
+            "captured_at": datetime.now(UTC).isoformat(),
+            "step1_evidence_sha256": evidence_fingerprint(step1),
+            "context_sha256": context_sha256,
+        },
+    }
+    if raw_provider_response is not None:
+        diagnostic["raw_provider_response"] = raw_provider_response
+    if normalized_trace is not None:
+        diagnostic["normalized_trace"] = dict(normalized_trace)
+    unsigned = copy.deepcopy(diagnostic)
+    diagnostic["diagnostic_sha256"] = artifact_sha256(unsigned)
+    return diagnostic

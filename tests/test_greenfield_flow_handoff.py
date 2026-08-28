@@ -46,11 +46,23 @@ def test_handoff_fails_closed_for_missing_artifacts(tmp_path: Path) -> None:
 
 def test_handoff_persists_terminal_failure(tmp_path: Path) -> None:
     handoff = GreenfieldFlowHandoff(tmp_path, source={"repository": "ia-main"})
-    handoff.fail("step4", ValueError("invalid evidence"))
+    diagnostic = _artifact(
+        tmp_path / "step1.5.diagnostic.json",
+        {"analysis_kind": "greenfield_pr_impact_step_1_5_diagnostic"},
+    )
+    handoff.fail(
+        "step4",
+        ValueError("invalid evidence"),
+        contract_path=tmp_path / "step1.5.contract.json",
+        diagnostics={"step1_5_diagnostic": diagnostic},
+    )
 
     persisted = json.loads((tmp_path / "flow.handoff.json").read_text())
     assert persisted["status"] == "failed"
-    assert persisted["failure"] == {"stage": "step4", "reason": "invalid evidence"}
+    assert persisted["failure"]["stage"] == "step4"
+    assert persisted["failure"]["reason"] == "invalid evidence"
+    assert persisted["failure"]["contract_path"] == str(tmp_path / "step1.5.contract.json")
+    assert persisted["failure"]["diagnostics"]["step1_5_diagnostic"]["path"] == "step1.5.diagnostic.json"
 
 
 def test_complete_bundle_rejects_rerun_or_identity_change(tmp_path: Path) -> None:

@@ -14,6 +14,7 @@ from greenfield.behavior_contract import BehaviorContractError
 from greenfield.step1_5_trace import TraceError, validate_trace
 from greenfield.strands_agent import (
     StrandsAgentError,
+    Step1TraceFailure,
     generate_contract,
     run_strands_trace,
 )
@@ -49,6 +50,8 @@ def main(argv: list[str] | None = None) -> int:
             model=model,
             timeout=timeout,
             max_file_bytes=args.max_file_bytes,
+            contract_path=args.contract_output,
+            diagnostic_output=args.trace_output.parent / "step1.5.diagnostic.json",
         )
         if validate_trace(step1, trace):
             raise TraceError("generated trace failed validation")
@@ -62,7 +65,16 @@ def main(argv: list[str] | None = None) -> int:
             "contract": str(args.contract_output),
         }, sort_keys=True))
         return 0
-    except (OSError, TypeError, ValueError, json.JSONDecodeError, StrandsAgentError, TraceError, BehaviorContractError) as exc:
+    except (
+        OSError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+        StrandsAgentError,
+        Step1TraceFailure,
+        TraceError,
+        BehaviorContractError,
+    ) as exc:
         print(f"greenfield Step 1.5 failed: {exc}", file=sys.stderr)
         return 2
 

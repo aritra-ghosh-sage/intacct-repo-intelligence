@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -57,6 +58,7 @@ from greenfield.step8_create import (
 )
 from greenfield.strands_agent import (
     StrandsAgentError,
+    Step1TraceFailure,
     generate_contract,
     run_strands_analysis,
     run_strands_trace,
@@ -185,6 +187,43 @@ def _captured_candidate(
     )
 
 
+def _resolve_llm_runtime(
+    *,
+    cli_model: str | None,
+    strands_config: Any,
+    planner_config: dict[str, Any],
+    planner_mode: str,
+) -> tuple[str, str | None]:
+    model = (cli_model or strands_config.model or os.environ.get("LLM_MODEL") or "").strip()
+    if not model:
+        raise ValueError(
+            "Greenfield LLM model is not configured; supply --model, set model in the Greenfield config, or export LLM_MODEL"
+        )
+    base_url = (
+        str(planner_config.get("base_url") or strands_config.base_url or os.environ.get("LLM_BASE_URL") or "")
+        .strip()
+        or None
+    )
+    if planner_mode != "off" and not base_url:
+        raise ValueError(
+            "NexAU is enabled but no base URL is configured; set base_url in the planner config or export LLM_BASE_URL"
+        )
+    return model, base_url
+
+
+def _execution_context(
+    *, dry_run: bool, planner_mode: str, model: str, base_url: str | None
+) -> dict[str, Any]:
+    context: dict[str, Any] = {
+        "dry_run": dry_run,
+        "planner_mode": planner_mode,
+        "model": model,
+    }
+    if base_url is not None:
+        context["base_url"] = base_url
+    return context
+
+
 def _step6_handoff(
     *,
     reason: str = "step6_request_and_target_evidence_not_supplied",
@@ -261,6 +300,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--planner-config", type=Path)
     parser.add_argument("--model")
+    parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--timeout", type=int)
     parser.add_argument("--max-file-bytes", type=int, default=120_000)
     parser.add_argument("--ci-evidence", action="append", default=[])
@@ -309,15 +349,23 @@ def main(argv: list[str] | None = None) -> int:
         env_path = load_greenfield_env()
         strands_config = load_strands_config(args.strands_config)
         apply_strands_environment(strands_config)
-        model = args.model or strands_config.model
-        timeout = args.timeout or strands_config.timeout_seconds
         planner_config = (
             load_planner_config(args.planner_config) if args.planner_mode != "off" else {}
         )
+        model, base_url = _resolve_llm_runtime(
+            cli_model=args.model,
+            strands_config=strands_config,
+            planner_config=planner_config,
+            planner_mode=args.planner_mode,
+        )
+        if args.dry_run and (args.publish_github or args.create_draft_pr):
+            raise ValueError("--dry-run cannot be combined with GitHub write flags")
+        dry_run = args.dry_run or not (args.publish_github or args.create_draft_pr)
+        timeout = args.timeout or strands_config.timeout_seconds
         if args.planner_mode != "off":
             validate_greenfield_llm_env(
-                model=model or str(planner_config.get("model") or "").strip() or None,
-                base_url=str(planner_config.get("base_url") or "").strip() or None,
+                model=model,
+                base_url=base_url,
                 env_path=env_path,
             )
         args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -387,6 +435,12 @@ def main(argv: list[str] | None = None) -> int:
             contract_artifacts=args.contract,
             repository_handbooks=_repository_handbooks(args.repository_handbook),
             tool_limits={"max_file_bytes": args.max_file_bytes},
+            execution=_execution_context(
+                dry_run=dry_run,
+                planner_mode=args.planner_mode,
+                model=model,
+                base_url=base_url if args.planner_mode != "off" else None,
+            ),
         )
         run_context_path = args.output_dir / "run-context.json"
         write_json_atomic(run_context_path, run_context)
@@ -396,19 +450,38 @@ def main(argv: list[str] | None = None) -> int:
             outputs={"run_context": run_context_path},
         )
         current_stage = "step1_5"
-        trace, context = run_strands_trace(
-            step1,
-            args.source_root,
-            model=model,
-            timeout=timeout,
-            max_file_bytes=args.max_file_bytes,
-        )
         trace_path = args.output_dir / "step1.5.trace.json"
         contract_path = args.output_dir / "step1.5.contract.json"
-        write_json_atomic(trace_path, trace)
-        write_json_atomic(
-            contract_path, generate_contract(step1, trace, str(trace_path))
-        )
+        diagnostic_path = args.output_dir / "step1.5.diagnostic.json"
+        try:
+            trace, context = run_strands_trace(
+                step1,
+                args.source_root,
+                model=model,
+                timeout=timeout,
+                max_file_bytes=args.max_file_bytes,
+                contract_path=contract_path,
+                diagnostic_output=diagnostic_path,
+            )
+            write_json_atomic(trace_path, trace)
+            write_json_atomic(
+                contract_path, generate_contract(step1, trace, str(trace_path))
+            )
+        except Step1TraceFailure as exc:
+            if handoff is not None:
+                diagnostics = (
+                    {"step1_5_diagnostic": diagnostic_path}
+                    if diagnostic_path.exists()
+                    else None
+                )
+                handoff.fail(
+                    current_stage,
+                    exc,
+                    contract_path=contract_path,
+                    diagnostics=diagnostics,
+                )
+            print(f"greenfield Strands pipeline failed: {exc}", file=sys.stderr)
+            return 2
         handoff.complete_stage(
             "step1_5",
             inputs={"step1": step1_path},
@@ -635,7 +708,11 @@ def main(argv: list[str] | None = None) -> int:
                     compatibility_summary,
                     toolbox,
                     mode=args.planner_mode,
-                    config=planner_config,
+                    config={
+                        **planner_config,
+                        "model": model,
+                        **({"base_url": base_url} if base_url is not None else {}),
+                    },
                     model=model,
                     timeout=timeout,
                 )

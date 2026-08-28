@@ -90,9 +90,21 @@ class GreenfieldFlowHandoff:
         )
         self._write()
 
-    def fail(self, stage: str, error: BaseException) -> None:
+    def fail(
+        self,
+        stage: str,
+        error: BaseException,
+        *,
+        contract_path: str | Path | None = None,
+        diagnostics: Mapping[str, str | Path] | None = None,
+    ) -> None:
         self._body["status"] = "failed"
-        self._body["failure"] = {"stage": stage, "reason": str(error)}
+        failure: dict[str, Any] = {"stage": stage, "reason": str(error)}
+        if contract_path is not None:
+            failure["contract_path"] = str(contract_path)
+        if diagnostics:
+            failure["diagnostics"] = self._references(diagnostics)
+        self._body["failure"] = failure
         self._write()
 
     def finish(self) -> dict[str, Any]:

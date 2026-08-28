@@ -172,6 +172,7 @@ def build_run_context(
     contract_artifacts: Sequence[str | Path] = (),
     repository_handbooks: Mapping[str, str | Path] | None = None,
     tool_limits: Mapping[str, int] | None = None,
+    execution: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Capture source identity, candidate scope, and evidence fingerprints once."""
 
@@ -295,6 +296,8 @@ def build_run_context(
             "catalog_mutation": "none",
         },
     }
+    if execution is not None:
+        context["execution"] = dict(execution)
     context["context_sha256"] = artifact_sha256(context)
     errors = validate_run_context(context)
     if errors:
@@ -333,6 +336,19 @@ def validate_run_context(value: Any) -> list[str]:
         for row in candidates
     ):
         errors.append("candidate_repositories contains an invalid row")
+    execution = value.get("execution")
+    if execution is not None:
+        if not isinstance(execution, Mapping):
+            errors.append("execution must be an object")
+        else:
+            if "dry_run" in execution and not isinstance(execution["dry_run"], bool):
+                errors.append("execution.dry_run must be a boolean")
+            if execution.get("planner_mode") not in {None, "off", "shadow", "active"}:
+                errors.append("execution.planner_mode is invalid")
+            if "model" in execution and not isinstance(execution["model"], str):
+                errors.append("execution.model must be a string")
+            if "base_url" in execution and not isinstance(execution["base_url"], str):
+                errors.append("execution.base_url must be a string")
     digest = value.get("context_sha256")
     unsigned = dict(value)
     unsigned.pop("context_sha256", None)
