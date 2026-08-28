@@ -13,6 +13,7 @@ wheels/
 .python-version
 uv.lock
 .cache/
+.env
 
 # Local catalog database
 all_tables_row_count.txt
