@@ -18,6 +18,11 @@ configuration and role-based credentials. Repository config must store only
 non-secret defaults such as region, model, and timeout; see
 `config/greenfield_strands.example.yaml` for the expected shape.
 
+Greenfield runners also load a repo-local `.env` file when present. That file
+can supply the same AWS variables above and the NexAU `LLM_*` values used by the
+optional planner path. The checked-in example is
+`config/greenfield_llm.example.env`.
+
 The validated trace is written as `step1.5.trace.json`. The existing behavior
 contract generator then writes `step1.5.contract.json`; Step 2 consumes that
 contract through its existing `--generated-contract` option.

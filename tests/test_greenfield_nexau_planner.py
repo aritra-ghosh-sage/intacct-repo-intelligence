@@ -10,6 +10,13 @@ from greenfield.strands_tools import GreenfieldToolbox
 from tests.test_greenfield_simplified_flow import _context
 
 
+@pytest.fixture(autouse=True)
+def _greenfield_llm_env(monkeypatch) -> None:
+    monkeypatch.setenv("LLM_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_MODEL", "test-model")
+    monkeypatch.setenv("LLM_BASE_URL", "https://test.example/v1")
+
+
 def test_nexau_planner_retains_bounded_lifecycle(tmp_path: Path) -> None:
     context, _ = _context(tmp_path)
 

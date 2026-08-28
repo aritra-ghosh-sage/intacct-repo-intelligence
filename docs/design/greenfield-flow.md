@@ -12,6 +12,17 @@ PYTHONPATH=. ./.venv/bin/python scripts/run_greenfield.py \
 The resolved source root for the current workspace convention is
 `/Users/aritra.ghosh/projects/main`.
 
+The greenfield runners load a repo-local `.env` file at startup if it exists.
+Existing shell values win over file values. Use the shared `.env` for:
+
+- Strands AWS runtime settings such as `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+  optional `AWS_SESSION_TOKEN`, `AWS_PROFILE`, and `AWS_REGION`
+- NexAU planner settings such as `LLM_API_KEY`, `LLM_MODEL`, and `LLM_BASE_URL`
+
+If the planner is enabled and any of the required `LLM_*` values are missing,
+the runner fails fast with a message that points to the checked `.env` path and
+the checked-in example file.
+
 ## Phases
 
 ### Capture

@@ -18,6 +18,7 @@ from greenfield.strands_agent import (
     run_strands_trace,
 )
 from greenfield.strands_config import apply_strands_environment, load_strands_config
+from greenfield.llm_env import load_greenfield_env
 from scripts.validate_greenfield_step1 import validate as validate_step1
 
 
@@ -33,6 +34,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-file-bytes", type=int, default=0)
     args = parser.parse_args(argv)
     try:
+        load_greenfield_env()
         strands_config = load_strands_config(args.strands_config)
         apply_strands_environment(strands_config)
         model = args.model or strands_config.model

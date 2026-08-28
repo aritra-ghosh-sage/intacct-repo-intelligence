@@ -38,6 +38,7 @@ from greenfield.remediation import build_automatic_step6_request
 from greenfield.replay_validation import validation_summary
 from greenfield.repository_context import collect_repository_context
 from greenfield.run_context import build_run_context
+from greenfield.llm_env import load_greenfield_env, validate_greenfield_llm_env
 from greenfield.step2_contract import normalize_repository_inventory
 from greenfield.step6_contract import Step6Error, load_json, validate_step6_report
 from greenfield.step6_patch import generate_step6
@@ -305,10 +306,20 @@ def main(argv: list[str] | None = None) -> int:
     handoff: GreenfieldFlowHandoff | None = None
     current_stage = "initialization"
     try:
+        env_path = load_greenfield_env()
         strands_config = load_strands_config(args.strands_config)
         apply_strands_environment(strands_config)
         model = args.model or strands_config.model
         timeout = args.timeout or strands_config.timeout_seconds
+        planner_config = (
+            load_planner_config(args.planner_config) if args.planner_mode != "off" else {}
+        )
+        if args.planner_mode != "off":
+            validate_greenfield_llm_env(
+                model=model or str(planner_config.get("model") or "").strip() or None,
+                base_url=str(planner_config.get("base_url") or "").strip() or None,
+                env_path=env_path,
+            )
         args.output_dir.mkdir(parents=True, exist_ok=True)
         step1_path = args.step1_report or args.output_dir / "step1.json"
         current_stage = "step1"
@@ -624,7 +635,7 @@ def main(argv: list[str] | None = None) -> int:
                     compatibility_summary,
                     toolbox,
                     mode=args.planner_mode,
-                    config=load_planner_config(args.planner_config),
+                    config=planner_config,
                     model=model,
                     timeout=timeout,
                 )

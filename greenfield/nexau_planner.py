@@ -12,6 +12,11 @@ from typing import Any
 import yaml
 
 from greenfield.artifact_io import artifact_sha256
+from greenfield.llm_env import (
+    GreenfieldEnvError,
+    load_greenfield_env,
+    validate_greenfield_llm_env,
+)
 from greenfield.planning_contract import TASK_TYPES, build_planning_report
 from greenfield.strands_agent import StrandsAgentError, run_strands_analysis
 from greenfield.strands_tools import GreenfieldToolbox
@@ -104,25 +109,24 @@ def _default_planner_factory(
 ) -> Callable[[str], Any]:
     """Create a programmatic NexAU agent when the optional runtime is installed."""
 
+    env_path = load_greenfield_env()
+    model = str(config.get("model") or os.environ.get("LLM_MODEL") or "").strip()
+    base_url = str(config.get("base_url") or os.environ.get("LLM_BASE_URL") or "").strip()
+    try:
+        validate_greenfield_llm_env(
+            model=model or None,
+            base_url=base_url or None,
+            env_path=env_path,
+        )
+    except GreenfieldEnvError as exc:
+        raise NexAUPlannerError(str(exc)) from exc
+    api_key = os.environ.get("LLM_API_KEY")
     try:
         from nexau import Agent, AgentConfig, LLMConfig, Tool
     except ImportError as exc:  # pragma: no cover - depends on optional runtime
         raise NexAUPlannerError(
             "NexAU is not installed; install the pinned project dependency before enabling planner mode"
         ) from exc
-    model = str(config.get("model") or os.environ.get("LLM_MODEL") or "").strip()
-    if not model:
-        raise NexAUPlannerError(
-            "NexAU planner requires planner config model or LLM_MODEL environment variable"
-        )
-    base_url = str(config.get("base_url") or os.environ.get("LLM_BASE_URL") or "").strip()
-    if not base_url:
-        raise NexAUPlannerError(
-            "NexAU planner requires planner config base_url or LLM_BASE_URL environment variable"
-        )
-    api_key = os.environ.get("LLM_API_KEY")
-    if not api_key:
-        raise NexAUPlannerError("NexAU planner requires LLM_API_KEY environment variable")
     llm = LLMConfig(
         model=model,
         base_url=base_url,
