@@ -1,0 +1,26 @@
+{
+  "analysis_kind": "greenfield_pr_analysis_request",
+  "base_revision": "706d7ed374a45b6a43fbf57933de98b2ee1a22c8",
+  "changed_paths": [
+    "app/resources/js/glmatching.js",
+    "app/source/gl/GLMatchingManager.cls",
+    "app/source/gl/glmatching_form.xml"
+  ],
+  "evidence": [
+    {
+      "artifact": "step1.json",
+      "sha256": "747ffc2569e0c7278ab45292bd7792bcd4a127bbb3fd435b72704f5a9af4bca9"
+    }
+  ],
+  "head_revision": "7c385de5220fabf1a6c16bbe4d34ca0b6cd1389c",
+  "pr_number": 48702,
+  "provenance": {
+    "catalog_mutation": "none",
+    "github_writes": "none",
+    "read_only": true
+  },
+  "request_sha256": "338d297d258da49465f7c785bcaf391383f65d10993b94fb77e8e4957f578aa1",
+  "schema_version": "0.1",
+  "source_repo_key": "ia-main",
+  "source_repository": "intacct/ia-app"
+}

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import threading
 import time
 from pathlib import Path
@@ -13,6 +14,7 @@ from greenfield.step1_5_trace import normalize_trace, validate_trace
 from greenfield.step1_capture import evidence_fingerprint
 from greenfield.strands_agent import (
     StrandsAgentError,
+    _prompt,
     _run_strands_json,
     build_context,
     run_strands_trace,
@@ -75,6 +77,98 @@ def test_strands_trace_validation_preserves_exact_surface_states() -> None:
     trace = _trace()
     assert validate_trace(STEP1, trace) == []
     assert trace["surfaces"]["xml_api"] == "not_run"
+
+
+def test_normalize_trace_accepts_provider_surface_records() -> None:
+    raw = _trace()
+    raw["surfaces"] = [
+        {
+            "surface": "http_qrequest",
+            "status": "available",
+            "path": "app/source/gl/GLMatchingManager.cls",
+            "lines": {"start": 87, "end": 120},
+            "notes": "provider metadata is not trusted",
+        },
+        {"surface": "rest_api", "status": "not_run"},
+    ]
+    normalized = normalize_trace(
+        STEP1,
+        raw,
+        agent_metadata={"name": "fixture", "model": "fixture", "timeout_seconds": 1},
+        context_sha256="a" * 64,
+    )
+
+    assert normalized["surfaces"] == {
+        "http_qrequest": "available",
+        "rest_api": "not_run",
+    }
+    assert validate_trace(STEP1, normalized) == []
+
+
+def test_normalize_trace_accepts_legacy_call_kind() -> None:
+    raw = _trace()
+    call = raw["calls"][0]
+    call["kind"] = call.pop("relationship_type")
+    normalized = normalize_trace(
+        STEP1,
+        raw,
+        agent_metadata={"name": "fixture", "model": "fixture", "timeout_seconds": 1},
+        context_sha256="a" * 64,
+    )
+
+    assert normalized["calls"][0]["relationship_type"] == "CALLS"
+    assert validate_trace(STEP1, normalized) == []
+
+
+def test_normalize_trace_rejects_conflicting_call_relation_keys() -> None:
+    raw = _trace()
+    raw["calls"][0]["kind"] = "STATIC_CALLS"
+
+    with pytest.raises(ValueError, match="conflicting relationship_type and kind"):
+        normalize_trace(
+            STEP1,
+            raw,
+            agent_metadata={"name": "fixture", "model": "fixture", "timeout_seconds": 1},
+            context_sha256="a" * 64,
+        )
+
+
+@pytest.mark.parametrize(
+    ("surfaces", "message"),
+    [
+        (["not-an-object"], "surfaces[0] must be an object"),
+        ([{"status": "available"}], "surfaces[0].surface must be a non-empty string"),
+        ([{"surface": "http_qrequest"}], "surfaces[0].status must be a non-empty string"),
+        ([{"surface": "http_qrequest", "status": "unknown"}], "unsupported status"),
+        (
+            [
+                {"surface": "http_qrequest", "status": "available"},
+                {"surface": "http_qrequest", "status": "empty"},
+            ],
+            "duplicate surface",
+        ),
+    ],
+)
+def test_normalize_trace_rejects_malformed_surface_records(
+    surfaces: list[object], message: str
+) -> None:
+    raw = _trace()
+    raw["surfaces"] = surfaces
+
+    with pytest.raises(ValueError, match=re.escape(message)):
+        normalize_trace(
+            STEP1,
+            raw,
+            agent_metadata={"name": "fixture", "model": "fixture", "timeout_seconds": 1},
+            context_sha256="a" * 64,
+        )
+
+
+def test_step1_5_prompt_requires_canonical_surface_map() -> None:
+    prompt = _prompt({"changed_files": []}, ROOT)
+
+    assert '"surfaces": {"http_qrequest": "available", "rest_api": "not_run"}' in prompt
+    assert "Do not return surfaces as a list of records" in prompt
 
 
 def test_trace_provenance_bindings_are_fail_closed() -> None:

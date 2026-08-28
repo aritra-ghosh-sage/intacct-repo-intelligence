@@ -1,0 +1,135 @@
+{
+  "analysis_kind": "greenfield_run_context",
+  "candidate_repositories": [
+    {
+      "discovery_eligible": true,
+      "inspected_revision": "b159255de66a41e368fd67263f72cbc46761a537",
+      "local_root": "/Users/aritra.ghosh/projects/ia-gwdata-gl",
+      "priority": "explicit_contract",
+      "relationship_types": [
+        "validates_gateway_behavior_of"
+      ],
+      "repo_key": "ia-gwdata-gl",
+      "repository": "intacct/ia-gwdata-gl",
+      "test_formats": [
+        "csv",
+        "xml"
+      ],
+      "test_roots": [
+        "testdefinitions",
+        "testscripts"
+      ],
+      "tracked_branch": "main"
+    },
+    {
+      "discovery_eligible": true,
+      "inspected_revision": "410629b478b078973061f1bc6e355360d56b164f",
+      "local_root": "/Users/aritra.ghosh/projects/ia-restapi-automation-tests",
+      "priority": "explicit_contract",
+      "relationship_types": [
+        "tests_rest_of"
+      ],
+      "repo_key": "ia-restapi-automation-tests",
+      "repository": "intacct/ia-restapi-automation-tests",
+      "test_formats": [
+        "gherkin"
+      ],
+      "test_roots": [
+        "features"
+      ],
+      "tracked_branch": "main"
+    },
+    {
+      "discovery_eligible": true,
+      "inspected_revision": null,
+      "local_root": "/Users/aritra.ghosh/projects/ia-gwdata-ap",
+      "priority": "discovery_screen",
+      "relationship_types": [],
+      "repo_key": "ia-gwdata-ap",
+      "repository": "intacct/ia-gwdata-ap",
+      "test_formats": [
+        "csv",
+        "xml"
+      ],
+      "test_roots": [
+        "testdefinitions",
+        "testscripts"
+      ],
+      "tracked_branch": "main"
+    },
+    {
+      "discovery_eligible": true,
+      "inspected_revision": null,
+      "local_root": "/Users/aritra.ghosh/projects/ia-gwdata-contract",
+      "priority": "discovery_screen",
+      "relationship_types": [],
+      "repo_key": "ia-gwdata-contract",
+      "repository": "intacct/ia-gwdata-contract",
+      "test_formats": [
+        "csv",
+        "xml"
+      ],
+      "test_roots": [
+        "testdefinitions",
+        "testscripts"
+      ],
+      "tracked_branch": "main"
+    },
+    {
+      "discovery_eligible": true,
+      "inspected_revision": null,
+      "local_root": "/Users/aritra.ghosh/projects/ia-gwdata-project",
+      "priority": "discovery_screen",
+      "relationship_types": [],
+      "repo_key": "ia-gwdata-project",
+      "repository": "intacct/ia-gwdata-project",
+      "test_formats": [
+        "csv",
+        "xml"
+      ],
+      "test_roots": [
+        "testdefinitions",
+        "testscripts"
+      ],
+      "tracked_branch": "main"
+    }
+  ],
+  "context_sha256": "74bf7b6a45577b3b6b6383de09ab0b07f5a69bf5cef4f84b173ebdcf73962581",
+  "evidence_artifacts": [],
+  "manifest": {
+    "path": "/Users/aritra.ghosh/projects/intacct-repo-intelligence/config/workspace_repos.yaml",
+    "sha256": "21f0f828bdabd2c2194b0f0d8e302b6c36664d136962f3d27a6bc0ee9a0e7cad"
+  },
+  "provenance": {
+    "catalog_mutation": "none",
+    "github_writes": "none",
+    "request_sha256": "d952c0bfd800252f8b8c963115e1e7ffb9e53f7150e07cae374bc0771ef79009",
+    "step1_sha256": "b1c9ebcf8e4a313f64032ba988d24f91cb692a4b7e0f3ac7b80aa91febdbc801"
+  },
+  "repository_handbooks": [],
+  "schema_version": "0.1",
+  "source": {
+    "base_revision": "706d7ed374a45b6a43fbf57933de98b2ee1a22c8",
+    "changed_paths": [
+      "app/resources/js/glmatching.js",
+      "app/source/gl/GLMatchingManager.cls",
+      "app/source/gl/glmatching_form.xml"
+    ],
+    "head_revision": "7c385de5220fabf1a6c16bbe4d34ca0b6cd1389c",
+    "local_root": "/Users/aritra.ghosh/projects/main",
+    "pr_number": 48702,
+    "repo_key": "ia-main",
+    "repository": "intacct/ia-app"
+  },
+  "tool_policy": {
+    "limits": {
+      "max_file_bytes": 120000,
+      "max_files": 40,
+      "max_search_results": 50,
+      "max_tool_calls": 80
+    },
+    "network_access": "none",
+    "read_only": true,
+    "revision_bound": true
+  }
+}

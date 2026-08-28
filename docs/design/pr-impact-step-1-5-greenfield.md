@@ -11,6 +11,12 @@ must use an exact changed/source path and target revision. AI output cannot
 establish a cross-repository relationship, executed test coverage, ownership,
 or a no-impact result.
 
+Raw provider responses are normalized at the Step 1.5 trust boundary. The
+provider may return surface records with `surface` and `status` fields, but the
+validated and persisted trace always stores `surfaces` as an object mapping
+surface names to status values. Provider-only metadata such as paths, line
+ranges, and notes is not trusted as part of the canonical surface evidence.
+
 The Strands runtime uses the standard AWS credential provider chain. Operators
 may set `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, optional
 `AWS_SESSION_TOKEN`, `AWS_PROFILE`, and `AWS_REGION`, or rely on shared AWS

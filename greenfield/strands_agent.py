@@ -88,12 +88,22 @@ cross-repository facts.
 
 Return only JSON matching the supplied Greenfield Step 1.5 trace schema. Produce:
 - affected_symbols: exact symbols in changed paths with source lines;
-- calls: exact CALLS or STATIC_CALLS relationships with source/target paths and lines;
+- calls: exact objects with source_symbol, target_symbol, relationship_type
+  (CALLS or STATIC_CALLS), source_path, source_line, source_revision,
+  target_path, and resolution='exact'; for example:
+  {{"source_symbol": "A", "target_symbol": "B", "relationship_type": "CALLS",
+  "source_path": "app/source/a.cls", "source_line": 10,
+  "source_revision": "<target revision>", "target_path": "app/source/b.cls",
+  "resolution": "exact"}};
+  do not use `kind` as a replacement for `relationship_type`;
 - behaviors: non-empty behavior groups compatible with the existing Greenfield
   behavior contract, including entry_symbols, source_paths, symbol_paths,
   exact edges, and a concise description;
-- surfaces: statuses available, empty, unavailable, not_run, unresolved,
-  ambiguous, or dynamic, with no claim that an unexamined surface is unaffected;
+- surfaces: an object mapping each surface name to one of the statuses
+  available, empty, unavailable, not_run, unresolved, ambiguous, or dynamic,
+  with no claim that an unexamined surface is unaffected. For example:
+  {{"surfaces": {{"http_qrequest": "available", "rest_api": "not_run"}}}}.
+  Do not return surfaces as a list of records;
 - findings: explicit unresolved or unavailable evidence and next checks.
 
 Every asserted edge must have exact source evidence and resolution='exact'.

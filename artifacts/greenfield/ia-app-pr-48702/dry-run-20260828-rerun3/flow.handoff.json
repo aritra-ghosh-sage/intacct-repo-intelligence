@@ -1,0 +1,86 @@
+{
+  "analysis_kind": "greenfield_pr_impact_flow_handoff",
+  "failure": {
+    "reason": "invalid Strands Step 1.5 trace: behavior 0.symbol_paths must be an object",
+    "stage": "step1_5"
+  },
+  "provenance": {
+    "catalog_mutation": "none",
+    "github_writes": "none",
+    "read_only": true
+  },
+  "schema_version": "0.1",
+  "source": {
+    "base_revision": "706d7ed374a45b6a43fbf57933de98b2ee1a22c8",
+    "base_sha": "706d7ed374a45b6a43fbf57933de98b2ee1a22c8",
+    "changed_paths": [
+      "app/resources/js/glmatching.js",
+      "app/source/gl/GLMatchingManager.cls",
+      "app/source/gl/glmatching_form.xml"
+    ],
+    "head_sha": "7c385de5220fabf1a6c16bbe4d34ca0b6cd1389c",
+    "pr_number": 48702,
+    "repo_key": "ia-main",
+    "repository": "intacct/ia-app",
+    "target_revision": "7c385de5220fabf1a6c16bbe4d34ca0b6cd1389c"
+  },
+  "stages": [
+    {
+      "inputs": {
+        "manifest": {
+          "path": "/Users/aritra.ghosh/projects/intacct-repo-intelligence/config/workspace_repos.yaml",
+          "sha256": "21f0f828bdabd2c2194b0f0d8e302b6c36664d136962f3d27a6bc0ee9a0e7cad"
+        }
+      },
+      "name": "step1",
+      "outputs": {
+        "step1": {
+          "path": "step1.json",
+          "sha256": "2625453e2bb8acd75dce6ea1da1341abce5c59538582fe4497268878155ba7bc"
+        }
+      },
+      "status": "complete"
+    },
+    {
+      "inputs": {
+        "step1": {
+          "path": "step1.json",
+          "sha256": "2625453e2bb8acd75dce6ea1da1341abce5c59538582fe4497268878155ba7bc"
+        }
+      },
+      "name": "request",
+      "outputs": {
+        "identity": {
+          "path": "bundle.identity.json",
+          "sha256": "0de608adaa6b15362695cd5e1ab3fd5aee5df54da88718b3a6e6f0c1ed5c2cfe"
+        },
+        "request": {
+          "path": "pr-analysis.request.json",
+          "sha256": "2a26eee554329b6f7f37c0a3752225483b898c6a4b4f521e9a69278f1acfae10"
+        }
+      },
+      "status": "complete"
+    },
+    {
+      "inputs": {
+        "manifest": {
+          "path": "/Users/aritra.ghosh/projects/intacct-repo-intelligence/config/workspace_repos.yaml",
+          "sha256": "21f0f828bdabd2c2194b0f0d8e302b6c36664d136962f3d27a6bc0ee9a0e7cad"
+        },
+        "step1": {
+          "path": "step1.json",
+          "sha256": "2625453e2bb8acd75dce6ea1da1341abce5c59538582fe4497268878155ba7bc"
+        }
+      },
+      "name": "capture",
+      "outputs": {
+        "run_context": {
+          "path": "run-context.json",
+          "sha256": "8d879b9d26061a55b125c430656fe0470375add620345ce7673df1e09d1c3968"
+        }
+      },
+      "status": "complete"
+    }
+  ],
+  "status": "failed"
+}

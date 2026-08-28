@@ -99,6 +99,50 @@ def _validate_surfaces(value: Any) -> dict[str, str]:
     return dict(sorted(result.items()))
 
 
+def _normalize_surfaces(value: Any) -> dict[str, str]:
+    """Normalize provider surface records into the persisted status map."""
+
+    if not isinstance(value, list):
+        return _validate_surfaces(value)
+
+    normalized: dict[str, str] = {}
+    for index, item in enumerate(value):
+        if not isinstance(item, Mapping):
+            raise TraceError(f"surfaces[{index}] must be an object")
+        name = _text(item.get("surface"), f"surfaces[{index}].surface")
+        if name in normalized:
+            raise TraceError(f"duplicate surface: {name}")
+        status = _text(item.get("status"), f"surfaces[{index}].status")
+        normalized[name] = status
+    return _validate_surfaces(normalized)
+
+
+def _normalize_calls(value: Any) -> list[dict[str, Any]]:
+    """Normalize the provider's legacy call relation key at the trust boundary."""
+
+    if not isinstance(value, list):
+        raise TraceError("calls must be a list")
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, Mapping):
+            raise TraceError(f"calls[{index}] must be an object")
+        call = dict(item)
+        legacy_kind = call.get("kind")
+        relationship_type = call.get("relationship_type")
+        if relationship_type is None and legacy_kind is not None:
+            call["relationship_type"] = legacy_kind
+        elif (
+            relationship_type is not None
+            and legacy_kind is not None
+            and relationship_type != legacy_kind
+        ):
+            raise TraceError(
+                f"calls[{index}] has conflicting relationship_type and kind"
+            )
+        normalized.append(call)
+    return normalized
+
+
 def _call_key(
     value: Mapping[str, Any],
 ) -> tuple[str, str, str, str, int, str, str, str]:
@@ -252,7 +296,8 @@ def normalize_trace(
     trace["affected_symbols"] = _validate_symbol_rows(
         trace.get("affected_symbols", []), set(trace["changed_paths"])
     )
-    trace["surfaces"] = _validate_surfaces(trace.get("surfaces", {}))
+    trace["surfaces"] = _normalize_surfaces(trace.get("surfaces", {}))
+    trace["calls"] = _normalize_calls(trace.get("calls", []))
     trace["provenance"] = {
         "read_only": True,
         "catalog_mutation": "none",
