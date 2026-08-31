@@ -41,12 +41,26 @@ def load_planner_config(path: str | Path | None) -> dict[str, Any]:
         return {}
     if not isinstance(value, dict):
         raise NexAUPlannerError("planner config must be an object")
-    forbidden = {"api_key", "secret", "token", "password"}
+    forbidden_fragments = (
+        "api_key",
+        "apikey",
+        "secret",
+        "token",
+        "password",
+        "passwd",
+        "privatekey",
+        "accesskey",
+        "sessiontoken",
+    )
+
+    def normalized_key_name(key: Any) -> str:
+        return "".join(ch for ch in str(key).lower() if ch.isalnum())
 
     def contains_secret(value: Any) -> bool:
         if isinstance(value, Mapping):
             return any(
-                str(key).lower() in forbidden or contains_secret(child)
+                any(fragment in normalized_key_name(key) for fragment in forbidden_fragments)
+                or contains_secret(child)
                 for key, child in value.items()
             )
         if isinstance(value, list):

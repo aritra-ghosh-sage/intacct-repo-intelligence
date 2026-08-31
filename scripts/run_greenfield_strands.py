@@ -589,6 +589,7 @@ def main(argv: list[str] | None = None) -> int:
                 timeout=timeout,
                 max_file_bytes=args.max_file_bytes,
                 max_tokens=strands_config.max_tokens,
+                max_continuations=strands_config.max_continuations,
                 contract_path=contract_path,
                 diagnostic_output=diagnostic_path,
             )
@@ -924,6 +925,7 @@ def main(argv: list[str] | None = None) -> int:
                     tool_calls=toolbox.ledger(),
                     planning=planning_report,
                     lifecycle_complete=planning_report.get("status") == "complete",
+                    source_trace=trace,
                 )
             else:
                 raise AnalysisReportError(
@@ -948,6 +950,7 @@ def main(argv: list[str] | None = None) -> int:
                 tool_calls=toolbox.ledger(),
                 planning=planning_report,
                 lifecycle_complete=False,
+                source_trace=trace,
             )
         analysis_path = args.output_dir / "analysis-report.json"
         write_json_atomic(analysis_path, analysis)

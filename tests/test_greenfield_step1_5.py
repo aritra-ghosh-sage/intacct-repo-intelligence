@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from strands.types.exceptions import MaxTokensReachedException
 
 from greenfield.artifact_io import artifact_sha256
 from greenfield.step1_5_trace import normalize_trace, validate_trace
@@ -193,9 +194,73 @@ def test_normalize_trace_accepts_behavior_symbol_path_records() -> None:
     assert validate_trace(STEP1, normalized) == []
 
 
+def test_normalize_trace_derives_calls_from_behavior_edges() -> None:
+    raw = _trace()
+    raw.pop("calls")
+    # Expected edges come from the raw fixture, not from an already-derived trace.
+    source_edges = [
+        edge
+        for behavior in SOURCE_TRACE["behaviors"]
+        for edge in behavior["edges"]
+    ]
+    expected_keys = sorted(
+        (edge["source_symbol"], edge["target_symbol"]) for edge in source_edges
+    )
+
+    normalized = normalize_trace(
+        STEP1,
+        raw,
+        agent_metadata={"name": "fixture", "model": "fixture", "timeout_seconds": 1},
+        context_sha256="a" * 64,
+    )
+
+    assert expected_keys
+    assert sorted(
+        (call["source_symbol"], call["target_symbol"]) for call in normalized["calls"]
+    ) == expected_keys
+    assert all(call["resolution"] == "exact" for call in normalized["calls"])
+    assert validate_trace(STEP1, normalized) == []
+
+
+def test_normalize_trace_ignores_model_supplied_calls() -> None:
+    raw = _trace()
+    raw["calls"] = [{"source_symbol": "Fabricated", "target_symbol": "Edge"}]
+
+    normalized = normalize_trace(
+        STEP1,
+        raw,
+        agent_metadata={"name": "fixture", "model": "fixture", "timeout_seconds": 1},
+        context_sha256="a" * 64,
+    )
+
+    assert all(call["source_symbol"] != "Fabricated" for call in normalized["calls"])
+    assert validate_trace(STEP1, normalized) == []
+
+
+def test_normalize_trace_excludes_edges_the_traversal_cannot_reach() -> None:
+    raw = _trace()
+    raw.pop("calls")
+    orphan = copy.deepcopy(raw["behaviors"][0]["edges"][0])
+    orphan["source_symbol"] = "Unreachable::caller"
+    orphan["target_symbol"] = "Unreachable::callee"
+    raw["behaviors"][0]["edges"].append(orphan)
+
+    normalized = normalize_trace(
+        STEP1,
+        raw,
+        agent_metadata={"name": "fixture", "model": "fixture", "timeout_seconds": 1},
+        context_sha256="a" * 64,
+    )
+
+    assert all(
+        call["source_symbol"] != "Unreachable::caller" for call in normalized["calls"]
+    )
+    assert validate_trace(STEP1, normalized) == []
+
+
 def test_normalize_trace_rejects_conflicting_call_relation_keys() -> None:
     raw = _trace()
-    raw["calls"][0]["kind"] = "STATIC_CALLS"
+    raw["behaviors"][0]["edges"][0]["kind"] = "STATIC_CALLS"
 
     with pytest.raises(ValueError, match="conflicting relationship_type and kind"):
         normalize_trace(
@@ -239,7 +304,7 @@ def test_normalize_trace_rejects_malformed_surface_records(
 
 def test_normalize_trace_rejects_malformed_line_evidence() -> None:
     raw = _trace()
-    raw["calls"][0]["source_line"] = None
+    raw["behaviors"][0]["edges"][0]["source_line"] = None
 
     with pytest.raises(ValueError, match="source_line must be a positive integer"):
         normalize_trace(
@@ -379,6 +444,229 @@ def test_run_strands_trace_persists_failure_diagnostic(tmp_path: Path) -> None:
     assert diagnostic["contract_path"] == str(contract_path)
     assert diagnostic["raw_provider_response"]["surfaces"] == ["not-an-object"]
     assert diagnostic["source"]["target_revision"] == head
+
+
+def _changed_files_step1(base: str, head: str) -> dict[str, object]:
+    step1 = copy.deepcopy(STEP1)
+    step1["input"].update(
+        {
+            "target_revision": head,
+            "head_sha": head,
+            "base_revision": base,
+            "base_sha": base,
+            "changed_paths": [
+                "app/source/company/AllocationTxnHelper.cls",
+                "app/source/gl/GLBatchManager.cls",
+            ],
+        }
+    )
+    step1["changed_files"] = [
+        {
+            "path": "app/source/company/AllocationTxnHelper.cls",
+            "filename": "app/source/company/AllocationTxnHelper.cls",
+            "status": "modified",
+        },
+        {
+            "path": "app/source/gl/GLBatchManager.cls",
+            "filename": "app/source/gl/GLBatchManager.cls",
+            "status": "modified",
+        },
+    ]
+    step1["pr_metadata"]["base_revision"] = base
+    step1["pr_metadata"]["target_revision"] = head
+    step1["provenance"]["evidence_sha256"] = evidence_fingerprint(step1)
+    return step1
+
+
+class _TruncatingAgent:
+    """Mimics Strands appending the partial assistant message before raising."""
+
+    def __init__(self, fragments: list[str], *, always_truncate: bool = False) -> None:
+        self._fragments = fragments
+        self._always_truncate = always_truncate
+        self.messages: list[dict[str, object]] = []
+        self.calls = 0
+        self.prompts: list[object] = []
+        self.trailing_assistants_at_call: list[int] = []
+
+    def __call__(self, prompt: object = None) -> str:
+        fragment = self._fragments[min(self.calls, len(self._fragments) - 1)]
+        self.calls += 1
+        self.prompts.append(prompt)
+        trailing = 0
+        for row in reversed(self.messages):
+            if row.get("role") != "assistant":
+                break
+            trailing += 1
+        self.trailing_assistants_at_call.append(trailing)
+        if self._always_truncate or self.calls < len(self._fragments):
+            self.messages.append(
+                {"role": "assistant", "content": [{"text": fragment}]}
+            )
+            raise MaxTokensReachedException("output token limit reached")
+        self.messages.append({"role": "assistant", "content": [{"text": fragment}]})
+        return fragment
+
+
+def test_run_strands_trace_continues_after_max_tokens(tmp_path: Path) -> None:
+    repo, base, head = _trace_repo(tmp_path)
+    step1 = _changed_files_step1(base, head)
+    payload = json.dumps(_trace()).replace(STEP1["input"]["head_sha"], head)
+    split = len(payload) // 2
+    agent = _TruncatingAgent([payload[:split], payload[split:]])
+
+    def factory(_model: str | None, *, tools: list[object] | None = None):
+        return agent
+
+    trace, _context = run_strands_trace(
+        step1,
+        repo,
+        model="test-model",
+        agent_factory=factory,
+    )
+
+    assert agent.calls == 2
+    assert agent.prompts[1] is None
+    assert not validate_trace(step1, trace)
+
+
+def test_continuation_records_boundary_observed_provenance(tmp_path: Path) -> None:
+    repo, base, head = _trace_repo(tmp_path)
+    step1 = _changed_files_step1(base, head)
+    payload = json.dumps(_trace()).replace(STEP1["input"]["head_sha"], head)
+    split = len(payload) // 2
+    agent = _TruncatingAgent([payload[:split], payload[split:]])
+
+    def factory(_model: str | None, *, tools: list[object] | None = None):
+        return agent
+
+    trace, _context = run_strands_trace(
+        step1, repo, model="test-model", agent_factory=factory
+    )
+
+    assert trace["provenance"]["agent"]["continuation_attempts"] == 1
+    assert trace["provenance"]["agent"]["join_whitespace_trimmed"] is False
+
+
+def test_continuation_rejects_truncated_tool_use(tmp_path: Path) -> None:
+    repo, base, head = _trace_repo(tmp_path)
+    step1 = _changed_files_step1(base, head)
+    agent = _TruncatingAgent(
+        [
+            '{"behaviors": The selected tool read_source\'s tool use was '
+            "incomplete due to maximum token limits being reached.",
+            "{}",
+        ]
+    )
+
+    def factory(_model: str | None, *, tools: list[object] | None = None):
+        return agent
+
+    with pytest.raises(Step1TraceFailure, match="cannot be resumed as JSON"):
+        run_strands_trace(step1, repo, model="test-model", agent_factory=factory)
+
+    assert agent.calls == 1
+
+
+def test_continuation_refuses_to_trim_inside_a_json_string(tmp_path: Path) -> None:
+    repo, base, head = _trace_repo(tmp_path)
+    step1 = _changed_files_step1(base, head)
+    agent = _TruncatingAgent(['{"rationale": "Recomputes the allocation ', '"}'])
+
+    def factory(_model: str | None, *, tools: list[object] | None = None):
+        return agent
+
+    with pytest.raises(Step1TraceFailure, match="silently alter the captured evidence"):
+        run_strands_trace(step1, repo, model="test-model", agent_factory=factory)
+
+
+def test_continuation_prefills_a_single_coalesced_assistant_turn(
+    tmp_path: Path,
+) -> None:
+    repo, base, head = _trace_repo(tmp_path)
+    step1 = _changed_files_step1(base, head)
+    payload = json.dumps(_trace()).replace(STEP1["input"]["head_sha"], head)
+    third = len(payload) // 3
+    agent = _TruncatingAgent(
+        [payload[:third] + "   ", payload[third : third * 2], payload[third * 2 :]]
+    )
+
+    def factory(_model: str | None, *, tools: list[object] | None = None):
+        return agent
+
+    trace, _context = run_strands_trace(
+        step1,
+        repo,
+        model="test-model",
+        max_continuations=2,
+        agent_factory=factory,
+    )
+
+    assert agent.calls == 3
+    assert agent.prompts[1] is None and agent.prompts[2] is None
+    assert agent.trailing_assistants_at_call == [0, 1, 1], (
+        "each continuation must prefill exactly one trailing assistant turn"
+    )
+    prefilled = str(agent.messages[0]["content"][0]["text"])  # type: ignore[index]
+    assert prefilled == prefilled.rstrip(), "prefill must not end in whitespace"
+    assert not validate_trace(step1, trace)
+
+
+def test_run_strands_trace_fails_closed_after_continuation_budget(
+    tmp_path: Path,
+) -> None:
+    repo, base, head = _trace_repo(tmp_path)
+    step1 = _changed_files_step1(base, head)
+    diagnostic_path = tmp_path / "step1.5.diagnostic.json"
+    agent = _TruncatingAgent(['{"behaviors": '], always_truncate=True)
+
+    def factory(_model: str | None, *, tools: list[object] | None = None):
+        return agent
+
+    with pytest.raises(Step1TraceFailure, match="continuation attempts"):
+        run_strands_trace(
+            step1,
+            repo,
+            model="test-model",
+            max_continuations=1,
+            diagnostic_output=diagnostic_path,
+            agent_factory=factory,
+        )
+
+    assert agent.calls == 2
+    diagnostic = json.loads(diagnostic_path.read_text(encoding="utf-8"))
+    assert diagnostic["stage"] == "provider_call"
+    assert diagnostic["provider"]["continuation_attempts"] == 1
+
+
+def test_run_strands_trace_reports_output_budget_rejection(tmp_path: Path) -> None:
+    repo, base, head = _trace_repo(tmp_path)
+    step1 = _changed_files_step1(base, head)
+    diagnostic_path = tmp_path / "step1.5.diagnostic.json"
+
+    def factory(_model: str | None, *, tools: list[object] | None = None):
+        def agent(_prompt: str) -> str:
+            raise RuntimeError(
+                "An error occurred (ValidationException) when calling the Converse "
+                "operation: The maximum tokens you requested exceeds the model "
+                "limit of 10000."
+            )
+
+        return agent
+
+    with pytest.raises(Step1TraceFailure, match="rejected max_tokens=32000"):
+        run_strands_trace(
+            step1,
+            repo,
+            model="us.amazon.nova-pro-v1:0",
+            max_tokens=32000,
+            diagnostic_output=diagnostic_path,
+            agent_factory=factory,
+        )
+
+    diagnostic = json.loads(diagnostic_path.read_text(encoding="utf-8"))
+    assert "us.amazon.nova-pro-v1:0" in diagnostic["reason"]
+    assert diagnostic["provider"]["max_tokens"] == 32000
 
 
 def test_run_strands_trace_persists_sanitized_provider_error(
@@ -800,10 +1088,29 @@ def test_strands_config_rejects_nested_repo_secrets(tmp_path: Path) -> None:
     assert "should-not-be-here" not in message
 
 
-def test_strands_config_defaults_max_tokens_to_nova_ceiling(tmp_path: Path) -> None:
+def test_strands_config_defaults_to_large_output_budget(tmp_path: Path) -> None:
     config_path = tmp_path / "strands.yaml"
     config_path.write_text("region: us-east-1\n", encoding="utf-8")
-    assert load_strands_config(config_path).max_tokens == 5000
+    config = load_strands_config(config_path)
+    assert config.max_tokens == 32000
+    assert config.max_continuations == 2
+
+
+def test_strands_config_accepts_configured_max_continuations(tmp_path: Path) -> None:
+    config_path = tmp_path / "strands.yaml"
+    config_path.write_text(
+        "region: us-east-1\nmax_continuations: 5\n", encoding="utf-8"
+    )
+    assert load_strands_config(config_path).max_continuations == 5
+
+
+def test_strands_config_rejects_non_positive_max_continuations(tmp_path: Path) -> None:
+    config_path = tmp_path / "strands.yaml"
+    config_path.write_text(
+        "region: us-east-1\nmax_continuations: 0\n", encoding="utf-8"
+    )
+    with pytest.raises(StrandsConfigError, match="max_continuations"):
+        load_strands_config(config_path)
 
 
 def test_strands_config_accepts_configured_max_tokens(tmp_path: Path) -> None:

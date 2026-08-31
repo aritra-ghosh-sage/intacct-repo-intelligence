@@ -59,6 +59,25 @@ def _evidence(rows: Any, fallback: Mapping[str, Any]) -> list[dict[str, Any]]:
     return result or [dict(fallback)]
 
 
+def _source_trace_gaps(source_trace: Mapping[str, Any] | None) -> set[str]:
+    """Report incomplete Step 1.5 evidence without relying on the model's own flag."""
+
+    if not isinstance(source_trace, Mapping):
+        return set()
+    gaps: set[str] = set()
+    if source_trace.get("truncated") is True:
+        gaps.add("step1_5_trace_truncated")
+    provenance = source_trace.get("provenance")
+    agent = provenance.get("agent") if isinstance(provenance, Mapping) else None
+    if isinstance(agent, Mapping):
+        attempts = agent.get("continuation_attempts")
+        if isinstance(attempts, int) and not isinstance(attempts, bool) and attempts > 0:
+            gaps.add("step1_5_trace_continued")
+        if agent.get("join_whitespace_trimmed") is True:
+            gaps.add("step1_5_trace_join_trimmed")
+    return gaps
+
+
 def build_analysis_report(
     run_context: Mapping[str, Any],
     *,
@@ -70,12 +89,16 @@ def build_analysis_report(
     tool_calls: list[Mapping[str, Any]] | None = None,
     planning: Mapping[str, Any] | None = None,
     lifecycle_complete: bool = True,
+    source_trace: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Fold compatibility step artifacts and Strands guidance into one report."""
 
     context_errors = validate_run_context(run_context)
     if context_errors:
         raise AnalysisReportError("invalid run context: " + "; ".join(context_errors))
+    trace_gaps = _source_trace_gaps(source_trace)
+    if trace_gaps:
+        lifecycle_complete = False
     artifacts = {
         "step2": artifact_sha256(step2),
         "step3": artifact_sha256(step3),
@@ -150,6 +173,14 @@ def build_analysis_report(
             if isinstance(row, Mapping)
         ]
 
+    # Supplied planner rows replace the derived ones, so re-apply the lifecycle downgrade.
+    if not lifecycle_complete:
+        for row in (*repositories.values(), *actions):
+            if row.get("evidence_state") in AUTOMATIC_DRAFT_STATES:
+                row["evidence_state"] = "candidate"
+        for row in actions:
+            row["draft_eligible"] = False
+
     ordered_repositories = sorted(
         repositories.values(),
         key=lambda row: (
@@ -167,6 +198,7 @@ def build_analysis_report(
             for value in report.get("gaps", [])
         }
         | {str(value) for value in supplied.get("gaps", [])}
+        | trace_gaps
     )
     report: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,

@@ -65,6 +65,19 @@ def test_nexau_planner_rejects_out_of_scope_task(tmp_path: Path) -> None:
         )
 
 
+def test_load_planner_config_rejects_secret_like_keys(tmp_path: Path) -> None:
+    config_path = tmp_path / "planner.yaml"
+    config_path.write_text(
+        "apiKey: demo\nclient_secret: demo\nallowed: true\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(NexAUPlannerError, match="secret fields"):
+        from greenfield.nexau_planner import load_planner_config
+
+        load_planner_config(config_path)
+
+
 def test_nexau_planner_replans_before_synthesis(tmp_path: Path) -> None:
     context, _ = _context(tmp_path)
     planner_responses = iter(

@@ -261,6 +261,77 @@ def test_analysis_retains_step3_repository_impacts(tmp_path: Path) -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    ("source_trace", "expected_gap"),
+    [
+        ({"truncated": True}, "step1_5_trace_truncated"),
+        (
+            {"provenance": {"agent": {"continuation_attempts": 1}}},
+            "step1_5_trace_continued",
+        ),
+        (
+            {"provenance": {"agent": {"join_whitespace_trimmed": True}}},
+            "step1_5_trace_join_trimmed",
+        ),
+    ],
+)
+def test_incomplete_source_trace_blocks_draft_and_records_gap(
+    tmp_path: Path, source_trace: dict[str, object], expected_gap: str
+) -> None:
+    context, _ = _context(tmp_path)
+    report = build_analysis_report(
+        context,
+        step2={"gaps": []},
+        step3={"potentially_affected_repositories": {"items": []}, "gaps": []},
+        step4={"coverage": {}, "gaps": []},
+        step5={"actions": [], "gaps": []},
+        agent_analysis={
+            "repository_impacts": [
+                {
+                    "repository": "intacct/explicit-tests",
+                    "evidence_state": "confirmed",
+                    "rank": 1,
+                    "rationale": "The captured behavior is affected.",
+                    "evidence": [],
+                }
+            ],
+            "actions": [
+                {
+                    "action_id": "a1",
+                    "action_type": "update_existing_test",
+                    "target_repository": "intacct/explicit-tests",
+                    "evidence_state": "confirmed",
+                    "draft_eligible": True,
+                    "evidence": [],
+                }
+            ],
+        },
+        source_trace=source_trace,
+    )
+    assert report["status"] == "partial"
+    assert expected_gap in report["gaps"]
+    assert report["repository_impacts"][0]["evidence_state"] == "candidate"
+    assert all(not row["draft_eligible"] for row in report["actions"])
+
+
+def test_complete_source_trace_leaves_draft_eligibility_intact(tmp_path: Path) -> None:
+    context, _ = _context(tmp_path)
+    report = build_analysis_report(
+        context,
+        step2={"gaps": []},
+        step3={"potentially_affected_repositories": {"items": []}, "gaps": []},
+        step4={"coverage": {}, "gaps": []},
+        step5={"actions": [], "gaps": []},
+        source_trace={
+            "provenance": {
+                "agent": {"continuation_attempts": 0, "join_whitespace_trimmed": False}
+            }
+        },
+    )
+    assert report["status"] == "complete"
+    assert report["gaps"] == []
+
+
 def test_strands_analysis_receives_bounded_tools(tmp_path: Path) -> None:
     context, _ = _context(tmp_path)
     toolbox = GreenfieldToolbox(context)

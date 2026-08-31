@@ -325,6 +325,33 @@ def _normalize_behaviors(
     ]
 
 
+def _derive_calls(
+    step1: Mapping[str, Any], trace: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    """Derive calls from the behavior edges the contract traversal reaches.
+
+    Calls restate behavior edges, and validation recomputes them from the same
+    traversal, so deriving keeps the two consistent by construction and keeps a
+    model restatement out of the evidence.
+    """
+
+    try:
+        contract = generate_behavior_contract(step1, trace)
+    except BehaviorContractError as exc:
+        raise TraceError(f"behavior edges cannot form a contract: {exc}") from exc
+    selected = {_call_key(edge) for edge in contract["generation"]["edges"]}
+    calls: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    for behavior in trace["behaviors"]:
+        for edge in behavior["edges"]:
+            key = _call_key(edge)
+            if key not in selected or key in seen:
+                continue
+            seen.add(key)
+            calls.append(copy.deepcopy(dict(edge)))
+    return sorted(calls, key=_call_key)
+
+
 def _call_key(
     value: Mapping[str, Any],
 ) -> tuple[str, str, str, str, int, str, str, str]:
@@ -548,11 +575,7 @@ def normalize_trace(
         revision=trace["revision"],
         changed_paths=set(trace["changed_paths"]),
     )
-    trace["calls"] = _normalize_calls(
-        trace.get("calls", []),
-        revision=trace["revision"],
-        changed_paths=set(trace["changed_paths"]),
-    )
+    trace["calls"] = _derive_calls(step1, trace)
     trace["provenance"] = {
         "read_only": True,
         "catalog_mutation": "none",
@@ -582,6 +605,7 @@ def build_trace_rejection_diagnostic(
     provider_error: Mapping[str, Any] | None = None,
     aws_credential_status: Mapping[str, object] | None = None,
     provider_max_tokens: int | None = None,
+    provider_continuation_attempts: int | None = None,
 ) -> dict[str, Any]:
     source = step1.get("input") if isinstance(step1, Mapping) else {}
     if not isinstance(source, Mapping):
@@ -597,6 +621,7 @@ def build_trace_rejection_diagnostic(
             "name": provider_name,
             "model": provider_model,
             "max_tokens": provider_max_tokens,
+            "continuation_attempts": provider_continuation_attempts,
         },
         "source": {
             "repository": source.get("repository") or source.get("repo_key"),

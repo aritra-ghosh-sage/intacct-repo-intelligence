@@ -32,7 +32,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--strands-config", type=Path)
     parser.add_argument("--model")
     parser.add_argument("--timeout", type=int)
-    parser.add_argument("--max-file-bytes", type=int, default=0)
+    parser.add_argument("--max-file-bytes", type=int, default=500_000)
     args = parser.parse_args(argv)
     try:
         load_greenfield_env()
@@ -51,6 +51,7 @@ def main(argv: list[str] | None = None) -> int:
             timeout=timeout,
             max_file_bytes=args.max_file_bytes,
             max_tokens=strands_config.max_tokens,
+            max_continuations=strands_config.max_continuations,
             contract_path=args.contract_output,
             diagnostic_output=args.trace_output.parent / "step1.5.diagnostic.json",
         )
