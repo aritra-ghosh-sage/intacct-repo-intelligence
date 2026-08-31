@@ -20,6 +20,47 @@ Existing shell values win over file values. Use the shared `.env` for:
   optional `AWS_SESSION_TOKEN`, `AWS_PROFILE`, and `AWS_REGION`
 - NexAU planner settings such as `LLM_API_KEY`, `LLM_MODEL`, and `LLM_BASE_URL`
 
+## Unattended Runtime Setup
+
+The automated runner must use a dedicated environment for the Greenfield
+runtime. NexAU 0.4.1 requires a newer OpenAI client than the legacy `dev`
+group, so these dependency sets must not be installed into the same environment.
+From the repository root, bootstrap the runtime with the committed lockfile:
+
+```bash
+scripts/bootstrap_greenfield_runtime.sh
+```
+
+The helper provisions `.venv-greenfield` by running
+`uv sync --locked --extra nexau-planner --no-group dev`. Set `GREENFIELD_VENV`
+when the worker image uses a different environment location.
+
+The job must invoke `.venv-greenfield/bin/python` (or the equivalent path in
+the worker image), and must not depend on a developer's existing `.venv`.
+`LLM_API_KEY`, `LLM_MODEL`, `LLM_BASE_URL`, AWS credentials, and GitHub
+credentials belong in the deployment secret store or injected environment;
+they must never be placed in the lockfile, configuration artifacts, or logs.
+
+E2B is not required for `analyze` or `publish`; NexAU uses its local sandbox
+by default. The runner records E2B availability as an optional capability. E2B
+must be provisioned separately only for a Step 7 profile that explicitly
+requires a production sandbox, using the `e2b` package (not
+`e2b-code-interpreter`) and an injected `E2B_API_KEY`. The sandbox worker
+image should provision it with uv's installer, for example:
+
+```bash
+uv pip install --python .venv-greenfield 'e2b>=2.12,<3'
+```
+
+That optional sandbox dependency must be baked into the worker image or its
+own locked runtime profile; it must not be installed opportunistically during
+a PR run. If that profile is selected and E2B is unavailable, `draft` must
+fail before any GitHub write.
+
+The deployment must verify that the configured source checkout resolves to
+`/Users/aritra.ghosh/projects/main` for the current workspace convention, or
+fail capture with a diagnostic rather than silently substituting another path.
+
 NexAU is the default Analyze orchestrator. Startup writes redacted capability
 diagnostics to `telemetry.jsonl`; Analyze and Publish fall back to direct
 Strands with an explicit `nexau_planner_unavailable` gap, while Draft fails

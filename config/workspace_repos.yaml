@@ -13,7 +13,6 @@ repositories:
     greenfield_analysis:
       role: source
       discovery_eligible: true
-      repository_handbook: null
     depends_on: null
     ignore_paths:
       - app/appconnect
@@ -134,7 +133,6 @@ repositories:
     greenfield_analysis:
       role: test
       discovery_eligible: true
-      repository_handbook: null
       test_roots:
         - src/test/resources/features/rest-api
       test_formats:
@@ -161,7 +159,6 @@ repositories:
     greenfield_analysis:
       role: test
       discovery_eligible: true
-      repository_handbook: null
       test_roots:
         - features
       test_formats:

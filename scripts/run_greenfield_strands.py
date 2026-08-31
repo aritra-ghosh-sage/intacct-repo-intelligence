@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import shutil
@@ -263,6 +264,7 @@ def _capability_preflight(
     planner_config: Mapping[str, Any],
 ) -> dict[str, Any]:
     diagnostics: list[dict[str, str]] = []
+    optional_diagnostics: list[dict[str, str]] = []
     try:
         validate_greenfield_llm_env(
             model=model or None, base_url=base_url, env_path=env_path
@@ -303,6 +305,18 @@ def _capability_preflight(
                 "message": "Strands dependency is unavailable",
             }
         )
+    try:
+        e2b_available = importlib.util.find_spec("e2b") is not None
+    except (ImportError, ValueError):
+        e2b_available = False
+    if not e2b_available:
+        optional_diagnostics.append(
+            {
+                "component": "e2b",
+                "code": "optional_dependency_unavailable",
+                "message": "E2B is unavailable; it is required only by sandbox-backed validation profiles",
+            }
+        )
     return {
         "status": "ready" if not diagnostics else "unavailable",
         "nexau": "ready"
@@ -311,7 +325,9 @@ def _capability_preflight(
         "strands": "ready"
         if not any(row["component"] == "strands" for row in diagnostics)
         else "unavailable",
+        "optional_capabilities": {"e2b": "ready" if e2b_available else "unavailable"},
         "diagnostics": diagnostics,
+        "optional_diagnostics": optional_diagnostics,
     }
 
 

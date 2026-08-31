@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import sys
+import types
 from pathlib import Path
 from unittest.mock import patch
 
@@ -210,6 +212,37 @@ def test_llm_model_resolution_fails_when_unconfigured(monkeypatch) -> None:
             planner_config={},
             planner_mode="off",
         )
+
+
+def test_capability_preflight_records_e2b_as_optional(monkeypatch, tmp_path: Path) -> None:
+    real_find_spec = run_greenfield_strands.importlib.util.find_spec
+
+    def find_spec(name: str):
+        if name == "e2b":
+            return None
+        return real_find_spec(name)
+
+    monkeypatch.setattr(run_greenfield_strands.importlib.util, "find_spec", find_spec)
+    monkeypatch.setitem(sys.modules, "nexau", types.ModuleType("nexau"))
+    monkeypatch.setitem(sys.modules, "strands", types.ModuleType("strands"))
+    monkeypatch.setenv("LLM_API_KEY", "test-key")
+
+    result = run_greenfield_strands._capability_preflight(
+        model="test-model",
+        base_url="https://llm.example/v1",
+        env_path=tmp_path / ".env",
+        planner_config={},
+    )
+
+    assert result["status"] == "ready"
+    assert result["optional_capabilities"] == {"e2b": "unavailable"}
+    assert result["optional_diagnostics"] == [
+        {
+            "component": "e2b",
+            "code": "optional_dependency_unavailable",
+            "message": "E2B is unavailable; it is required only by sandbox-backed validation profiles",
+        }
+    ]
 
 
 def test_missing_env_file_does_not_block_step1_5_runner(
