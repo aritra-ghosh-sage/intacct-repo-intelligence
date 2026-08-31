@@ -439,7 +439,7 @@ def main(argv: list[str] | None = None) -> int:
     args.model = None
     args.dry_run = args.mode == "analyze"
     args.timeout = None
-    args.max_file_bytes = 120_000
+    args.max_file_bytes = 500_000
     args.ci_evidence = []
     args.contract = []
     args.inventory_evidence = []

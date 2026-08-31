@@ -5,6 +5,7 @@ from __future__ import annotations
 import concurrent.futures
 import inspect
 import json
+import re
 import subprocess
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -25,6 +26,21 @@ from scripts.validate_greenfield_step1 import validate as validate_step1
 
 class StrandsAgentError(ValueError):
     """Raised when Strands cannot produce a valid Step 1.5 trace."""
+
+
+class ProviderExecutionError(StrandsAgentError):
+    """Raised when the Strands provider fails before returning parseable output."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider_error: dict[str, Any],
+        aws_credential_status: dict[str, object],
+    ) -> None:
+        super().__init__(message)
+        self.provider_error = provider_error
+        self.aws_credential_status = aws_credential_status
 
 
 class Step1TraceFailure(StrandsAgentError):
@@ -58,7 +74,7 @@ def _git(source_root: Path, *args: str) -> str:
 
 
 def build_context(
-    step1: Mapping[str, Any], source_root: str | Path, *, max_file_bytes: int = 120_000
+    step1: Mapping[str, Any], source_root: str | Path, *, max_file_bytes: int = 500_000
 ) -> dict[str, Any]:
     """Materialize only target-revision blobs needed by the agent."""
 
@@ -199,6 +215,43 @@ def _parse_json_response(value: Any) -> dict[str, Any]:
     return parsed
 
 
+_AWS_ACCESS_KEY_PATTERN = re.compile(r"(?:AKIA|ASIA)[0-9A-Z]{16}")
+_SECRET_VALUE_PATTERN = re.compile(
+    r"(?i)(authorization|x-amz-security-token|aws_secret_access_key|aws_session_token|secretaccesskey|sessiontoken|api[-_]?key|token|secret)(\s*[=:]\s*)[^,;\n\r]+"
+)
+
+
+def _redact_provider_message(value: object, *, limit: int = 2_000) -> str:
+    text = str(value)
+    text = _AWS_ACCESS_KEY_PATTERN.sub("<redacted-aws-access-key>", text)
+    text = _SECRET_VALUE_PATTERN.sub(r"\1\2<redacted>", text)
+    if len(text) > limit:
+        return text[:limit] + "...<truncated>"
+    return text
+
+
+def _safe_exception_summary(exc: BaseException, *, max_depth: int = 5) -> dict[str, Any]:
+    provider_error: dict[str, Any] = {
+        "type": type(exc).__name__,
+        "message": _redact_provider_message(exc),
+        "cause_chain": [],
+    }
+    causes: list[dict[str, str]] = []
+    current = exc.__cause__ or exc.__context__
+    seen = {id(exc)}
+    while current is not None and id(current) not in seen and len(causes) < max_depth:
+        seen.add(id(current))
+        causes.append(
+            {
+                "type": type(current).__name__,
+                "message": _redact_provider_message(current),
+            }
+        )
+        current = current.__cause__ or current.__context__
+    provider_error["cause_chain"] = causes
+    return provider_error
+
+
 def _run_strands_json(
     prompt: str,
     *,
@@ -230,9 +283,13 @@ def _run_strands_json(
         raise
     except Exception as exc:  # pragma: no cover - provider-specific failure shape
         status = credential_status()
-        raise StrandsAgentError(
-            "Strands execution failed; AWS credential status is "
-            + json.dumps(status, sort_keys=True)
+        provider_error = _safe_exception_summary(exc)
+        raise ProviderExecutionError(
+            "Strands execution failed: "
+            f"{provider_error['type']}: {provider_error['message']}; "
+            "AWS credential status is " + json.dumps(status, sort_keys=True),
+            provider_error=provider_error,
+            aws_credential_status=status,
         ) from exc
     finally:
         if executor is not None:
@@ -265,6 +322,8 @@ def run_strands_trace(
             tools=tools,
         )
     except StrandsAgentError as exc:
+        provider_error = getattr(exc, "provider_error", None)
+        aws_credential_status = getattr(exc, "aws_credential_status", None)
         if diagnostic_path is not None:
             write_json_atomic(
                 diagnostic_path,
@@ -276,6 +335,8 @@ def run_strands_trace(
                     provider_name="strands",
                     provider_model=model or "configured",
                     context_sha256=str(context["context_sha256"]),
+                    provider_error=provider_error,
+                    aws_credential_status=aws_credential_status,
                 ),
             )
         raise Step1TraceFailure(
@@ -428,8 +489,9 @@ def generate_contract(
 
 
 __all__ = [
-    "StrandsAgentError",
+    "ProviderExecutionError",
     "Step1TraceFailure",
+    "StrandsAgentError",
     "build_context",
     "generate_contract",
     "run_strands_analysis",

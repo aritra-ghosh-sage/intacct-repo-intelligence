@@ -358,6 +358,65 @@ def test_run_strands_trace_persists_failure_diagnostic(tmp_path: Path) -> None:
     assert diagnostic["source"]["target_revision"] == head
 
 
+def test_run_strands_trace_persists_sanitized_provider_error(
+    tmp_path: Path,
+) -> None:
+    repo, base, head = _trace_repo(tmp_path)
+    step1 = copy.deepcopy(STEP1)
+    step1["input"].update(
+        {
+            "target_revision": head,
+            "head_sha": head,
+            "base_revision": base,
+            "base_sha": base,
+            "changed_paths": ["app/source/company/AllocationTxnHelper.cls"],
+        }
+    )
+    step1["changed_files"] = [
+        {
+            "path": "app/source/company/AllocationTxnHelper.cls",
+            "filename": "app/source/company/AllocationTxnHelper.cls",
+            "status": "modified",
+        }
+    ]
+    step1["pr_metadata"]["base_revision"] = base
+    step1["pr_metadata"]["target_revision"] = head
+    step1["provenance"]["evidence_sha256"] = evidence_fingerprint(step1)
+    diagnostic_path = tmp_path / "step1.5.diagnostic.json"
+
+    class FakeProviderError(RuntimeError):
+        pass
+
+    def factory(_model: str | None, *, tools: list[object] | None = None):
+        def agent(_prompt: str) -> str:
+            raise FakeProviderError(
+                "MaxTokensReachedException with AWS_SECRET_ACCESS_KEY=abc123, "
+                "AWS_SESSION_TOKEN=tok123, access key ASIAABCDEFGHIJKLMNOP"
+            )
+
+        return agent
+
+    with pytest.raises(Step1TraceFailure, match="FakeProviderError"):
+        run_strands_trace(
+            step1,
+            repo,
+            model="test-model",
+            diagnostic_output=diagnostic_path,
+            agent_factory=factory,
+        )
+
+    diagnostic = json.loads(diagnostic_path.read_text(encoding="utf-8"))
+    serialized = json.dumps(diagnostic)
+    assert diagnostic["stage"] == "provider_call"
+    assert diagnostic["provider"]["error"]["type"] == "FakeProviderError"
+    assert "MaxTokensReachedException" in diagnostic["provider"]["error"]["message"]
+    assert "FakeProviderError" in diagnostic["reason"]
+    assert "aws_credential_status" in diagnostic
+    assert "abc123" not in serialized
+    assert "tok123" not in serialized
+    assert "ASIAABCDEFGHIJKLMNOP" not in serialized
+
+
 def test_step1_5_prompt_requires_canonical_surface_map() -> None:
     prompt = _prompt({"changed_files": []}, ROOT)
 

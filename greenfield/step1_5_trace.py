@@ -555,6 +555,8 @@ def build_trace_rejection_diagnostic(
     raw_provider_response: Any | None = None,
     normalized_trace: Mapping[str, Any] | None = None,
     context_sha256: str | None = None,
+    provider_error: Mapping[str, Any] | None = None,
+    aws_credential_status: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     source = step1.get("input") if isinstance(step1, Mapping) else {}
     if not isinstance(source, Mapping):
@@ -592,6 +594,10 @@ def build_trace_rejection_diagnostic(
         diagnostic["raw_provider_response"] = raw_provider_response
     if normalized_trace is not None:
         diagnostic["normalized_trace"] = dict(normalized_trace)
+    if provider_error is not None:
+        diagnostic["provider"]["error"] = dict(provider_error)
+    if aws_credential_status is not None:
+        diagnostic["aws_credential_status"] = dict(aws_credential_status)
     unsigned = copy.deepcopy(diagnostic)
     diagnostic["diagnostic_sha256"] = artifact_sha256(unsigned)
     return diagnostic
