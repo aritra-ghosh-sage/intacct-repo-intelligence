@@ -155,7 +155,7 @@ def test_run_context_records_explicit_execution_mode(tmp_path: Path) -> None:
     context, _ = _context(tmp_path)
     execution = {
         "dry_run": True,
-        "planner_mode": "shadow",
+        "planner_mode": "default",
         "model": "shared-model",
         "base_url": "https://shared.example/v1",
     }
@@ -173,6 +173,14 @@ def test_run_context_records_explicit_execution_mode(tmp_path: Path) -> None:
 
     assert validate_run_context(explicit) == []
     assert explicit["execution"] == execution
+
+
+@pytest.mark.parametrize("mode", ["active", "shadow", "off"])
+def test_run_context_rejects_legacy_planner_modes(tmp_path: Path, mode: str) -> None:
+    context, _ = _context(tmp_path)
+    context["execution"] = {"dry_run": True, "planner_mode": mode}
+
+    assert "execution.planner_mode is invalid" in validate_run_context(context)
 
 
 def test_toolbox_reads_only_captured_revision_and_records_evidence(

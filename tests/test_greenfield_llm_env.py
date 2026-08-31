@@ -173,7 +173,7 @@ def test_shared_env_values_are_available_to_strands_and_nexau(
         context,
         {"gaps": []},
         GreenfieldToolbox(context),
-        mode="shadow",
+        mode="default",
         planner_factory=planner_factory,
     )
 
@@ -194,7 +194,6 @@ def test_llm_model_resolution_prefers_cli_over_config_and_env(monkeypatch) -> No
             "model": "planner-model",
             "base_url": "https://planner.example/v1",
         },
-        planner_mode="shadow",
     )
 
     assert model == "cli-model"
@@ -210,7 +209,6 @@ def test_llm_model_resolution_fails_when_unconfigured(monkeypatch) -> None:
             cli_model=None,
             strands_config=StrandsRuntimeConfig(),
             planner_config={},
-            planner_mode="off",
         )
 
 

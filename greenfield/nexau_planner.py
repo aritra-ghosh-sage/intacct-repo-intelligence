@@ -420,7 +420,7 @@ def run_nexau_planner(
 ) -> dict[str, Any]:
     """Run NexAU as the default bounded orchestrator for Analyze."""
 
-    if mode not in {"default", "shadow", "active"}:
+    if mode != "default":
         raise NexAUPlannerError("planner mode must be default")
     settings = dict(config or {})
     started = monotonic()

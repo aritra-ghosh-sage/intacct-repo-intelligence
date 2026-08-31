@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from greenfield.nexau_planner import NexAUPlannerError, run_nexau_planner
-from greenfield.planning_contract import validate_planning_report
+from greenfield.planning_contract import build_planning_report, validate_planning_report
 from greenfield.strands_tools import GreenfieldToolbox
 from tests.test_greenfield_simplified_flow import _context
 
@@ -37,7 +37,7 @@ def test_nexau_planner_retains_bounded_lifecycle(tmp_path: Path) -> None:
         context,
         {"gaps": []},
         GreenfieldToolbox(context),
-        mode="shadow",
+        mode="default",
         planner_factory=planner_factory,
         strands_factory=strands_factory,
     )
@@ -60,7 +60,7 @@ def test_nexau_planner_rejects_out_of_scope_task(tmp_path: Path) -> None:
             context,
             {},
             GreenfieldToolbox(context),
-            mode="shadow",
+            mode="default",
             planner_factory=planner_factory,
         )
 
@@ -95,7 +95,7 @@ def test_nexau_planner_replans_before_synthesis(tmp_path: Path) -> None:
         context,
         {"gaps": []},
         GreenfieldToolbox(context),
-        mode="active",
+        mode="default",
         planner_factory=planner_factory,
         strands_factory=strands_factory,
     )
@@ -104,6 +104,35 @@ def test_nexau_planner_replans_before_synthesis(tmp_path: Path) -> None:
     assert task_types == ["screen_repository", "challenge_claim", "synthesize_review"]
     assert report["analysis"]["agent"]["name"] == "nexau"
     assert validate_planning_report(report) == []
+
+
+@pytest.mark.parametrize("mode", ["active", "shadow", "off"])
+def test_nexau_planner_rejects_legacy_modes(tmp_path: Path, mode: str) -> None:
+    context, _ = _context(tmp_path)
+
+    with pytest.raises(NexAUPlannerError, match="planner mode must be default"):
+        run_nexau_planner(
+            context,
+            {},
+            GreenfieldToolbox(context),
+            mode=mode,
+        )
+
+
+@pytest.mark.parametrize("mode", ["active", "shadow"])
+def test_planning_report_rejects_legacy_modes(tmp_path: Path, mode: str) -> None:
+    context, _ = _context(tmp_path)
+    report = build_planning_report(
+        context,
+        mode="default",
+        planner={"name": "nexau", "status": "unavailable"},
+        cycles=[],
+        status="unavailable",
+        stop_reason="planner_runtime_unavailable",
+    )
+    report["mode"] = mode
+
+    assert "mode is invalid" in validate_planning_report(report)
 
 
 def test_incomplete_planner_downgrades_automatic_claims(tmp_path: Path) -> None:

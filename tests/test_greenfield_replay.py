@@ -277,6 +277,7 @@ def test_runner_step6_handoff_does_not_infer_target_inputs() -> None:
 
 def test_runner_exposes_wrapper_handoff_artifact() -> None:
     source = Path(run_greenfield_strands.__file__).read_text(encoding="utf-8")
+    assert "run_strands_analysis(" not in source
     assert "GreenfieldFlowHandoff" in source
     assert 'current_stage = "behavior_impact_report"' in source
     assert 'current_stage = "analyze"' in source

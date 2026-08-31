@@ -80,7 +80,7 @@ def validate_planning_report(value: Any) -> list[str]:
         errors.append(f"analysis_kind must be {ANALYSIS_KIND}")
     if value.get("status") not in {"complete", "partial", "blocked", "unavailable"}:
         errors.append("status is invalid")
-    if value.get("mode") not in {"default", "shadow", "active"}:
+    if value.get("mode") != "default":
         errors.append("mode is invalid")
     if not isinstance(value.get("run_context_sha256"), str) or not SHA256.fullmatch(
         str(value.get("run_context_sha256"))

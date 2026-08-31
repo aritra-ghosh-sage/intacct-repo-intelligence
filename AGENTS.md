@@ -204,8 +204,11 @@ PYTHONPATH=. ./.venv/bin/python scripts/run_greenfield.py \
 ```
 
 `scripts/run_greenfield_strands.py` is the implementation entry point behind
-that command. NexAU is the default internal Analyze orchestrator; direct
-Strands is a recorded partial fallback only when NexAU is unavailable.
+that command. NexAU is the mandatory internal Analyze orchestrator. Step 1.5
+uses Strands independently to trace exact source blobs; it is not an Analyze
+fallback. When NexAU is unavailable or incomplete, Analyze writes a degraded,
+explicitly gapped artifact bundle and automatic Draft creation remains blocked.
+Never substitute a direct Strands analysis for a failed NexAU lifecycle.
 
 The operator-facing flow has four phases:
 
@@ -232,6 +235,19 @@ contracts, CI evidence, test inventories, and related-PR evidence. Every
 `confirmed` or `strong_candidate` claim must cite a recorded source or tool
 result. Repository eligibility and semantic naming alone never prove impact.
 
+Before analyzing or changing a retained Greenfield run, verify the source
+repository, PR number, base and head revisions, artifact-bundle path, and
+report hashes from `run-context.json`. State the resolved identity in the
+response. Do not treat an artifact from a different PR or revision as evidence
+for the requested run.
+
+External test repositories, including `ia-gwdata-*`, are discovery-only until
+they have revision-pinned relationship-contract and CI evidence. No relevant
+test for a PR is a valid evidence result, not a discovery failure. See
+[docs/design/greenfield-intacct-code-intelligence-layer.md](docs/design/greenfield-intacct-code-intelligence-layer.md)
+and the Greenfield Step 2 design documents before proposing repository
+onboarding or coverage claims.
+
 Allowed evidence states are `confirmed`, `strong_candidate`, `candidate`,
 `unresolved`, `unavailable`, and `no_evidence`. Only `confirmed` and
 `strong_candidate` remediation may reach automatic draft creation, and only
@@ -247,6 +263,19 @@ or merge its own PR.
 The GitHub Check is the canonical user-facing status. The PR comment is an
 idempotent human-readable projection of the same `publication.json`; do not
 create an independent dashboard data model.
+
+## Greenfield Changes
+
+- When asked to start Greenfield implementation, choose the smallest
+  evidence-backed slice, name its cheapest falsifying test, and implement it.
+  When external source access or immutable evidence is missing, change only
+  supporting contract or validation code; never invent source facts.
+- Run focused validation first: Step 2 contracts and candidate logic use
+  `tests/test_greenfield_step2.py`; NexAU planner changes use
+  `tests/test_greenfield_nexau_planner.py`; runner, artifact, and Draft-gate
+  changes use `tests/test_greenfield_simplified_flow.py` and
+  `tests/test_greenfield_replay.py`. Run `tests/test_greenfield_*.py` only
+  after the affected focused slice passes.
 
 ## When Editing
 

@@ -63,9 +63,7 @@ from greenfield.step8_create import (
 )
 from greenfield.strands_agent import (
     Step1TraceFailure,
-    StrandsAgentError,
     generate_contract,
-    run_strands_analysis,
     run_strands_trace,
 )
 from greenfield.strands_config import apply_strands_environment, load_strands_config
@@ -218,7 +216,6 @@ def _resolve_llm_runtime(
     cli_model: str | None,
     strands_config: Any,
     planner_config: dict[str, Any],
-    planner_mode: str = "default",
 ) -> tuple[str, str | None]:
     model = (
         cli_model or strands_config.model or os.environ.get("LLM_MODEL") or ""
@@ -570,7 +567,7 @@ def main(argv: list[str] | None = None) -> int:
                 dry_run=dry_run,
                 planner_mode=args.planner_mode,
                 model=model,
-                base_url=base_url if args.planner_mode != "off" else None,
+                base_url=base_url,
             ),
         )
         run_context_path = args.output_dir / "run-context.json"
@@ -860,20 +857,33 @@ def main(argv: list[str] | None = None) -> int:
                 ],
             )
         except NexAUPlannerError as exc:
+            nexau_reason = redact(str(exc))
             planning_report = build_planning_report(
                 run_context,
                 mode="default",
                 planner={
                     "name": "nexau",
                     "status": "unavailable",
-                    "reason": redact(str(exc)),
+                    "reason": nexau_reason,
                 },
                 cycles=[],
                 status="unavailable",
                 stop_reason="planner_runtime_unavailable",
                 gaps=["nexau_planner_unavailable"],
+                analysis={
+                    "repository_impacts": [],
+                    "actions": [],
+                    "coverage": {},
+                    "recommendation": "Review deterministic evidence; NexAU investigation is unavailable.",
+                    "gaps": ["nexau_planner_unavailable"],
+                    "agent": {
+                        "name": "nexau",
+                        "status": "unavailable",
+                        "reason": nexau_reason,
+                    },
+                },
             )
-            telemetry.emit("nexau_planner_unavailable", reason=redact(str(exc)))
+            telemetry.emit("nexau_planner_unavailable", reason=nexau_reason)
         planning_path = args.output_dir / "planning-report.json"
         write_json_atomic(planning_path, planning_report)
         handoff.complete_stage(
@@ -890,14 +900,14 @@ def main(argv: list[str] | None = None) -> int:
         try:
             planned_analysis = (
                 planning_report.get("analysis")
-                if args.planner_mode == "default"
-                and isinstance(planning_report, dict)
-                and planning_report.get("status") in {"complete", "partial"}
+                if isinstance(planning_report, dict)
+                and planning_report.get("status")
+                in {"complete", "partial", "blocked", "unavailable"}
                 else None
             )
             if (
                 isinstance(planned_analysis, dict)
-                and planning_report.get("status") != "complete"
+                and planning_report.get("status") in {"partial", "blocked"}
             ):
                 planned_analysis = _downgrade_incomplete_analysis(
                     planned_analysis, reason="nexau_planner_incomplete"
@@ -915,28 +925,11 @@ def main(argv: list[str] | None = None) -> int:
                     lifecycle_complete=planning_report.get("status") == "complete",
                 )
             else:
-                agent_analysis, tool_calls = run_strands_analysis(
-                    run_context,
-                    compatibility_summary,
-                    toolbox,
-                    model=model,
-                    timeout=timeout,
+                raise AnalysisReportError(
+                    "NexAU planning report did not contain analysis for status "
+                    f"{planning_report.get('status')!r}"
                 )
-                agent_analysis = _downgrade_incomplete_analysis(
-                    agent_analysis, reason="nexau_planner_unavailable"
-                )
-                analysis = build_analysis_report(
-                    run_context,
-                    step2=step2_report,
-                    step3=step3_report,
-                    step4=step4_report,
-                    step5=step5_report,
-                    agent_analysis=agent_analysis,
-                    tool_calls=tool_calls,
-                    planning=planning_report,
-                    lifecycle_complete=False,
-                )
-        except (AnalysisReportError, StrandsAgentError, ValueError) as exc:
+        except (AnalysisReportError, ValueError) as exc:
             analysis = build_analysis_report(
                 run_context,
                 step2=step2_report,
@@ -944,8 +937,12 @@ def main(argv: list[str] | None = None) -> int:
                 step4=step4_report,
                 step5=step5_report,
                 agent_analysis={
-                    "agent": {"status": "unavailable", "reason": str(exc)},
-                    "gaps": ["strands_tool_analysis_unavailable"],
+                    "agent": {
+                        "name": "nexau",
+                        "status": "unavailable",
+                        "reason": redact(str(exc)),
+                    },
+                    "gaps": ["nexau_planner_unavailable"],
                 },
                 tool_calls=toolbox.ledger(),
                 planning=planning_report,

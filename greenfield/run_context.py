@@ -343,13 +343,7 @@ def validate_run_context(value: Any) -> list[str]:
         else:
             if "dry_run" in execution and not isinstance(execution["dry_run"], bool):
                 errors.append("execution.dry_run must be a boolean")
-            if execution.get("planner_mode") not in {
-                None,
-                "default",
-                "off",
-                "shadow",
-                "active",
-            }:
+            if execution.get("planner_mode") not in {None, "default"}:
                 errors.append("execution.planner_mode is invalid")
             if "model" in execution and not isinstance(execution["model"], str):
                 errors.append("execution.model must be a string")

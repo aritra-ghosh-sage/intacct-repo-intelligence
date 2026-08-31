@@ -61,10 +61,11 @@ The deployment must verify that the configured source checkout resolves to
 `/Users/aritra.ghosh/projects/main` for the current workspace convention, or
 fail capture with a diagnostic rather than silently substituting another path.
 
-NexAU is the default Analyze orchestrator. Startup writes redacted capability
-diagnostics to `telemetry.jsonl`; Analyze and Publish fall back to direct
-Strands with an explicit `nexau_planner_unavailable` gap, while Draft fails
-closed. Credentials never enter command output or artifacts.
+NexAU is the mandatory Analyze orchestrator. Startup writes redacted capability
+diagnostics to `telemetry.jsonl`. When NexAU is unavailable or incomplete,
+Analyze writes an explicit degraded evidence report with the applicable NexAU
+gap and no replacement direct-Strands analysis; Draft fails closed until NexAU
+planning completes. Credentials never enter command output or artifacts.
 
 ## Phases
 

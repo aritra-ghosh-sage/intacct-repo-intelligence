@@ -26,7 +26,7 @@ non-secret defaults such as region, model, and timeout; see
 
 Greenfield runners also load a repo-local `.env` file when present. That file
 can supply the same AWS variables above and the NexAU `LLM_*` values used by the
-optional planner path. The checked-in example is
+mandatory Analyze planner. The checked-in example is
 `config/greenfield_llm.example.env`.
 
 The validated trace is written as `step1.5.trace.json`. The existing behavior
