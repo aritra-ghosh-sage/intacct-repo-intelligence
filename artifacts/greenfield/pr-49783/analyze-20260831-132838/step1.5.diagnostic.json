@@ -1,0 +1,33 @@
+{
+  "analysis_kind": "greenfield_pr_impact_step_1_5_diagnostic",
+  "contract_path": "artifacts/greenfield/pr-49783/analyze-20260831-132838/step1.5.contract.json",
+  "diagnostic_sha256": "61add5ac1f791e21af4761298676d5d8da68c895778905912ef50cb89b1fee93",
+  "provenance": {
+    "captured_at": "2026-08-31T13:35:00.098970+00:00",
+    "catalog_mutation": "none",
+    "context_sha256": "70e5b12cc371e352cb2aef3a3c40a98a9891c8796c8cd9e1cb867ad56c0680f9",
+    "github_writes": "none",
+    "read_only": true,
+    "step1_evidence_sha256": "3a984d8bd66d13b7b807a6e497c2ba19d8e27445e6ce1e420f01f4e7f6249b04"
+  },
+  "provider": {
+    "continuation_attempts": null,
+    "max_tokens": 32000,
+    "model": "us.anthropic.claude-opus-4-5-20251101-v1:0",
+    "name": "strands"
+  },
+  "reason": "Strands did not produce JSON output: Expecting value: line 1 column 1 (char 0)",
+  "schema_version": "0.1",
+  "source": {
+    "base_revision": "88831b97966bf918cd08a882d2ac5d2aa4bf21a9",
+    "changed_paths": [
+      "app/source/gl/GLLedgerReporter.cls"
+    ],
+    "pr_number": 49783,
+    "repo_key": "ia-main",
+    "repository": "intacct/ia-app",
+    "target_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
+  },
+  "stage": "provider_call",
+  "status": "rejected"
+}
