@@ -108,6 +108,29 @@ def _validate_surfaces(value: Any) -> dict[str, str]:
     return dict(sorted(result.items()))
 
 
+def _validate_truncation_metadata(trace: Mapping[str, Any]) -> None:
+    """Validate optional partial-output metadata when a provider truncates a trace."""
+
+    if "truncated" not in trace:
+        return
+    truncated = trace.get("truncated")
+    if not isinstance(truncated, bool):
+        raise TraceError("truncated must be a boolean")
+    if not truncated:
+        return
+    reason = trace.get("truncation_reason")
+    if reason is not None and not isinstance(reason, str):
+        raise TraceError("truncation_reason must be a string")
+    omitted_counts = trace.get("omitted_counts")
+    if omitted_counts is None:
+        return
+    if not isinstance(omitted_counts, Mapping):
+        raise TraceError("omitted_counts must be an object")
+    for key, count in omitted_counts.items():
+        if not isinstance(key, str) or isinstance(count, bool) or not isinstance(count, int):
+            raise TraceError("omitted_counts entries must map string keys to integers")
+
+
 def _normalize_surfaces(value: Any) -> dict[str, str]:
     """Normalize provider surface records into the persisted status map."""
 
@@ -385,6 +408,7 @@ def validate_trace(step1: Mapping[str, Any], trace: Mapping[str, Any]) -> list[s
             raise TraceError("trace changed paths do not match Step 1")
         _validate_symbol_rows(trace.get("affected_symbols"), changed_paths)
         _validate_surfaces(trace.get("surfaces", {}))
+        _validate_truncation_metadata(trace)
         identity = trace.get("input")
         if not isinstance(identity, Mapping):
             raise TraceError("trace input must be an object")
@@ -557,6 +581,7 @@ def build_trace_rejection_diagnostic(
     context_sha256: str | None = None,
     provider_error: Mapping[str, Any] | None = None,
     aws_credential_status: Mapping[str, object] | None = None,
+    provider_max_tokens: int | None = None,
 ) -> dict[str, Any]:
     source = step1.get("input") if isinstance(step1, Mapping) else {}
     if not isinstance(source, Mapping):
@@ -571,6 +596,7 @@ def build_trace_rejection_diagnostic(
         "provider": {
             "name": provider_name,
             "model": provider_model,
+            "max_tokens": provider_max_tokens,
         },
         "source": {
             "repository": source.get("repository") or source.get("repo_key"),

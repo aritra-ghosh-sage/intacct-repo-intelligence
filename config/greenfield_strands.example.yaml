@@ -6,3 +6,6 @@ region: us-east-1
 profile: null
 model: null
 timeout_seconds: 300
+# Amazon Nova models cap generated output at 5,000 tokens (hard ceiling); raise
+# only when using a model with a larger output budget.
+max_tokens: 5000

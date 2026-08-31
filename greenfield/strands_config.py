@@ -23,6 +23,7 @@ class StrandsRuntimeConfig:
     model: str | None = None
     base_url: str | None = None
     timeout_seconds: int = 300
+    max_tokens: int = 5000
 
     def environment(self) -> dict[str, str]:
         values: dict[str, str] = {}
@@ -89,12 +90,14 @@ def load_strands_config(path: str | Path | None = None) -> StrandsRuntimeConfig:
             )
         data = raw
     timeout = data.get("timeout_seconds", 300)
+    max_tokens = data.get("max_tokens", 5000)
     return StrandsRuntimeConfig(
         region=str(data["region"]).strip() if data.get("region") else None,
         profile=str(data["profile"]).strip() if data.get("profile") else None,
         model=str(data["model"]).strip() if data.get("model") else None,
         base_url=str(data["base_url"]).strip() if data.get("base_url") else None,
         timeout_seconds=_positive_int(timeout, "timeout_seconds"),
+        max_tokens=_positive_int(max_tokens, "max_tokens"),
     )
 
 

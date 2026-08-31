@@ -588,6 +588,7 @@ def main(argv: list[str] | None = None) -> int:
                 model=model,
                 timeout=timeout,
                 max_file_bytes=args.max_file_bytes,
+                max_tokens=strands_config.max_tokens,
                 contract_path=contract_path,
                 diagnostic_output=diagnostic_path,
             )

@@ -50,6 +50,7 @@ def main(argv: list[str] | None = None) -> int:
             model=model,
             timeout=timeout,
             max_file_bytes=args.max_file_bytes,
+            max_tokens=strands_config.max_tokens,
             contract_path=args.contract_output,
             diagnostic_output=args.trace_output.parent / "step1.5.diagnostic.json",
         )

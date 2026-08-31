@@ -299,6 +299,29 @@ def test_validate_trace_rejects_nested_edge_revision_and_line() -> None:
     assert any("target_line" in error for error in errors)
 
 
+def test_trace_accepts_truncated_partial_output() -> None:
+    trace = _trace()
+    trace["truncated"] = True
+    trace["truncation_reason"] = "provider_output_budget"
+    trace["omitted_counts"] = {"calls": 5, "behaviors": 1}
+    unsigned = copy.deepcopy(trace)
+    unsigned["provenance"].pop("trace_sha256", None)
+    trace["provenance"]["trace_sha256"] = artifact_sha256(unsigned)
+
+    assert validate_trace(STEP1, trace) == []
+
+
+def test_trace_rejects_invalid_truncation_metadata() -> None:
+    trace = _trace()
+    trace["truncated"] = "yes"
+    unsigned = copy.deepcopy(trace)
+    unsigned["provenance"].pop("trace_sha256", None)
+    trace["provenance"]["trace_sha256"] = artifact_sha256(unsigned)
+
+    errors = validate_trace(STEP1, trace)
+    assert any("truncated must be a boolean" in error for error in errors)
+
+
 def test_run_strands_trace_persists_failure_diagnostic(tmp_path: Path) -> None:
     repo, base, head = _trace_repo(tmp_path)
     step1 = copy.deepcopy(STEP1)
@@ -506,6 +529,150 @@ def test_context_reads_target_revision_only(tmp_path: Path) -> None:
         build_context(step1, repo, max_file_bytes=5)
 
 
+def test_build_context_hunk_centers_large_modified_file(tmp_path: Path) -> None:
+    repo = tmp_path / "source"
+    repo.mkdir()
+    import subprocess
+
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.email", "test@example.test"],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "Test"], check=True)
+    path = "app/source/gl/Big.cls"
+    file_path = repo / path
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [f"line {i}\n" for i in range(1, 301)]
+    file_path.write_text("".join(lines), encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "base"], check=True)
+    base = subprocess.check_output(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+    ).strip()
+    lines[199] = "line 200 changed\n"
+    file_path.write_text("".join(lines), encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "commit", "-qam", "head"], check=True)
+    head = subprocess.check_output(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+    ).strip()
+
+    step1 = copy.deepcopy(STEP1)
+    step1["input"].update(
+        {
+            "target_revision": head,
+            "head_sha": head,
+            "base_revision": base,
+            "base_sha": base,
+            "changed_paths": [path],
+        }
+    )
+    step1["changed_files"] = [{"path": path, "filename": path, "status": "modified"}]
+    step1["pr_metadata"]["base_revision"] = base
+    step1["pr_metadata"]["target_revision"] = head
+    step1["provenance"]["evidence_sha256"] = evidence_fingerprint(step1)
+
+    context = build_context(step1, repo, max_file_bytes=1000)
+
+    entry = context["changed_files"][0]
+    assert entry["context_mode"] == "hunk"
+    assert entry["truncated"] is True
+    assert "--- lines" in entry["content"]
+    assert "line 200 changed\n" in entry["content"]
+    assert "line 1\n" not in entry["content"]
+    assert "line 300\n" not in entry["content"]
+
+
+def test_build_context_added_file_ignores_hunk_mode(tmp_path: Path) -> None:
+    repo = tmp_path / "source"
+    repo.mkdir()
+    import subprocess
+
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.email", "test@example.test"],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "Test"], check=True)
+    path = "app/source/gl/New.cls"
+    file_path = repo / path
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.write_text("x" * 1000, encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "head"], check=True)
+    head = subprocess.check_output(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+    ).strip()
+
+    step1 = copy.deepcopy(STEP1)
+    step1["input"].update(
+        {
+            "target_revision": head,
+            "head_sha": head,
+            "base_revision": head,
+            "base_sha": head,
+            "changed_paths": [path],
+        }
+    )
+    step1["changed_files"] = [{"path": path, "filename": path, "status": "added"}]
+    step1["pr_metadata"]["base_revision"] = head
+    step1["pr_metadata"]["target_revision"] = head
+    step1["provenance"]["evidence_sha256"] = evidence_fingerprint(step1)
+
+    with pytest.raises(StrandsAgentError, match="max_file_bytes"):
+        build_context(step1, repo, max_file_bytes=200)
+
+
+def test_build_context_raises_when_hunk_excerpt_still_too_large(tmp_path: Path) -> None:
+    repo = tmp_path / "source"
+    repo.mkdir()
+    import subprocess
+
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.email", "test@example.test"],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "Test"], check=True)
+    path = "app/source/gl/Scattered.cls"
+    file_path = repo / path
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [f"line {i}\n" for i in range(1, 2001)]
+    file_path.write_text("".join(lines), encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "base"], check=True)
+    base = subprocess.check_output(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+    ).strip()
+    # Scatter many small edits across the file so hunk windows (each ± 40
+    # lines) still merge into a large aggregate excerpt.
+    for offset in range(100, 2000, 100):
+        lines[offset - 1] = f"line {offset} changed\n"
+    file_path.write_text("".join(lines), encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "commit", "-qam", "head"], check=True)
+    head = subprocess.check_output(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+    ).strip()
+
+    step1 = copy.deepcopy(STEP1)
+    step1["input"].update(
+        {
+            "target_revision": head,
+            "head_sha": head,
+            "base_revision": base,
+            "base_sha": base,
+            "changed_paths": [path],
+        }
+    )
+    step1["changed_files"] = [{"path": path, "filename": path, "status": "modified"}]
+    step1["pr_metadata"]["base_revision"] = base
+    step1["pr_metadata"]["target_revision"] = head
+    step1["provenance"]["evidence_sha256"] = evidence_fingerprint(step1)
+
+    with pytest.raises(StrandsAgentError, match="even after hunk-centering"):
+        build_context(step1, repo, max_file_bytes=200)
+
+
 def test_runner_writes_trace_and_contract(tmp_path: Path) -> None:
     trace = _trace()
     trace_path = tmp_path / "trace.json"
@@ -551,6 +718,44 @@ def test_strands_failure_is_explicit() -> None:
         run_strands_trace(STEP1, "/path/that/does/not/exist", timeout=1)
 
 
+def test_default_agent_factory_configures_bedrock_max_tokens() -> None:
+    from greenfield.strands_agent import _default_agent_factory
+
+    captured: dict[str, object] = {}
+
+    class FakeBedrockModel:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    class FakeAgent:
+        def __init__(self, **kwargs: object) -> None:
+            captured["agent_options"] = kwargs
+
+    with patch("strands.models.bedrock.BedrockModel", FakeBedrockModel), patch(
+        "strands.Agent", FakeAgent
+    ):
+        _default_agent_factory("us.amazon.nova-pro-v1:0", max_tokens=5000)
+
+    assert captured["model_id"] == "us.amazon.nova-pro-v1:0"
+    assert captured["max_tokens"] == 5000
+
+
+def test_default_agent_factory_without_max_tokens_passes_bare_model_string() -> None:
+    from greenfield.strands_agent import _default_agent_factory
+
+    captured: dict[str, object] = {}
+
+    class FakeAgent:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    with patch("strands.Agent", FakeAgent):
+        _default_agent_factory("us.amazon.nova-pro-v1:0")
+
+    assert captured["model"] == "us.amazon.nova-pro-v1:0"
+    assert "max_tokens" not in captured
+
+
 def test_strands_timeout_returns_without_waiting_for_blocked_agent() -> None:
     release = threading.Event()
 
@@ -593,6 +798,25 @@ def test_strands_config_rejects_nested_repo_secrets(tmp_path: Path) -> None:
     assert "<root>.providers[0].token" in message
     assert "<root>.aws.secret_key" in message
     assert "should-not-be-here" not in message
+
+
+def test_strands_config_defaults_max_tokens_to_nova_ceiling(tmp_path: Path) -> None:
+    config_path = tmp_path / "strands.yaml"
+    config_path.write_text("region: us-east-1\n", encoding="utf-8")
+    assert load_strands_config(config_path).max_tokens == 5000
+
+
+def test_strands_config_accepts_configured_max_tokens(tmp_path: Path) -> None:
+    config_path = tmp_path / "strands.yaml"
+    config_path.write_text("region: us-east-1\nmax_tokens: 8000\n", encoding="utf-8")
+    assert load_strands_config(config_path).max_tokens == 8000
+
+
+def test_strands_config_rejects_non_positive_max_tokens(tmp_path: Path) -> None:
+    config_path = tmp_path / "strands.yaml"
+    config_path.write_text("region: us-east-1\nmax_tokens: 0\n", encoding="utf-8")
+    with pytest.raises(StrandsConfigError, match="max_tokens must be a positive integer"):
+        load_strands_config(config_path)
 
 
 def test_test_proposal_requires_exact_target_and_evidence() -> None:

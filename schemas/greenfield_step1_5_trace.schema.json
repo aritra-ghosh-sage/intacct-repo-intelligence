@@ -12,7 +12,10 @@
     "affected_symbols": {"type": "array"},
     "calls": {"type": "array"},
     "behaviors": {"type": "array", "minItems": 1},
-    "surfaces": {"type": "object"}
+    "surfaces": {"type": "object"},
+    "truncated": {"type": "boolean"},
+    "truncation_reason": {"type": "string"},
+    "omitted_counts": {"type": "object", "additionalProperties": {"type": "integer"}}
   },
   "additionalProperties": true
 }

@@ -73,6 +73,49 @@ def _git(source_root: Path, *args: str) -> str:
     return result.stdout
 
 
+_HUNK_CONTEXT_LINES = 40
+_HUNK_HEADER_PATTERN = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+
+
+def _parse_diff_hunk_windows(diff_text: str, *, context_lines: int) -> list[tuple[int, int]]:
+    """Return merged (start_line, end_line) 1-indexed target-side windows from a unified diff."""
+
+    hunks: list[tuple[int, int]] = []
+    for line in diff_text.splitlines():
+        match = _HUNK_HEADER_PATTERN.match(line)
+        if not match:
+            continue
+        start = int(match.group(1))
+        length = int(match.group(2)) if match.group(2) is not None else 1
+        end = start + max(length, 1) - 1
+        hunks.append((max(1, start - context_lines), end + context_lines))
+    if not hunks:
+        return []
+    hunks.sort()
+    merged: list[tuple[int, int]] = [hunks[0]]
+    for start, end in hunks[1:]:
+        last_start, last_end = merged[-1]
+        if start <= last_end + 1:
+            merged[-1] = (last_start, max(last_end, end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _build_hunk_excerpt(content: str, windows: list[tuple[int, int]]) -> str:
+    lines = content.splitlines()
+    total = len(lines)
+    parts: list[str] = []
+    for start, end in windows:
+        clipped_start = max(1, start)
+        clipped_end = min(total, end)
+        if clipped_start > clipped_end:
+            continue
+        excerpt = "\n".join(lines[clipped_start - 1 : clipped_end])
+        parts.append(f"--- lines {clipped_start}-{clipped_end} of {total} ---\n{excerpt}")
+    return "\n\n".join(parts)
+
+
 def build_context(
     step1: Mapping[str, Any], source_root: str | Path, *, max_file_bytes: int = 500_000
 ) -> dict[str, Any]:
@@ -84,6 +127,7 @@ def build_context(
         raise StrandsAgentError("invalid Step 1 report: " + "; ".join(errors))
     source = step1["input"]
     revision = str(source.get("target_revision") or source.get("head_sha")).lower()
+    base_revision = str(source.get("base_sha") or source.get("base_revision") or "").lower()
     _git(root, "cat-file", "-e", f"{revision}^{{commit}}")
     files: list[dict[str, Any]] = []
     for row in step1["changed_files"]:
@@ -91,15 +135,42 @@ def build_context(
         status = str(row.get("status", "modified"))
         content = None
         truncated = False
+        context_mode = "full"
         if status != "deleted":
             content = _git(root, "show", f"{revision}:{path}")
+            if (
+                max_file_bytes > 0
+                and len(content.encode("utf-8")) > max_file_bytes
+                and status == "modified"
+                and base_revision
+            ):
+                diff_text = _git(root, "diff", f"{base_revision}..{revision}", "--", path)
+                windows = _parse_diff_hunk_windows(
+                    diff_text, context_lines=_HUNK_CONTEXT_LINES
+                )
+                if windows:
+                    content = _build_hunk_excerpt(content, windows)
+                    truncated = True
+                    context_mode = "hunk"
+            # Re-check after hunk-centering: scattered hunks across a huge file
+            # can still exceed the cap, so the excerpt must not bypass it.
             if max_file_bytes > 0 and len(content.encode("utf-8")) > max_file_bytes:
+                detail = (
+                    "even after hunk-centering"
+                    if context_mode == "hunk"
+                    else "raise --max-file-bytes to preserve exact evidence"
+                )
                 raise StrandsAgentError(
-                    f"source blob exceeds max_file_bytes for {path}; "
-                    "raise --max-file-bytes to preserve exact evidence"
+                    f"source blob exceeds max_file_bytes for {path}; {detail}"
                 )
         files.append(
-            {"path": path, "status": status, "content": content, "truncated": truncated}
+            {
+                "path": path,
+                "status": status,
+                "content": content,
+                "truncated": truncated,
+                "context_mode": context_mode,
+            }
         )
     context = {
         "schema_version": "0.1",
@@ -154,6 +225,15 @@ Every asserted edge must preserve exact source evidence, use resolution="exact",
 and keep provider-only metadata out of the persisted contract.
 Use the target revision from the context and preserve all changed paths.
 
+A changed file with `"context_mode": "hunk"` has been reduced to only the
+changed-hunk regions plus surrounding context lines (see the `--- lines a-b
+of n ---` markers in its `content`), not the full file. For such a file, only
+trace calls/behaviors reachable from the shown regions; do not attempt to
+enumerate every symbol in the whole file. If the output would still not fit,
+emit a partial trace with the top-level fields `truncated: true`,
+`truncation_reason: <string>`, and `omitted_counts: {{"calls": <int>,
+"behaviors": <int>}}` rather than leaving the JSON incomplete.
+
 Context JSON:
 ```json
 {context_json}
@@ -162,7 +242,10 @@ Context JSON:
 
 
 def _default_agent_factory(
-    model: str | None, *, tools: list[Any] | None = None
+    model: str | None,
+    *,
+    tools: list[Any] | None = None,
+    max_tokens: int | None = None,
 ) -> Callable[[str], Any]:
     try:
         from strands import Agent
@@ -172,7 +255,17 @@ def _default_agent_factory(
         ) from exc
     try:
         options: dict[str, Any] = {}
-        if model:
+        if max_tokens is not None:
+            # Explicit max_tokens requires a Model instance; Agent(model=str) would
+            # otherwise leave Bedrock's undocumented "dynamic" default in place.
+            from strands.models.bedrock import BedrockModel
+
+            options["model"] = (
+                BedrockModel(model_id=model, max_tokens=max_tokens)
+                if model
+                else BedrockModel(max_tokens=max_tokens)
+            )
+        elif model:
             options["model"] = model
         if tools is not None:
             options["tools"] = tools
@@ -259,10 +352,11 @@ def _run_strands_json(
     timeout: float,
     agent_factory: Callable[[str | None], Callable[[str], Any]] | None = None,
     tools: list[Any] | None = None,
+    max_tokens: int | None = None,
 ) -> dict[str, Any]:
     factory = agent_factory or _default_agent_factory
     if factory is _default_agent_factory:
-        agent = _default_agent_factory(model, tools=tools)
+        agent = _default_agent_factory(model, tools=tools, max_tokens=max_tokens)
     else:
         parameters = inspect.signature(factory).parameters
         agent = factory(model, tools=tools) if "tools" in parameters else factory(model)
@@ -303,6 +397,7 @@ def run_strands_trace(
     model: str | None = None,
     timeout: int = 300,
     max_file_bytes: int = 120_000,
+    max_tokens: int | None = 5000,
     contract_path: str | Path | None = None,
     diagnostic_output: str | Path | None = None,
     agent_factory: Callable[[str | None], Callable[[str], Any]] | None = None,
@@ -320,6 +415,7 @@ def run_strands_trace(
             timeout=timeout,
             agent_factory=agent_factory,
             tools=tools,
+            max_tokens=max_tokens,
         )
     except StrandsAgentError as exc:
         provider_error = getattr(exc, "provider_error", None)
@@ -334,6 +430,7 @@ def run_strands_trace(
                     contract_path=contract_path,
                     provider_name="strands",
                     provider_model=model or "configured",
+                    provider_max_tokens=max_tokens,
                     context_sha256=str(context["context_sha256"]),
                     provider_error=provider_error,
                     aws_credential_status=aws_credential_status,
@@ -349,6 +446,7 @@ def run_strands_trace(
         "name": "strands",
         "model": model or "configured",
         "timeout_seconds": timeout,
+        "max_tokens": max_tokens,
     }
     try:
         trace = normalize_trace(
