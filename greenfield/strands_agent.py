@@ -296,11 +296,17 @@ def _extract_text(value: Any) -> str:
         child = getattr(value, attribute, None)
         if isinstance(child, str):
             return child
+        text = _message_text(child)
+        if text:
+            return text
     if isinstance(value, Mapping):
         for key in ("message", "content", "text", "output"):
             child = value.get(key)
             if isinstance(child, str):
                 return child
+            text = _message_text(child)
+            if text:
+                return text
     return str(value)
 
 
@@ -316,6 +322,8 @@ def _strip_json_fence(text: str) -> str:
 
 
 def _parse_json_text(text: str) -> dict[str, Any]:
+    if not text.strip():
+        raise StrandsAgentError("Strands produced empty output; expected a JSON object")
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError as exc:

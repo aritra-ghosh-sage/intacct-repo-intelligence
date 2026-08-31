@@ -669,6 +669,46 @@ def test_run_strands_trace_reports_output_budget_rejection(tmp_path: Path) -> No
     assert diagnostic["provider"]["max_tokens"] == 32000
 
 
+def test_run_strands_json_reads_nested_agent_message() -> None:
+    class FakeAgentResult:
+        message = {"content": [{"text": '{"status": "ok"}'}]}
+
+        def __str__(self) -> str:
+            return ""
+
+    def factory(_model: str | None, *, tools: list[object] | None = None):
+        def agent(_prompt: str) -> FakeAgentResult:
+            return FakeAgentResult()
+
+        return agent
+
+    parsed, delivery = _run_strands_json(
+        "prompt",
+        model="test-model",
+        timeout=1,
+        agent_factory=factory,
+    )
+
+    assert parsed == {"status": "ok"}
+    assert delivery["continuation_attempts"] == 0
+
+
+def test_run_strands_json_rejects_empty_output() -> None:
+    def factory(_model: str | None, *, tools: list[object] | None = None):
+        def agent(_prompt: str) -> str:
+            return "  \n"
+
+        return agent
+
+    with pytest.raises(StrandsAgentError, match="empty output"):
+        _run_strands_json(
+            "prompt",
+            model="test-model",
+            timeout=1,
+            agent_factory=factory,
+        )
+
+
 def test_run_strands_trace_persists_sanitized_provider_error(
     tmp_path: Path,
 ) -> None:
