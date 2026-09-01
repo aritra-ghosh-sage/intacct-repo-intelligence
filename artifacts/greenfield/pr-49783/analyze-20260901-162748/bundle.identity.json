@@ -1,8 +1,0 @@
-{
-  "base_revision": "88831b97966bf918cd08a882d2ac5d2aa4bf21a9",
-  "bundle_key": "intacct-ia-app-pr-49783-071f786e237c0c92b385a19314f9a804c90ffedc",
-  "head_revision": "071f786e237c0c92b385a19314f9a804c90ffedc",
-  "pr_number": 49783,
-  "schema_version": "0.1",
-  "source_repository": "intacct/ia-app"
-}
