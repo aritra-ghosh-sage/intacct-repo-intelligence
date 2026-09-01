@@ -1,11 +1,13 @@
 {
   "artifact_kind": "generated_behavior_contract",
   "changed_symbols": [
+    "GLLedgerReporter::BuildPeriodsArray",
     "GLLedgerReporter::CreateDataXML",
     "GLLedgerReporter::DoQuery",
-    "GLLedgerReporter::Reporter_Instantiate",
-    "GLLedgerReporter::__construct",
-    "GLLedgerReporter::_getSryReportQuery",
+    "GLLedgerReporter::GLPrintReportHeader",
+    "GLLedgerReporter::ProcessDocColumnValueProlog",
+    "GLLedgerReporter::ProcessDocColumnValueRecurse",
+    "GLLedgerReporter::ReformatTransArrayForPeriods",
     "GLLedgerReporter::addSubTransaction",
     "GLLedgerReporter::getChildrenPath",
     "GLLedgerReporter::getElementHierarchy",
@@ -16,7 +18,7 @@
   "entry_surfaces": {},
   "evidence": {
     "path": "<generated>",
-    "sha256": "540ac928f7aa763cd69985842a09081aa8a7ced5d0142dc644ec6225406bc850"
+    "sha256": "6b4c2ccba113673bc92d5ce937612c72defc5e3309ec69aacf23b2a123a28884"
   },
   "generation": {
     "bounds": {
@@ -37,6 +39,13 @@
         "source_paths": [
           "app/source/gl/GLLedgerReporter.cls"
         ],
+        "symbol": "GLLedgerReporter::BuildPeriodsArray"
+      },
+      {
+        "role": "entry",
+        "source_paths": [
+          "app/source/gl/GLLedgerReporter.cls"
+        ],
         "symbol": "GLLedgerReporter::CreateDataXML"
       },
       {
@@ -51,21 +60,28 @@
         "source_paths": [
           "app/source/gl/GLLedgerReporter.cls"
         ],
-        "symbol": "GLLedgerReporter::Reporter_Instantiate"
+        "symbol": "GLLedgerReporter::GLPrintReportHeader"
       },
       {
         "role": "entry",
         "source_paths": [
           "app/source/gl/GLLedgerReporter.cls"
         ],
-        "symbol": "GLLedgerReporter::__construct"
+        "symbol": "GLLedgerReporter::ProcessDocColumnValueProlog"
       },
       {
         "role": "entry",
         "source_paths": [
           "app/source/gl/GLLedgerReporter.cls"
         ],
-        "symbol": "GLLedgerReporter::_getSryReportQuery"
+        "symbol": "GLLedgerReporter::ProcessDocColumnValueRecurse"
+      },
+      {
+        "role": "entry",
+        "source_paths": [
+          "app/source/gl/GLLedgerReporter.cls"
+        ],
+        "symbol": "GLLedgerReporter::ReformatTransArrayForPeriods"
       },
       {
         "role": "entry",
@@ -112,9 +128,9 @@
     ],
     "rule_set_version": "0.1",
     "source_trace_path": "artifacts/greenfield/pr-49783/analyze-20260901-162748/step1.5.trace.json",
-    "source_trace_sha256": "6e4af61d09901c96696c1ead3f89b2e3b89a2d119b4deffa135b8bf39c2141b1",
+    "source_trace_sha256": "54afbb92d39f1891bdc3ff8bb0031a893e3e37243d328dbed439e9a7e5ea73e3",
     "status": "complete",
-    "step1_evidence_sha256": "2a889c34f6a920c2477ccf22120e5c42c67e58a1fba8157cbefa9066ea868038",
+    "step1_evidence_sha256": "6f7567971f1c8dc607a82059a67cd77e1f15b80314925ca564532691b738a1b7",
     "surfaces": {}
   },
   "impacted_files": [],
@@ -138,61 +154,10 @@
     {
       "consumer_repository": "ia-app",
       "entry_surfaces": [],
-      "interface_id": "behavior:d6b7ac3dc5715b655c8543fb",
-      "owner": null,
-      "owner_repository": "ia-main",
-      "protected_behavior": "Constructs the GL ledger reporter, normalizes report parameters, initializes localization, authorization, currency, and feature-dependent state.",
-      "relationship_type": "behavior_contract",
-      "source_paths": [
-        "app/source/gl/GLLedgerReporter.cls"
-      ],
-      "source_symbols": [
-        "GLLedgerReporter::__construct"
-      ],
-      "status": "active",
-      "test_obligations": []
-    },
-    {
-      "consumer_repository": "ia-app",
-      "entry_surfaces": [],
-      "interface_id": "behavior:1e7ff88ebe50c86009b0a5c1",
-      "owner": null,
-      "owner_repository": "ia-main",
-      "protected_behavior": "Instantiates the reporter and merges memorized user preferences with request parameters, including drill-filter and dimension defaults.",
-      "relationship_type": "behavior_contract",
-      "source_paths": [
-        "app/source/gl/GLLedgerReporter.cls"
-      ],
-      "source_symbols": [
-        "GLLedgerReporter::Reporter_Instantiate"
-      ],
-      "status": "active",
-      "test_obligations": []
-    },
-    {
-      "consumer_repository": "ia-app",
-      "entry_surfaces": [],
-      "interface_id": "behavior:78a210c603a56f7c3729c160",
-      "owner": null,
-      "owner_repository": "ia-main",
-      "protected_behavior": "Builds GL query filters, period and balance-forward data, transaction records, account maps, reporting-book state, and drill-down context.",
-      "relationship_type": "behavior_contract",
-      "source_paths": [
-        "app/source/gl/GLLedgerReporter.cls"
-      ],
-      "source_symbols": [
-        "GLLedgerReporter::DoQuery"
-      ],
-      "status": "active",
-      "test_obligations": []
-    },
-    {
-      "consumer_repository": "ia-app",
-      "entry_surfaces": [],
       "interface_id": "behavior:57fe53265e84cb8a329dc6a3",
       "owner": null,
       "owner_repository": "ia-main",
-      "protected_behavior": "Creates report XML by preprocessing, querying, rendering headers, grouping transactions, calculating totals, applying document-column processing, and serializing output.",
+      "protected_behavior": "Builds the GL report data XML by initializing reporting context, running pre-query and query processing, constructing report headers and transaction XML, and returning either inline XML or a temporary-file path.",
       "relationship_type": "behavior_contract",
       "source_paths": [
         "app/source/gl/GLLedgerReporter.cls"
@@ -206,16 +171,33 @@
     {
       "consumer_repository": "ia-app",
       "entry_surfaces": [],
-      "interface_id": "behavior:b1ba10943885b56eb43564df",
+      "interface_id": "behavior:78a210c603a56f7c3729c160",
       "owner": null,
       "owner_repository": "ia-main",
-      "protected_behavior": "Builds the primary and detailed GL transaction queries and populates transaction and subtransaction result state.",
+      "protected_behavior": "Prepares GL report filters and accounting context, resolves period and account/location/department data, retrieves balances and transaction records, and prepares drill-down state for report generation.",
       "relationship_type": "behavior_contract",
       "source_paths": [
         "app/source/gl/GLLedgerReporter.cls"
       ],
       "source_symbols": [
-        "GLLedgerReporter::_getSryReportQuery"
+        "GLLedgerReporter::DoQuery"
+      ],
+      "status": "active",
+      "test_obligations": []
+    },
+    {
+      "consumer_repository": "ia-app",
+      "entry_surfaces": [],
+      "interface_id": "behavior:ae03d1eb8cf41afac12a4c8e",
+      "owner": null,
+      "owner_repository": "ia-main",
+      "protected_behavior": "Populates report header fields, reporting titles, dimension headers, transaction-state filters, consolidation metadata, and transaction drill-down operation metadata.",
+      "relationship_type": "behavior_contract",
+      "source_paths": [
+        "app/source/gl/GLLedgerReporter.cls"
+      ],
+      "source_symbols": [
+        "GLLedgerReporter::GLPrintReportHeader"
       ],
       "status": "active",
       "test_obligations": []
@@ -226,7 +208,7 @@
       "interface_id": "behavior:98e95371fbd924c066d129d7",
       "owner": null,
       "owner_repository": "ia-main",
-      "protected_behavior": "Transforms queried ledger entries into report rows, optionally adds subtransactions, drill-down metadata, dimensions, and currency information.",
+      "protected_behavior": "Transforms GL and subledger query records into report transaction rows, including debit/credit values, document and drill-down data, dimensions, currencies, and subtransactions.",
       "relationship_type": "behavior_contract",
       "source_paths": [
         "app/source/gl/GLLedgerReporter.cls"
@@ -241,10 +223,46 @@
     {
       "consumer_repository": "ia-app",
       "entry_surfaces": [],
+      "interface_id": "behavior:456b124545a723809a382731",
+      "owner": null,
+      "owner_repository": "ia-main",
+      "protected_behavior": "Groups report transactions into monthly or custom accounting-period structures and recursively rewrites report arrays to contain period subtotals.",
+      "relationship_type": "behavior_contract",
+      "source_paths": [
+        "app/source/gl/GLLedgerReporter.cls"
+      ],
+      "source_symbols": [
+        "GLLedgerReporter::BuildPeriodsArray",
+        "GLLedgerReporter::ReformatTransArrayForPeriods"
+      ],
+      "status": "active",
+      "test_obligations": []
+    },
+    {
+      "consumer_repository": "ia-app",
+      "entry_surfaces": [],
+      "interface_id": "behavior:dfb0f8b38f9e3f4651944fb2",
+      "owner": null,
+      "owner_repository": "ia-main",
+      "protected_behavior": "Conditionally replaces eligible document-column values with record identifiers for accrual detailed reports and recursively applies the transformation to transaction and subtransaction rows.",
+      "relationship_type": "behavior_contract",
+      "source_paths": [
+        "app/source/gl/GLLedgerReporter.cls"
+      ],
+      "source_symbols": [
+        "GLLedgerReporter::ProcessDocColumnValueProlog",
+        "GLLedgerReporter::ProcessDocColumnValueRecurse"
+      ],
+      "status": "active",
+      "test_obligations": []
+    },
+    {
+      "consumer_repository": "ia-app",
+      "entry_surfaces": [],
       "interface_id": "behavior:0fb1098b6305204245d430f8",
       "owner": null,
       "owner_repository": "ia-main",
-      "protected_behavior": "Provides location and department hierarchy data used to group ledger output, including recursive parent, child, and path calculations.",
+      "protected_behavior": "Builds department and location hierarchies and derives parent, child, display-name, and record-path information used by grouped report output.",
       "relationship_type": "behavior_contract",
       "source_paths": [
         "app/source/gl/GLLedgerReporter.cls"

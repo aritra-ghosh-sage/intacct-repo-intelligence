@@ -6,8 +6,10 @@ import hashlib
 import json
 import re
 import subprocess
+import threading
 from collections.abc import Callable, Mapping
 from copy import deepcopy
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +34,11 @@ class GreenfieldToolbox:
             raise GreenfieldToolError("invalid run context: " + "; ".join(errors))
         self.context = run_context
         self.calls: list[dict[str, Any]] = []
+        self._call_lock = threading.RLock()
+        self._scope_local = threading.local()
+        self._open_scopes: set[str] = set()
+        self._next_scope = 0
+        self._accessed_source_paths: set[tuple[str, str]] = set()
         self._limits = run_context["tool_policy"]["limits"]
         self._repositories = self._repository_map()
         self._handbooks = {
@@ -76,22 +83,26 @@ class GreenfieldToolbox:
     def _record(
         self, name: str, arguments: Mapping[str, Any], result: Mapping[str, Any]
     ) -> dict[str, Any]:
-        if len(self.calls) >= int(self._limits["max_tool_calls"]):
-            raise GreenfieldToolError("maximum tool-call budget exceeded")
-        call_id = artifact_sha256(
-            {"sequence": len(self.calls) + 1, "tool": name, "arguments": arguments}
-        )
-        snapshot = deepcopy(dict(result))
-        result_sha256 = artifact_sha256(snapshot)
-        row = {
-            "tool_call_id": call_id,
-            "tool": name,
-            "arguments": dict(arguments),
-            "result_sha256": result_sha256,
-            "result": snapshot,
-            "status": snapshot.get("status", "available"),
-        }
-        self.calls.append(row)
+        scope = getattr(self._scope_local, "scope", None)
+        with self._call_lock:
+            if scope is not None and scope not in self._open_scopes:
+                raise GreenfieldToolError("tool scope expired before result could be recorded")
+            if len(self.calls) >= int(self._limits["max_tool_calls"]):
+                raise GreenfieldToolError("maximum tool-call budget exceeded")
+            call_id = artifact_sha256(
+                {"sequence": len(self.calls) + 1, "tool": name, "arguments": arguments}
+            )
+            snapshot = deepcopy(dict(result))
+            result_sha256 = artifact_sha256(snapshot)
+            row = {
+                "tool_call_id": call_id,
+                "tool": name,
+                "arguments": dict(arguments),
+                "result_sha256": result_sha256,
+                "result": snapshot,
+                "status": snapshot.get("status", "available"),
+            }
+            self.calls.append(row)
         return {
             **snapshot,
             "tool_call_id": call_id,
@@ -188,6 +199,11 @@ class GreenfieldToolbox:
 
         row, root, revision = self._repository(repository)
         safe_path = self._safe_path(path)
+        source_key = (repository, safe_path)
+        if source_key not in self._accessed_source_paths:
+            if len(self._accessed_source_paths) >= int(self._limits["max_files"]):
+                raise GreenfieldToolError("maximum distinct source-file budget exceeded")
+            self._accessed_source_paths.add(source_key)
         if start_line < 1 or end_line < start_line or end_line - start_line > 500:
             raise GreenfieldToolError(
                 "source line range is invalid or exceeds 500 lines"
@@ -374,23 +390,57 @@ class GreenfieldToolbox:
             result,
         )
 
+    def open_tool_scope(self) -> str:
+        """Create a task-local evidence scope that can be sealed on timeout."""
+
+        with self._call_lock:
+            self._next_scope += 1
+            scope = f"tool-scope-{self._next_scope}"
+            self._open_scopes.add(scope)
+            return scope
+
+    def close_tool_scope(self, scope: str) -> None:
+        """Prevent a timed-out agent from recording any later evidence."""
+
+        with self._call_lock:
+            self._open_scopes.discard(scope)
+
+    def _scoped_tool(self, method: Callable[..., Any], scope: str) -> Callable[..., Any]:
+        @wraps(method)
+        def invoke(*args: Any, **kwargs: Any) -> Any:
+            with self._call_lock:
+                if scope not in self._open_scopes:
+                    raise GreenfieldToolError("tool scope has expired")
+            previous = getattr(self._scope_local, "scope", None)
+            self._scope_local.scope = scope
+            try:
+                return method(*args, **kwargs)
+            finally:
+                self._scope_local.scope = previous
+
+        return invoke
+
     def as_strands_tools(
-        self, decorator: Callable[[Callable[..., Any]], Any]
+        self, decorator: Callable[[Callable[..., Any]], Any], *, scope: str | None = None
     ) -> list[Any]:
         """Decorate the bounded methods using the installed Strands `tool` contract."""
 
-        return [
-            decorator(self.list_candidate_repositories),
-            decorator(self.repository_metadata),
-            decorator(self.read_handbook),
-            decorator(self.read_source),
-            decorator(self.search_source),
-            decorator(self.read_evidence_artifact),
-            decorator(self.codegraph_explore),
+        methods = [
+            self.list_candidate_repositories,
+            self.repository_metadata,
+            self.read_handbook,
+            self.read_source,
+            self.search_source,
+            self.read_evidence_artifact,
+            self.codegraph_explore,
         ]
+        if scope is not None:
+            methods = [self._scoped_tool(method, scope) for method in methods]
+        return [decorator(method) for method in methods]
 
     def ledger(self) -> list[dict[str, Any]]:
-        return json.loads(json.dumps(self.calls))
+        with self._call_lock:
+            return json.loads(json.dumps(self.calls))
 
 
 __all__ = ["GreenfieldToolError", "GreenfieldToolbox"]

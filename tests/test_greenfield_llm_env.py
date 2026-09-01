@@ -16,8 +16,8 @@ from greenfield.llm_env import (
     load_greenfield_env,
     validate_greenfield_llm_env,
 )
-from greenfield.nexau_planner import run_nexau_planner
 from greenfield.strands_config import StrandsRuntimeConfig, credential_status
+from greenfield.strands_planner import run_strands_planner
 from greenfield.strands_tools import GreenfieldToolbox
 from scripts import run_greenfield_strands, trace_greenfield_step1_5
 from tests.test_greenfield_simplified_flow import _context
@@ -109,7 +109,7 @@ def test_validate_greenfield_llm_env_reports_clear_instructions(
         validate_greenfield_llm_env(env_path=env_path)
 
     message = str(excinfo.value)
-    assert "Greenfield NexAU/LLM configuration is missing required values" in message
+    assert "Greenfield generic LLM configuration is missing required values" in message
     assert "LLM_API_KEY" in message
     assert "LLM_MODEL" in message
     assert "LLM_BASE_URL" in message
@@ -163,7 +163,7 @@ STRANDS_PLANNER_MODEL=planner-model
 
         return runner
 
-    report = run_nexau_planner(
+    report = run_strands_planner(
         context,
         {"gaps": []},
         GreenfieldToolbox(context),
@@ -172,38 +172,7 @@ STRANDS_PLANNER_MODEL=planner-model
     )
 
     assert report["analysis"]["agent"]["name"] == "strands-bedrock"
-    assert report["status"] == "complete"
-
-
-def test_llm_model_resolution_prefers_cli_over_config_and_env(monkeypatch) -> None:
-    monkeypatch.setenv("LLM_MODEL", "env-model")
-    monkeypatch.setenv("LLM_BASE_URL", "https://env.example/v1")
-    strands_config = StrandsRuntimeConfig(
-        model="config-model", base_url="https://config.example/v1"
-    )
-    model, base_url = run_greenfield_strands._resolve_llm_runtime(
-        cli_model="cli-model",
-        strands_config=strands_config,
-        planner_config={
-            "model": "planner-model",
-            "base_url": "https://planner.example/v1",
-        },
-    )
-
-    assert model == "cli-model"
-    assert base_url is None
-
-
-def test_llm_model_resolution_fails_when_unconfigured(monkeypatch) -> None:
-    monkeypatch.delenv("LLM_MODEL", raising=False)
-    monkeypatch.delenv("LLM_BASE_URL", raising=False)
-
-    with pytest.raises(ValueError, match="model is not configured"):
-        run_greenfield_strands._resolve_llm_runtime(
-            cli_model=None,
-            strands_config=StrandsRuntimeConfig(),
-            planner_config={},
-        )
+    assert report["status"] == "partial"
 
 
 def test_stage_models_use_distinct_native_strands_identifiers(monkeypatch) -> None:
@@ -247,7 +216,6 @@ def test_capability_preflight_records_e2b_as_optional(
         model="test-model",
         base_url="https://llm.example/v1",
         env_path=tmp_path / ".env",
-        planner_config={},
     )
 
     assert result["status"] == "ready"
@@ -286,7 +254,6 @@ def test_capability_preflight_does_not_require_nexau(
         model="test-model",
         base_url="https://llm.example/v1",
         env_path=tmp_path / ".env",
-        planner_config={},
     )
 
     assert result["status"] == "ready"

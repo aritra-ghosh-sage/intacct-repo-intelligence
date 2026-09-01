@@ -65,6 +65,9 @@ def validate(report: Any) -> list[str]:
     provenance = report.get("provenance")
     if not isinstance(provenance, dict) or provenance.get("read_only") is not True:
         errors.append("provenance.read_only must be true")
+    digest = provenance.get("analysis_report_sha256") if isinstance(provenance, dict) else None
+    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        errors.append("provenance.analysis_report_sha256 must be SHA-256")
     return errors
 
 

@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
+from copy import deepcopy
 from typing import Any
 
 from greenfield.pr_analysis_contract import validate_claims
+
+SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 ASSESSMENT_STATES = frozenset(
     {"covers", "needs_update", "missing", "unrelated", "unresolved", "not_assessed"}
@@ -19,6 +23,8 @@ def build_assessment(
     candidates: list[dict[str, Any]],
     evidence: list[dict[str, Any]],
     assessed: bool,
+    analysis_report_sha256: str,
+    canonical_analysis: Mapping[str, Any],
 ) -> dict[str, Any]:
     rows = []
     state_by_action = {
@@ -69,12 +75,20 @@ def build_assessment(
             "read_only": True,
             "github_writes": "none",
             "catalog_mutation": "none",
+            "analysis_report_sha256": analysis_report_sha256,
         },
+        "canonical_analysis": deepcopy(dict(canonical_analysis)),
     }
 
 
 def validate_assessment(report: Mapping[str, Any]) -> list[str]:
     errors = validate_claims(report, kind="greenfield_test_assessment")
+    provenance = report.get("provenance")
+    digest = provenance.get("analysis_report_sha256") if isinstance(provenance, Mapping) else None
+    if not isinstance(digest, str) or not SHA256.fullmatch(digest):
+        errors.append("provenance.analysis_report_sha256 must be SHA-256")
+    if not isinstance(report.get("canonical_analysis"), Mapping):
+        errors.append("canonical_analysis must be an object")
     rows = report.get("assessments")
     if not isinstance(rows, list):
         return errors + ["assessments must be a list"]

@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 import platform
+import re
 import shutil
 import sys
 from collections.abc import Mapping
@@ -18,8 +19,14 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from greenfield.analysis_report import AnalysisReportError, build_analysis_report
-from greenfield.artifact_io import read_json_object, write_json_atomic
+from greenfield.analysis_report import (
+    AnalysisReportError,
+    build_analysis_report,
+    canonical_analysis_projection,
+    canonical_remediation_actions,
+    validate_projection_consistency,
+)
+from greenfield.artifact_io import artifact_sha256, read_json_object, write_json_atomic
 from greenfield.behavior_impact_report import (
     BehaviorImpactReportError,
     build_behavior_impact_report,
@@ -33,8 +40,10 @@ from greenfield.github_repository_evidence import (
 )
 from greenfield.impact_discovery import discover_from_trace, validate_discovery
 from greenfield.llm_env import load_greenfield_env
-from greenfield.nexau_planner import StrandsPlannerError, run_strands_planner
-from greenfield.planning_contract import build_planning_report
+from greenfield.planning_contract import (
+    build_planning_report,
+    downgrade_incomplete_analysis,
+)
 from greenfield.pr_analysis_contract import make_request
 from greenfield.pr_review import render_review, validate_review
 from greenfield.publish import build_publication, publish_github
@@ -65,6 +74,7 @@ from greenfield.strands_agent import (
     run_strands_trace,
 )
 from greenfield.strands_config import apply_strands_environment, load_strands_config
+from greenfield.strands_planner import StrandsPlannerError, run_strands_planner
 from greenfield.strands_tools import GreenfieldToolbox
 from greenfield.telemetry import GreenfieldTelemetry, redact
 from greenfield.test_assessment import build_assessment, validate_assessment
@@ -209,26 +219,6 @@ def _captured_candidate(
     )
 
 
-def _resolve_llm_runtime(
-    *,
-    cli_model: str | None,
-    strands_config: Any,
-    planner_config: dict[str, Any],
-) -> tuple[str, str | None]:
-    """Resolve the legacy generic model helper without provider credentials."""
-
-    model = (
-        cli_model or strands_config.model or os.environ.get("STRANDS_MODEL") or ""
-    ).strip()
-    if not model:
-        raise ValueError(
-            "Greenfield Strands model is not configured; supply --model, set model "
-            "in the Greenfield config, or export STRANDS_MODEL"
-        )
-    del planner_config
-    return model, None
-
-
 def _resolve_stage_models(strands_config: Any) -> tuple[str, str]:
     """Resolve the trace model and the dedicated native planner model."""
 
@@ -288,7 +278,6 @@ def _capability_preflight(
     model: str,
     base_url: str | None,
     env_path: Path,
-    planner_config: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Check native Strands prerequisites without OpenAI-compatible env coupling."""
 
@@ -301,14 +290,6 @@ def _capability_preflight(
                 "component": "strands_planner",
                 "code": "configuration_unavailable",
                 "message": "Strands planner model is not configured",
-            }
-        )
-    if not isinstance(planner_config, Mapping):
-        diagnostics.append(
-            {
-                "component": "planner_config",
-                "code": "invalid",
-                "message": "planner config must be an object",
             }
         )
     try:
@@ -356,29 +337,17 @@ def _capability_preflight(
     }
 
 
-def _downgrade_incomplete_analysis(
-    value: Mapping[str, Any], *, reason: str
-) -> dict[str, Any]:
-    """Prevent partial planner/Strands lifecycles from retaining draft claims."""
-    result = json.loads(json.dumps(value))
-    for row in result.get("repository_impacts", []):
-        if isinstance(row, dict) and row.get("evidence_state") in {
-            "confirmed",
-            "strong_candidate",
-        }:
-            row["evidence_state"] = "candidate"
-            row.pop("challenge_task_id", None)
-    for row in result.get("actions", []):
-        if isinstance(row, dict):
-            row["draft_eligible"] = False
-            if row.get("evidence_state") in {"confirmed", "strong_candidate"}:
-                row["evidence_state"] = "candidate"
-            row.pop("challenge_task_id", None)
-    gaps = result.setdefault("gaps", [])
-    if reason not in gaps:
-        gaps.append(reason)
-    result["agent"] = {**result.get("agent", {}), "status": "partial", "reason": reason}
-    return result
+def _stage_outcome(value: Any, *, default: str = "failed") -> str:
+    if not isinstance(value, Mapping):
+        return default
+    status = str(value.get("status") or "")
+    if status in {"failed", "blocked", "unavailable", "skipped", "degraded"}:
+        return status
+    if status in {"partial", "not_run", "execution_unavailable"}:
+        return "degraded" if status == "partial" else "unavailable"
+    if status in {"complete", "validated", "created", "reused", "ready"}:
+        return "succeeded"
+    return default
 
 
 def _require_draft_step8_success(step8_result: Mapping[str, Any] | None) -> None:
@@ -463,7 +432,6 @@ def main(argv: list[str] | None = None) -> int:
         Path(__file__).resolve().parents[1] / "config" / "workspace_repos.yaml"
     )
     args.strands_config = None
-    args.planner_config = None
     args.model = None
     args.dry_run = args.mode == "analyze"
     args.timeout = None
@@ -495,7 +463,6 @@ def main(argv: list[str] | None = None) -> int:
         env_path = load_greenfield_env()
         strands_config = load_strands_config(args.strands_config)
         apply_strands_environment(strands_config)
-        planner_config = {}
         strands_model, planner_model = _resolve_stage_models(strands_config)
         dry_run = args.dry_run or not (args.publish_github or args.create_draft_pr)
         timeout = args.timeout or strands_config.timeout_seconds
@@ -505,7 +472,6 @@ def main(argv: list[str] | None = None) -> int:
             model=planner_model,
             base_url=None,
             env_path=env_path,
-            planner_config=planner_config,
         )
         telemetry.emit("capability_preflight", mode=args.mode, **preflight)
         if args.mode == "draft" and preflight["status"] != "ready":
@@ -687,9 +653,8 @@ def main(argv: list[str] | None = None) -> int:
         handoff.complete_stage(
             "inventory",
             inputs={"step1": step1_path, "manifest": args.manifest},
-            outputs={
-                f"inventory_{index:02d}": path for index, path in enumerate(inventories)
-            },
+            outputs={f"inventory_{index:02d}": path for index, path in enumerate(inventories)},
+            status="skipped" if not inventories else "succeeded",
         )
         current_stage = "step2"
         step2_path = args.output_dir / "step2.json"
@@ -853,8 +818,17 @@ def main(argv: list[str] | None = None) -> int:
                 for row in run_context["candidate_repositories"]
             ],
         }
+        planning_input_artifacts = {
+            "run_context_sha256": run_context["context_sha256"],
+            "step2_sha256": artifact_sha256(step2_report),
+            "step3_sha256": artifact_sha256(step3_report),
+            "step4_sha256": artifact_sha256(step4_report),
+            "step5_sha256": artifact_sha256(step5_report),
+            "compatibility_summary_sha256": artifact_sha256(compatibility_summary),
+        }
         planning_report: dict[str, Any] | None = None
         planning_path: Path | None = None
+        planner_diagnostic_path = args.output_dir / "planner.diagnostic.json"
         current_stage = "strands_planning"
         telemetry.emit(
             "analysis_inputs",
@@ -868,12 +842,12 @@ def main(argv: list[str] | None = None) -> int:
                 toolbox,
                 mode=args.planner_mode,
                 config={
-                    **planner_config,
                     "model": planner_model,
                     "max_tokens": 8192,
                 },
                 model=strands_model,
                 timeout=timeout,
+                input_artifacts=planning_input_artifacts,
             )
             telemetry.emit(
                 "strands_plan_generated",
@@ -885,6 +859,29 @@ def main(argv: list[str] | None = None) -> int:
             )
         except StrandsPlannerError as exc:
             strands_reason = redact(str(exc))
+            write_json_atomic(
+                planner_diagnostic_path,
+                {
+                    "schema_version": "0.1",
+                    "analysis_kind": "greenfield_planner_diagnostic",
+                    "failure_reason": strands_reason,
+                    "response_shape": "unavailable_or_invalid",
+                    "task_index": (
+                        int(match.group(1))
+                        if (match := re.search(r"planner task (\d+)", strands_reason))
+                        else None
+                    ),
+                    "prompt_digest": artifact_sha256(
+                        {
+                            "run_context_sha256": run_context["context_sha256"],
+                            "compatibility_summary_sha256": planning_input_artifacts[
+                                "compatibility_summary_sha256"
+                            ],
+                        }
+                    ),
+                    "input_digests": planning_input_artifacts,
+                },
+            )
             planning_report = build_planning_report(
                 run_context,
                 mode="default",
@@ -909,10 +906,14 @@ def main(argv: list[str] | None = None) -> int:
                         "reason": strands_reason,
                     },
                 },
+                input_artifacts=planning_input_artifacts,
             )
             telemetry.emit("strands_planner_unavailable", reason=strands_reason)
         planning_path = args.output_dir / "planning-report.json"
         write_json_atomic(planning_path, planning_report)
+        planning_outputs = {"planning_report": planning_path}
+        if planner_diagnostic_path.exists():
+            planning_outputs["planner_diagnostic"] = planner_diagnostic_path
         handoff.complete_stage(
             "strands_planning",
             inputs={
@@ -922,7 +923,8 @@ def main(argv: list[str] | None = None) -> int:
                 "step4": step4_path,
                 "step5": step5_path,
             },
-            outputs={"planning_report": planning_path},
+            outputs=planning_outputs,
+            status=_stage_outcome(planning_report),
         )
         try:
             planned_analysis = (
@@ -936,7 +938,7 @@ def main(argv: list[str] | None = None) -> int:
                 "partial",
                 "blocked",
             }:
-                planned_analysis = _downgrade_incomplete_analysis(
+                planned_analysis = downgrade_incomplete_analysis(
                     planned_analysis, reason="strands_planner_incomplete"
                 )
             if isinstance(planned_analysis, dict):
@@ -949,6 +951,7 @@ def main(argv: list[str] | None = None) -> int:
                     agent_analysis=planned_analysis,
                     tool_calls=toolbox.ledger(),
                     planning=planning_report,
+                    planning_inputs=planning_input_artifacts,
                     lifecycle_complete=planning_report.get("status") == "complete",
                     source_trace=trace,
                 )
@@ -974,6 +977,7 @@ def main(argv: list[str] | None = None) -> int:
                 },
                 tool_calls=toolbox.ledger(),
                 planning=planning_report,
+                planning_inputs=planning_input_artifacts,
                 lifecycle_complete=False,
                 source_trace=trace,
             )
@@ -998,6 +1002,7 @@ def main(argv: list[str] | None = None) -> int:
                 "analysis_report": analysis_path,
                 "planning_report": planning_path,
             },
+            status=_stage_outcome(analysis),
         )
         current_stage = "behavior_impact_report"
         handbook = build_behavior_impact_report(
@@ -1006,12 +1011,16 @@ def main(argv: list[str] | None = None) -> int:
             read_json_object(step3_path),
             read_json_object(step4_path),
             read_json_object(step5_path),
+            analysis=analysis,
         )
         handbook_errors = validate_behavior_impact_report(handbook)
         if handbook_errors:
             raise BehaviorImpactReportError(
                 "generated invalid behavior handbook: " + "; ".join(handbook_errors)
             )
+        projection_errors = validate_projection_consistency(handbook, analysis)
+        if projection_errors:
+            raise ValueError("inconsistent behavior-impact projection: " + "; ".join(projection_errors))
         handbook_path = args.output_dir / "behavior-impact-report.json"
         handbook_markdown_path = args.output_dir / "behavior-impact-report.md"
         write_json_atomic(handbook_path, handbook)
@@ -1031,6 +1040,7 @@ def main(argv: list[str] | None = None) -> int:
                 "behavior_impact_report": handbook_path,
                 "markdown": handbook_markdown_path,
             },
+            status=_stage_outcome(handbook),
         )
         current_stage = "test_assessment"
         assessment_path = args.output_dir / "test-assessment.json"
@@ -1039,24 +1049,18 @@ def main(argv: list[str] | None = None) -> int:
             for row in run_context["candidate_repositories"]
             if isinstance(row, dict)
         }
-        assessment_candidates = [
-            {
-                "action_type": row.get("action_type"),
-                "target_repository": row.get("target_repository"),
-                "target_revision": row.get("target_revision")
-                or candidate_revisions.get(str(row.get("target_repository"))),
-                "scope": row.get("scope", {}),
-                "evidence_state": row.get("evidence_state"),
-            }
-            for row in analysis.get("actions", [])
-            if isinstance(row, dict)
-            and row.get("action_type")
-            in {"run_test_suite", "update_existing_test", "add_missing_test"}
-            and (
-                row.get("target_revision")
-                or candidate_revisions.get(str(row.get("target_repository")))
+        assessment_candidates = []
+        for row in canonical_remediation_actions(analysis):
+            if not isinstance(row, dict) or row.get("action_type") not in {
+                "run_test_suite", "update_existing_test", "add_missing_test"
+            }:
+                continue
+            target_revision = row.get("target_revision") or candidate_revisions.get(
+                str(row.get("target_repository"))
             )
-        ]
+            if not target_revision:
+                continue
+            assessment_candidates.append({**row, "target_revision": target_revision})
         assessment = build_assessment(
             repository=str(request["source_repository"]),
             revision=str(request["head_revision"]),
@@ -1069,19 +1073,25 @@ def main(argv: list[str] | None = None) -> int:
                 }
             ],
             assessed=bool(assessment_candidates),
+            analysis_report_sha256=analysis["report_sha256"],
+            canonical_analysis=canonical_analysis_projection(analysis),
         )
         assessment_errors = validate_assessment(assessment)
         if assessment_errors:
             raise ValueError("invalid test assessment: " + "; ".join(assessment_errors))
+        projection_errors = validate_projection_consistency(assessment, analysis)
+        if projection_errors:
+            raise ValueError("inconsistent test assessment: " + "; ".join(projection_errors))
         write_json_atomic(assessment_path, assessment)
         handoff.complete_stage(
             "test_assessment",
             inputs={"discovery": discovery_path, "step4": step4_path},
             outputs={"assessment": assessment_path},
+            status=_stage_outcome(assessment),
         )
         current_stage = "test_proposal"
         proposal_rows = []
-        for row in analysis.get("actions", []):
+        for row in canonical_remediation_actions(analysis):
             if not isinstance(row, dict) or row.get("draft_eligible") is not True:
                 continue
             scope = row.get("scope", {})
@@ -1093,6 +1103,7 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             proposal_rows.append(
                 {
+                    "action_id": row["action_id"],
                     "target_repository": row["target_repository"],
                     "target_base_revision": row["target_revision"],
                     "paths": paths,
@@ -1122,13 +1133,18 @@ def main(argv: list[str] | None = None) -> int:
                 "read_only": True,
                 "catalog_mutation": "none",
                 "github_writes": "none",
+                "analysis_report_sha256": analysis["report_sha256"],
             },
+            "canonical_analysis": canonical_analysis_projection(analysis),
         }
         proposal_errors = validate_test_proposal(proposal)
         if proposal_errors:
             raise ValueError(
                 "invalid Strands test proposal: " + "; ".join(proposal_errors)
             )
+        projection_errors = validate_projection_consistency(proposal, analysis)
+        if projection_errors:
+            raise ValueError("inconsistent test proposal: " + "; ".join(projection_errors))
         proposal_path = args.output_dir / "test-proposal.json"
         write_json_atomic(proposal_path, proposal)
         handoff.complete_stage(
@@ -1141,6 +1157,7 @@ def main(argv: list[str] | None = None) -> int:
                 "step5": step5_path,
             },
             outputs={"test_proposal": proposal_path},
+            status=_stage_outcome(proposal),
         )
         current_stage = "pr_review"
         review_path = args.output_dir / "pr-review.json"
@@ -1161,6 +1178,9 @@ def main(argv: list[str] | None = None) -> int:
         review_errors = validate_review(review)
         if review_errors:
             raise ValueError("invalid PR review: " + "; ".join(review_errors))
+        projection_errors = validate_projection_consistency(review, analysis)
+        if projection_errors:
+            raise ValueError("inconsistent PR review: " + "; ".join(projection_errors))
         write_json_atomic(review_path, review)
         review_markdown_path = args.output_dir / "pr-review.md"
         review_markdown_path.write_text(str(review["markdown"]), encoding="utf-8")
@@ -1176,6 +1196,7 @@ def main(argv: list[str] | None = None) -> int:
                 **({"planning_report": planning_path} if planning_path else {}),
             },
             outputs={"review": review_path, "markdown": review_markdown_path},
+            status=_stage_outcome(review),
         )
         if args.step7_eligible and not args.strict_target_evidence:
             raise ValueError("--step7-eligible requires --strict-target-evidence")
@@ -1220,6 +1241,7 @@ def main(argv: list[str] | None = None) -> int:
                     "pr_review": review_path,
                 },
                 outputs={step6_artifact_name: step6_artifact_path},
+                status=_stage_outcome(step6_artifact),
             )
         else:
             current_stage = "step6"
@@ -1261,6 +1283,7 @@ def main(argv: list[str] | None = None) -> int:
                     "step5": step5_path,
                 },
                 outputs={step6_artifact_name: step6_artifact_path},
+                status=_stage_outcome(step6_report),
             )
 
         step7_report: dict[str, Any] | None = None
@@ -1371,6 +1394,7 @@ def main(argv: list[str] | None = None) -> int:
                             "request": step7_request_path,
                             "report": step7_report_path,
                         },
+                        status=_stage_outcome(step7_report),
                     )
                     if (
                         args.mode != "analyze"
@@ -1460,6 +1484,7 @@ def main(argv: list[str] | None = None) -> int:
                 "step7_handoff",
                 inputs={"step6": step6_artifact_path},
                 outputs=outputs,
+                status=_stage_outcome(step7_handoff),
             )
 
         step8_result: dict[str, Any] | None = None
@@ -1538,6 +1563,7 @@ def main(argv: list[str] | None = None) -> int:
                         "request": step8_request_path,
                         "result": step8_result_path,
                     },
+                    status=_stage_outcome(step8_result),
                 )
             except Step8Error as exc:
                 step8_handoff = _blocked_handoff(
@@ -1557,6 +1583,7 @@ def main(argv: list[str] | None = None) -> int:
                     **({"step7": step7_report_path} if step7_report_path else {}),
                 },
                 outputs={"handoff": step8_handoff_path},
+                status=_stage_outcome(step8_handoff),
             )
         if args.mode == "draft":
             if planning_report.get("status") != "complete":
@@ -1582,6 +1609,9 @@ def main(argv: list[str] | None = None) -> int:
             planning=planning_report,
             handbook_resynchronization=handbook_resynchronization,
         )
+        projection_errors = validate_projection_consistency(publication, analysis)
+        if projection_errors:
+            raise ValueError("inconsistent publication: " + "; ".join(projection_errors))
         publication_path = args.output_dir / "publication.json"
         write_json_atomic(publication_path, publication)
         publication_result_path: Path | None = None
@@ -1605,6 +1635,7 @@ def main(argv: list[str] | None = None) -> int:
                     else {}
                 ),
             },
+            status="succeeded",
         )
         handoff.finish()
         # This small pointer is the sole mutable convenience artifact; all

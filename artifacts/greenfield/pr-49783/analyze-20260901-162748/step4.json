@@ -6,7 +6,7 @@
         "classification": "candidate",
         "evidence": [
           {
-            "digest": "56ca58671f0eb9259830bf74e055ddc3bbf075f9e53a7dfc8246b0207c753abe",
+            "digest": "369e4d17e8df0014afa063a1f58364c7bf474dc2a06f89d5b9bf42fe57eb22f8",
             "kind": "contract",
             "path": "artifacts/greenfield/pr-49783/analyze-20260901-162748/step1.5.contract.json",
             "revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
@@ -23,13 +23,13 @@
         "classification": "candidate",
         "evidence": [
           {
-            "digest": "56ca58671f0eb9259830bf74e055ddc3bbf075f9e53a7dfc8246b0207c753abe",
+            "digest": "369e4d17e8df0014afa063a1f58364c7bf474dc2a06f89d5b9bf42fe57eb22f8",
             "kind": "contract",
             "path": "artifacts/greenfield/pr-49783/analyze-20260901-162748/step1.5.contract.json",
             "revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
           }
         ],
-        "interface_id": "behavior:1e7ff88ebe50c86009b0a5c1",
+        "interface_id": "behavior:456b124545a723809a382731",
         "reason": "declared_contract_without_test_evidence",
         "source_repository": "ia-main",
         "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc",
@@ -40,7 +40,7 @@
         "classification": "candidate",
         "evidence": [
           {
-            "digest": "56ca58671f0eb9259830bf74e055ddc3bbf075f9e53a7dfc8246b0207c753abe",
+            "digest": "369e4d17e8df0014afa063a1f58364c7bf474dc2a06f89d5b9bf42fe57eb22f8",
             "kind": "contract",
             "path": "artifacts/greenfield/pr-49783/analyze-20260901-162748/step1.5.contract.json",
             "revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
@@ -57,7 +57,7 @@
         "classification": "candidate",
         "evidence": [
           {
-            "digest": "56ca58671f0eb9259830bf74e055ddc3bbf075f9e53a7dfc8246b0207c753abe",
+            "digest": "369e4d17e8df0014afa063a1f58364c7bf474dc2a06f89d5b9bf42fe57eb22f8",
             "kind": "contract",
             "path": "artifacts/greenfield/pr-49783/analyze-20260901-162748/step1.5.contract.json",
             "revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
@@ -74,7 +74,7 @@
         "classification": "candidate",
         "evidence": [
           {
-            "digest": "56ca58671f0eb9259830bf74e055ddc3bbf075f9e53a7dfc8246b0207c753abe",
+            "digest": "369e4d17e8df0014afa063a1f58364c7bf474dc2a06f89d5b9bf42fe57eb22f8",
             "kind": "contract",
             "path": "artifacts/greenfield/pr-49783/analyze-20260901-162748/step1.5.contract.json",
             "revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
@@ -91,13 +91,13 @@
         "classification": "candidate",
         "evidence": [
           {
-            "digest": "56ca58671f0eb9259830bf74e055ddc3bbf075f9e53a7dfc8246b0207c753abe",
+            "digest": "369e4d17e8df0014afa063a1f58364c7bf474dc2a06f89d5b9bf42fe57eb22f8",
             "kind": "contract",
             "path": "artifacts/greenfield/pr-49783/analyze-20260901-162748/step1.5.contract.json",
             "revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
           }
         ],
-        "interface_id": "behavior:b1ba10943885b56eb43564df",
+        "interface_id": "behavior:ae03d1eb8cf41afac12a4c8e",
         "reason": "declared_contract_without_test_evidence",
         "source_repository": "ia-main",
         "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc",
@@ -108,13 +108,13 @@
         "classification": "candidate",
         "evidence": [
           {
-            "digest": "56ca58671f0eb9259830bf74e055ddc3bbf075f9e53a7dfc8246b0207c753abe",
+            "digest": "369e4d17e8df0014afa063a1f58364c7bf474dc2a06f89d5b9bf42fe57eb22f8",
             "kind": "contract",
             "path": "artifacts/greenfield/pr-49783/analyze-20260901-162748/step1.5.contract.json",
             "revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
           }
         ],
-        "interface_id": "behavior:d6b7ac3dc5715b655c8543fb",
+        "interface_id": "behavior:dfb0f8b38f9e3f4651944fb2",
         "reason": "declared_contract_without_test_evidence",
         "source_repository": "ia-main",
         "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc",
@@ -175,12 +175,12 @@
   "provenance": {
     "catalog_mutation": "none",
     "evidence_digests": [
-      "56ca58671f0eb9259830bf74e055ddc3bbf075f9e53a7dfc8246b0207c753abe"
+      "369e4d17e8df0014afa063a1f58364c7bf474dc2a06f89d5b9bf42fe57eb22f8"
     ],
     "github_writes": "none",
     "read_only": true,
     "rule_set_version": "0.1",
-    "step3_report_sha256": "4832a95d212c0ced3fdaa27925ffb28eee2e80062b143526c47cc87c92cdb7a6"
+    "step3_report_sha256": "7668318d5fe856d8011e3c7bace7acebc1b8e8e598e8c01582564533b66f11cc"
   },
   "schema_version": "0.1",
   "status": "partial",

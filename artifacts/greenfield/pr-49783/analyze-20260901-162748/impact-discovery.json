@@ -14,11 +14,11 @@
       "evidence": [
         {
           "artifact": "step1.5.trace.json",
-          "sha256": "6e4af61d09901c96696c1ead3f89b2e3b89a2d119b4deffa135b8bf39c2141b1"
+          "sha256": "54afbb92d39f1891bdc3ff8bb0031a893e3e37243d328dbed439e9a7e5ea73e3"
         },
         {
           "artifact": "step1.5.contract.json",
-          "sha256": "21fdd7d1e8af668cba81af37592488a3dda59bc623e464acda7c3bcf08f31cf9"
+          "sha256": "351cf50a287226f96208f8166aeb082db2ac376e6251d3f3dd7619e19f460761"
         }
       ],
       "evidence_status": "confirmed",
@@ -34,7 +34,7 @@
     "catalog_mutation": "none",
     "github_writes": "none",
     "read_only": true,
-    "request_sha256": "5da913c3d434d8b2f4fabb12812f02af8267a6afd5a333f350fead9aa3786dc0"
+    "request_sha256": "1d3a06e0f69488d6e697155fd167b7007d474d1551f9543d71671b663ef573be"
   },
   "read_requests": [],
   "schema_version": "0.1",

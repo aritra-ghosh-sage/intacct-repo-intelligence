@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from greenfield.analysis_report import canonical_analysis_projection
 from greenfield.artifact_io import artifact_sha256
 from greenfield.pr_analysis_contract import validate_claims
 
@@ -202,7 +203,7 @@ def render_review(
     gaps = sorted(set(gaps))
     marker = "**Explicit gaps:**\n"
     markdown = template.replace(marker, marker + "\n" + "\n".join(evidence_lines + [f"- {gap}" for gap in gaps]) + "\n", 1)
-    report = {"schema_version": "0.1", "analysis_kind": "greenfield_pr_review", "status": "partial" if gaps else "complete", "claims": discovery.get("claims", []), "markdown": markdown, "gaps": gaps, "provenance": {"template": str(TEMPLATE.relative_to(TEMPLATE.parents[2])), "read_only": True, "analysis_report_sha256": analysis.get("report_sha256") if isinstance(analysis, dict) else None, "behavior_impact_sha256": behavior_impact.get("handbook_sha256") if isinstance(behavior_impact, dict) else None, "planning_sha256": planning.get("planning_sha256") if isinstance(planning, dict) else None}}
+    report = {"schema_version": "0.1", "analysis_kind": "greenfield_pr_review", "status": "partial" if gaps else "complete", "claims": discovery.get("claims", []), "markdown": markdown, "gaps": gaps, "provenance": {"template": str(TEMPLATE.relative_to(TEMPLATE.parents[2])), "read_only": True, "analysis_report_sha256": analysis.get("report_sha256") if isinstance(analysis, dict) else None, "behavior_impact_sha256": behavior_impact.get("handbook_sha256") if isinstance(behavior_impact, dict) else None, "planning_sha256": planning.get("planning_sha256") if isinstance(planning, dict) else None}, **({"canonical_analysis": canonical_analysis_projection(analysis)} if isinstance(analysis, dict) else {})}
     report["review_sha256"] = artifact_sha256(report)
     return report
 
@@ -211,6 +212,11 @@ def validate_review(report: dict[str, Any]) -> list[str]:
     errors = validate_claims(report, kind="greenfield_pr_review")
     if not isinstance(report.get("markdown"), str) or "## 🔍 Review Summary" not in report["markdown"]:
         errors.append("markdown must use the canonical template")
+    provenance = report.get("provenance")
+    if isinstance(report.get("canonical_analysis"), dict):
+        digest = provenance.get("analysis_report_sha256") if isinstance(provenance, dict) else None
+        if not isinstance(digest, str) or len(digest) != 64:
+            errors.append("provenance.analysis_report_sha256 must be SHA-256")
     digest = report.get("review_sha256")
     unsigned = dict(report)
     unsigned.pop("review_sha256", None)

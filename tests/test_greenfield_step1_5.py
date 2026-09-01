@@ -1408,7 +1408,7 @@ def test_test_proposal_requires_exact_target_and_evidence() -> None:
             }
         ],
         "findings": [],
-        "provenance": {"read_only": True},
+            "provenance": {"read_only": True, "analysis_report_sha256": "d" * 64},
     }
     assert validate_test_proposal(proposal) == []
     proposal["proposals"][0]["paths"] = ["tests/*.feature"]

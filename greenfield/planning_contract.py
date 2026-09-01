@@ -23,8 +23,20 @@ TASK_TYPES = frozenset(
         "synthesize_review",
     }
 )
+REPOSITORY_REQUIRED_TASK_TYPES = frozenset(TASK_TYPES - {"synthesize_review"})
 DECISIONS = frozenset({"continue", "replan", "complete", "block"})
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
+MAX_TASKS = 32
+MAX_TASK_ID_LENGTH = 96
+MAX_QUESTION_LENGTH = 1_000
+PLANNING_INPUT_KEYS = (
+    "run_context_sha256",
+    "step2_sha256",
+    "step3_sha256",
+    "step4_sha256",
+    "step5_sha256",
+    "compatibility_summary_sha256",
+)
 
 
 class PlanningContractError(ValueError):
@@ -41,6 +53,7 @@ def build_planning_report(
     stop_reason: str,
     gaps: list[str] | None = None,
     analysis: Mapping[str, Any] | None = None,
+    input_artifacts: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Build a hash-verified planner artifact; it is never impact evidence itself."""
 
@@ -51,6 +64,9 @@ def build_planning_report(
         "mode": mode,
         "source": dict(run_context["source"]),
         "run_context_sha256": run_context["context_sha256"],
+        "input_artifacts": dict(input_artifacts or {
+            "run_context_sha256": run_context["context_sha256"],
+        }),
         "planner": dict(planner),
         "cycles": [dict(row) for row in cycles],
         "gaps": sorted(set(gaps or [])),
@@ -70,7 +86,7 @@ def build_planning_report(
     return report
 
 
-def validate_planning_report(value: Any) -> list[str]:
+def validate_planning_report(value: Any, *, allow_legacy_replay: bool = False) -> list[str]:
     errors: list[str] = []
     if not isinstance(value, Mapping):
         return ["planning report must be an object"]
@@ -86,12 +102,31 @@ def validate_planning_report(value: Any) -> list[str]:
         str(value.get("run_context_sha256"))
     ):
         errors.append("run_context_sha256 is invalid")
+    input_artifacts = value.get("input_artifacts")
+    if not isinstance(input_artifacts, Mapping):
+        if not allow_legacy_replay:
+            errors.append("input_artifacts must be an object")
+        input_artifacts = {}
+    require_all_inputs = len(input_artifacts) > 1
+    for key in PLANNING_INPUT_KEYS:
+        digest = input_artifacts.get(key)
+        if digest is None and not require_all_inputs:
+            continue
+        if not isinstance(digest, str) or not SHA256.fullmatch(digest):
+            errors.append(f"input_artifacts.{key} is invalid")
+    if (
+        not allow_legacy_replay
+        and input_artifacts.get("run_context_sha256") != value.get("run_context_sha256")
+    ):
+        errors.append("input_artifacts.run_context_sha256 must match run_context_sha256")
     if not isinstance(value.get("planner"), Mapping):
         errors.append("planner must be an object")
     cycles = value.get("cycles")
     if not isinstance(cycles, list):
         errors.append("cycles must be a list")
         cycles = []
+    elif len(cycles) > MAX_TASKS:
+        errors.append(f"cycles exceeds maximum of {MAX_TASKS}")
     seen: set[str] = set()
     completed: set[str] = set()
     synthesis_ids: set[str] = set()
@@ -107,6 +142,8 @@ def validate_planning_report(value: Any) -> list[str]:
         task_id = task.get("task_id")
         if not isinstance(task_id, str) or not task_id:
             errors.append(f"cycles[{index}].task.task_id is required")
+        elif len(task_id) > MAX_TASK_ID_LENGTH:
+            errors.append(f"cycles[{index}].task.task_id is too long")
         elif task_id in seen:
             errors.append(f"duplicate planner task_id: {task_id}")
         else:
@@ -115,6 +152,19 @@ def validate_planning_report(value: Any) -> list[str]:
             errors.append(f"cycles[{index}].task.task_type is invalid")
         if not isinstance(task.get("question"), str) or not task["question"].strip():
             errors.append(f"cycles[{index}].task.question is required")
+        elif len(task["question"]) > MAX_QUESTION_LENGTH:
+            errors.append(f"cycles[{index}].task.question is too long")
+        task_type = task.get("task_type")
+        if task_type in REPOSITORY_REQUIRED_TASK_TYPES:
+            repository = task.get("repository")
+            if not isinstance(repository, str) or not repository.strip():
+                errors.append(f"cycles[{index}].task.repository is required")
+        elif task_type == "synthesize_review" and task.get("repository") is not None:
+            errors.append(f"cycles[{index}].task.repository is forbidden for synthesis")
+        if task_type == "challenge_claim":
+            claim_id = task.get("claim_id")
+            if not isinstance(claim_id, str) or not claim_id.strip():
+                errors.append(f"cycles[{index}].task.claim_id is required")
         if cycle.get("decision") not in DECISIONS:
             errors.append(f"cycles[{index}].decision is invalid")
         cycle_status = cycle.get("status", "complete")
@@ -126,6 +176,29 @@ def validate_planning_report(value: Any) -> list[str]:
             synthesis_ids.add(task_id)
         if task.get("task_type") == "challenge_claim" and isinstance(task_id, str):
             challenge_ids.add(task_id)
+            if cycle_status == "complete":
+                challenge = cycle.get("result")
+                if not isinstance(challenge, Mapping):
+                    errors.append(f"challenge task requires a typed result: {task_id}")
+                else:
+                    if challenge.get("claim_id") != task.get("claim_id"):
+                        errors.append(f"challenge result is not bound to claim: {task_id}")
+                    if challenge.get("verdict") not in {"upheld", "downgraded", "rejected"}:
+                        errors.append(f"challenge verdict is invalid: {task_id}")
+                    if not isinstance(challenge.get("rationale"), str) or not challenge["rationale"].strip():
+                        errors.append(f"challenge rationale is required: {task_id}")
+                    challenge_refs = challenge.get("evidence_refs")
+                    cycle_ref_ids = {
+                        ref.get("tool_call_id")
+                        for ref in cycle.get("evidence_refs", [])
+                        if isinstance(ref, Mapping)
+                    }
+                    if not isinstance(challenge_refs, list) or not challenge_refs:
+                        errors.append(f"challenge evidence_refs are required: {task_id}")
+                    else:
+                        for ref in challenge_refs:
+                            if not isinstance(ref, Mapping) or ref.get("tool_call_id") not in cycle_ref_ids:
+                                errors.append(f"challenge evidence is not bound to toolbox results: {task_id}")
         references = cycle.get("evidence_refs", [])
         if not isinstance(references, list):
             errors.append(f"cycles[{index}].evidence_refs must be a list")
@@ -144,6 +217,8 @@ def validate_planning_report(value: Any) -> list[str]:
                     errors.append(
                         f"cycles[{index}].evidence_refs has invalid result_sha256"
                     )
+        if task.get("task_type") == "challenge_claim" and cycle_status == "complete" and not references:
+            errors.append(f"challenge task requires evidence_refs: {task_id}")
     analysis = value.get("analysis")
     if value.get("status") in {"complete", "partial"} or analysis is not None:
         if not isinstance(analysis, Mapping):
@@ -213,6 +288,15 @@ def validate_planning_report(value: Any) -> list[str]:
             errors.append("mandatory synthesis task did not complete")
         if not challenge_ids.issubset(completed):
             errors.append("challenge task did not complete")
+        for cycle in cycles:
+            task = cycle.get("task") if isinstance(cycle, Mapping) else None
+            if not isinstance(task, Mapping) or task.get("task_type") != "synthesize_review":
+                continue
+            if cycle.get("status", "complete") != "complete":
+                errors.append("complete planning report requires successful synthesis")
+            result = cycle.get("result")
+            if not isinstance(result, Mapping) or not isinstance(result.get("findings"), Mapping):
+                errors.append("complete planning report requires synthesized findings")
     unsigned = dict(value)
     digest = unsigned.pop("planning_sha256", None)
     if (
@@ -224,11 +308,45 @@ def validate_planning_report(value: Any) -> list[str]:
     return errors
 
 
+def downgrade_incomplete_analysis(
+    value: Mapping[str, Any], *, reason: str
+) -> dict[str, Any]:
+    """Centralize the fail-closed downgrade for incomplete planner lifecycles."""
+
+    result = {key: value for key, value in value.items()}
+    result["repository_impacts"] = [
+        dict(row) if isinstance(row, Mapping) else row
+        for row in value.get("repository_impacts", [])
+    ]
+    result["actions"] = [dict(row) if isinstance(row, Mapping) else row for row in value.get("actions", [])]
+    for row in result["repository_impacts"]:
+        if isinstance(row, dict) and row.get("evidence_state") in {"confirmed", "strong_candidate"}:
+            row["evidence_state"] = "candidate"
+            row.pop("challenge_task_id", None)
+    for row in result["actions"]:
+        if isinstance(row, dict):
+            row["draft_eligible"] = False
+            if row.get("evidence_state") in {"confirmed", "strong_candidate"}:
+                row["evidence_state"] = "candidate"
+            row.pop("challenge_task_id", None)
+    gaps = list(result.get("gaps", []))
+    if reason not in gaps:
+        gaps.append(reason)
+    result["gaps"] = gaps
+    result["agent"] = {
+        **(result.get("agent", {}) if isinstance(result.get("agent"), Mapping) else {}),
+        "status": "partial",
+        "reason": reason,
+    }
+    return result
+
+
 __all__ = [
     "ANALYSIS_KIND",
     "DECISIONS",
     "TASK_TYPES",
     "PlanningContractError",
     "build_planning_report",
+    "downgrade_incomplete_analysis",
     "validate_planning_report",
 ]

@@ -2,35 +2,35 @@
   "analysis": {
     "actions": [],
     "agent": {
-      "name": "nexau",
-      "reason": "NexAU planner execution failed: Error in agent execution: Error code: 400 - {'error': {'code': 'validation_error', 'message': \"Function tools with reasoning_effort are not supported for gpt-5.6-luna in /v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to 'none'.\", 'param': 'reasoning_effort', 'type': 'invalid_request_error'}}",
+      "name": "strands-bedrock",
+      "reason": "planner task 0 has an invalid task_type",
       "status": "unavailable"
     },
     "coverage": {},
     "gaps": [
-      "nexau_planner_unavailable"
+      "strands_planner_unavailable"
     ],
-    "recommendation": "Review deterministic evidence; NexAU investigation is unavailable.",
+    "recommendation": "Review deterministic evidence; Strands planner investigation is unavailable.",
     "repository_impacts": []
   },
   "analysis_kind": "greenfield_analysis_plan",
   "cycles": [],
   "gaps": [
-    "nexau_planner_unavailable"
+    "strands_planner_unavailable"
   ],
   "mode": "default",
   "planner": {
-    "name": "nexau",
-    "reason": "NexAU planner execution failed: Error in agent execution: Error code: 400 - {'error': {'code': 'validation_error', 'message': \"Function tools with reasoning_effort are not supported for gpt-5.6-luna in /v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to 'none'.\", 'param': 'reasoning_effort', 'type': 'invalid_request_error'}}",
+    "name": "strands-bedrock",
+    "reason": "planner task 0 has an invalid task_type",
     "status": "unavailable"
   },
-  "planning_sha256": "78503c135e364839cd613fe92791d12880db04dae1d0b6eca9a3d49cdf841454",
+  "planning_sha256": "8e0ee0d6b0b39f2e6f202f1840854040e6615a7af025ebbe4ea5f3f2aee9959d",
   "provenance": {
     "catalog_mutation": "none",
     "github_writes": "none",
     "read_only": true
   },
-  "run_context_sha256": "fead96f78eb57eba7ec8ed11f8d17cb57bf79bca8690666cd587adbe991ca7fa",
+  "run_context_sha256": "510767ea03e41cc176a34fb3cbe99ce75adc8fb7d69fd29b3c3e8fc901d462fd",
   "schema_version": "0.1",
   "source": {
     "base_revision": "88831b97966bf918cd08a882d2ac5d2aa4bf21a9",

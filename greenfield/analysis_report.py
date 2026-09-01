@@ -90,6 +90,7 @@ def build_analysis_report(
     planning: Mapping[str, Any] | None = None,
     lifecycle_complete: bool = True,
     source_trace: Mapping[str, Any] | None = None,
+    planning_inputs: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Fold compatibility step artifacts and Strands guidance into one report."""
 
@@ -105,6 +106,14 @@ def build_analysis_report(
         "step4": artifact_sha256(step4),
         "step5": artifact_sha256(step5),
     }
+    if isinstance(planning, Mapping) and planning_inputs:
+        recorded = planning.get("input_artifacts")
+        if isinstance(recorded, Mapping):
+            for key, digest in planning_inputs.items():
+                if recorded.get(key) != digest:
+                    raise AnalysisReportError(
+                        f"planning input hash mismatch for {key}"
+                    )
     fallback = {"kind": "artifact", "artifact": "step3", "sha256": artifacts["step3"]}
     repositories: dict[str, dict[str, Any]] = {}
     surface = step3.get("potentially_affected_repositories", {})
@@ -215,6 +224,7 @@ def build_analysis_report(
         "tool_calls": [deepcopy(dict(row)) for row in tool_calls or []],
         "provenance": {
             "artifacts": artifacts,
+            **({"planning_input_artifacts": dict(planning_inputs)} if planning_inputs else {}),
             "agent": deepcopy(supplied.get("agent", {"status": "not_run"})),
             "candidate_repositories": [
                 row["repository"]
@@ -246,6 +256,47 @@ def build_analysis_report(
     if errors:
         raise AnalysisReportError("invalid analysis report: " + "; ".join(errors))
     return report
+
+
+def canonical_remediation_actions(analysis: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Return the single normalized action view consumed by downstream stages."""
+
+    rows = analysis.get("actions", [])
+    if not isinstance(rows, list):
+        return []
+    return [deepcopy(dict(row)) for row in rows if isinstance(row, Mapping)]
+
+
+def canonical_analysis_projection(analysis: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the semantic fields every downstream projection must preserve."""
+
+    return {
+        "analysis_report_sha256": analysis.get("report_sha256"),
+        "repository_impacts": deepcopy(analysis.get("repository_impacts", [])),
+        "coverage": deepcopy(analysis.get("coverage", {})),
+        "actions": canonical_remediation_actions(analysis),
+        "gaps": deepcopy(analysis.get("gaps", [])),
+    }
+
+
+def validate_projection_consistency(
+    projection: Mapping[str, Any], analysis: Mapping[str, Any]
+) -> list[str]:
+    """Reject downstream projections that silently alter canonical semantics."""
+
+    errors: list[str] = []
+    expected = canonical_analysis_projection(analysis)
+    analysis_sha256 = expected["analysis_report_sha256"]
+    provenance = projection.get("provenance")
+    recorded = provenance.get("analysis_report_sha256") if isinstance(provenance, Mapping) else None
+    canonical = projection.get("canonical_analysis")
+    if recorded != analysis_sha256:
+        errors.append("provenance.analysis_report_sha256 does not match canonical analysis")
+    if not isinstance(canonical, Mapping):
+        errors.append("canonical_analysis is required for semantic projection validation")
+    elif dict(canonical) != expected:
+        errors.append("canonical_analysis does not exactly match canonical analysis")
+    return errors
 
 
 def _evidence_binding_errors(
@@ -478,5 +529,8 @@ __all__ = [
     "EVIDENCE_STATES",
     "AnalysisReportError",
     "build_analysis_report",
+    "canonical_analysis_projection",
+    "canonical_remediation_actions",
     "validate_analysis_report",
+    "validate_projection_consistency",
 ]

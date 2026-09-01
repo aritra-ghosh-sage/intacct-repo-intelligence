@@ -976,11 +976,12 @@
     "labels": [
       "Dont_Update",
       "Invalid_Ticket",
+      "PRhasConflicts",
       "Review_is_Pending"
     ],
-    "merge_commit_sha": "26e911f6cf4fea663e420eb6b3f8b88a48e1b35b",
-    "mergeable": null,
-    "mergeable_state": "unknown",
+    "merge_commit_sha": null,
+    "mergeable": false,
+    "mergeable_state": "dirty",
     "merged": false,
     "merged_at": null,
     "node_id": "PR_kwDOEjrnWM8AAAABBDzLJw",
@@ -989,7 +990,7 @@
     "target_branch": "fix/gl/IA-369033-deprecations-glledger",
     "target_revision": "071f786e237c0c92b385a19314f9a804c90ffedc",
     "title": "[IA-369033], [IA-369032], [IA-369036] - Deprecation issues fixed.",
-    "updated_at": "2026-08-30T10:13:16Z",
+    "updated_at": "2026-09-01T12:28:34Z",
     "url": "https://github.com/intacct/ia-app/pull/49783"
   },
   "provenance": {
@@ -1076,8 +1077,8 @@
       "repos/intacct/ia-app/actions/runs/32957222577/jobs",
       "repos/intacct/ia-app/actions/runs/32957222482/jobs"
     ],
-    "evidence_sha256": "2a889c34f6a920c2477ccf22120e5c42c67e58a1fba8157cbefa9066ea868038",
-    "fetched_at": "2026-09-01T12:01:23.531764+00:00",
+    "evidence_sha256": "6f7567971f1c8dc607a82059a67cd77e1f15b80314925ca564532691b738a1b7",
+    "fetched_at": "2026-09-01T13:07:56.151742+00:00",
     "github_writes": "none",
     "provider": "gh_api",
     "read_only": true,

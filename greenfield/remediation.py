@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from greenfield.analysis_report import canonical_remediation_actions
 from greenfield.artifact_io import artifact_sha256
 from greenfield.step4_contract import artifact_sha256 as step4_artifact_sha256
 from greenfield.step6_contract import Step6Error
@@ -52,7 +53,7 @@ def _selected_action(
         for row in step5.get("actions", [])
         if isinstance(row, Mapping)
     }
-    for action in analysis.get("actions", []):
+    for action in canonical_remediation_actions(analysis):
         if (
             not isinstance(action, Mapping)
             or action.get("draft_eligible") is not True
@@ -169,6 +170,11 @@ def build_automatic_step6_request(
             "step3_report_sha256": artifact_sha256(step3),
             "step4_report_sha256": step4_artifact_sha256(step4),
             "step5_report_sha256": artifact_sha256(step5),
+            **(
+                {"analysis_report_sha256": analysis.get("report_sha256")}
+                if isinstance(analysis, Mapping)
+                else {}
+            ),
         },
         "action": {
             "action_id": compatibility["action_id"],

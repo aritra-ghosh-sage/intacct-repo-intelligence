@@ -34,13 +34,13 @@
 - **Planner lifecycle:** unavailable; 0 retained cycle(s).
 - **Behavior projection:** revision-bound artifact retained.
 **Affected behaviors and interfaces:**
-- `behavior:0fb1098b6305204245d430f8` (partial): Provides location and department hierarchy data used to group ledger output, including recursive parent, child, and path calculations. [source: `app/source/gl/GLLedgerReporter.cls`]
-- `behavior:1e7ff88ebe50c86009b0a5c1` (partial): Instantiates the reporter and merges memorized user preferences with request parameters, including drill-filter and dimension defaults. [source: `app/source/gl/GLLedgerReporter.cls`]
-- `behavior:57fe53265e84cb8a329dc6a3` (partial): Creates report XML by preprocessing, querying, rendering headers, grouping transactions, calculating totals, applying document-column processing, and serializing output. [source: `app/source/gl/GLLedgerReporter.cls`]
-- `behavior:78a210c603a56f7c3729c160` (partial): Builds GL query filters, period and balance-forward data, transaction records, account maps, reporting-book state, and drill-down context. [source: `app/source/gl/GLLedgerReporter.cls`]
-- `behavior:98e95371fbd924c066d129d7` (partial): Transforms queried ledger entries into report rows, optionally adds subtransactions, drill-down metadata, dimensions, and currency information. [source: `app/source/gl/GLLedgerReporter.cls`]
-- `behavior:b1ba10943885b56eb43564df` (partial): Builds the primary and detailed GL transaction queries and populates transaction and subtransaction result state. [source: `app/source/gl/GLLedgerReporter.cls`]
-- `behavior:d6b7ac3dc5715b655c8543fb` (partial): Constructs the GL ledger reporter, normalizes report parameters, initializes localization, authorization, currency, and feature-dependent state. [source: `app/source/gl/GLLedgerReporter.cls`]
+- `behavior:0fb1098b6305204245d430f8` (partial): Builds department and location hierarchies and derives parent, child, display-name, and record-path information used by grouped report output. [source: `app/source/gl/GLLedgerReporter.cls`]
+- `behavior:456b124545a723809a382731` (partial): Groups report transactions into monthly or custom accounting-period structures and recursively rewrites report arrays to contain period subtotals. [source: `app/source/gl/GLLedgerReporter.cls`]
+- `behavior:57fe53265e84cb8a329dc6a3` (partial): Builds the GL report data XML by initializing reporting context, running pre-query and query processing, constructing report headers and transaction XML, and returning either inline XML or a temporary-file path. [source: `app/source/gl/GLLedgerReporter.cls`]
+- `behavior:78a210c603a56f7c3729c160` (partial): Prepares GL report filters and accounting context, resolves period and account/location/department data, retrieves balances and transaction records, and prepares drill-down state for report generation. [source: `app/source/gl/GLLedgerReporter.cls`]
+- `behavior:98e95371fbd924c066d129d7` (partial): Transforms GL and subledger query records into report transaction rows, including debit/credit values, document and drill-down data, dimensions, currencies, and subtransactions. [source: `app/source/gl/GLLedgerReporter.cls`]
+- `behavior:ae03d1eb8cf41afac12a4c8e` (partial): Populates report header fields, reporting titles, dimension headers, transaction-state filters, consolidation metadata, and transaction drill-down operation metadata. [source: `app/source/gl/GLLedgerReporter.cls`]
+- `behavior:dfb0f8b38f9e3f4651944fb2` (partial): Conditionally replaces eligible document-column values with record identifiers for accrual detailed reports and recursively applies the transformation to transaction and subtransaction rows. [source: `app/source/gl/GLLedgerReporter.cls`]
 **Repository impact evidence:**
 - `ia-app` (candidate): Step 3 impact outcome [evidence: `contract`]
 - `intacct/ia-gwdata-ap` (candidate): Step 3 impact outcome [evidence: `repository_inventory`]
@@ -50,12 +50,12 @@
 - `intacct/ia-restapi-automation-tests` (candidate): Step 3 impact outcome [evidence: `repository_inventory`]
 **Coverage and obligations:**
 - `behavior:0fb1098b6305204245d430f8` (candidate): `contract`
-- `behavior:1e7ff88ebe50c86009b0a5c1` (candidate): `contract`
+- `behavior:456b124545a723809a382731` (candidate): `contract`
 - `behavior:57fe53265e84cb8a329dc6a3` (candidate): `contract`
 - `behavior:78a210c603a56f7c3729c160` (candidate): `contract`
 - `behavior:98e95371fbd924c066d129d7` (candidate): `contract`
-- `behavior:b1ba10943885b56eb43564df` (candidate): `contract`
-- `behavior:d6b7ac3dc5715b655c8543fb` (candidate): `contract`
+- `behavior:ae03d1eb8cf41afac12a4c8e` (candidate): `contract`
+- `behavior:dfb0f8b38f9e3f4651944fb2` (candidate): `contract`
 **Executed CI evidence:**
 - No exact CI execution evidence was supplied.
 **Recommended actions:**
@@ -85,10 +85,10 @@
 - intacct/ia-gwdata-gl:ci_linkage_unavailable:target_repository_has_no_source_revision
 - intacct/ia-gwdata-project:ci_linkage_unavailable:target_repository_has_no_source_revision
 - intacct/ia-restapi-automation-tests:ci_linkage_unavailable:target_repository_has_no_source_revision
-- nexau_planner_unavailable
 - related_pull_requests_not_modelled:revision_pinned_artifact_not_provided
 - repository_inventory_not_provided
 - semantic_index_not_provided:direct_semantic_components
+- strands_planner_unavailable
 - test_repository_not_assessed
 - test_suites_unavailable:no_normalized_test_evidence
 - workflow_has_no_test_execution:intacct/ia-gwdata-ap

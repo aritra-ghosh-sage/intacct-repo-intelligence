@@ -3,46 +3,7 @@
   "analysis_kind": "greenfield_pr_impact_step_1_5",
   "behaviors": [
     {
-      "description": "Constructs the GL ledger reporter, normalizes report parameters, initializes localization, authorization, currency, and feature-dependent state.",
-      "edges": [],
-      "entry_symbols": [
-        "GLLedgerReporter::__construct"
-      ],
-      "kind": "behavior",
-      "source_paths": [
-        "app/source/gl/GLLedgerReporter.cls"
-      ],
-      "surfaces": {},
-      "symbol_paths": {}
-    },
-    {
-      "description": "Instantiates the reporter and merges memorized user preferences with request parameters, including drill-filter and dimension defaults.",
-      "edges": [],
-      "entry_symbols": [
-        "GLLedgerReporter::Reporter_Instantiate"
-      ],
-      "kind": "behavior",
-      "source_paths": [
-        "app/source/gl/GLLedgerReporter.cls"
-      ],
-      "surfaces": {},
-      "symbol_paths": {}
-    },
-    {
-      "description": "Builds GL query filters, period and balance-forward data, transaction records, account maps, reporting-book state, and drill-down context.",
-      "edges": [],
-      "entry_symbols": [
-        "GLLedgerReporter::DoQuery"
-      ],
-      "kind": "behavior",
-      "source_paths": [
-        "app/source/gl/GLLedgerReporter.cls"
-      ],
-      "surfaces": {},
-      "symbol_paths": {}
-    },
-    {
-      "description": "Creates report XML by preprocessing, querying, rendering headers, grouping transactions, calculating totals, applying document-column processing, and serializing output.",
+      "description": "Builds the GL report data XML by initializing reporting context, running pre-query and query processing, constructing report headers and transaction XML, and returning either inline XML or a temporary-file path.",
       "edges": [],
       "entry_symbols": [
         "GLLedgerReporter::CreateDataXML"
@@ -55,10 +16,10 @@
       "symbol_paths": {}
     },
     {
-      "description": "Builds the primary and detailed GL transaction queries and populates transaction and subtransaction result state.",
+      "description": "Prepares GL report filters and accounting context, resolves period and account/location/department data, retrieves balances and transaction records, and prepares drill-down state for report generation.",
       "edges": [],
       "entry_symbols": [
-        "GLLedgerReporter::_getSryReportQuery"
+        "GLLedgerReporter::DoQuery"
       ],
       "kind": "behavior",
       "source_paths": [
@@ -68,7 +29,20 @@
       "symbol_paths": {}
     },
     {
-      "description": "Transforms queried ledger entries into report rows, optionally adds subtransactions, drill-down metadata, dimensions, and currency information.",
+      "description": "Populates report header fields, reporting titles, dimension headers, transaction-state filters, consolidation metadata, and transaction drill-down operation metadata.",
+      "edges": [],
+      "entry_symbols": [
+        "GLLedgerReporter::GLPrintReportHeader"
+      ],
+      "kind": "behavior",
+      "source_paths": [
+        "app/source/gl/GLLedgerReporter.cls"
+      ],
+      "surfaces": {},
+      "symbol_paths": {}
+    },
+    {
+      "description": "Transforms GL and subledger query records into report transaction rows, including debit/credit values, document and drill-down data, dimensions, currencies, and subtransactions.",
       "edges": [],
       "entry_symbols": [
         "GLLedgerReporter::addSubTransaction",
@@ -82,7 +56,35 @@
       "symbol_paths": {}
     },
     {
-      "description": "Provides location and department hierarchy data used to group ledger output, including recursive parent, child, and path calculations.",
+      "description": "Groups report transactions into monthly or custom accounting-period structures and recursively rewrites report arrays to contain period subtotals.",
+      "edges": [],
+      "entry_symbols": [
+        "GLLedgerReporter::BuildPeriodsArray",
+        "GLLedgerReporter::ReformatTransArrayForPeriods"
+      ],
+      "kind": "behavior",
+      "source_paths": [
+        "app/source/gl/GLLedgerReporter.cls"
+      ],
+      "surfaces": {},
+      "symbol_paths": {}
+    },
+    {
+      "description": "Conditionally replaces eligible document-column values with record identifiers for accrual detailed reports and recursively applies the transformation to transaction and subtransaction rows.",
+      "edges": [],
+      "entry_symbols": [
+        "GLLedgerReporter::ProcessDocColumnValueProlog",
+        "GLLedgerReporter::ProcessDocColumnValueRecurse"
+      ],
+      "kind": "behavior",
+      "source_paths": [
+        "app/source/gl/GLLedgerReporter.cls"
+      ],
+      "surfaces": {},
+      "symbol_paths": {}
+    },
+    {
+      "description": "Builds department and location hierarchies and derives parent, child, display-name, and record-path information used by grouped report output.",
       "edges": [],
       "entry_symbols": [
         "GLLedgerReporter::getChildrenPath",
@@ -104,14 +106,14 @@
   ],
   "findings": [
     {
-      "message": "The supplied source bytes do not include trusted line markers or a separately provided symbol-to-line map. Exact edge line numbers and canonical symbol_paths cannot be persisted without invention. Next check: run a line-aware parser or source indexer against target revision 071f786e237c0c92b385a19314f9a804c90ffedc.",
+      "message": "The supplied target-revision bytes establish the changed implementation and direct method bodies, but no independently resolved canonical symbol-to-path/line metadata was supplied. No symbol_paths or call edges were persisted to avoid inventing line numbers, target revisions, or provider-only metadata.",
       "symbol": null,
-      "type": "unavailable"
+      "type": "unavailable_evidence"
     },
     {
-      "message": "Many calls resolve to framework, manager, helper, or included-file symbols outside the changed file; their exact target source paths are not present in the supplied evidence. Next check: inspect the target revision's included classes and helper definitions, especially GLGroupReporter, Reporter, GLBatchManager, GLBookManager, QueryResult, and manager implementations.",
+      "message": "The changed file is a reporter class implementation. It contains no declared HTTP or REST route registration, so HTTP/REST surface availability cannot be established from this file alone.",
       "symbol": null,
-      "type": "unresolved"
+      "type": "unavailable_surface_evidence"
     }
   ],
   "input": {
@@ -124,10 +126,7 @@
     "repo_key": "ia-main",
     "repository": "intacct/ia-app"
   },
-  "omitted_counts": {
-    "behaviors": 0,
-    "calls": 0
-  },
+  "omitted_counts": null,
   "provenance": {
     "agent": {
       "continuation_attempts": 0,
@@ -138,12 +137,12 @@
       "timeout_seconds": 300
     },
     "catalog_mutation": "none",
-    "context_sha256": "46ef0a239bdb1f9ade7958b10a8eb213248016c61c91cd6f7bcdd2a0f084f327",
+    "context_sha256": "c92b9a7765b3baf427e1d7d0aa0d9aee4917811b356b2b357fcb433aa5db0e7b",
     "github_writes": "none",
     "read_only": true,
     "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc",
-    "step1_evidence_sha256": "2a889c34f6a920c2477ccf22120e5c42c67e58a1fba8157cbefa9066ea868038",
-    "trace_sha256": "d25925176322b2d0232c0f3923ba3f0ad14fa298c85bb42d09704a48c7c05c40"
+    "step1_evidence_sha256": "6f7567971f1c8dc607a82059a67cd77e1f15b80314925ca564532691b738a1b7",
+    "trace_sha256": "cda63898890cfb23151076a319786205b05f0010a39a2a6910cc037b164e5535"
   },
   "repository": "intacct/ia-app",
   "revision": "071f786e237c0c92b385a19314f9a804c90ffedc",

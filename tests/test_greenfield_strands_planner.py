@@ -1,22 +1,24 @@
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 from types import ModuleType
 
 import pytest
 
-from greenfield.nexau_planner import (
+from greenfield.artifact_io import artifact_sha256
+from greenfield.planning_contract import build_planning_report, validate_planning_report
+from greenfield.strands_planner import (
     _PLANNER_PROMPT_MAX_BYTES,
-    NexAUPlannerError,
+    StrandsPlannerError,
     _cycle_brief,
     _default_planner_factory,
     _prompt,
     _replan_prompt,
     _response_text,
-    run_nexau_planner,
+    run_strands_planner,
 )
-from greenfield.planning_contract import build_planning_report, validate_planning_report
 from greenfield.strands_tools import GreenfieldToolbox
 from tests.test_greenfield_simplified_flow import _context
 
@@ -73,6 +75,7 @@ def test_default_planner_factory_uses_native_strands_bedrock(
         "model": captured["agent"]["model"],
         "system_prompt": captured["agent"]["system_prompt"],
         "callback_handler": None,
+        "structured_output_model": captured["agent"]["structured_output_model"],
     }
 
 
@@ -81,7 +84,7 @@ def test_default_planner_factory_rejects_missing_model(
 ) -> None:
     context, _ = _context(tmp_path)
     monkeypatch.delenv("STRANDS_PLANNER_MODEL", raising=False)
-    with pytest.raises(NexAUPlannerError, match="planner model is not configured"):
+    with pytest.raises(StrandsPlannerError, match="planner model is not configured"):
         _default_planner_factory({}, GreenfieldToolbox(context))
 
 
@@ -177,7 +180,7 @@ def test_strands_prompts_use_bounded_handbook_oriented_briefs(tmp_path: Path) ->
     assert cycle_brief["completed_task_ids_omitted_count"] == 42
 
 
-def test_nexau_planner_retains_bounded_lifecycle(tmp_path: Path) -> None:
+def test_strands_planner_retains_bounded_lifecycle(tmp_path: Path) -> None:
     context, _ = _context(tmp_path)
 
     def planner_factory(_config: dict):
@@ -188,12 +191,14 @@ def test_nexau_planner_retains_bounded_lifecycle(tmp_path: Path) -> None:
 
     def strands_factory(_model: str | None, *, tools: list[object]):
         def agent(_prompt: str) -> str:
-            tools[0]()
+            evidence = tools[0]()
+            if "challenge_claim" in _prompt:
+                return '{"repository_impacts": [], "actions": [], "coverage": {}, "recommendation": "none", "gaps": [], "challenge": {"claim_id": "impact:intacct/explicit-tests", "verdict": "upheld", "rationale": "evidence supports the claim", "evidence_refs": [{"tool_call_id": "' + evidence["tool_call_id"] + '"}]}, "agent": {"status": "complete"}}'
             return '{"repository_impacts": [], "actions": [], "coverage": {}, "recommendation": "none", "gaps": [], "agent": {"status": "complete"}}'
 
         return agent
 
-    report = run_nexau_planner(
+    report = run_strands_planner(
         context,
         {"gaps": []},
         GreenfieldToolbox(context),
@@ -207,7 +212,7 @@ def test_nexau_planner_retains_bounded_lifecycle(tmp_path: Path) -> None:
     assert report["cycles"][-1]["task"]["task_type"] == "synthesize_review"
 
 
-def test_nexau_planner_rejects_out_of_scope_task(tmp_path: Path) -> None:
+def test_strands_planner_rejects_out_of_scope_task(tmp_path: Path) -> None:
     context, _ = _context(tmp_path)
 
     def planner_factory(_config: dict):
@@ -215,8 +220,8 @@ def test_nexau_planner_rejects_out_of_scope_task(tmp_path: Path) -> None:
             '{"tasks": [{"task_type": "screen_repository", "repository": "intacct/outside", "question": "bad"}]}'
         )
 
-    with pytest.raises(NexAUPlannerError, match="outside captured scope"):
-        run_nexau_planner(
+    with pytest.raises(StrandsPlannerError, match="outside captured scope"):
+        run_strands_planner(
             context,
             {},
             GreenfieldToolbox(context),
@@ -225,20 +230,77 @@ def test_nexau_planner_rejects_out_of_scope_task(tmp_path: Path) -> None:
         )
 
 
-def test_load_planner_config_rejects_secret_like_keys(tmp_path: Path) -> None:
-    config_path = tmp_path / "planner.yaml"
-    config_path.write_text(
-        "apiKey: demo\nclient_secret: demo\nallowed: true\n",
-        encoding="utf-8",
+def test_strands_planner_enforces_one_wall_clock_deadline(tmp_path: Path) -> None:
+    context, _ = _context(tmp_path)
+
+    def planner_factory(_config: dict):
+        def planner(_prompt: str) -> str:
+            time.sleep(0.1)
+            return '{"tasks": []}'
+
+        return planner
+
+    with pytest.raises(StrandsPlannerError, match="deadline"):
+        run_strands_planner(
+            context,
+            {},
+            GreenfieldToolbox(context),
+            mode="default",
+            timeout=0.01,
+            planner_factory=planner_factory,
+        )
+
+
+def test_timed_out_task_cannot_append_late_tool_evidence(tmp_path: Path) -> None:
+    context, _ = _context(tmp_path)
+    toolbox = GreenfieldToolbox(context)
+
+    def planner_factory(_config: dict):
+        return lambda _prompt: (
+            '{"tasks": [{"task_id": "screen", "task_type": "screen_repository", '
+            '"repository": "intacct/explicit-tests", "question": "Screen it."}]}'
+        )
+
+    def strands_factory(_model: str | None, *, tools: list[object]):
+        def agent(_prompt: str) -> str:
+            time.sleep(0.05)
+            tools[0]()
+            return '{"repository_impacts": [], "actions": [], "coverage": {}, "gaps": []}'
+
+        return agent
+
+    with pytest.raises(StrandsPlannerError, match="deadline"):
+        run_strands_planner(
+            context,
+            {},
+            toolbox,
+            mode="default",
+            timeout=0.01,
+            planner_factory=planner_factory,
+            strands_factory=strands_factory,
+        )
+    time.sleep(0.1)
+    assert toolbox.ledger() == []
+
+
+def test_legacy_planning_report_is_inspectable_but_not_strict(tmp_path: Path) -> None:
+    context, _ = _context(tmp_path)
+    report = build_planning_report(
+        context,
+        mode="default",
+        planner={},
+        cycles=[],
+        status="unavailable",
+        stop_reason="legacy",
     )
+    report.pop("input_artifacts")
+    report["planning_sha256"] = artifact_sha256(
+        {key: value for key, value in report.items() if key != "planning_sha256"}
+    )
+    assert "input_artifacts must be an object" in validate_planning_report(report)
+    assert validate_planning_report(report, allow_legacy_replay=True) == []
 
-    with pytest.raises(NexAUPlannerError, match="secret fields"):
-        from greenfield.nexau_planner import load_planner_config
-
-        load_planner_config(config_path)
-
-
-def test_nexau_planner_replans_before_synthesis(tmp_path: Path) -> None:
+def test_strands_planner_replans_before_synthesis(tmp_path: Path) -> None:
     context, _ = _context(tmp_path)
     planner_responses = iter(
         [
@@ -248,7 +310,7 @@ def test_nexau_planner_replans_before_synthesis(tmp_path: Path) -> None:
             ),
             (
                 '{"tasks": [{"task_id": "challenge", "task_type": "challenge_claim", '
-                '"repository": "intacct/explicit-tests", "question": "Challenge it."}]}'
+                '"repository": "intacct/explicit-tests", "claim_id": "impact:intacct/explicit-tests", "question": "Challenge it."}]}'
             ),
             '{"tasks": []}',
         ]
@@ -259,12 +321,14 @@ def test_nexau_planner_replans_before_synthesis(tmp_path: Path) -> None:
 
     def strands_factory(_model: str | None, *, tools: list[object]):
         def agent(_prompt: str) -> str:
-            tools[0]()
+            evidence = tools[0]()
+            if "challenge_claim" in _prompt:
+                return '{"repository_impacts": [], "actions": [], "coverage": {}, "gaps": [], "challenge": {"claim_id": "impact:intacct/explicit-tests", "verdict": "upheld", "rationale": "evidence supports the claim", "evidence_refs": [{"tool_call_id": "' + evidence["tool_call_id"] + '"}]}, "agent": {"status": "complete"}}'
             return '{"repository_impacts": [], "actions": [], "coverage": {}, "gaps": [], "agent": {"status": "complete"}}'
 
         return agent
 
-    report = run_nexau_planner(
+    report = run_strands_planner(
         context,
         {"gaps": []},
         GreenfieldToolbox(context),
@@ -280,11 +344,11 @@ def test_nexau_planner_replans_before_synthesis(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("mode", ["active", "shadow", "off"])
-def test_nexau_planner_rejects_legacy_modes(tmp_path: Path, mode: str) -> None:
+def test_strands_planner_rejects_legacy_modes(tmp_path: Path, mode: str) -> None:
     context, _ = _context(tmp_path)
 
-    with pytest.raises(NexAUPlannerError, match="planner mode must be default"):
-        run_nexau_planner(
+    with pytest.raises(StrandsPlannerError, match="planner mode must be default"):
+        run_strands_planner(
             context,
             {},
             GreenfieldToolbox(context),
@@ -298,7 +362,7 @@ def test_planning_report_rejects_legacy_modes(tmp_path: Path, mode: str) -> None
     report = build_planning_report(
         context,
         mode="default",
-        planner={"name": "nexau", "status": "unavailable"},
+        planner={"name": "strands-bedrock", "status": "unavailable"},
         cycles=[],
         status="unavailable",
         stop_reason="planner_runtime_unavailable",
@@ -329,7 +393,7 @@ def test_incomplete_planner_downgrades_automatic_claims(tmp_path: Path) -> None:
 
         return agent
 
-    report = run_nexau_planner(
+    report = run_strands_planner(
         context,
         {"gaps": []},
         GreenfieldToolbox(context),

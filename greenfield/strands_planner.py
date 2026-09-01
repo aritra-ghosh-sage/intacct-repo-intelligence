@@ -1,23 +1,26 @@
-"""Native Strands/Bedrock planning adapter for bounded Greenfield investigation.
-
-The module name and compatibility aliases are retained temporarily because the
-planner report is part of the existing Greenfield artifact contract.  The
-runtime itself is Strands-native and does not depend on NexAU.
-"""
+"""Native Strands/Bedrock planner for bounded Greenfield investigation."""
 
 from __future__ import annotations
 
 import json
 import os
 from collections.abc import Callable, Mapping
-from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from time import monotonic
 from typing import Any
 
-import yaml
+from pydantic import BaseModel
 
 from greenfield.artifact_io import artifact_sha256
-from greenfield.planning_contract import TASK_TYPES, build_planning_report
+from greenfield.planning_contract import (
+    MAX_QUESTION_LENGTH,
+    MAX_TASK_ID_LENGTH,
+    MAX_TASKS,
+    REPOSITORY_REQUIRED_TASK_TYPES,
+    TASK_TYPES,
+    build_planning_report,
+)
 from greenfield.strands_agent import StrandsAgentError, run_strands_analysis
 from greenfield.strands_tools import GreenfieldToolbox
 from greenfield.telemetry import redact
@@ -32,56 +35,14 @@ class StrandsPlannerError(ValueError):
     """Raised when the Strands planner cannot produce a safe lifecycle."""
 
 
-# Compatibility for callers and retained artifact readers during the migration.
-NexAUPlannerError = StrandsPlannerError
+class PlannerTaskResponse(BaseModel):
+    """Typed response boundary for initial and replanning turns."""
+
+    tasks: list[dict[str, Any]]
 
 
 def _redacted_error(value: Any) -> str:
     return str(redact(str(value)))[:500]
-
-
-def load_planner_config(path: str | Path | None) -> dict[str, Any]:
-    """Load non-secret planner configuration from an operator-supplied YAML file."""
-
-    if path is None:
-        return {}
-    value = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
-    if value is None:
-        return {}
-    if not isinstance(value, dict):
-        raise StrandsPlannerError("planner config must be an object")
-    forbidden_fragments = (
-        "api_key",
-        "apikey",
-        "secret",
-        "token",
-        "password",
-        "passwd",
-        "privatekey",
-        "accesskey",
-        "sessiontoken",
-    )
-
-    def normalized_key_name(key: Any) -> str:
-        return "".join(ch for ch in str(key).lower() if ch.isalnum())
-
-    def contains_secret(value: Any) -> bool:
-        if isinstance(value, Mapping):
-            return any(
-                any(
-                    fragment in normalized_key_name(key)
-                    for fragment in forbidden_fragments
-                )
-                or contains_secret(child)
-                for key, child in value.items()
-            )
-        if isinstance(value, list):
-            return any(contains_secret(child) for child in value)
-        return False
-
-    if contains_secret(value):
-        raise StrandsPlannerError("planner config must not contain secret fields")
-    return dict(value)
 
 
 def _bounded_text(value: Any) -> str:
@@ -379,6 +340,7 @@ def _default_planner_factory(
                 "the requested JSON task plan. Never claim evidence or execute writes."
             ),
             callback_handler=None,
+            structured_output_model=PlannerTaskResponse,
         )
 
     def run_planner(prompt: str) -> Any:
@@ -392,6 +354,9 @@ def _default_planner_factory(
 def _response_text(raw: Any) -> str:
     if isinstance(raw, str):
         return raw
+    model_dump = getattr(raw, "model_dump", None)
+    if callable(model_dump):
+        return json.dumps(model_dump(), sort_keys=True)
     for attribute in ("content", "text"):
         value = getattr(raw, attribute, None)
         if isinstance(value, str):
@@ -428,15 +393,33 @@ def _response_text(raw: Any) -> str:
     return str(raw)
 
 
-def _run_planner_call(runner: Callable[[str], Any], prompt: str) -> Any:
+def _run_planner_call(
+    runner: Callable[[str], Any], prompt: str, *, timeout: float
+) -> Any:
+    if timeout <= 0:
+        raise StrandsPlannerError("Strands planner deadline exceeded")
+    executor = ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(runner, prompt)
     try:
-        return runner(prompt)
+        return future.result(timeout=timeout)
+    except FutureTimeoutError as exc:
+        future.cancel()
+        raise StrandsPlannerError("Strands planner deadline exceeded") from exc
     except StrandsPlannerError:
         raise
     except Exception as exc:  # pragma: no cover - provider-specific failure shape
         raise StrandsPlannerError(
             f"Strands planner execution failed: {_redacted_error(exc)}"
         ) from exc
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
+def _remaining_deadline(deadline: float) -> float:
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        raise StrandsPlannerError("Strands planner deadline exceeded")
+    return remaining
 
 
 def _parse_tasks(
@@ -457,6 +440,8 @@ def _parse_tasks(
     rows = value.get("tasks") if isinstance(value, Mapping) else None
     if not isinstance(rows, list):
         raise StrandsPlannerError("Strands planner response requires tasks")
+    if len(rows) > MAX_TASKS:
+        raise StrandsPlannerError(f"Strands planner returned more than {MAX_TASKS} tasks")
     allowed = {str(run_context["source"]["repository"])} | {
         str(row["repository"]) for row in run_context["candidate_repositories"]
     }
@@ -468,21 +453,37 @@ def _parse_tasks(
         repository = row.get("repository")
         if repository is not None and str(repository) not in allowed:
             raise StrandsPlannerError(f"planner task {index} is outside captured scope")
+        task_type = str(row["task_type"])
+        if task_type in REPOSITORY_REQUIRED_TASK_TYPES and not repository:
+            raise StrandsPlannerError(f"planner task {index} requires a captured repository")
+        if task_type == "synthesize_review" and repository is not None:
+            raise StrandsPlannerError("synthesis task cannot name a repository")
         question = str(row.get("question") or "").strip()
         if not question:
             raise StrandsPlannerError(f"planner task {index} requires a question")
+        if len(question) > MAX_QUESTION_LENGTH:
+            raise StrandsPlannerError(f"planner task {index} question is too long")
         task_id = str(row.get("task_id") or f"planner-{index + 1:02d}")
+        if len(task_id) > MAX_TASK_ID_LENGTH:
+            raise StrandsPlannerError(f"planner task {index} task_id is too long")
         if task_id in seen_ids:
             raise StrandsPlannerError(f"planner task IDs must be unique: {task_id}")
         seen_ids.add(task_id)
         tasks.append(
             {
                 "task_id": task_id,
-                "task_type": str(row["task_type"]),
+                "task_type": task_type,
                 "question": question,
                 **({"repository": str(repository)} if repository is not None else {}),
+                **(
+                    {"claim_id": str(row["claim_id"])}
+                    if row.get("claim_id") is not None
+                    else {}
+                ),
             }
         )
+        if task_type == "challenge_claim" and not tasks[-1].get("claim_id"):
+            raise StrandsPlannerError(f"planner task {index} challenge requires claim_id")
     if ensure_synthesis and not any(
         row["task_type"] == "synthesize_review" for row in tasks
     ):
@@ -503,15 +504,17 @@ def _dispatch_task(
     toolbox: GreenfieldToolbox,
     *,
     model: str | None,
-    timeout: int,
+    timeout: float,
     strands_factory: Callable[[str | None], Callable[[str], Any]] | None,
 ) -> dict[str, Any]:
     """Give Strands a single scoped question; all evidence stays in the shared ledger."""
 
     if task["task_type"] == "synthesize_review":
-        return {"evidence_refs": [], "findings": {}, "status": "complete"}
+        # Synthesis is a typed planner turn, not a host-side empty sentinel.
+        pass
     scoped = {**summary, "planner_task": dict(task)}
     previous_ids = {str(row["tool_call_id"]) for row in toolbox.ledger()}
+    tool_scope = toolbox.open_tool_scope()
     try:
         findings, _ = run_strands_analysis(
             run_context,
@@ -520,8 +523,10 @@ def _dispatch_task(
             model=model,
             timeout=timeout,
             agent_factory=strands_factory,
+            tool_scope=tool_scope,
         )
     except (StrandsAgentError, RuntimeError, ValueError, OSError) as exc:
+        toolbox.close_tool_scope(tool_scope)
         return {
             "evidence_refs": [
                 {
@@ -535,7 +540,8 @@ def _dispatch_task(
             "status": "unavailable",
             "error": _redacted_error(exc),
         }
-    return {
+    toolbox.close_tool_scope(tool_scope)
+    result: dict[str, Any] = {
         "evidence_refs": [
             {"tool_call_id": row["tool_call_id"], "result_sha256": row["result_sha256"]}
             for row in toolbox.ledger()
@@ -544,6 +550,16 @@ def _dispatch_task(
         "findings": findings,
         "status": "complete",
     }
+    if task["task_type"] == "challenge_claim":
+        challenge = findings.get("challenge") if isinstance(findings, Mapping) else None
+        if isinstance(challenge, Mapping):
+            result["result"] = dict(challenge)
+        else:
+            result["status"] = "failed"
+            result["error"] = "challenge response did not contain a typed verdict"
+    elif task["task_type"] == "synthesize_review":
+        result["result"] = {"findings": dict(findings)}
+    return result
 
 
 def _append_unique(rows: list[dict[str, Any]], additions: Any) -> None:
@@ -591,6 +607,7 @@ def _required_challenge_tasks(findings: Mapping[str, Any]) -> list[dict[str, Any
                 "task_id": f"challenge-impact-{repository}",
                 "task_type": "challenge_claim",
                 "repository": str(repository),
+                "claim_id": f"impact:{repository}",
                 "question": f"Challenge the impact claim for {repository} against its cited evidence.",
             }
         )
@@ -607,29 +624,29 @@ def _required_challenge_tasks(findings: Mapping[str, Any]) -> list[dict[str, Any
                 "task_id": f"challenge-action-{action_id}",
                 "task_type": "challenge_claim",
                 "repository": str(repository),
+                "claim_id": str(action_id),
                 "question": f"Challenge draft eligibility for action {action_id} against its cited evidence.",
             }
         )
     return tasks
 
 
-def _downgrade_incomplete_findings(findings: dict[str, Any], *, reason: str) -> None:
-    """Keep incomplete planner lifecycles from retaining automatic claims."""
+def _apply_challenge(findings: dict[str, Any], result: Mapping[str, Any]) -> None:
+    challenge = result.get("result")
+    if not isinstance(challenge, Mapping):
+        return
+    if challenge.get("verdict") == "upheld":
+        return
+    claim_id = str(challenge.get("claim_id") or "")
     for row in findings.get("repository_impacts", []):
-        if isinstance(row, Mapping) and row.get("evidence_state") in {
-            "confirmed",
-            "strong_candidate",
-        }:
+        if isinstance(row, dict) and claim_id == f"impact:{row.get('repository')}":
             row["evidence_state"] = "candidate"
             row.pop("challenge_task_id", None)
     for row in findings.get("actions", []):
-        if not isinstance(row, Mapping):
-            continue
-        row["draft_eligible"] = False
-        if row.get("evidence_state") in {"confirmed", "strong_candidate"}:
+        if isinstance(row, dict) and claim_id == str(row.get("action_id")):
             row["evidence_state"] = "candidate"
-        row.pop("challenge_task_id", None)
-    findings["gaps"].add(reason)
+            row["draft_eligible"] = False
+            row.pop("challenge_task_id", None)
 
 
 def run_strands_planner(
@@ -642,7 +659,8 @@ def run_strands_planner(
     planner_factory: Callable[[Mapping[str, Any]], Callable[[str], Any]] | None = None,
     strands_factory: Callable[[str | None], Callable[[str], Any]] | None = None,
     model: str | None = None,
-    timeout: int = 300,
+    timeout: float = 300,
+    input_artifacts: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Run Strands as the default bounded orchestrator for Analyze."""
 
@@ -655,8 +673,13 @@ def run_strands_planner(
         if planner_factory is not None
         else _default_planner_factory(settings, toolbox)
     )
+    deadline = started + max(0.001, float(timeout))
     tasks = _parse_tasks(
-        _run_planner_call(runner, _prompt(run_context, summary)),
+        _run_planner_call(
+            runner,
+            _prompt(run_context, summary),
+            timeout=_remaining_deadline(deadline),
+        ),
         run_context,
         ensure_synthesis=True,
     )
@@ -674,7 +697,7 @@ def run_strands_planner(
         max_cycles = int(settings.get("max_cycles", 32))
     except (TypeError, ValueError) as exc:
         raise StrandsPlannerError("planner max_cycles must be an integer") from exc
-    if max_cycles < 1:
+    if max_cycles < 1 or max_cycles > MAX_TASKS:
         raise StrandsPlannerError("planner max_cycles must be positive")
     queue = list(tasks)
     terminal = False
@@ -696,7 +719,7 @@ def run_strands_planner(
             summary,
             toolbox,
             model=model,
-            timeout=timeout,
+            timeout=_remaining_deadline(deadline),
             strands_factory=strands_factory,
         )
         task_findings = result.get("findings", {})
@@ -708,9 +731,25 @@ def run_strands_planner(
             result["status"] = "failed"
             result["error"] = "challenge task produced no toolbox evidence"
             findings["gaps"].add(f"planner_challenge_evidence_missing:{task_id}")
+        if task["task_type"] == "challenge_claim" and result.get("status") == "complete":
+            challenge = result.get("result")
+            if not isinstance(challenge, Mapping) or challenge.get("claim_id") != task.get("claim_id"):
+                result["status"] = "failed"
+                result["error"] = "challenge verdict is not bound to the requested claim"
+                findings["gaps"].add(f"planner_challenge_unbound:{task_id}")
+            elif challenge.get("verdict") not in {"upheld", "downgraded", "rejected"}:
+                result["status"] = "failed"
+                result["error"] = "challenge verdict is invalid"
+                findings["gaps"].add(f"planner_challenge_invalid:{task_id}")
+            else:
+                _apply_challenge(findings, result)
+        elif task["task_type"] == "challenge_claim":
+            findings["gaps"].add(f"planner_challenge_failed:{task_id}")
         if task["task_type"] == "synthesize_review":
-            terminal = True
-            decision = "complete"
+            terminal = result.get("status") == "complete" and isinstance(
+                result.get("result"), Mapping
+            )
+            decision = "complete" if terminal else "block"
         else:
             new_tasks = _parse_tasks(
                 _run_planner_call(
@@ -724,6 +763,7 @@ def run_strands_planner(
                             "gaps": sorted(findings["gaps"]),
                         },
                     ),
+                    timeout=_remaining_deadline(deadline),
                 ),
                 run_context,
             )
@@ -765,6 +805,7 @@ def run_strands_planner(
                 "task": task,
                 "evidence_refs": result.get("evidence_refs", []),
                 "decision": decision,
+                **({"result": result["result"]} if result.get("result") is not None else {}),
                 **(
                     {"status": result["status"], "error": result["error"]}
                     if result.get("status") in {"unavailable", "failed", "partial"}
@@ -784,7 +825,11 @@ def run_strands_planner(
     else:
         status = "partial" if findings["gaps"] else "complete"
     if status != "complete":
-        _downgrade_incomplete_findings(findings, reason="strands_planner_incomplete")
+        from greenfield.planning_contract import downgrade_incomplete_analysis
+
+        findings = downgrade_incomplete_analysis(
+            findings, reason="strands_planner_incomplete"
+        )
     findings["gaps"] = sorted(findings["gaps"])
     for row in findings["repository_impacts"]:
         if isinstance(row, Mapping) and row.get("evidence_state") in {
@@ -813,18 +858,12 @@ def run_strands_planner(
         stop_reason=stop_reason,
         gaps=findings["gaps"],
         analysis=findings,
+        input_artifacts=input_artifacts,
     )
     return report
 
 
-# Temporary compatibility alias for retained callers and old artifact tooling.
-run_nexau_planner = run_strands_planner
-
-
 __all__ = [
-    "NexAUPlannerError",
     "StrandsPlannerError",
-    "load_planner_config",
-    "run_nexau_planner",
     "run_strands_planner",
 ]

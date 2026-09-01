@@ -337,6 +337,8 @@ def _validate_request(request: Any, *, strict_target_evidence: bool = False) -> 
         "step5_report_sha256",
     ):
         _sha256(upstream.get(name), f"upstream.{name}")
+    if upstream.get("analysis_report_sha256") is not None:
+        _sha256(upstream.get("analysis_report_sha256"), "upstream.analysis_report_sha256")
 
     action = _object(root.get("action"), "action")
     _sha256(action.get("action_id"), "action.action_id")
@@ -607,6 +609,8 @@ def _validate_report(
         "step5_report_sha256",
     ):
         _sha256(provenance.get(field), f"provenance.{field}")
+    if provenance.get("analysis_report_sha256") is not None:
+        _sha256(provenance.get("analysis_report_sha256"), "provenance.analysis_report_sha256")
     if (
         provenance.get("read_only") is not True
         or provenance.get("catalog_mutation") != "none"

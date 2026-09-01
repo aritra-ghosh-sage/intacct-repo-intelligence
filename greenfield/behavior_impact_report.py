@@ -7,6 +7,7 @@ import re
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from greenfield.analysis_report import canonical_analysis_projection
 from greenfield.artifact_io import artifact_sha256
 from greenfield.step4_contract import validate_step4_report
 from greenfield.step5_actions import validate_step5_report
@@ -458,6 +459,7 @@ def build_behavior_impact_report(
     step3: Mapping[str, Any],
     step4: Mapping[str, Any],
     step5: Mapping[str, Any],
+    analysis: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Project exact Greenfield evidence into a behavior-centric index."""
 
@@ -620,6 +622,13 @@ def build_behavior_impact_report(
         "register": register,
         "behaviors": behaviors,
         "unassigned_evidence": unassigned,
+        **(
+            {
+                "canonical_analysis": canonical_analysis_projection(analysis)
+            }
+            if isinstance(analysis, Mapping)
+            else {}
+        ),
         "gaps": global_gaps,
         "warnings": warnings,
         "provenance": {
@@ -628,6 +637,11 @@ def build_behavior_impact_report(
             "step3_report_sha256": digests["step3"],
             "step4_report_sha256": digests["step4"],
             "step5_report_sha256": digests["step5"],
+            **(
+                {"analysis_report_sha256": analysis.get("report_sha256")}
+                if isinstance(analysis, Mapping)
+                else {}
+            ),
             "rule_set_version": RULE_SET_VERSION,
             "read_only": True,
             "catalog_mutation": "none",
@@ -682,6 +696,17 @@ def validate_behavior_impact_report(report: Any) -> list[str]:
         value = provenance.get(field)
         if not isinstance(value, str) or not SHA256.fullmatch(value):
             errors.append(f"provenance.{field} must be SHA-256")
+    canonical = report.get("canonical_analysis")
+    if canonical is not None:
+        if not isinstance(canonical, Mapping):
+            errors.append("canonical_analysis must be an object")
+        else:
+            digest = canonical.get("analysis_report_sha256")
+            if not isinstance(digest, str) or not SHA256.fullmatch(digest):
+                errors.append("canonical_analysis.analysis_report_sha256 must be SHA-256")
+            for field in ("repository_impacts", "actions", "gaps"):
+                if not isinstance(canonical.get(field), list):
+                    errors.append(f"canonical_analysis.{field} must be a list")
     if provenance.get("read_only") is not True:
         errors.append("provenance.read_only must be true")
     if provenance.get("catalog_mutation") != "none":

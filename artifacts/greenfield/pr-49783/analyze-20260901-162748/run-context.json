@@ -94,14 +94,13 @@
       "tracked_branch": "main"
     }
   ],
-  "context_sha256": "fead96f78eb57eba7ec8ed11f8d17cb57bf79bca8690666cd587adbe991ca7fa",
+  "context_sha256": "510767ea03e41cc176a34fb3cbe99ce75adc8fb7d69fd29b3c3e8fc901d462fd",
   "evidence_artifacts": [],
   "execution": {
-    "base_url": "https://bedrock-mantle.us-west-2.api.aws/openai/v1",
     "dry_run": true,
     "model": "us.openai.gpt-5.6-luna",
-    "nexau_model": "openai.gpt-5.6-luna",
     "planner_mode": "default",
+    "planner_model": "us.anthropic.claude-sonnet-5",
     "strands_model": "us.openai.gpt-5.6-luna"
   },
   "manifest": {
@@ -111,8 +110,8 @@
   "provenance": {
     "catalog_mutation": "none",
     "github_writes": "none",
-    "request_sha256": "5da913c3d434d8b2f4fabb12812f02af8267a6afd5a333f350fead9aa3786dc0",
-    "step1_sha256": "4df4c5219f9bf58f04cfcc4923f0dd0c98c2a4b10a7d04789689aaab8617b39c"
+    "request_sha256": "1d3a06e0f69488d6e697155fd167b7007d474d1551f9543d71671b663ef573be",
+    "step1_sha256": "9d912f45c58328248ed25500ea3738f1a1f8ed2c64f2099a5922c38022936c30"
   },
   "repository_handbooks": [],
   "schema_version": "0.1",

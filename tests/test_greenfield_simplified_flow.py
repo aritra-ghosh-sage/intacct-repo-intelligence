@@ -8,10 +8,17 @@ import pytest
 from greenfield.analysis_report import (
     AnalysisReportError,
     build_analysis_report,
+    canonical_analysis_projection,
     validate_analysis_report,
+    validate_projection_consistency,
 )
 from greenfield.artifact_io import artifact_sha256
-from greenfield.publish import build_publication, publish_github
+from greenfield.publish import (
+    _publication_unsigned,
+    build_publication,
+    publish_github,
+    validate_publication,
+)
 from greenfield.repository_handbook import (
     build_repository_handbook,
     resynchronize_repository_handbook,
@@ -22,6 +29,7 @@ from greenfield.step1_capture import build_report
 from greenfield.step8_create import ValidatedDraftAuthorizer
 from greenfield.strands_agent import run_strands_analysis
 from greenfield.strands_tools import GreenfieldToolbox, GreenfieldToolError
+from scripts.run_greenfield_strands import _stage_outcome
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -563,9 +571,9 @@ class _Publisher:
 
     def request(self, method: str, endpoint: str, body: dict | None = None):
         self.calls.append((method, endpoint, body))
-        if endpoint.endswith("/check-runs") and method == "GET":
+        if "/check-runs?" in endpoint and method == "GET":
             return {"check_runs": []}
-        if endpoint.endswith("/comments?per_page=100"):
+        if "/comments?" in endpoint:
             return []
         return {"id": len(self.calls)}
 
@@ -601,7 +609,7 @@ def test_publication_updates_without_create_only_check_fields(tmp_path: Path) ->
     class ExistingPublisher(_Publisher):
         def request(self, method: str, endpoint: str, body: dict | None = None):
             self.calls.append((method, endpoint, body))
-            if endpoint.endswith("/check-runs") and method == "GET":
+            if "/check-runs?" in endpoint and method == "GET":
                 return {
                     "check_runs": [
                         {
@@ -611,7 +619,7 @@ def test_publication_updates_without_create_only_check_fields(tmp_path: Path) ->
                         }
                     ]
                 }
-            if endpoint.endswith("/comments?per_page=100"):
+            if "/comments?" in endpoint:
                 return [
                     {
                         "id": 20,
@@ -629,6 +637,96 @@ def test_publication_updates_without_create_only_check_fields(tmp_path: Path) ->
     )
     assert "head_sha" not in check_update
     assert "external_id" not in check_update
+
+
+def test_publication_digest_and_pagination_are_fail_closed(tmp_path: Path) -> None:
+    context, _ = _context(tmp_path)
+    report = build_analysis_report(
+        context,
+        step2={"gaps": []},
+        step3={"potentially_affected_repositories": {"items": []}, "gaps": []},
+        step4={"coverage": {}, "gaps": []},
+        step5={"actions": [], "gaps": []},
+    )
+    publication = build_publication(report, artifact_bundle="bundle")
+    assert validate_publication(publication) == []
+    tampered = dict(publication)
+    tampered["publication_sha256"] = "0" * 64
+    assert any("publication_sha256" in error for error in validate_publication(tampered))
+
+    class DuplicatePagedPublisher(_Publisher):
+        def request(self, method: str, endpoint: str, body: dict | None = None):
+            self.calls.append((method, endpoint, body))
+            if "/check-runs?" in endpoint and method == "GET":
+                page = 2 if "page=2" in endpoint else 1
+                rows = [{"id": index, "name": "other", "external_id": str(index)} for index in range(100)]
+                rows[0] = {"id": 998, "name": publication["check"]["name"], "external_id": publication["check"]["external_id"]}
+                if page == 2:
+                    rows = [{"id": 999, "name": publication["check"]["name"], "external_id": publication["check"]["external_id"]}]
+                return {"check_runs": rows}
+            if "/comments?" in endpoint and method == "GET":
+                return []
+            raise AssertionError("unexpected GitHub request")
+
+    with pytest.raises(ValueError, match="multiple Greenfield checks"):
+        publish_github(publication, DuplicatePagedPublisher())
+
+
+def test_publication_contract_rejects_malformed_identity_and_accepts_legacy_replay(
+    tmp_path: Path,
+) -> None:
+    context, _ = _context(tmp_path)
+    report = build_analysis_report(
+        context,
+        step2={"gaps": []},
+        step3={"potentially_affected_repositories": {"items": []}, "gaps": []},
+        step4={"coverage": {}, "gaps": []},
+        step5={"actions": [], "gaps": []},
+    )
+    publication = build_publication(report, artifact_bundle="bundle")
+    malformed = dict(publication)
+    malformed["source"] = {**publication["source"], "repository": "x"}
+    malformed["check"] = {**publication["check"], "external_id": "not-a-sha"}
+    malformed["planning_status"] = "bogus"
+    malformed["publication_sha256"] = artifact_sha256(_publication_unsigned(malformed))
+    malformed["check"]["publication_sha256"] = malformed["publication_sha256"]
+    malformed["comment"] = {**publication["comment"], "publication_sha256": malformed["publication_sha256"]}
+    errors = validate_publication(malformed)
+    assert "source.repository must be owner/repository" in errors
+    assert "check.external_id must be a SHA-256" in errors
+    assert "planning_status is invalid" in errors
+
+    legacy = dict(publication)
+    legacy["check"] = {key: value for key, value in publication["check"].items() if key != "publication_sha256"}
+    legacy["comment"] = {key: value for key, value in publication["comment"].items() if key != "publication_sha256"}
+    legacy.pop("draft_pr")
+    legacy.pop("canonical_analysis")
+    legacy["publication_sha256"] = artifact_sha256(_publication_unsigned(legacy))
+    assert validate_publication(legacy)
+    assert validate_publication(legacy, allow_legacy_replay=True) == []
+
+
+def test_projection_consistency_rejects_semantic_mismatch(tmp_path: Path) -> None:
+    context, _ = _context(tmp_path)
+    report = build_analysis_report(
+        context,
+        step2={"gaps": []},
+        step3={"potentially_affected_repositories": {"items": []}, "gaps": []},
+        step4={"coverage": {}, "gaps": []},
+        step5={"actions": [], "gaps": []},
+    )
+    projection = {
+        "provenance": {"analysis_report_sha256": report["report_sha256"]},
+        "canonical_analysis": canonical_analysis_projection(report),
+    }
+    assert validate_projection_consistency(projection, report) == []
+    projection["canonical_analysis"]["actions"] = [{"action_id": "different"}]
+    assert "canonical_analysis does not exactly match canonical analysis" in validate_projection_consistency(projection, report)
+
+
+def test_unknown_stage_status_fails_closed() -> None:
+    assert _stage_outcome({"status": "unrecognized"}) == "failed"
+    assert _stage_outcome(None) == "failed"
 
 
 def test_draft_authorizer_uses_validation_not_owner_approval() -> None:

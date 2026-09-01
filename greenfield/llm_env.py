@@ -93,7 +93,7 @@ def validate_greenfield_llm_env(
     base_url: str | None = None,
     env_path: str | Path | None = None,
 ) -> None:
-    """Fail fast when the NexAU/LLM runtime cannot be configured."""
+    """Fail fast when the legacy generic LLM runtime cannot be configured."""
 
     missing: list[str] = []
     if not os.environ.get("LLM_API_KEY"):
@@ -118,7 +118,7 @@ def validate_greenfield_llm_env(
         ]
     )
     raise GreenfieldEnvError(
-        "Greenfield NexAU/LLM configuration is missing required values: "
+        "Greenfield generic LLM configuration is missing required values: "
         + ", ".join(missing)
         + f".\nChecked .env: {checked}\n"
         f"Copy {example} to {checked} and fill in the missing values, or export them in your shell.\n"

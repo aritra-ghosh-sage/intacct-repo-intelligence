@@ -14,7 +14,7 @@
           "path": "artifacts/greenfield/pr-49783/analyze-20260901-162748/step1.5.contract.json",
           "repository": "ia-main",
           "revision": "071f786e237c0c92b385a19314f9a804c90ffedc",
-          "sha256": "56ca58671f0eb9259830bf74e055ddc3bbf075f9e53a7dfc8246b0207c753abe"
+          "sha256": "369e4d17e8df0014afa063a1f58364c7bf474dc2a06f89d5b9bf42fe57eb22f8"
         }
       ],
       "evidence_score": {
@@ -45,7 +45,7 @@
             },
             {
               "evidence": [],
-              "interface_id": "behavior:1e7ff88ebe50c86009b0a5c1",
+              "interface_id": "behavior:456b124545a723809a382731",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             },
@@ -69,13 +69,13 @@
             },
             {
               "evidence": [],
-              "interface_id": "behavior:b1ba10943885b56eb43564df",
+              "interface_id": "behavior:ae03d1eb8cf41afac12a4c8e",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             },
             {
               "evidence": [],
-              "interface_id": "behavior:d6b7ac3dc5715b655c8543fb",
+              "interface_id": "behavior:dfb0f8b38f9e3f4651944fb2",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             }
@@ -106,7 +106,7 @@
           "path": "artifacts/greenfield/pr-49783/analyze-20260901-162748/step1.5.contract.json",
           "repository": "ia-main",
           "revision": "071f786e237c0c92b385a19314f9a804c90ffedc",
-          "sha256": "56ca58671f0eb9259830bf74e055ddc3bbf075f9e53a7dfc8246b0207c753abe"
+          "sha256": "369e4d17e8df0014afa063a1f58364c7bf474dc2a06f89d5b9bf42fe57eb22f8"
         }
       ],
       "evidence_score": {
@@ -118,7 +118,7 @@
         "rule_set_version": "0.1",
         "score": 80
       },
-      "interface_id": "behavior:1e7ff88ebe50c86009b0a5c1",
+      "interface_id": "behavior:456b124545a723809a382731",
       "likely_tests": [],
       "owner": null,
       "owner_repository": "ia-main",
@@ -137,7 +137,7 @@
             },
             {
               "evidence": [],
-              "interface_id": "behavior:1e7ff88ebe50c86009b0a5c1",
+              "interface_id": "behavior:456b124545a723809a382731",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             },
@@ -161,13 +161,13 @@
             },
             {
               "evidence": [],
-              "interface_id": "behavior:b1ba10943885b56eb43564df",
+              "interface_id": "behavior:ae03d1eb8cf41afac12a4c8e",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             },
             {
               "evidence": [],
-              "interface_id": "behavior:d6b7ac3dc5715b655c8543fb",
+              "interface_id": "behavior:dfb0f8b38f9e3f4651944fb2",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             }
@@ -179,7 +179,8 @@
         }
       ],
       "source_symbols": [
-        "GLLedgerReporter::Reporter_Instantiate"
+        "GLLedgerReporter::BuildPeriodsArray",
+        "GLLedgerReporter::ReformatTransArrayForPeriods"
       ],
       "target_repository": "ia-app"
     },
@@ -195,7 +196,7 @@
           "path": "artifacts/greenfield/pr-49783/analyze-20260901-162748/step1.5.contract.json",
           "repository": "ia-main",
           "revision": "071f786e237c0c92b385a19314f9a804c90ffedc",
-          "sha256": "56ca58671f0eb9259830bf74e055ddc3bbf075f9e53a7dfc8246b0207c753abe"
+          "sha256": "369e4d17e8df0014afa063a1f58364c7bf474dc2a06f89d5b9bf42fe57eb22f8"
         }
       ],
       "evidence_score": {
@@ -226,7 +227,7 @@
             },
             {
               "evidence": [],
-              "interface_id": "behavior:1e7ff88ebe50c86009b0a5c1",
+              "interface_id": "behavior:456b124545a723809a382731",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             },
@@ -250,13 +251,13 @@
             },
             {
               "evidence": [],
-              "interface_id": "behavior:b1ba10943885b56eb43564df",
+              "interface_id": "behavior:ae03d1eb8cf41afac12a4c8e",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             },
             {
               "evidence": [],
-              "interface_id": "behavior:d6b7ac3dc5715b655c8543fb",
+              "interface_id": "behavior:dfb0f8b38f9e3f4651944fb2",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             }
@@ -284,7 +285,7 @@
           "path": "artifacts/greenfield/pr-49783/analyze-20260901-162748/step1.5.contract.json",
           "repository": "ia-main",
           "revision": "071f786e237c0c92b385a19314f9a804c90ffedc",
-          "sha256": "56ca58671f0eb9259830bf74e055ddc3bbf075f9e53a7dfc8246b0207c753abe"
+          "sha256": "369e4d17e8df0014afa063a1f58364c7bf474dc2a06f89d5b9bf42fe57eb22f8"
         }
       ],
       "evidence_score": {
@@ -315,7 +316,7 @@
             },
             {
               "evidence": [],
-              "interface_id": "behavior:1e7ff88ebe50c86009b0a5c1",
+              "interface_id": "behavior:456b124545a723809a382731",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             },
@@ -339,13 +340,13 @@
             },
             {
               "evidence": [],
-              "interface_id": "behavior:b1ba10943885b56eb43564df",
+              "interface_id": "behavior:ae03d1eb8cf41afac12a4c8e",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             },
             {
               "evidence": [],
-              "interface_id": "behavior:d6b7ac3dc5715b655c8543fb",
+              "interface_id": "behavior:dfb0f8b38f9e3f4651944fb2",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             }
@@ -373,7 +374,7 @@
           "path": "artifacts/greenfield/pr-49783/analyze-20260901-162748/step1.5.contract.json",
           "repository": "ia-main",
           "revision": "071f786e237c0c92b385a19314f9a804c90ffedc",
-          "sha256": "56ca58671f0eb9259830bf74e055ddc3bbf075f9e53a7dfc8246b0207c753abe"
+          "sha256": "369e4d17e8df0014afa063a1f58364c7bf474dc2a06f89d5b9bf42fe57eb22f8"
         }
       ],
       "evidence_score": {
@@ -404,7 +405,7 @@
             },
             {
               "evidence": [],
-              "interface_id": "behavior:1e7ff88ebe50c86009b0a5c1",
+              "interface_id": "behavior:456b124545a723809a382731",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             },
@@ -428,13 +429,13 @@
             },
             {
               "evidence": [],
-              "interface_id": "behavior:b1ba10943885b56eb43564df",
+              "interface_id": "behavior:ae03d1eb8cf41afac12a4c8e",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             },
             {
               "evidence": [],
-              "interface_id": "behavior:d6b7ac3dc5715b655c8543fb",
+              "interface_id": "behavior:dfb0f8b38f9e3f4651944fb2",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             }
@@ -463,7 +464,7 @@
           "path": "artifacts/greenfield/pr-49783/analyze-20260901-162748/step1.5.contract.json",
           "repository": "ia-main",
           "revision": "071f786e237c0c92b385a19314f9a804c90ffedc",
-          "sha256": "56ca58671f0eb9259830bf74e055ddc3bbf075f9e53a7dfc8246b0207c753abe"
+          "sha256": "369e4d17e8df0014afa063a1f58364c7bf474dc2a06f89d5b9bf42fe57eb22f8"
         }
       ],
       "evidence_score": {
@@ -475,7 +476,7 @@
         "rule_set_version": "0.1",
         "score": 80
       },
-      "interface_id": "behavior:b1ba10943885b56eb43564df",
+      "interface_id": "behavior:ae03d1eb8cf41afac12a4c8e",
       "likely_tests": [],
       "owner": null,
       "owner_repository": "ia-main",
@@ -494,7 +495,7 @@
             },
             {
               "evidence": [],
-              "interface_id": "behavior:1e7ff88ebe50c86009b0a5c1",
+              "interface_id": "behavior:456b124545a723809a382731",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             },
@@ -518,13 +519,13 @@
             },
             {
               "evidence": [],
-              "interface_id": "behavior:b1ba10943885b56eb43564df",
+              "interface_id": "behavior:ae03d1eb8cf41afac12a4c8e",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             },
             {
               "evidence": [],
-              "interface_id": "behavior:d6b7ac3dc5715b655c8543fb",
+              "interface_id": "behavior:dfb0f8b38f9e3f4651944fb2",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             }
@@ -536,7 +537,7 @@
         }
       ],
       "source_symbols": [
-        "GLLedgerReporter::_getSryReportQuery"
+        "GLLedgerReporter::GLPrintReportHeader"
       ],
       "target_repository": "ia-app"
     },
@@ -552,7 +553,7 @@
           "path": "artifacts/greenfield/pr-49783/analyze-20260901-162748/step1.5.contract.json",
           "repository": "ia-main",
           "revision": "071f786e237c0c92b385a19314f9a804c90ffedc",
-          "sha256": "56ca58671f0eb9259830bf74e055ddc3bbf075f9e53a7dfc8246b0207c753abe"
+          "sha256": "369e4d17e8df0014afa063a1f58364c7bf474dc2a06f89d5b9bf42fe57eb22f8"
         }
       ],
       "evidence_score": {
@@ -564,7 +565,7 @@
         "rule_set_version": "0.1",
         "score": 80
       },
-      "interface_id": "behavior:d6b7ac3dc5715b655c8543fb",
+      "interface_id": "behavior:dfb0f8b38f9e3f4651944fb2",
       "likely_tests": [],
       "owner": null,
       "owner_repository": "ia-main",
@@ -583,7 +584,7 @@
             },
             {
               "evidence": [],
-              "interface_id": "behavior:1e7ff88ebe50c86009b0a5c1",
+              "interface_id": "behavior:456b124545a723809a382731",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             },
@@ -607,13 +608,13 @@
             },
             {
               "evidence": [],
-              "interface_id": "behavior:b1ba10943885b56eb43564df",
+              "interface_id": "behavior:ae03d1eb8cf41afac12a4c8e",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             },
             {
               "evidence": [],
-              "interface_id": "behavior:d6b7ac3dc5715b655c8543fb",
+              "interface_id": "behavior:dfb0f8b38f9e3f4651944fb2",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             }
@@ -625,7 +626,8 @@
         }
       ],
       "source_symbols": [
-        "GLLedgerReporter::__construct"
+        "GLLedgerReporter::ProcessDocColumnValueProlog",
+        "GLLedgerReporter::ProcessDocColumnValueRecurse"
       ],
       "target_repository": "ia-app"
     },
@@ -48475,7 +48477,7 @@
             },
             {
               "evidence": [],
-              "interface_id": "behavior:1e7ff88ebe50c86009b0a5c1",
+              "interface_id": "behavior:456b124545a723809a382731",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             },
@@ -48499,13 +48501,13 @@
             },
             {
               "evidence": [],
-              "interface_id": "behavior:b1ba10943885b56eb43564df",
+              "interface_id": "behavior:ae03d1eb8cf41afac12a4c8e",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             },
             {
               "evidence": [],
-              "interface_id": "behavior:d6b7ac3dc5715b655c8543fb",
+              "interface_id": "behavior:dfb0f8b38f9e3f4651944fb2",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             }
@@ -95348,7 +95350,7 @@
             },
             {
               "evidence": [],
-              "interface_id": "behavior:1e7ff88ebe50c86009b0a5c1",
+              "interface_id": "behavior:456b124545a723809a382731",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             },
@@ -95372,13 +95374,13 @@
             },
             {
               "evidence": [],
-              "interface_id": "behavior:b1ba10943885b56eb43564df",
+              "interface_id": "behavior:ae03d1eb8cf41afac12a4c8e",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             },
             {
               "evidence": [],
-              "interface_id": "behavior:d6b7ac3dc5715b655c8543fb",
+              "interface_id": "behavior:dfb0f8b38f9e3f4651944fb2",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             }
@@ -123742,7 +123744,7 @@
             },
             {
               "evidence": [],
-              "interface_id": "behavior:1e7ff88ebe50c86009b0a5c1",
+              "interface_id": "behavior:456b124545a723809a382731",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             },
@@ -123766,13 +123768,13 @@
             },
             {
               "evidence": [],
-              "interface_id": "behavior:b1ba10943885b56eb43564df",
+              "interface_id": "behavior:ae03d1eb8cf41afac12a4c8e",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             },
             {
               "evidence": [],
-              "interface_id": "behavior:d6b7ac3dc5715b655c8543fb",
+              "interface_id": "behavior:dfb0f8b38f9e3f4651944fb2",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             }
@@ -138128,7 +138130,7 @@
             },
             {
               "evidence": [],
-              "interface_id": "behavior:1e7ff88ebe50c86009b0a5c1",
+              "interface_id": "behavior:456b124545a723809a382731",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             },
@@ -138152,13 +138154,13 @@
             },
             {
               "evidence": [],
-              "interface_id": "behavior:b1ba10943885b56eb43564df",
+              "interface_id": "behavior:ae03d1eb8cf41afac12a4c8e",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             },
             {
               "evidence": [],
-              "interface_id": "behavior:d6b7ac3dc5715b655c8543fb",
+              "interface_id": "behavior:dfb0f8b38f9e3f4651944fb2",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             }
@@ -148362,12 +148364,12 @@
             {
               "interfaces": [
                 "behavior:0fb1098b6305204245d430f8",
-                "behavior:1e7ff88ebe50c86009b0a5c1",
+                "behavior:456b124545a723809a382731",
                 "behavior:57fe53265e84cb8a329dc6a3",
                 "behavior:78a210c603a56f7c3729c160",
                 "behavior:98e95371fbd924c066d129d7",
-                "behavior:b1ba10943885b56eb43564df",
-                "behavior:d6b7ac3dc5715b655c8543fb"
+                "behavior:ae03d1eb8cf41afac12a4c8e",
+                "behavior:dfb0f8b38f9e3f4651944fb2"
               ],
               "kind": "source_interface"
             }
@@ -148386,12 +148388,12 @@
             {
               "interfaces": [
                 "behavior:0fb1098b6305204245d430f8",
-                "behavior:1e7ff88ebe50c86009b0a5c1",
+                "behavior:456b124545a723809a382731",
                 "behavior:57fe53265e84cb8a329dc6a3",
                 "behavior:78a210c603a56f7c3729c160",
                 "behavior:98e95371fbd924c066d129d7",
-                "behavior:b1ba10943885b56eb43564df",
-                "behavior:d6b7ac3dc5715b655c8543fb"
+                "behavior:ae03d1eb8cf41afac12a4c8e",
+                "behavior:dfb0f8b38f9e3f4651944fb2"
               ],
               "kind": "source_interface"
             }
@@ -148410,12 +148412,12 @@
             {
               "interfaces": [
                 "behavior:0fb1098b6305204245d430f8",
-                "behavior:1e7ff88ebe50c86009b0a5c1",
+                "behavior:456b124545a723809a382731",
                 "behavior:57fe53265e84cb8a329dc6a3",
                 "behavior:78a210c603a56f7c3729c160",
                 "behavior:98e95371fbd924c066d129d7",
-                "behavior:b1ba10943885b56eb43564df",
-                "behavior:d6b7ac3dc5715b655c8543fb"
+                "behavior:ae03d1eb8cf41afac12a4c8e",
+                "behavior:dfb0f8b38f9e3f4651944fb2"
               ],
               "kind": "source_interface"
             }
@@ -148443,7 +148445,7 @@
             },
             {
               "evidence": [],
-              "interface_id": "behavior:1e7ff88ebe50c86009b0a5c1",
+              "interface_id": "behavior:456b124545a723809a382731",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             },
@@ -148467,13 +148469,13 @@
             },
             {
               "evidence": [],
-              "interface_id": "behavior:b1ba10943885b56eb43564df",
+              "interface_id": "behavior:ae03d1eb8cf41afac12a4c8e",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             },
             {
               "evidence": [],
-              "interface_id": "behavior:d6b7ac3dc5715b655c8543fb",
+              "interface_id": "behavior:dfb0f8b38f9e3f4651944fb2",
               "mapping_kind": "explicit_source_contract",
               "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
             }
@@ -148559,7 +148561,7 @@
     "rule_set_version": "0.1",
     "semantic_index_sha256": [],
     "source_pr_number": 49783,
-    "step1_report_sha256": "4df4c5219f9bf58f04cfcc4923f0dd0c98c2a4b10a7d04789689aaab8617b39c"
+    "step1_report_sha256": "9d912f45c58328248ed25500ea3738f1a1f8ed2c64f2099a5922c38022936c30"
   },
   "schema_version": "0.1",
   "status": "partial",

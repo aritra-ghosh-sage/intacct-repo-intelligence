@@ -178,6 +178,18 @@ class _Step15StructuredOutput(BaseModel):
     omitted_counts: dict[str, int] | None = None
 
 
+class _AnalysisStructuredOutput(BaseModel):
+    """Typed semantic response used by planner task turns."""
+
+    repository_impacts: list[dict[str, Any]] = Field(default_factory=list)
+    actions: list[dict[str, Any]] = Field(default_factory=list)
+    coverage: dict[str, Any] = Field(default_factory=dict)
+    recommendation: str = ""
+    gaps: list[str] = Field(default_factory=list)
+    agent: dict[str, Any] = Field(default_factory=dict)
+    challenge: dict[str, Any] | None = None
+
+
 def _git(source_root: Path, *args: str) -> str:
     result = subprocess.run(
         ["git", "-C", str(source_root), *args],
@@ -370,6 +382,7 @@ def _default_agent_factory(
     *,
     tools: list[Any] | None = None,
     max_tokens: int | None = None,
+    structured_output_model: type[BaseModel] = _Step15StructuredOutput,
 ) -> Callable[[str], Any]:
     try:
         from strands import Agent
@@ -393,7 +406,7 @@ def _default_agent_factory(
             options["model"] = model
         if tools is not None:
             options["tools"] = tools
-        options["structured_output_model"] = _Step15StructuredOutput
+        options["structured_output_model"] = structured_output_model
         agent = Agent(**options)
     except Exception as exc:  # pragma: no cover - provider-specific failure shape
         raise StrandsAgentError(f"Strands agent initialization failed: {exc}") from exc
@@ -747,12 +760,16 @@ def _run_strands_json(
     tools: list[Any] | None = None,
     max_tokens: int | None = None,
     max_continuations: int = 2,
+    structured_output_model: type[BaseModel] = _Step15StructuredOutput,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Return the parsed provider output and how the boundary obtained it."""
 
     factory = agent_factory or _default_agent_factory
     if factory is _default_agent_factory:
-        agent = _default_agent_factory(model, tools=tools, max_tokens=max_tokens)
+        factory_kwargs: dict[str, Any] = {"tools": tools, "max_tokens": max_tokens}
+        if "structured_output_model" in inspect.signature(factory).parameters:
+            factory_kwargs["structured_output_model"] = structured_output_model
+        agent = _default_agent_factory(model, **factory_kwargs)
     else:
         parameters = inspect.signature(factory).parameters
         agent = factory(model, tools=tools) if "tools" in parameters else factory(model)
@@ -941,6 +958,24 @@ def run_strands_trace(
 def _analysis_prompt(
     run_context: Mapping[str, Any], compatibility_summary: Mapping[str, Any]
 ) -> str:
+    planner_task = compatibility_summary.get("planner_task")
+    task_type = (
+        planner_task.get("task_type")
+        if isinstance(planner_task, Mapping)
+        else None
+    )
+    lifecycle_instruction = ""
+    if task_type == "challenge_claim":
+        lifecycle_instruction = """
+This is a claim challenge task. Return a `challenge` object with the requested
+`claim_id`, verdict (`upheld`, `downgraded`, or `rejected`), a concise rationale,
+and claim-bound evidence_refs. Do not silently substitute another claim.
+"""
+    elif task_type == "synthesize_review":
+        lifecycle_instruction = """
+This is the final synthesis task. Return the complete normalized semantic result
+in the requested fields. Synthesis must not introduce unsupported claims.
+"""
     return f"""You are the Strands analyst for the Greenfield Analyze phase.
 
 Use the available read-only tools to investigate repository behavior, impacted
@@ -969,6 +1004,7 @@ the central validation_plan. New tests may be added to an existing captured test
 file; creating a new repository file is not yet permitted by the mutation gate.
 Owner uncertainty does not block a draft; unknown target revision, ambiguous
 path scope, or unavailable validation does.
+{lifecycle_instruction}
 
 Run context:
 ```json
@@ -990,6 +1026,7 @@ def run_strands_analysis(
     model: str | None = None,
     timeout: int = 300,
     agent_factory: Callable[[str | None], Callable[[str], Any]] | None = None,
+    tool_scope: str | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Run tool-guided semantic analysis and return its output plus tool ledger."""
 
@@ -1004,7 +1041,7 @@ def run_strands_analysis(
         def tool(value: Callable[..., Any]) -> Callable[..., Any]:
             return value
 
-    tools = toolbox.as_strands_tools(tool)
+    tools = toolbox.as_strands_tools(tool, scope=tool_scope)
     raw, _delivery = _run_strands_json(
         _analysis_prompt(run_context, compatibility_summary),
         model=model,
@@ -1013,6 +1050,7 @@ def run_strands_analysis(
         tools=tools,
         # A truncated tool use cannot be resumed as JSON, so never continue here.
         max_continuations=0,
+        structured_output_model=_AnalysisStructuredOutput,
     )
     return raw, toolbox.ledger()
 
