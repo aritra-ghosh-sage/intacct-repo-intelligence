@@ -1,0 +1,77 @@
+{
+  "analysis_kind": "greenfield_pr_review",
+  "claims": [
+    {
+      "behaviors": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "evidence": [
+        {
+          "artifact": "step1.5.trace.json",
+          "sha256": "6e4af61d09901c96696c1ead3f89b2e3b89a2d119b4deffa135b8bf39c2141b1"
+        },
+        {
+          "artifact": "step1.5.contract.json",
+          "sha256": "21fdd7d1e8af668cba81af37592488a3dda59bc623e464acda7c3bcf08f31cf9"
+        }
+      ],
+      "evidence_status": "confirmed",
+      "inspected_revision": "071f786e237c0c92b385a19314f9a804c90ffedc",
+      "rationale": "exact source trace retained 7 behavior groups",
+      "repository": "intacct/ia-app"
+    }
+  ],
+  "gaps": [
+    "ci_artifact_unavailable:intacct/ia-gwdata-ap",
+    "ci_artifact_unavailable:intacct/ia-gwdata-contract",
+    "ci_artifact_unavailable:intacct/ia-gwdata-gl",
+    "ci_artifact_unavailable:intacct/ia-gwdata-project",
+    "ci_artifact_unavailable:intacct/ia-restapi-automation-tests",
+    "ci_evidence_not_provided",
+    "ci_linkage_unavailable:intacct/ia-gwdata-ap",
+    "ci_linkage_unavailable:intacct/ia-gwdata-contract",
+    "ci_linkage_unavailable:intacct/ia-gwdata-gl",
+    "ci_linkage_unavailable:intacct/ia-gwdata-project",
+    "ci_linkage_unavailable:intacct/ia-restapi-automation-tests",
+    "cross_repository_discovery_requires_confirmed_relation_or_bound_ci_evidence",
+    "intacct/ia-gwdata-ap:ci_linkage_unavailable:target_repository_has_no_source_revision",
+    "intacct/ia-gwdata-ap:repos/intacct/ia-gwdata-ap/git/trees/3a412ac4d3792b49d9b13acfd27163e55baeae35?recursive=1: response_truncated",
+    "intacct/ia-gwdata-contract:ci_linkage_unavailable:target_repository_has_no_source_revision",
+    "intacct/ia-gwdata-contract:repos/intacct/ia-gwdata-contract/git/trees/9e23a432633c6b2a7d84390561a17a364662a823?recursive=1: response_truncated",
+    "intacct/ia-gwdata-gl:ci_linkage_unavailable:target_repository_has_no_source_revision",
+    "intacct/ia-gwdata-project:ci_linkage_unavailable:target_repository_has_no_source_revision",
+    "intacct/ia-restapi-automation-tests:ci_linkage_unavailable:target_repository_has_no_source_revision",
+    "nexau_planner_unavailable",
+    "related_pull_requests_not_modelled:revision_pinned_artifact_not_provided",
+    "repository_inventory_not_provided",
+    "semantic_index_not_provided:direct_semantic_components",
+    "test_repository_not_assessed",
+    "test_suites_unavailable:no_normalized_test_evidence",
+    "workflow_has_no_test_execution:intacct/ia-gwdata-ap",
+    "workflow_has_no_test_execution:intacct/ia-gwdata-contract",
+    "workflow_has_no_test_execution:intacct/ia-gwdata-gl",
+    "workflow_has_no_test_execution:intacct/ia-gwdata-project",
+    "workflow_has_no_test_execution:intacct/ia-restapi-automation-tests",
+    "workflow_metadata_only:intacct/ia-gwdata-ap",
+    "workflow_metadata_only:intacct/ia-gwdata-contract",
+    "workflow_metadata_only:intacct/ia-gwdata-gl",
+    "workflow_metadata_only:intacct/ia-gwdata-project"
+  ],
+  "markdown": "## 🔍 Review Summary\n\n**Type:** Bug Fix | Feature | Refactor | Docs | Chore\n**Scope:** [1-2 sentence description]\n**Risk Level:** Low | Medium | High | Critical\n\n**Evidence identity:** Source repository `[repo]` | Base `[sha]` | Head `[sha]`\n**Assessment boundary:** Repositories assessed `[list]` | Owner evidence `[available/unavailable]` | CI execution `[status]`\n\n---\n\n## 📊 Changes at a Glance\n\n- **Files:** X changed, Y additions, Z deletions\n- **Commits:** N (avg. message quality: good/needs work)\n- **Coverage:** API changes [Y/N] | DB migrations [Y/N] | UI [Y/N]\n\n---\n\n## 🧭 Blast Radius & Use-Case Flows\n\n| Evidence class | Surface | Entity `.ent` file / flow | Status | Evidence |\n|---------------|---------|---------------------------|--------|----------|\n| Confirmed | [API/workflow/database/permission] | `path/to/entity.ent` or flow path | Confirmed | [catalog record/revision] |\n| Candidate | Caller chain | `path/to/caller.cls` | Candidate | [relationship/revision] |\n\n**Explicit gaps:**\n\n- **Source identity:** `intacct/ia-app` base `88831b97966bf918cd08a882d2ac5d2aa4bf21a9`, head `071f786e237c0c92b385a19314f9a804c90ffedc`.\n- **Assessed repositories:** intacct/ia-app.\n- **CI execution:** execution_unavailable.\n- **Ranked impact:** `ia-app` (candidate), `intacct/ia-gwdata-ap` (candidate), `intacct/ia-gwdata-contract` (candidate), `intacct/ia-gwdata-gl` (candidate), `intacct/ia-gwdata-project` (candidate), `intacct/ia-restapi-automation-tests` (candidate).\n- **Coverage assessment:** not_assessed.\n- **Planner lifecycle:** unavailable; 0 retained cycle(s).\n- **Behavior projection:** revision-bound artifact retained.\n**Affected behaviors and interfaces:**\n- `behavior:0fb1098b6305204245d430f8` (partial): Provides location and department hierarchy data used to group ledger output, including recursive parent, child, and path calculations. [source: `app/source/gl/GLLedgerReporter.cls`]\n- `behavior:1e7ff88ebe50c86009b0a5c1` (partial): Instantiates the reporter and merges memorized user preferences with request parameters, including drill-filter and dimension defaults. [source: `app/source/gl/GLLedgerReporter.cls`]\n- `behavior:57fe53265e84cb8a329dc6a3` (partial): Creates report XML by preprocessing, querying, rendering headers, grouping transactions, calculating totals, applying document-column processing, and serializing output. [source: `app/source/gl/GLLedgerReporter.cls`]\n- `behavior:78a210c603a56f7c3729c160` (partial): Builds GL query filters, period and balance-forward data, transaction records, account maps, reporting-book state, and drill-down context. [source: `app/source/gl/GLLedgerReporter.cls`]\n- `behavior:98e95371fbd924c066d129d7` (partial): Transforms queried ledger entries into report rows, optionally adds subtransactions, drill-down metadata, dimensions, and currency information. [source: `app/source/gl/GLLedgerReporter.cls`]\n- `behavior:b1ba10943885b56eb43564df` (partial): Builds the primary and detailed GL transaction queries and populates transaction and subtransaction result state. [source: `app/source/gl/GLLedgerReporter.cls`]\n- `behavior:d6b7ac3dc5715b655c8543fb` (partial): Constructs the GL ledger reporter, normalizes report parameters, initializes localization, authorization, currency, and feature-dependent state. [source: `app/source/gl/GLLedgerReporter.cls`]\n**Repository impact evidence:**\n- `ia-app` (candidate): Step 3 impact outcome [evidence: `contract`]\n- `intacct/ia-gwdata-ap` (candidate): Step 3 impact outcome [evidence: `repository_inventory`]\n- `intacct/ia-gwdata-contract` (candidate): Step 3 impact outcome [evidence: `repository_inventory`]\n- `intacct/ia-gwdata-gl` (candidate): Step 3 impact outcome [evidence: `repository_inventory`]\n- `intacct/ia-gwdata-project` (candidate): Step 3 impact outcome [evidence: `repository_inventory`]\n- `intacct/ia-restapi-automation-tests` (candidate): Step 3 impact outcome [evidence: `repository_inventory`]\n**Coverage and obligations:**\n- `behavior:0fb1098b6305204245d430f8` (candidate): `contract`\n- `behavior:1e7ff88ebe50c86009b0a5c1` (candidate): `contract`\n- `behavior:57fe53265e84cb8a329dc6a3` (candidate): `contract`\n- `behavior:78a210c603a56f7c3729c160` (candidate): `contract`\n- `behavior:98e95371fbd924c066d129d7` (candidate): `contract`\n- `behavior:b1ba10943885b56eb43564df` (candidate): `contract`\n- `behavior:d6b7ac3dc5715b655c8543fb` (candidate): `contract`\n**Executed CI evidence:**\n- No exact CI execution evidence was supplied.\n**Recommended actions:**\n- `request_owner_review` in `ia-app` (candidate): impacted_interface_owner_available [evidence: `contract`]\n- `request_owner_review` in `ia-app` (candidate): impacted_interface_owner_available [evidence: `contract`]\n- `request_owner_review` in `ia-app` (candidate): impacted_interface_owner_available [evidence: `contract`]\n- `request_owner_review` in `ia-app` (candidate): impacted_interface_owner_available [evidence: `contract`]\n- `request_owner_review` in `ia-app` (candidate): impacted_interface_owner_available [evidence: `contract`]\n- `request_owner_review` in `ia-app` (candidate): impacted_interface_owner_available [evidence: `contract`]\n- `request_owner_review` in `ia-app` (candidate): impacted_interface_owner_available [evidence: `contract`]\n- ci_artifact_unavailable:intacct/ia-gwdata-ap\n- ci_artifact_unavailable:intacct/ia-gwdata-contract\n- ci_artifact_unavailable:intacct/ia-gwdata-gl\n- ci_artifact_unavailable:intacct/ia-gwdata-project\n- ci_artifact_unavailable:intacct/ia-restapi-automation-tests\n- ci_evidence_not_provided\n- ci_linkage_unavailable:intacct/ia-gwdata-ap\n- ci_linkage_unavailable:intacct/ia-gwdata-contract\n- ci_linkage_unavailable:intacct/ia-gwdata-gl\n- ci_linkage_unavailable:intacct/ia-gwdata-project\n- ci_linkage_unavailable:intacct/ia-restapi-automation-tests\n- cross_repository_discovery_requires_confirmed_relation_or_bound_ci_evidence\n- intacct/ia-gwdata-ap:ci_linkage_unavailable:target_repository_has_no_source_revision\n- intacct/ia-gwdata-ap:repos/intacct/ia-gwdata-ap/git/trees/3a412ac4d3792b49d9b13acfd27163e55baeae35?recursive=1: response_truncated\n- intacct/ia-gwdata-contract:ci_linkage_unavailable:target_repository_has_no_source_revision\n- intacct/ia-gwdata-contract:repos/intacct/ia-gwdata-contract/git/trees/9e23a432633c6b2a7d84390561a17a364662a823?recursive=1: response_truncated\n- intacct/ia-gwdata-gl:ci_linkage_unavailable:target_repository_has_no_source_revision\n- intacct/ia-gwdata-project:ci_linkage_unavailable:target_repository_has_no_source_revision\n- intacct/ia-restapi-automation-tests:ci_linkage_unavailable:target_repository_has_no_source_revision\n- nexau_planner_unavailable\n- related_pull_requests_not_modelled:revision_pinned_artifact_not_provided\n- repository_inventory_not_provided\n- semantic_index_not_provided:direct_semantic_components\n- test_repository_not_assessed\n- test_suites_unavailable:no_normalized_test_evidence\n- workflow_has_no_test_execution:intacct/ia-gwdata-ap\n- workflow_has_no_test_execution:intacct/ia-gwdata-contract\n- workflow_has_no_test_execution:intacct/ia-gwdata-gl\n- workflow_has_no_test_execution:intacct/ia-gwdata-project\n- workflow_has_no_test_execution:intacct/ia-restapi-automation-tests\n- workflow_metadata_only:intacct/ia-gwdata-ap\n- workflow_metadata_only:intacct/ia-gwdata-contract\n- workflow_metadata_only:intacct/ia-gwdata-gl\n- workflow_metadata_only:intacct/ia-gwdata-project\n\n- [Missing, unavailable, stale, ambiguous, not-modelled, or not-recorded-in-PR evidence]\n\n---\n\n## ✅ Reviewed\n\n| File | Type | Status | Notes |\n|------|------|--------|-------|\n| `path/to/file1.cls` | Logic | ✓ | [brief comment] |\n| `path/to/file2.js` | UI | ⚠ | [specific concern] |\n\n---\n\n## 🧪 Test Coverage & Obligations\n\n| Test repository | Suite / scenario | Coverage status | Required action | Evidence |\n|-----------------|------------------|-----------------|-----------------|----------|\n| `repo/key` | `feature > scenario` | Confirmed / Candidate / Uncovered | Keep / Update / Add / Review | [revision and lines] |\n\n**Coverage gaps:**\n\n- [Exact missing, stale, unavailable, or weak coverage]\n- [Use `not_assessed` when a nominated test repository lacks a confirmed relation and revision-bound test evidence]\n\n---\n\n## 🎯 Findings\n\n### 🔴 Critical\n- **[File:Line]** Exact issue with reproducible impact and fix\n\n### 🟡 Medium Priority\n- **[File:Line]** Pattern/inconsistency; recommend action\n\n### 🟢 Nice-to-Have\n- **[File:Line]** Suggestion for improvement\n\n### ✅ Strengths\n- **[File:Line]** What was done well\n\n---\n\n## 📋 Checklist\n\n- [ ] All changed files reviewed\n- [ ] No dead code or unused functions\n- [ ] Consistency with existing patterns\n- [ ] Documentation/comments adequate\n- [ ] Tests cover new logic (if applicable)\n- [ ] No obvious performance issues\n- [ ] Follows team/language conventions\n\n---\n\n## 🎲 Confidence & Recommendation\n\n**Confidence:** [score or `Not computed`; describe evidence scope, not business risk]\n**Recommendation:** Approve ✓ / Request Changes ⚠ / Comment 💬\n\n**Gaps/Assumptions:**\n- [Explicit unresolved, unavailable, stale, or deferred evidence]\n- [Evidence scope and target revision limitation]\n- [AI guidance files are advisory context and never establish impact, ownership, or coverage]\n\n**Next Reviewer:** @team-compliance (domain experts for e-invoicing logic)\n",
+  "provenance": {
+    "analysis_report_sha256": "e9bb1610d35e86ffded0954b1938461b00f41f432f8d247a43c85316833e5a45",
+    "behavior_impact_sha256": null,
+    "planning_sha256": "78503c135e364839cd613fe92791d12880db04dae1d0b6eca9a3d49cdf841454",
+    "read_only": true,
+    "template": "docs/review/pr-review-template.md"
+  },
+  "review_sha256": "0d1345f9a5a79df546b922b8993489ac6c0207e91a98ecba19b34019f293c2e0",
+  "schema_version": "0.1",
+  "status": "partial"
+}

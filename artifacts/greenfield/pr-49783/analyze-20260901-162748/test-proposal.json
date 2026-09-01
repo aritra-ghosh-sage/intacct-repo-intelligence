@@ -1,0 +1,21 @@
+{
+  "analysis_kind": "greenfield_pr_test_proposal",
+  "findings": [
+    "no remediation met the strong-candidate draft gate"
+  ],
+  "input": {
+    "changed_paths": [
+      "app/source/gl/GLLedgerReporter.cls"
+    ],
+    "source_repository": "intacct/ia-app",
+    "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
+  },
+  "proposals": [],
+  "provenance": {
+    "catalog_mutation": "none",
+    "github_writes": "none",
+    "read_only": true
+  },
+  "schema_version": "0.1",
+  "status": "partial"
+}

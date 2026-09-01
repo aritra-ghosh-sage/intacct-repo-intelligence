@@ -1,0 +1,623 @@
+{
+  "actions": [
+    {
+      "action_id": "8aed6a79c0cf8f6c7ebc23970e85a497d9831f4995436afad694c8df26f7278f",
+      "action_type": "request_owner_review",
+      "compatibility_action_type": "request_owner_review",
+      "completion_condition": "The declared owner reviews the impacted interface or records an explicit disposition.",
+      "draft_eligible": false,
+      "evidence": [
+        {
+          "kind": "contract",
+          "path": "artifacts/greenfield/pr-49783/analyze-20260901-162748/step1.5.contract.json",
+          "repository": "ia-main",
+          "revision": "071f786e237c0c92b385a19314f9a804c90ffedc",
+          "sha256": "56ca58671f0eb9259830bf74e055ddc3bbf075f9e53a7dfc8246b0207c753abe"
+        }
+      ],
+      "evidence_state": "candidate",
+      "rationale": "impacted_interface_owner_available",
+      "scope": {
+        "interface_id": "behavior:0fb1098b6305204245d430f8",
+        "target_revision": null
+      },
+      "target_repository": "ia-app",
+      "target_revision": null
+    },
+    {
+      "action_id": "27304452bf825c8a6f7ee474f5ee73d673c9104a5282e927aa5193a06da5b043",
+      "action_type": "request_owner_review",
+      "compatibility_action_type": "request_owner_review",
+      "completion_condition": "The declared owner reviews the impacted interface or records an explicit disposition.",
+      "draft_eligible": false,
+      "evidence": [
+        {
+          "kind": "contract",
+          "path": "artifacts/greenfield/pr-49783/analyze-20260901-162748/step1.5.contract.json",
+          "repository": "ia-main",
+          "revision": "071f786e237c0c92b385a19314f9a804c90ffedc",
+          "sha256": "56ca58671f0eb9259830bf74e055ddc3bbf075f9e53a7dfc8246b0207c753abe"
+        }
+      ],
+      "evidence_state": "candidate",
+      "rationale": "impacted_interface_owner_available",
+      "scope": {
+        "interface_id": "behavior:1e7ff88ebe50c86009b0a5c1",
+        "target_revision": null
+      },
+      "target_repository": "ia-app",
+      "target_revision": null
+    },
+    {
+      "action_id": "1ee0c0f504a22b8051b25616661213e7fc3f21627e415e16f7125bc3f7b511df",
+      "action_type": "request_owner_review",
+      "compatibility_action_type": "request_owner_review",
+      "completion_condition": "The declared owner reviews the impacted interface or records an explicit disposition.",
+      "draft_eligible": false,
+      "evidence": [
+        {
+          "kind": "contract",
+          "path": "artifacts/greenfield/pr-49783/analyze-20260901-162748/step1.5.contract.json",
+          "repository": "ia-main",
+          "revision": "071f786e237c0c92b385a19314f9a804c90ffedc",
+          "sha256": "56ca58671f0eb9259830bf74e055ddc3bbf075f9e53a7dfc8246b0207c753abe"
+        }
+      ],
+      "evidence_state": "candidate",
+      "rationale": "impacted_interface_owner_available",
+      "scope": {
+        "interface_id": "behavior:57fe53265e84cb8a329dc6a3",
+        "target_revision": null
+      },
+      "target_repository": "ia-app",
+      "target_revision": null
+    },
+    {
+      "action_id": "f2d4aeb4921284467e14766a84a5531d883b9b407f5cad5703052e91947e5f31",
+      "action_type": "request_owner_review",
+      "compatibility_action_type": "request_owner_review",
+      "completion_condition": "The declared owner reviews the impacted interface or records an explicit disposition.",
+      "draft_eligible": false,
+      "evidence": [
+        {
+          "kind": "contract",
+          "path": "artifacts/greenfield/pr-49783/analyze-20260901-162748/step1.5.contract.json",
+          "repository": "ia-main",
+          "revision": "071f786e237c0c92b385a19314f9a804c90ffedc",
+          "sha256": "56ca58671f0eb9259830bf74e055ddc3bbf075f9e53a7dfc8246b0207c753abe"
+        }
+      ],
+      "evidence_state": "candidate",
+      "rationale": "impacted_interface_owner_available",
+      "scope": {
+        "interface_id": "behavior:78a210c603a56f7c3729c160",
+        "target_revision": null
+      },
+      "target_repository": "ia-app",
+      "target_revision": null
+    },
+    {
+      "action_id": "86798905fede2d6a1659523f73dc9b77317cd20b8007da87f52ac65a32ffff77",
+      "action_type": "request_owner_review",
+      "compatibility_action_type": "request_owner_review",
+      "completion_condition": "The declared owner reviews the impacted interface or records an explicit disposition.",
+      "draft_eligible": false,
+      "evidence": [
+        {
+          "kind": "contract",
+          "path": "artifacts/greenfield/pr-49783/analyze-20260901-162748/step1.5.contract.json",
+          "repository": "ia-main",
+          "revision": "071f786e237c0c92b385a19314f9a804c90ffedc",
+          "sha256": "56ca58671f0eb9259830bf74e055ddc3bbf075f9e53a7dfc8246b0207c753abe"
+        }
+      ],
+      "evidence_state": "candidate",
+      "rationale": "impacted_interface_owner_available",
+      "scope": {
+        "interface_id": "behavior:98e95371fbd924c066d129d7",
+        "target_revision": null
+      },
+      "target_repository": "ia-app",
+      "target_revision": null
+    },
+    {
+      "action_id": "9250701de72de7601e1bb742afec3b5b793e73c643cba89667dea7ec7633282f",
+      "action_type": "request_owner_review",
+      "compatibility_action_type": "request_owner_review",
+      "completion_condition": "The declared owner reviews the impacted interface or records an explicit disposition.",
+      "draft_eligible": false,
+      "evidence": [
+        {
+          "kind": "contract",
+          "path": "artifacts/greenfield/pr-49783/analyze-20260901-162748/step1.5.contract.json",
+          "repository": "ia-main",
+          "revision": "071f786e237c0c92b385a19314f9a804c90ffedc",
+          "sha256": "56ca58671f0eb9259830bf74e055ddc3bbf075f9e53a7dfc8246b0207c753abe"
+        }
+      ],
+      "evidence_state": "candidate",
+      "rationale": "impacted_interface_owner_available",
+      "scope": {
+        "interface_id": "behavior:b1ba10943885b56eb43564df",
+        "target_revision": null
+      },
+      "target_repository": "ia-app",
+      "target_revision": null
+    },
+    {
+      "action_id": "1d6995bbfb083c8f67453e0ab612d8076e507311dae1394e44a193cbed327c66",
+      "action_type": "request_owner_review",
+      "compatibility_action_type": "request_owner_review",
+      "completion_condition": "The declared owner reviews the impacted interface or records an explicit disposition.",
+      "draft_eligible": false,
+      "evidence": [
+        {
+          "kind": "contract",
+          "path": "artifacts/greenfield/pr-49783/analyze-20260901-162748/step1.5.contract.json",
+          "repository": "ia-main",
+          "revision": "071f786e237c0c92b385a19314f9a804c90ffedc",
+          "sha256": "56ca58671f0eb9259830bf74e055ddc3bbf075f9e53a7dfc8246b0207c753abe"
+        }
+      ],
+      "evidence_state": "candidate",
+      "rationale": "impacted_interface_owner_available",
+      "scope": {
+        "interface_id": "behavior:d6b7ac3dc5715b655c8543fb",
+        "target_revision": null
+      },
+      "target_repository": "ia-app",
+      "target_revision": null
+    }
+  ],
+  "analysis_kind": "greenfield_analysis_report",
+  "coverage": {},
+  "gaps": [
+    "ci_artifact_unavailable:intacct/ia-gwdata-ap",
+    "ci_artifact_unavailable:intacct/ia-gwdata-contract",
+    "ci_artifact_unavailable:intacct/ia-gwdata-gl",
+    "ci_artifact_unavailable:intacct/ia-gwdata-project",
+    "ci_artifact_unavailable:intacct/ia-restapi-automation-tests",
+    "ci_evidence_not_provided",
+    "ci_linkage_unavailable:intacct/ia-gwdata-ap",
+    "ci_linkage_unavailable:intacct/ia-gwdata-contract",
+    "ci_linkage_unavailable:intacct/ia-gwdata-gl",
+    "ci_linkage_unavailable:intacct/ia-gwdata-project",
+    "ci_linkage_unavailable:intacct/ia-restapi-automation-tests",
+    "intacct/ia-gwdata-ap:ci_linkage_unavailable:target_repository_has_no_source_revision",
+    "intacct/ia-gwdata-ap:repos/intacct/ia-gwdata-ap/git/trees/3a412ac4d3792b49d9b13acfd27163e55baeae35?recursive=1: response_truncated",
+    "intacct/ia-gwdata-contract:ci_linkage_unavailable:target_repository_has_no_source_revision",
+    "intacct/ia-gwdata-contract:repos/intacct/ia-gwdata-contract/git/trees/9e23a432633c6b2a7d84390561a17a364662a823?recursive=1: response_truncated",
+    "intacct/ia-gwdata-gl:ci_linkage_unavailable:target_repository_has_no_source_revision",
+    "intacct/ia-gwdata-project:ci_linkage_unavailable:target_repository_has_no_source_revision",
+    "intacct/ia-restapi-automation-tests:ci_linkage_unavailable:target_repository_has_no_source_revision",
+    "nexau_planner_unavailable",
+    "related_pull_requests_not_modelled:revision_pinned_artifact_not_provided",
+    "repository_inventory_not_provided",
+    "semantic_index_not_provided:direct_semantic_components",
+    "test_suites_unavailable:no_normalized_test_evidence",
+    "workflow_has_no_test_execution:intacct/ia-gwdata-ap",
+    "workflow_has_no_test_execution:intacct/ia-gwdata-contract",
+    "workflow_has_no_test_execution:intacct/ia-gwdata-gl",
+    "workflow_has_no_test_execution:intacct/ia-gwdata-project",
+    "workflow_has_no_test_execution:intacct/ia-restapi-automation-tests",
+    "workflow_metadata_only:intacct/ia-gwdata-ap",
+    "workflow_metadata_only:intacct/ia-gwdata-contract",
+    "workflow_metadata_only:intacct/ia-gwdata-gl",
+    "workflow_metadata_only:intacct/ia-gwdata-project"
+  ],
+  "provenance": {
+    "agent": {
+      "name": "nexau",
+      "reason": "NexAU planner execution failed: Error in agent execution: Error code: 400 - {'error': {'code': 'validation_error', 'message': \"Function tools with reasoning_effort are not supported for gpt-5.6-luna in /v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to 'none'.\", 'param': 'reasoning_effort', 'type': 'invalid_request_error'}}",
+      "status": "unavailable"
+    },
+    "artifacts": {
+      "step2": "67f2f6b3a4d4a36878fc074cb26077517d3c52d6acec390b87ae4171ad5b3958",
+      "step3": "4832a95d212c0ced3fdaa27925ffb28eee2e80062b143526c47cc87c92cdb7a6",
+      "step4": "b3fcfb81497067d94d3e10100fdc117197ed1534761c395ad40060db41f329b3",
+      "step5": "4b5d7715b4dd2c7399863d147083b37aa6cf5bc328440a9e105fa60bc4702db2"
+    },
+    "candidate_repositories": [
+      "intacct/ia-gwdata-gl",
+      "intacct/ia-restapi-automation-tests",
+      "intacct/ia-gwdata-ap",
+      "intacct/ia-gwdata-contract",
+      "intacct/ia-gwdata-project"
+    ],
+    "candidate_revisions": {
+      "intacct/ia-gwdata-ap": null,
+      "intacct/ia-gwdata-contract": null,
+      "intacct/ia-gwdata-gl": "b159255de66a41e368fd67263f72cbc46761a537",
+      "intacct/ia-gwdata-project": null,
+      "intacct/ia-restapi-automation-tests": "1aeab2199196429ad8172fbc9d9c8b8450491c3a"
+    },
+    "catalog_mutation": "none",
+    "github_writes": "none",
+    "planning": {
+      "planning_sha256": "78503c135e364839cd613fe92791d12880db04dae1d0b6eca9a3d49cdf841454",
+      "status": "unavailable"
+    },
+    "read_only": true
+  },
+  "recommendation": "Review deterministic evidence; NexAU investigation is unavailable.",
+  "report_sha256": "e9bb1610d35e86ffded0954b1938461b00f41f432f8d247a43c85316833e5a45",
+  "repository_impacts": [
+    {
+      "evidence": [
+        {
+          "kind": "contract",
+          "path": "artifacts/greenfield/pr-49783/analyze-20260901-162748/step1.5.contract.json",
+          "repository": "ia-main",
+          "revision": "071f786e237c0c92b385a19314f9a804c90ffedc",
+          "sha256": "56ca58671f0eb9259830bf74e055ddc3bbf075f9e53a7dfc8246b0207c753abe"
+        }
+      ],
+      "evidence_state": "candidate",
+      "rank": 1,
+      "rationale": "Step 3 impact outcome",
+      "repository": "ia-app"
+    },
+    {
+      "evidence": [
+        {
+          "artifact_status": "not_linked_to_source_revision",
+          "ci_linkage_status": "unavailable",
+          "inspected_revision": "3a412ac4d3792b49d9b13acfd27163e55baeae35",
+          "kind": "repository_inventory",
+          "path": "<in-memory>",
+          "repository": "intacct/ia-gwdata-ap",
+          "response_sha256": "26fe98be29f7b74fc33d189e658c8502576a0911dc380f249dd90bba58e85217",
+          "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
+        }
+      ],
+      "evidence_state": "candidate",
+      "rank": 2,
+      "rationale": "Step 3 impact outcome",
+      "repository": "intacct/ia-gwdata-ap"
+    },
+    {
+      "evidence": [
+        {
+          "artifact_status": "not_linked_to_source_revision",
+          "ci_linkage_status": "unavailable",
+          "inspected_revision": "9e23a432633c6b2a7d84390561a17a364662a823",
+          "kind": "repository_inventory",
+          "path": "<in-memory>",
+          "repository": "intacct/ia-gwdata-contract",
+          "response_sha256": "a792544dcde5bc4f8c990a4696d1cc76ce295815b150b3301decc80e307084c0",
+          "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
+        }
+      ],
+      "evidence_state": "candidate",
+      "rank": 3,
+      "rationale": "Step 3 impact outcome",
+      "repository": "intacct/ia-gwdata-contract"
+    },
+    {
+      "evidence": [
+        {
+          "artifact_status": "empty",
+          "ci_linkage_status": "unavailable",
+          "inspected_revision": "b159255de66a41e368fd67263f72cbc46761a537",
+          "kind": "repository_inventory",
+          "path": "<in-memory>",
+          "repository": "intacct/ia-gwdata-gl",
+          "response_sha256": "9446f4a8657fe9371727bfc7820f25e9b6162e6b78fe6797d8820c856dfe9f16",
+          "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
+        }
+      ],
+      "evidence_state": "candidate",
+      "rank": 4,
+      "rationale": "Step 3 impact outcome",
+      "repository": "intacct/ia-gwdata-gl"
+    },
+    {
+      "evidence": [
+        {
+          "artifact_status": "not_linked_to_source_revision",
+          "ci_linkage_status": "unavailable",
+          "inspected_revision": "be1a46659ca51647983cd5f9eea472c27338f08a",
+          "kind": "repository_inventory",
+          "path": "<in-memory>",
+          "repository": "intacct/ia-gwdata-project",
+          "response_sha256": "7bfad43d8764ffeecc5e313150d24afd28e1de9609f981c6f6daa275aa53a847",
+          "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
+        }
+      ],
+      "evidence_state": "candidate",
+      "rank": 5,
+      "rationale": "Step 3 impact outcome",
+      "repository": "intacct/ia-gwdata-project"
+    },
+    {
+      "evidence": [
+        {
+          "artifact_status": "empty",
+          "ci_linkage_status": "unavailable",
+          "inspected_revision": "1aeab2199196429ad8172fbc9d9c8b8450491c3a",
+          "kind": "repository_inventory",
+          "path": "<in-memory>",
+          "repository": "intacct/ia-restapi-automation-tests",
+          "response_sha256": "0b505b30fd9eeade01255bf5cdde702a35b81f453c532f8bc3bb7a4e288670c9",
+          "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
+        }
+      ],
+      "evidence_state": "candidate",
+      "rank": 6,
+      "rationale": "Step 3 impact outcome",
+      "repository": "intacct/ia-restapi-automation-tests"
+    }
+  ],
+  "run_context_sha256": "fead96f78eb57eba7ec8ed11f8d17cb57bf79bca8690666cd587adbe991ca7fa",
+  "schema_version": "0.1",
+  "source": {
+    "base_revision": "88831b97966bf918cd08a882d2ac5d2aa4bf21a9",
+    "changed_paths": [
+      "app/source/gl/GLLedgerReporter.cls"
+    ],
+    "head_revision": "071f786e237c0c92b385a19314f9a804c90ffedc",
+    "local_root": "/Users/aritra.ghosh/projects/main",
+    "pr_number": 49783,
+    "repo_key": "ia-main",
+    "repository": "intacct/ia-app"
+  },
+  "status": "partial",
+  "tool_calls": [
+    {
+      "arguments": {},
+      "result": {
+        "repositories": [
+          {
+            "discovery_eligible": true,
+            "inspected_revision": "b159255de66a41e368fd67263f72cbc46761a537",
+            "local_root": "/Users/aritra.ghosh/projects/ia-gwdata-gl",
+            "priority": "explicit_contract",
+            "relationship_types": [
+              "validates_gateway_behavior_of"
+            ],
+            "repo_key": "ia-gwdata-gl",
+            "repository": "intacct/ia-gwdata-gl",
+            "test_formats": [
+              "csv",
+              "xml"
+            ],
+            "test_roots": [
+              "testdefinitions",
+              "testscripts"
+            ],
+            "tracked_branch": "main"
+          },
+          {
+            "discovery_eligible": true,
+            "inspected_revision": "1aeab2199196429ad8172fbc9d9c8b8450491c3a",
+            "local_root": "/Users/aritra.ghosh/projects/ia-restapi-automation-tests",
+            "priority": "explicit_contract",
+            "relationship_types": [
+              "tests_rest_of"
+            ],
+            "repo_key": "ia-restapi-automation-tests",
+            "repository": "intacct/ia-restapi-automation-tests",
+            "test_formats": [
+              "gherkin"
+            ],
+            "test_roots": [
+              "features"
+            ],
+            "tracked_branch": "main"
+          },
+          {
+            "discovery_eligible": true,
+            "inspected_revision": null,
+            "local_root": "/Users/aritra.ghosh/projects/ia-gwdata-ap",
+            "priority": "discovery_screen",
+            "relationship_types": [],
+            "repo_key": "ia-gwdata-ap",
+            "repository": "intacct/ia-gwdata-ap",
+            "test_formats": [
+              "csv",
+              "xml"
+            ],
+            "test_roots": [
+              "testdefinitions",
+              "testscripts"
+            ],
+            "tracked_branch": "main"
+          },
+          {
+            "discovery_eligible": true,
+            "inspected_revision": null,
+            "local_root": "/Users/aritra.ghosh/projects/ia-gwdata-contract",
+            "priority": "discovery_screen",
+            "relationship_types": [],
+            "repo_key": "ia-gwdata-contract",
+            "repository": "intacct/ia-gwdata-contract",
+            "test_formats": [
+              "csv",
+              "xml"
+            ],
+            "test_roots": [
+              "testdefinitions",
+              "testscripts"
+            ],
+            "tracked_branch": "main"
+          },
+          {
+            "discovery_eligible": true,
+            "inspected_revision": null,
+            "local_root": "/Users/aritra.ghosh/projects/ia-gwdata-project",
+            "priority": "discovery_screen",
+            "relationship_types": [],
+            "repo_key": "ia-gwdata-project",
+            "repository": "intacct/ia-gwdata-project",
+            "test_formats": [
+              "csv",
+              "xml"
+            ],
+            "test_roots": [
+              "testdefinitions",
+              "testscripts"
+            ],
+            "tracked_branch": "main"
+          }
+        ],
+        "status": "available"
+      },
+      "result_sha256": "c28b235d336ce21f7aa8ef296b41fdd82cdf50678b016e91ca9aa091281e2009",
+      "status": "available",
+      "tool": "list_candidate_repositories",
+      "tool_call_id": "295fce635d8695258eae9e1e660e0a24ba03ad1b91083461d8c0eb2a761b4d32"
+    },
+    {
+      "arguments": {
+        "repository": "intacct/ia-gwdata-gl"
+      },
+      "result": {
+        "repository": {
+          "discovery_eligible": true,
+          "inspected_revision": "b159255de66a41e368fd67263f72cbc46761a537",
+          "local_root": "/Users/aritra.ghosh/projects/ia-gwdata-gl",
+          "priority": "explicit_contract",
+          "relationship_types": [
+            "validates_gateway_behavior_of"
+          ],
+          "repo_key": "ia-gwdata-gl",
+          "repository": "intacct/ia-gwdata-gl",
+          "test_formats": [
+            "csv",
+            "xml"
+          ],
+          "test_roots": [
+            "testdefinitions",
+            "testscripts"
+          ],
+          "tracked_branch": "main"
+        },
+        "status": "available"
+      },
+      "result_sha256": "a62f94f1599dd180c86db7367019de94d789cba1573eb55b2644f5ae02d6a1c8",
+      "status": "available",
+      "tool": "repository_metadata",
+      "tool_call_id": "f36803e5c5eec8c2f91ad22cd08548afcfd78f89f0c6774e6e69b8c69bb56c73"
+    },
+    {
+      "arguments": {
+        "repository": "intacct/ia-restapi-automation-tests"
+      },
+      "result": {
+        "repository": {
+          "discovery_eligible": true,
+          "inspected_revision": "1aeab2199196429ad8172fbc9d9c8b8450491c3a",
+          "local_root": "/Users/aritra.ghosh/projects/ia-restapi-automation-tests",
+          "priority": "explicit_contract",
+          "relationship_types": [
+            "tests_rest_of"
+          ],
+          "repo_key": "ia-restapi-automation-tests",
+          "repository": "intacct/ia-restapi-automation-tests",
+          "test_formats": [
+            "gherkin"
+          ],
+          "test_roots": [
+            "features"
+          ],
+          "tracked_branch": "main"
+        },
+        "status": "available"
+      },
+      "result_sha256": "a25fd2fd29fb30459a7b5ef89cb73a93b8ecb37ff906f041b0650dab639de738",
+      "status": "available",
+      "tool": "repository_metadata",
+      "tool_call_id": "1a6265f3a4ed136691a24967d34237e724d856de40994fcf6a9385d243b34805"
+    },
+    {
+      "arguments": {
+        "repository": "intacct/ia-gwdata-ap"
+      },
+      "result": {
+        "repository": {
+          "discovery_eligible": true,
+          "inspected_revision": null,
+          "local_root": "/Users/aritra.ghosh/projects/ia-gwdata-ap",
+          "priority": "discovery_screen",
+          "relationship_types": [],
+          "repo_key": "ia-gwdata-ap",
+          "repository": "intacct/ia-gwdata-ap",
+          "test_formats": [
+            "csv",
+            "xml"
+          ],
+          "test_roots": [
+            "testdefinitions",
+            "testscripts"
+          ],
+          "tracked_branch": "main"
+        },
+        "status": "available"
+      },
+      "result_sha256": "742de31548e2684dbd4bbabc61290c5d1663010014773b92f88199151a865d95",
+      "status": "available",
+      "tool": "repository_metadata",
+      "tool_call_id": "084aafdcb7fa617dd3d4b1a8cca2d0d723da2e5b46ea6e9635d721114e6f14d6"
+    },
+    {
+      "arguments": {
+        "repository": "intacct/ia-gwdata-contract"
+      },
+      "result": {
+        "repository": {
+          "discovery_eligible": true,
+          "inspected_revision": null,
+          "local_root": "/Users/aritra.ghosh/projects/ia-gwdata-contract",
+          "priority": "discovery_screen",
+          "relationship_types": [],
+          "repo_key": "ia-gwdata-contract",
+          "repository": "intacct/ia-gwdata-contract",
+          "test_formats": [
+            "csv",
+            "xml"
+          ],
+          "test_roots": [
+            "testdefinitions",
+            "testscripts"
+          ],
+          "tracked_branch": "main"
+        },
+        "status": "available"
+      },
+      "result_sha256": "9c8242418b70125784f4c8e869b2f792d830c8cb705c6363ceb31d2472294c5e",
+      "status": "available",
+      "tool": "repository_metadata",
+      "tool_call_id": "88f94ec18f4bfd435779fafbd903c323af73ffcf5d7b39da3d2ccadde06d4515"
+    },
+    {
+      "arguments": {
+        "repository": "intacct/ia-gwdata-project"
+      },
+      "result": {
+        "repository": {
+          "discovery_eligible": true,
+          "inspected_revision": null,
+          "local_root": "/Users/aritra.ghosh/projects/ia-gwdata-project",
+          "priority": "discovery_screen",
+          "relationship_types": [],
+          "repo_key": "ia-gwdata-project",
+          "repository": "intacct/ia-gwdata-project",
+          "test_formats": [
+            "csv",
+            "xml"
+          ],
+          "test_roots": [
+            "testdefinitions",
+            "testscripts"
+          ],
+          "tracked_branch": "main"
+        },
+        "status": "available"
+      },
+      "result_sha256": "757879c3d502820a0276fe66d9c661c0b1b69358460dda7e467a01bf1d328bc6",
+      "status": "available",
+      "tool": "repository_metadata",
+      "tool_call_id": "ab098c2c48c1615c770f03a278b998cbcd96b4dcf16538d16f6b5aec45328cc2"
+    }
+  ]
+}

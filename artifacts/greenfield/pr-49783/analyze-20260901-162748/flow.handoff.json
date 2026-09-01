@@ -233,7 +233,291 @@
         }
       },
       "status": "complete"
+    },
+    {
+      "inputs": {
+        "run_context": {
+          "path": "run-context.json",
+          "sha256": "06b042919046a103463e6010f6ebb71c7d0f559fa6bf64505af9ebcbd00099ad"
+        },
+        "step2": {
+          "path": "step2.json",
+          "sha256": "e8eda340e5a29a68873fc2185a4523bb44effdb5dc46008ba51c3f5acb0b4381"
+        },
+        "step3": {
+          "path": "step3.json",
+          "sha256": "8d438f56f1b2e9b9676eae6518f98623ff6ae95de2bf1c02a5e62907d6dd5454"
+        },
+        "step4": {
+          "path": "step4.json",
+          "sha256": "f49e52e307c74d8e199487f70df1d08c78fd2a3997ab309ddcfd21b9dd0f387a"
+        },
+        "step5": {
+          "path": "step5.json",
+          "sha256": "f99b15945ebe9ccfe5292edf29302b71a41a2f19131e6109a032e356125ccf40"
+        }
+      },
+      "name": "nexau_planning",
+      "outputs": {
+        "planning_report": {
+          "path": "planning-report.json",
+          "sha256": "aaecb88faa4ffbc0fbf7c2396afc31fef038aaab8cd68e8c0760c706033737df"
+        }
+      },
+      "status": "complete"
+    },
+    {
+      "inputs": {
+        "run_context": {
+          "path": "run-context.json",
+          "sha256": "06b042919046a103463e6010f6ebb71c7d0f559fa6bf64505af9ebcbd00099ad"
+        },
+        "step2": {
+          "path": "step2.json",
+          "sha256": "e8eda340e5a29a68873fc2185a4523bb44effdb5dc46008ba51c3f5acb0b4381"
+        },
+        "step3": {
+          "path": "step3.json",
+          "sha256": "8d438f56f1b2e9b9676eae6518f98623ff6ae95de2bf1c02a5e62907d6dd5454"
+        },
+        "step4": {
+          "path": "step4.json",
+          "sha256": "f49e52e307c74d8e199487f70df1d08c78fd2a3997ab309ddcfd21b9dd0f387a"
+        },
+        "step5": {
+          "path": "step5.json",
+          "sha256": "f99b15945ebe9ccfe5292edf29302b71a41a2f19131e6109a032e356125ccf40"
+        }
+      },
+      "name": "analyze",
+      "outputs": {
+        "analysis_report": {
+          "path": "analysis-report.json",
+          "sha256": "898b580c71cc46a7ed34b7e9d10098b57fdf31a50a6710cbec7de9f83e70bc30"
+        },
+        "planning_report": {
+          "path": "planning-report.json",
+          "sha256": "aaecb88faa4ffbc0fbf7c2396afc31fef038aaab8cd68e8c0760c706033737df"
+        }
+      },
+      "status": "complete"
+    },
+    {
+      "inputs": {
+        "contract": {
+          "path": "step1.5.contract.json",
+          "sha256": "56ca58671f0eb9259830bf74e055ddc3bbf075f9e53a7dfc8246b0207c753abe"
+        },
+        "step2": {
+          "path": "step2.json",
+          "sha256": "e8eda340e5a29a68873fc2185a4523bb44effdb5dc46008ba51c3f5acb0b4381"
+        },
+        "step3": {
+          "path": "step3.json",
+          "sha256": "8d438f56f1b2e9b9676eae6518f98623ff6ae95de2bf1c02a5e62907d6dd5454"
+        },
+        "step4": {
+          "path": "step4.json",
+          "sha256": "f49e52e307c74d8e199487f70df1d08c78fd2a3997ab309ddcfd21b9dd0f387a"
+        },
+        "step5": {
+          "path": "step5.json",
+          "sha256": "f99b15945ebe9ccfe5292edf29302b71a41a2f19131e6109a032e356125ccf40"
+        }
+      },
+      "name": "behavior_impact_report",
+      "outputs": {
+        "behavior_impact_report": {
+          "path": "behavior-impact-report.json",
+          "sha256": "9f9d1ba922e984af06a7f79002e4a076b03b7b96975eef49dc289dbc555eb117"
+        },
+        "markdown": {
+          "path": "behavior-impact-report.md",
+          "sha256": "295ea92efc6ac9cfe2a3be97aaa7fa5183379adb4339d29b17f0f9a9e11f1422"
+        }
+      },
+      "status": "complete"
+    },
+    {
+      "inputs": {
+        "discovery": {
+          "path": "impact-discovery.json",
+          "sha256": "2cbe9bad324eaff318531dfcd6ccbd1fdd5460646d0e7e85030e47e4bdee0625"
+        },
+        "step4": {
+          "path": "step4.json",
+          "sha256": "f49e52e307c74d8e199487f70df1d08c78fd2a3997ab309ddcfd21b9dd0f387a"
+        }
+      },
+      "name": "test_assessment",
+      "outputs": {
+        "assessment": {
+          "path": "test-assessment.json",
+          "sha256": "f04c8d297a8f325e639cf94d91cba8bf5aeb8926cfbd1a78ce6b0352b6a0bb4c"
+        }
+      },
+      "status": "complete"
+    },
+    {
+      "inputs": {
+        "step1": {
+          "path": "step1.json",
+          "sha256": "132d3e6646efed59f17045c777dbee14dade3eac55a80230ae87120bbde91bc6"
+        },
+        "step2": {
+          "path": "step2.json",
+          "sha256": "e8eda340e5a29a68873fc2185a4523bb44effdb5dc46008ba51c3f5acb0b4381"
+        },
+        "step3": {
+          "path": "step3.json",
+          "sha256": "8d438f56f1b2e9b9676eae6518f98623ff6ae95de2bf1c02a5e62907d6dd5454"
+        },
+        "step4": {
+          "path": "step4.json",
+          "sha256": "f49e52e307c74d8e199487f70df1d08c78fd2a3997ab309ddcfd21b9dd0f387a"
+        },
+        "step5": {
+          "path": "step5.json",
+          "sha256": "f99b15945ebe9ccfe5292edf29302b71a41a2f19131e6109a032e356125ccf40"
+        }
+      },
+      "name": "test_proposal",
+      "outputs": {
+        "test_proposal": {
+          "path": "test-proposal.json",
+          "sha256": "7d5ee6136d24da34783db2aa8db91a2608fd600f09339af070d5bcc20912d174"
+        }
+      },
+      "status": "complete"
+    },
+    {
+      "inputs": {
+        "analysis_report": {
+          "path": "analysis-report.json",
+          "sha256": "898b580c71cc46a7ed34b7e9d10098b57fdf31a50a6710cbec7de9f83e70bc30"
+        },
+        "assessment": {
+          "path": "test-assessment.json",
+          "sha256": "f04c8d297a8f325e639cf94d91cba8bf5aeb8926cfbd1a78ce6b0352b6a0bb4c"
+        },
+        "behavior_impact_report": {
+          "path": "behavior-impact-report.json",
+          "sha256": "9f9d1ba922e984af06a7f79002e4a076b03b7b96975eef49dc289dbc555eb117"
+        },
+        "context": {
+          "path": "repository-context.json",
+          "sha256": "cd762c7aa3e6ee06fb277568e704befe6a0d9669a8800b88202c4930535c35d9"
+        },
+        "discovery": {
+          "path": "impact-discovery.json",
+          "sha256": "2cbe9bad324eaff318531dfcd6ccbd1fdd5460646d0e7e85030e47e4bdee0625"
+        },
+        "planning_report": {
+          "path": "planning-report.json",
+          "sha256": "aaecb88faa4ffbc0fbf7c2396afc31fef038aaab8cd68e8c0760c706033737df"
+        },
+        "request": {
+          "path": "pr-analysis.request.json",
+          "sha256": "37d2c33384fa2f4def063eebff5c897b0ebcda0d31699457f260e0c5adb99a12"
+        }
+      },
+      "name": "pr_review",
+      "outputs": {
+        "markdown": {
+          "path": "pr-review.md",
+          "sha256": "22631175f2d5396df2acfcbd4843a0f5302d4c49730a5b3f39aba47789d90f61"
+        },
+        "review": {
+          "path": "pr-review.json",
+          "sha256": "9dbb4ef1e286c11e34ac29dc5879cb27a0c64076d2eb58c873ccc144b24baec8"
+        }
+      },
+      "status": "complete"
+    },
+    {
+      "inputs": {
+        "pr_review": {
+          "path": "pr-review.json",
+          "sha256": "9dbb4ef1e286c11e34ac29dc5879cb27a0c64076d2eb58c873ccc144b24baec8"
+        },
+        "step3": {
+          "path": "step3.json",
+          "sha256": "8d438f56f1b2e9b9676eae6518f98623ff6ae95de2bf1c02a5e62907d6dd5454"
+        },
+        "step4": {
+          "path": "step4.json",
+          "sha256": "f49e52e307c74d8e199487f70df1d08c78fd2a3997ab309ddcfd21b9dd0f387a"
+        },
+        "step5": {
+          "path": "step5.json",
+          "sha256": "f99b15945ebe9ccfe5292edf29302b71a41a2f19131e6109a032e356125ccf40"
+        },
+        "test_proposal": {
+          "path": "test-proposal.json",
+          "sha256": "7d5ee6136d24da34783db2aa8db91a2608fd600f09339af070d5bcc20912d174"
+        }
+      },
+      "name": "step6_handoff",
+      "outputs": {
+        "step6_handoff": {
+          "path": "step6.handoff.json",
+          "sha256": "335181e1c7f61252adb81330ac2bb7a153ca6360fd32ee0c6fd6a26671795963"
+        }
+      },
+      "status": "complete"
+    },
+    {
+      "inputs": {
+        "step6": {
+          "path": "step6.handoff.json",
+          "sha256": "335181e1c7f61252adb81330ac2bb7a153ca6360fd32ee0c6fd6a26671795963"
+        }
+      },
+      "name": "step7_handoff",
+      "outputs": {
+        "handoff": {
+          "path": "step7.handoff.json",
+          "sha256": "ca06ace0a57e6d92f309ffeb85051c852ff2b126184bb181d61a48fb3443a0a8"
+        }
+      },
+      "status": "complete"
+    },
+    {
+      "inputs": {
+        "step6": {
+          "path": "step6.handoff.json",
+          "sha256": "335181e1c7f61252adb81330ac2bb7a153ca6360fd32ee0c6fd6a26671795963"
+        }
+      },
+      "name": "step8_handoff",
+      "outputs": {
+        "handoff": {
+          "path": "step8.handoff.json",
+          "sha256": "ae7713e837e92b85b76f6260bc28b5d20d5f36a6d6ecf9f275cfd57a847eb6dc"
+        }
+      },
+      "status": "complete"
+    },
+    {
+      "inputs": {
+        "analysis_report": {
+          "path": "analysis-report.json",
+          "sha256": "898b580c71cc46a7ed34b7e9d10098b57fdf31a50a6710cbec7de9f83e70bc30"
+        },
+        "pr_review": {
+          "path": "pr-review.json",
+          "sha256": "9dbb4ef1e286c11e34ac29dc5879cb27a0c64076d2eb58c873ccc144b24baec8"
+        }
+      },
+      "name": "publish",
+      "outputs": {
+        "publication": {
+          "path": "publication.json",
+          "sha256": "d9388c4a599e69ebabf2643daf87d70f715cbe920391e47f5330521b1b3231bd"
+        }
+      },
+      "status": "complete"
     }
   ],
-  "status": "running"
+  "status": "complete"
 }
