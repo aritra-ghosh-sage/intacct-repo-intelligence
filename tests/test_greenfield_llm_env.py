@@ -31,6 +31,7 @@ def _restore_greenfield_env() -> None:
         "AWS_PROFILE",
         "AWS_REGION",
         "AWS_SESSION_TOKEN",
+        "STRANDS_MODEL",
         "LLM_API_KEY",
         "LLM_MODEL",
         "LLM_BASE_URL",
@@ -211,6 +212,26 @@ def test_llm_model_resolution_fails_when_unconfigured(monkeypatch) -> None:
             strands_config=StrandsRuntimeConfig(),
             planner_config={},
         )
+
+
+def test_stage_models_use_distinct_strands_and_nexau_identifiers(monkeypatch) -> None:
+    monkeypatch.setenv("STRANDS_MODEL", "us.openai.gpt-5.6-luna")
+    monkeypatch.setenv("LLM_MODEL", "openai.gpt-5.6-luna")
+
+    strands_model, nexau_model = run_greenfield_strands._resolve_stage_models(
+        StrandsRuntimeConfig()
+    )
+
+    assert strands_model == "us.openai.gpt-5.6-luna"
+    assert nexau_model == "openai.gpt-5.6-luna"
+
+
+def test_stage_models_reject_a_mantle_gpt56_id_for_strands(monkeypatch) -> None:
+    monkeypatch.delenv("STRANDS_MODEL", raising=False)
+    monkeypatch.setenv("LLM_MODEL", "openai.gpt-5.6-luna")
+
+    with pytest.raises(ValueError, match="Bedrock ConverseStream"):
+        run_greenfield_strands._resolve_stage_models(StrandsRuntimeConfig())
 
 
 def test_capability_preflight_records_e2b_as_optional(monkeypatch, tmp_path: Path) -> None:

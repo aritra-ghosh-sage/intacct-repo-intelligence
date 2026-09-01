@@ -347,6 +347,14 @@ def validate_run_context(value: Any) -> list[str]:
                 errors.append("execution.planner_mode is invalid")
             if "model" in execution and not isinstance(execution["model"], str):
                 errors.append("execution.model must be a string")
+            if "strands_model" in execution and not isinstance(
+                execution["strands_model"], str
+            ):
+                errors.append("execution.strands_model must be a string")
+            if "nexau_model" in execution and not isinstance(
+                execution["nexau_model"], str
+            ):
+                errors.append("execution.nexau_model must be a string")
             if "base_url" in execution and not isinstance(execution["base_url"], str):
                 errors.append("execution.base_url must be a string")
     digest = value.get("context_sha256")

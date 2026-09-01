@@ -1,0 +1,141 @@
+{
+  "analysis_kind": "greenfield_run_context",
+  "candidate_repositories": [
+    {
+      "discovery_eligible": true,
+      "inspected_revision": "b159255de66a41e368fd67263f72cbc46761a537",
+      "local_root": "/Users/aritra.ghosh/projects/ia-gwdata-gl",
+      "priority": "explicit_contract",
+      "relationship_types": [
+        "validates_gateway_behavior_of"
+      ],
+      "repo_key": "ia-gwdata-gl",
+      "repository": "intacct/ia-gwdata-gl",
+      "test_formats": [
+        "csv",
+        "xml"
+      ],
+      "test_roots": [
+        "testdefinitions",
+        "testscripts"
+      ],
+      "tracked_branch": "main"
+    },
+    {
+      "discovery_eligible": true,
+      "inspected_revision": "1aeab2199196429ad8172fbc9d9c8b8450491c3a",
+      "local_root": "/Users/aritra.ghosh/projects/ia-restapi-automation-tests",
+      "priority": "explicit_contract",
+      "relationship_types": [
+        "tests_rest_of"
+      ],
+      "repo_key": "ia-restapi-automation-tests",
+      "repository": "intacct/ia-restapi-automation-tests",
+      "test_formats": [
+        "gherkin"
+      ],
+      "test_roots": [
+        "features"
+      ],
+      "tracked_branch": "main"
+    },
+    {
+      "discovery_eligible": true,
+      "inspected_revision": null,
+      "local_root": "/Users/aritra.ghosh/projects/ia-gwdata-ap",
+      "priority": "discovery_screen",
+      "relationship_types": [],
+      "repo_key": "ia-gwdata-ap",
+      "repository": "intacct/ia-gwdata-ap",
+      "test_formats": [
+        "csv",
+        "xml"
+      ],
+      "test_roots": [
+        "testdefinitions",
+        "testscripts"
+      ],
+      "tracked_branch": "main"
+    },
+    {
+      "discovery_eligible": true,
+      "inspected_revision": null,
+      "local_root": "/Users/aritra.ghosh/projects/ia-gwdata-contract",
+      "priority": "discovery_screen",
+      "relationship_types": [],
+      "repo_key": "ia-gwdata-contract",
+      "repository": "intacct/ia-gwdata-contract",
+      "test_formats": [
+        "csv",
+        "xml"
+      ],
+      "test_roots": [
+        "testdefinitions",
+        "testscripts"
+      ],
+      "tracked_branch": "main"
+    },
+    {
+      "discovery_eligible": true,
+      "inspected_revision": null,
+      "local_root": "/Users/aritra.ghosh/projects/ia-gwdata-project",
+      "priority": "discovery_screen",
+      "relationship_types": [],
+      "repo_key": "ia-gwdata-project",
+      "repository": "intacct/ia-gwdata-project",
+      "test_formats": [
+        "csv",
+        "xml"
+      ],
+      "test_roots": [
+        "testdefinitions",
+        "testscripts"
+      ],
+      "tracked_branch": "main"
+    }
+  ],
+  "context_sha256": "d00f337f4d015d5a03d8aefdc0f6964a9131f1cdda356082469f1a12a6eaca77",
+  "evidence_artifacts": [],
+  "execution": {
+    "base_url": "https://bedrock-mantle.us-west-2.api.aws/openai/v1",
+    "dry_run": true,
+    "model": "us.openai.gpt-5.6-luna",
+    "nexau_model": "openai.gpt-5.6-luna",
+    "planner_mode": "default",
+    "strands_model": "us.openai.gpt-5.6-luna"
+  },
+  "manifest": {
+    "path": "/Users/aritra.ghosh/projects/intacct-repo-intelligence/config/workspace_repos.yaml",
+    "sha256": "21f0f828bdabd2c2194b0f0d8e302b6c36664d136962f3d27a6bc0ee9a0e7cad"
+  },
+  "provenance": {
+    "catalog_mutation": "none",
+    "github_writes": "none",
+    "request_sha256": "36588757cf8480fce189ead7645d6617ef39a420bf267cc2e67535844e9d8db3",
+    "step1_sha256": "ae388a693ab70b9abed359ec97ed8962f6bf4778f9acbb7a68da83858d1d4f82"
+  },
+  "repository_handbooks": [],
+  "schema_version": "0.1",
+  "source": {
+    "base_revision": "88831b97966bf918cd08a882d2ac5d2aa4bf21a9",
+    "changed_paths": [
+      "app/source/gl/GLLedgerReporter.cls"
+    ],
+    "head_revision": "071f786e237c0c92b385a19314f9a804c90ffedc",
+    "local_root": "/Users/aritra.ghosh/projects/main",
+    "pr_number": 49783,
+    "repo_key": "ia-main",
+    "repository": "intacct/ia-app"
+  },
+  "tool_policy": {
+    "limits": {
+      "max_file_bytes": 500000,
+      "max_files": 40,
+      "max_search_results": 50,
+      "max_tool_calls": 80
+    },
+    "network_access": "none",
+    "read_only": true,
+    "revision_bound": true
+  }
+}

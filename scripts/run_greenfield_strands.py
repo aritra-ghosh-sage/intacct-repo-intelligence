@@ -242,13 +242,49 @@ def _resolve_llm_runtime(
     return model, base_url
 
 
+def _resolve_stage_models(strands_config: Any) -> tuple[str, str]:
+    """Resolve the native Strands and OpenAI-compatible NexAU model IDs.
+
+    Strands uses Bedrock ConverseStream, while NexAU uses an OpenAI-compatible
+    Chat Completions endpoint.  GPT-5.6 uses different identifiers for those
+    APIs, so a single shared LLM_MODEL cannot safely represent both runtimes.
+    """
+
+    nexau_model = (os.environ.get("LLM_MODEL") or "").strip()
+    strands_model = (
+        strands_config.model or os.environ.get("STRANDS_MODEL") or nexau_model
+    ).strip()
+    if not strands_model:
+        raise ValueError(
+            "Greenfield Strands model is not configured; set STRANDS_MODEL or "
+            "model in the Strands config"
+        )
+    if strands_model.startswith("openai.gpt-5.6-"):
+        raise ValueError(
+            "Greenfield Strands uses Bedrock ConverseStream and cannot use the "
+            f"Mantle model ID {strands_model!r}; set STRANDS_MODEL to the "
+            "corresponding Bedrock inference-profile ID (for example, "
+            "us.openai.gpt-5.6-luna) and retain LLM_MODEL for NexAU."
+        )
+    return strands_model, nexau_model
+
+
 def _execution_context(
-    *, dry_run: bool, planner_mode: str, model: str, base_url: str | None
+    *,
+    dry_run: bool,
+    planner_mode: str,
+    strands_model: str,
+    nexau_model: str,
+    base_url: str | None,
 ) -> dict[str, Any]:
     context: dict[str, Any] = {
         "dry_run": dry_run,
         "planner_mode": planner_mode,
-        "model": model,
+        # Retain model for compatibility with existing immutable bundles. New
+        # bundles make the provider boundary explicit below.
+        "model": strands_model,
+        "strands_model": strands_model,
+        "nexau_model": nexau_model,
     }
     if base_url is not None:
         context["base_url"] = base_url
@@ -486,7 +522,7 @@ def main(argv: list[str] | None = None) -> int:
         strands_config = load_strands_config(args.strands_config)
         apply_strands_environment(strands_config)
         planner_config = {}
-        model = (strands_config.model or os.environ.get("LLM_MODEL") or "").strip()
+        strands_model, nexau_model = _resolve_stage_models(strands_config)
         base_url = (
             strands_config.base_url or os.environ.get("LLM_BASE_URL") or ""
         ).strip() or None
@@ -495,7 +531,7 @@ def main(argv: list[str] | None = None) -> int:
         args.output_dir.mkdir(parents=True, exist_ok=True)
         telemetry = GreenfieldTelemetry(args.output_dir)
         preflight = _capability_preflight(
-            model=model,
+            model=nexau_model,
             base_url=base_url,
             env_path=env_path,
             planner_config=planner_config,
@@ -584,7 +620,8 @@ def main(argv: list[str] | None = None) -> int:
             execution=_execution_context(
                 dry_run=dry_run,
                 planner_mode=args.planner_mode,
-                model=model,
+                strands_model=strands_model,
+                nexau_model=nexau_model,
                 base_url=base_url,
             ),
         )
@@ -603,7 +640,7 @@ def main(argv: list[str] | None = None) -> int:
             trace, context = run_strands_trace(
                 step1,
                 args.source_root,
-                model=model,
+                model=strands_model,
                 timeout=timeout,
                 max_file_bytes=args.max_file_bytes,
                 max_tokens=strands_config.max_tokens,
@@ -862,10 +899,10 @@ def main(argv: list[str] | None = None) -> int:
                 mode=args.planner_mode,
                 config={
                     **planner_config,
-                    "model": model,
+                    "model": nexau_model,
                     **({"base_url": base_url} if base_url else {}),
                 },
-                model=model,
+                model=strands_model,
                 timeout=timeout,
             )
             telemetry.emit(

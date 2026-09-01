@@ -1,0 +1,107 @@
+{
+  "artifact_kind": "generated_behavior_contract",
+  "changed_symbols": [
+    "GLLedgerReporter",
+    "GLLedgerReporter::CreateDataXML",
+    "GLLedgerReporter::DoQuery"
+  ],
+  "entry_surfaces": {},
+  "evidence": {
+    "path": "<generated>",
+    "sha256": "0eb8143d81c5374daf4eaca482d72117f4189ede4f484f4dcfec532779e0ff32"
+  },
+  "generation": {
+    "bounds": {
+      "max_edges": 2000,
+      "max_hops": 3,
+      "max_nodes": 500
+    },
+    "diagnostics": [],
+    "edges": [],
+    "flow": {
+      "edges": [],
+      "status": "complete"
+    },
+    "generator_version": "0.1",
+    "nodes": [
+      {
+        "role": "entry",
+        "source_paths": [
+          "app/source/gl/GLLedgerReporter.cls"
+        ],
+        "symbol": "GLLedgerReporter"
+      },
+      {
+        "role": "entry",
+        "source_paths": [
+          "app/source/gl/GLLedgerReporter.cls"
+        ],
+        "symbol": "GLLedgerReporter::CreateDataXML"
+      },
+      {
+        "role": "entry",
+        "source_paths": [
+          "app/source/gl/GLLedgerReporter.cls"
+        ],
+        "symbol": "GLLedgerReporter::DoQuery"
+      }
+    ],
+    "rule_set_version": "0.1",
+    "source_trace_path": "artifacts/greenfield/pr-49783/analyze-20260901-162748/step1.5.trace.json",
+    "source_trace_sha256": "592bee6b3f39f084f911cea0e9c07b7dc17d548aaf39e778b146b4541e5bbbb0",
+    "status": "complete",
+    "step1_evidence_sha256": "2a889c34f6a920c2477ccf22120e5c42c67e58a1fba8157cbefa9066ea868038",
+    "surfaces": {}
+  },
+  "impacted_files": [
+    {
+      "path": "app/source/gl/GLLedgerReporter.cls",
+      "status": "confirmed",
+      "symbols": [
+        "GLLedgerReporter",
+        "GLLedgerReporter::CreateDataXML",
+        "GLLedgerReporter::DoQuery"
+      ]
+    }
+  ],
+  "input": {
+    "base_sha": "88831b97966bf918cd08a882d2ac5d2aa4bf21a9",
+    "changed_paths": [
+      "app/source/gl/GLLedgerReporter.cls"
+    ],
+    "head_sha": "071f786e237c0c92b385a19314f9a804c90ffedc",
+    "pr_number": 49783,
+    "repo_key": "ia-main",
+    "repository": "intacct/ia-app"
+  },
+  "provenance": {
+    "catalog_mutation": "none",
+    "github_writes": "none",
+    "read_only": true,
+    "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
+  },
+  "relations": [
+    {
+      "consumer_repository": "ia-app",
+      "entry_surfaces": [],
+      "interface_id": "behavior:f9ae00bbc72efb86990049ce",
+      "owner": null,
+      "owner_repository": "ia-main",
+      "protected_behavior": "The changed full source defines the GLLedgerReporter class and its report construction, query, filtering, rendering, drill-down, and helper methods. The source establishes multiple direct calls, but exact line evidence for persisted call edges was not safely established from the supplied byte context.",
+      "relationship_type": "behavior_contract",
+      "source_paths": [
+        "app/source/gl/GLLedgerReporter.cls"
+      ],
+      "source_symbols": [
+        "GLLedgerReporter",
+        "GLLedgerReporter::CreateDataXML",
+        "GLLedgerReporter::DoQuery"
+      ],
+      "status": "active",
+      "test_obligations": []
+    }
+  ],
+  "repository": "ia-main",
+  "revision": "071f786e237c0c92b385a19314f9a804c90ffedc",
+  "schema_version": "0.1"
+}

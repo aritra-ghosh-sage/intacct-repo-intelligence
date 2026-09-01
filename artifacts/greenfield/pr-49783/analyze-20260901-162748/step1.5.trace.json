@@ -1,0 +1,95 @@
+{
+  "affected_symbols": [
+    {
+      "line": 1,
+      "path": "app/source/gl/GLLedgerReporter.cls",
+      "role": "affected",
+      "symbol": "GLLedgerReporter"
+    },
+    {
+      "line": 1,
+      "path": "app/source/gl/GLLedgerReporter.cls",
+      "role": "affected",
+      "symbol": "GLLedgerReporter::CreateDataXML"
+    },
+    {
+      "line": 1,
+      "path": "app/source/gl/GLLedgerReporter.cls",
+      "role": "affected",
+      "symbol": "GLLedgerReporter::DoQuery"
+    }
+  ],
+  "analysis_kind": "greenfield_pr_impact_step_1_5",
+  "behaviors": [
+    {
+      "description": "The changed full source defines the GLLedgerReporter class and its report construction, query, filtering, rendering, drill-down, and helper methods. The source establishes multiple direct calls, but exact line evidence for persisted call edges was not safely established from the supplied byte context.",
+      "edges": [],
+      "entry_symbols": [
+        "GLLedgerReporter",
+        "GLLedgerReporter::CreateDataXML",
+        "GLLedgerReporter::DoQuery"
+      ],
+      "kind": "behavior",
+      "source_paths": [
+        "app/source/gl/GLLedgerReporter.cls"
+      ],
+      "surfaces": {},
+      "symbol_paths": {
+        "GLLedgerReporter": "app/source/gl/GLLedgerReporter.cls",
+        "GLLedgerReporter::CreateDataXML": "app/source/gl/GLLedgerReporter.cls",
+        "GLLedgerReporter::DoQuery": "app/source/gl/GLLedgerReporter.cls"
+      }
+    }
+  ],
+  "calls": [],
+  "changed_paths": [
+    "app/source/gl/GLLedgerReporter.cls"
+  ],
+  "findings": [
+    {
+      "message": "The supplied source bytes contain direct calls among GLLedgerReporter methods and to external symbols, but exact source line evidence and target revisions were not persisted because they could not be established without inventing metadata. Next checks: run a line-preserving symbol/call extractor against app/source/gl/GLLedgerReporter.cls at target revision 071f786e237c0c92b385a19314f9a804c90ffedc, then resolve each extracted target against that revision, including external symbols referenced by this class, before emitting CALLS or STATIC_CALLS edges.",
+      "symbol": null,
+      "type": "unavailable_evidence"
+    }
+  ],
+  "input": {
+    "base_sha": "88831b97966bf918cd08a882d2ac5d2aa4bf21a9",
+    "changed_paths": [
+      "app/source/gl/GLLedgerReporter.cls"
+    ],
+    "head_sha": "071f786e237c0c92b385a19314f9a804c90ffedc",
+    "pr_number": 49783,
+    "repo_key": "ia-main",
+    "repository": "intacct/ia-app"
+  },
+  "omitted_counts": {
+    "behaviors": 0,
+    "calls": 0
+  },
+  "provenance": {
+    "agent": {
+      "continuation_attempts": 0,
+      "join_whitespace_trimmed": false,
+      "max_tokens": 32000,
+      "model": "us.openai.gpt-5.6-luna",
+      "name": "strands",
+      "timeout_seconds": 300
+    },
+    "catalog_mutation": "none",
+    "context_sha256": "46ef0a239bdb1f9ade7958b10a8eb213248016c61c91cd6f7bcdd2a0f084f327",
+    "github_writes": "none",
+    "read_only": true,
+    "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc",
+    "step1_evidence_sha256": "2a889c34f6a920c2477ccf22120e5c42c67e58a1fba8157cbefa9066ea868038",
+    "trace_sha256": "f86b1f9ad6c86c505699156e17a72ce0f7196447665bf845df13db3a4a13130d"
+  },
+  "repository": "intacct/ia-app",
+  "revision": "071f786e237c0c92b385a19314f9a804c90ffedc",
+  "schema_version": "0.1",
+  "surfaces": {
+    "http_qrequest": "unresolved",
+    "rest_api": "unresolved"
+  },
+  "truncated": false,
+  "truncation_reason": null
+}

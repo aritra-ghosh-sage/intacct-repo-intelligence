@@ -1,0 +1,36 @@
+{
+  "analysis_kind": "greenfield_impact_discovery",
+  "claims": [
+    {
+      "behaviors": [
+        null
+      ],
+      "evidence": [
+        {
+          "artifact": "step1.5.trace.json",
+          "sha256": "592bee6b3f39f084f911cea0e9c07b7dc17d548aaf39e778b146b4541e5bbbb0"
+        },
+        {
+          "artifact": "step1.5.contract.json",
+          "sha256": "f43f78141f12bbfdc3998c9cbb3a7cb6fdd01357fed63517a8132cea02f14262"
+        }
+      ],
+      "evidence_status": "confirmed",
+      "inspected_revision": "071f786e237c0c92b385a19314f9a804c90ffedc",
+      "rationale": "exact source trace retained 1 behavior groups",
+      "repository": "intacct/ia-app"
+    }
+  ],
+  "gaps": [
+    "cross_repository_discovery_requires_confirmed_relation_or_bound_ci_evidence"
+  ],
+  "provenance": {
+    "catalog_mutation": "none",
+    "github_writes": "none",
+    "read_only": true,
+    "request_sha256": "36588757cf8480fce189ead7645d6617ef39a420bf267cc2e67535844e9d8db3"
+  },
+  "read_requests": [],
+  "schema_version": "0.1",
+  "status": "partial"
+}
