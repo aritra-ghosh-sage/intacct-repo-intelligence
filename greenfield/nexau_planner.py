@@ -198,7 +198,12 @@ def _default_planner_factory(
             tools=[evidence_tool],
         )
     )
-    return agent.run
+    def run_planner(prompt: str) -> Any:
+        """Adapt Greenfield's prompt runner to NexAU's keyword-only API."""
+
+        return agent.run(message=prompt)
+
+    return run_planner
 
 
 def _response_text(raw: Any) -> str:

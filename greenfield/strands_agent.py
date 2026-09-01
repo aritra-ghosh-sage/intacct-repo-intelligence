@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import concurrent.futures
+import hashlib
 import inspect
 import json
 import re
 import subprocess
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field
 
 from greenfield.artifact_io import artifact_sha256, write_json_atomic
 from greenfield.behavior_contract import generate_behavior_contract
@@ -63,13 +66,116 @@ class Step1TraceFailure(StrandsAgentError):
 class MaxOutputTokensError(StrandsAgentError):
     """Raised when continuation cannot recover a complete JSON trace."""
 
-    def __init__(self, message: str, *, continuation_attempts: int) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        continuation_attempts: int,
+        provider_response: Mapping[str, Any] | None = None,
+    ) -> None:
         super().__init__(message)
         self.continuation_attempts = continuation_attempts
+        self.provider_response = (
+            dict(provider_response) if provider_response is not None else None
+        )
+
+
+class ProviderResponseError(StrandsAgentError):
+    """Raised when a returned provider value cannot become canonical JSON."""
+
+    def __init__(self, message: str, *, provider_response: Mapping[str, Any]) -> None:
+        super().__init__(message)
+        self.provider_response = dict(provider_response)
 
 
 class ToolUseTruncatedError(StrandsAgentError):
     """Raised when the output limit cut a tool use rather than plain JSON."""
+
+
+class _ProviderSymbolPath(BaseModel):
+    """One provider-discovered symbol location before canonical normalization."""
+
+    path: str = Field(min_length=1)
+    line: int | None = Field(default=None, ge=1)
+    revision: str | None = None
+
+
+class _ProviderEdge(BaseModel):
+    """A source-bound call edge the canonical boundary will revalidate."""
+
+    source_symbol: str = Field(min_length=1)
+    target_symbol: str = Field(min_length=1)
+    relationship_type: Literal["CALLS", "STATIC_CALLS"]
+    source_path: str = Field(min_length=1)
+    source_line: int = Field(ge=1)
+    source_revision: str = Field(min_length=1)
+    target_path: str = Field(min_length=1)
+    target_line: int | None = Field(default=None, ge=1)
+    target_revision: str | None = None
+    resolution: Literal["exact"]
+
+
+class _ProviderBehavior(BaseModel):
+    """Required behavioral trace fields expected from the provider."""
+
+    kind: str = Field(default="behavior", min_length=1)
+    entry_symbols: list[str] = Field(min_length=1)
+    source_paths: list[str] = Field(min_length=1)
+    symbol_paths: dict[str, _ProviderSymbolPath] = Field(default_factory=dict)
+    edges: list[_ProviderEdge] = Field(default_factory=list)
+    surfaces: dict[
+        str,
+        Literal[
+            "available",
+            "empty",
+            "unavailable",
+            "not_run",
+            "unresolved",
+            "ambiguous",
+            "dynamic",
+        ],
+    ] = Field(default_factory=dict)
+    description: str | None = None
+
+
+class _ProviderAffectedSymbol(BaseModel):
+    """Optional direct changed-symbol observation."""
+
+    symbol: str = Field(min_length=1)
+    path: str = Field(min_length=1)
+    line: int = Field(default=1, ge=1)
+    role: str = Field(default="affected", min_length=1)
+
+
+class _ProviderFinding(BaseModel):
+    """Non-authoritative provider explanation retained beside the trace."""
+
+    type: str = Field(min_length=1)
+    message: str = Field(min_length=1)
+    symbol: str | None = None
+
+
+class _Step15StructuredOutput(BaseModel):
+    """Explicit provider contract before provenance binding and normalization."""
+
+    affected_symbols: list[_ProviderAffectedSymbol] = Field(default_factory=list)
+    surfaces: dict[
+        str,
+        Literal[
+            "available",
+            "empty",
+            "unavailable",
+            "not_run",
+            "unresolved",
+            "ambiguous",
+            "dynamic",
+        ],
+    ] = Field(default_factory=dict)
+    behaviors: list[_ProviderBehavior] = Field(min_length=1)
+    findings: list[_ProviderFinding] = Field(default_factory=list)
+    truncated: bool = False
+    truncation_reason: str | None = None
+    omitted_counts: dict[str, int] | None = None
 
 
 def _git(source_root: Path, *args: str) -> str:
@@ -232,6 +338,10 @@ Canonical output examples:
   The boundary persists only the existing canonical symbol-to-path mapping;
   provider-only path/line/revision metadata must not be treated as trusted
   evidence.
+- every behavior must include a non-empty `entry_symbols` list and non-empty
+  `source_paths` list. Each `source_paths` entry must be one of the changed
+  paths in the context. Every edge must include its exact `target_path`; do not
+  omit it merely because the target is outside the changed file.
 - findings should explain explicit unresolved or unavailable evidence and the
   next checks.
 
@@ -283,31 +393,131 @@ def _default_agent_factory(
             options["model"] = model
         if tools is not None:
             options["tools"] = tools
+        options["structured_output_model"] = _Step15StructuredOutput
         agent = Agent(**options)
     except Exception as exc:  # pragma: no cover - provider-specific failure shape
         raise StrandsAgentError(f"Strands agent initialization failed: {exc}") from exc
     return agent
 
 
-def _extract_text(value: Any) -> str:
+def _response_shape(value: Any) -> dict[str, Any]:
+    message = (
+        value.get("message")
+        if isinstance(value, Mapping)
+        else getattr(value, "message", None)
+    )
+    content = message.get("content") if isinstance(message, Mapping) else None
+    content_block_keys = [
+        sorted(str(key) for key in block)
+        for block in content or []
+        if isinstance(block, Mapping)
+    ]
+    stop_reason = (
+        value.get("stop_reason")
+        if isinstance(value, Mapping)
+        else getattr(value, "stop_reason", None)
+    )
+    return {
+        "result_type": f"{type(value).__module__}.{type(value).__qualname__}",
+        "stop_reason": stop_reason if isinstance(stop_reason, str) else None,
+        "content_block_keys": content_block_keys,
+    }
+
+
+def _response_metadata(
+    value: Any, *, extraction_strategy: str, text: str | None = None
+) -> dict[str, Any]:
+    metadata = {
+        **_response_shape(value),
+        "extraction_strategy": extraction_strategy,
+    }
+    if text is not None:
+        encoded = text.encode("utf-8")
+        stripped = text.lstrip()
+        metadata.update(
+            {
+                "text_bytes": len(encoded),
+                "text_sha256": hashlib.sha256(encoded).hexdigest(),
+                "first_non_whitespace_character": stripped[:1] or None,
+            }
+        )
+    return metadata
+
+
+def _extract_structured_output(
+    value: Any,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Return Strands structured output without falling back to provider prose."""
+
+    structured_output = getattr(value, "structured_output", None)
+    if structured_output is None:
+        return None
+    model_dump = getattr(structured_output, "model_dump", None)
+    if not callable(model_dump):
+        raise ProviderResponseError(
+            "Strands returned an unsupported structured output value",
+            provider_response=_response_metadata(
+                value, extraction_strategy="structured_output_unsupported"
+            ),
+        )
+    try:
+        payload = model_dump(mode="json")
+    except Exception as exc:
+        raise ProviderResponseError(
+            "Strands could not serialize structured output",
+            provider_response=_response_metadata(
+                value, extraction_strategy="structured_output_serialization_failed"
+            ),
+        ) from exc
+    if not isinstance(payload, Mapping):
+        raise ProviderResponseError(
+            "Strands structured output must be a JSON object",
+            provider_response=_response_metadata(
+                value, extraction_strategy="structured_output_not_object"
+            ),
+        )
+    return dict(payload), _response_metadata(
+        value, extraction_strategy="agent_result.structured_output"
+    )
+
+
+def _extract_text(value: Any) -> tuple[str, dict[str, Any]]:
     if isinstance(value, str):
-        return value
+        return value, _response_metadata(
+            value, extraction_strategy="direct_string", text=value
+        )
     for attribute in ("message", "content", "text"):
         child = getattr(value, attribute, None)
         if isinstance(child, str):
-            return child
+            return child, _response_metadata(
+                value, extraction_strategy=f"attribute.{attribute}.string", text=child
+            )
         text = _message_text(child)
         if text:
-            return text
+            return text, _response_metadata(
+                value,
+                extraction_strategy=f"attribute.{attribute}.text_blocks",
+                text=text,
+            )
     if isinstance(value, Mapping):
         for key in ("message", "content", "text", "output"):
             child = value.get(key)
             if isinstance(child, str):
-                return child
+                return child, _response_metadata(
+                    value, extraction_strategy=f"mapping.{key}.string", text=child
+                )
             text = _message_text(child)
             if text:
-                return text
-    return str(value)
+                return text, _response_metadata(
+                    value,
+                    extraction_strategy=f"mapping.{key}.text_blocks",
+                    text=text,
+                )
+    metadata = _response_metadata(value, extraction_strategy="unsupported")
+    raise ProviderResponseError(
+        "Strands returned an unsupported response shape; expected text content",
+        provider_response=metadata,
+    )
 
 
 def _strip_json_fence(text: str) -> str:
@@ -442,7 +652,8 @@ def _accumulate_response_text(
     executor: concurrent.futures.ThreadPoolExecutor,
     timeout: float,
     max_continuations: int,
-) -> tuple[str, int, bool]:
+    require_structured_output: bool,
+) -> tuple[str, int, bool, dict[str, Any]]:
     max_tokens_errors = _max_tokens_exceptions()
     fragments: list[str] = []
     next_input: str | None = prompt
@@ -451,7 +662,19 @@ def _accumulate_response_text(
     while True:
         future = executor.submit(agent, next_input)
         try:
-            text = _extract_text(future.result(timeout=timeout))
+            result = future.result(timeout=timeout)
+            structured = _extract_structured_output(result)
+            if structured is not None:
+                payload, response_metadata = structured
+                return json.dumps(payload), attempts, trimmed_join, response_metadata
+            if require_structured_output:
+                raise ProviderResponseError(
+                    "Strands completed without structured output",
+                    provider_response=_response_metadata(
+                        result, extraction_strategy="structured_output_missing"
+                    ),
+                )
+            text, response_metadata = _extract_text(result)
         except max_tokens_errors as exc:
             partial, trimmed = _coalesce_trailing_assistant_text(agent)
             if not partial:
@@ -475,7 +698,7 @@ def _accumulate_response_text(
             fragments.append(text)
         else:
             fragments.append(_strip_json_fence(text.strip()))
-        return "".join(fragments), attempts, trimmed_join
+        return "".join(fragments), attempts, trimmed_join, response_metadata
 
 
 _AWS_ACCESS_KEY_PATTERN = re.compile(r"(?:AKIA|ASIA)[0-9A-Z]{16}")
@@ -537,12 +760,13 @@ def _run_strands_json(
         concurrent.futures.ThreadPoolExecutor(max_workers=1)
     )
     try:
-        text, attempts, trimmed_join = _accumulate_response_text(
+        text, attempts, trimmed_join, response_metadata = _accumulate_response_text(
             agent,
             prompt,
             executor=executor,
             timeout=timeout,
             max_continuations=max_continuations,
+            require_structured_output=factory is _default_agent_factory,
         )
         try:
             return _parse_json_text(text), {
@@ -554,8 +778,11 @@ def _run_strands_json(
                 raise MaxOutputTokensError(
                     f"{exc} (after {attempts} continuation attempts)",
                     continuation_attempts=attempts,
+                    provider_response=response_metadata,
                 ) from exc
-            raise
+            raise ProviderResponseError(
+                str(exc), provider_response=response_metadata
+            ) from exc
     except concurrent.futures.TimeoutError as exc:
         executor.shutdown(wait=False, cancel_futures=True)
         executor = None
@@ -621,6 +848,7 @@ def run_strands_trace(
         )
     except StrandsAgentError as exc:
         provider_error = getattr(exc, "provider_error", None)
+        provider_response = getattr(exc, "provider_response", None)
         aws_credential_status = getattr(exc, "aws_credential_status", None)
         if diagnostic_path is not None:
             write_json_atomic(
@@ -638,6 +866,7 @@ def run_strands_trace(
                     ),
                     context_sha256=str(context["context_sha256"]),
                     provider_error=provider_error,
+                    provider_response_metadata=provider_response,
                     aws_credential_status=aws_credential_status,
                 ),
             )

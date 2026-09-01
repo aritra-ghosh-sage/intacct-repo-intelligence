@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 import json
 import os
 import sys
@@ -224,6 +225,11 @@ def test_capability_preflight_records_e2b_as_optional(monkeypatch, tmp_path: Pat
     monkeypatch.setitem(sys.modules, "nexau", types.ModuleType("nexau"))
     monkeypatch.setitem(sys.modules, "strands", types.ModuleType("strands"))
     monkeypatch.setenv("LLM_API_KEY", "test-key")
+    monkeypatch.setattr(
+        run_greenfield_strands,
+        "version",
+        lambda package: {"strands-agents": "1.53.0", "nexau": "0.4.1"}[package],
+    )
 
     result = run_greenfield_strands._capability_preflight(
         model="test-model",
@@ -233,12 +239,57 @@ def test_capability_preflight_records_e2b_as_optional(monkeypatch, tmp_path: Pat
     )
 
     assert result["status"] == "ready"
+    assert result["runtime"] == {
+        "python_executable": sys.executable,
+        "python_prefix": sys.prefix,
+        "python_version": run_greenfield_strands.platform.python_version(),
+        "packages": {"strands-agents": "1.53.0", "nexau": "0.4.1"},
+    }
     assert result["optional_capabilities"] == {"e2b": "unavailable"}
     assert result["optional_diagnostics"] == [
         {
             "component": "e2b",
             "code": "optional_dependency_unavailable",
             "message": "E2B is unavailable; it is required only by sandbox-backed validation profiles",
+        }
+    ]
+
+
+def test_capability_preflight_names_greenfield_runtime_for_missing_nexau(
+    monkeypatch, tmp_path: Path
+) -> None:
+    real_import = builtins.__import__
+
+    def import_without_nexau(name: str, *args: object, **kwargs: object):
+        if name == "nexau":
+            raise ImportError("NexAU is unavailable")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_nexau)
+    monkeypatch.setenv("LLM_API_KEY", "test-key")
+    monkeypatch.setattr(
+        run_greenfield_strands,
+        "version",
+        lambda package: "1.53.0" if package == "strands-agents" else None,
+    )
+
+    result = run_greenfield_strands._capability_preflight(
+        model="test-model",
+        base_url="https://llm.example/v1",
+        env_path=tmp_path / ".env",
+        planner_config={},
+    )
+
+    assert result["nexau"] == "unavailable"
+    assert result["diagnostics"] == [
+        {
+            "component": "nexau",
+            "code": "dependency_unavailable",
+            "message": (
+                "pinned NexAU dependency is unavailable; run Greenfield with "
+                "./.venv-greenfield/bin/python after installing the "
+                "nexau-planner extra"
+            ),
         }
     ]
 

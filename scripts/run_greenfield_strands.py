@@ -6,9 +6,11 @@ import argparse
 import importlib.util
 import json
 import os
+import platform
 import shutil
 import sys
 from collections.abc import Mapping
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
@@ -289,7 +291,11 @@ def _capability_preflight(
             {
                 "component": "nexau",
                 "code": "dependency_unavailable",
-                "message": "pinned NexAU dependency is unavailable",
+                "message": (
+                    "pinned NexAU dependency is unavailable; run Greenfield with "
+                    "./.venv-greenfield/bin/python after installing the "
+                    "nexau-planner extra"
+                ),
             }
         )
     try:
@@ -314,6 +320,12 @@ def _capability_preflight(
                 "message": "E2B is unavailable; it is required only by sandbox-backed validation profiles",
             }
         )
+    packages: dict[str, str | None] = {}
+    for package in ("strands-agents", "nexau"):
+        try:
+            packages[package] = version(package)
+        except PackageNotFoundError:
+            packages[package] = None
     return {
         "status": "ready" if not diagnostics else "unavailable",
         "nexau": "ready"
@@ -323,6 +335,12 @@ def _capability_preflight(
         if not any(row["component"] == "strands" for row in diagnostics)
         else "unavailable",
         "optional_capabilities": {"e2b": "ready" if e2b_available else "unavailable"},
+        "runtime": {
+            "python_executable": sys.executable,
+            "python_prefix": sys.prefix,
+            "python_version": platform.python_version(),
+            "packages": packages,
+        },
         "diagnostics": diagnostics,
         "optional_diagnostics": optional_diagnostics,
     }

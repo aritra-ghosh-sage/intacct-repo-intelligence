@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
-from greenfield.nexau_planner import NexAUPlannerError, run_nexau_planner
+from greenfield.nexau_planner import (
+    NexAUPlannerError,
+    _default_planner_factory,
+    run_nexau_planner,
+)
 from greenfield.planning_contract import build_planning_report, validate_planning_report
 from greenfield.strands_tools import GreenfieldToolbox
 from tests.test_greenfield_simplified_flow import _context
@@ -15,6 +21,48 @@ def _greenfield_llm_env(monkeypatch) -> None:
     monkeypatch.setenv("LLM_API_KEY", "test-key")
     monkeypatch.setenv("LLM_MODEL", "test-model")
     monkeypatch.setenv("LLM_BASE_URL", "https://test.example/v1")
+
+
+def test_default_planner_factory_adapts_keyword_only_nexau_run(
+    tmp_path: Path, monkeypatch
+) -> None:
+    context, _ = _context(tmp_path)
+    captured: dict[str, object] = {}
+    nexau = ModuleType("nexau")
+
+    class FakeLLMConfig:
+        def __init__(self, **kwargs: object) -> None:
+            captured["llm"] = kwargs
+
+    class FakeAgentConfig:
+        def __init__(self, **kwargs: object) -> None:
+            captured["agent_config"] = kwargs
+
+    class FakeTool:
+        @staticmethod
+        def from_yaml(path: Path, *, binding: object) -> object:
+            captured["tool_path"] = path
+            captured["binding"] = binding
+            return object()
+
+    class FakeAgent:
+        def __init__(self, *, config: object) -> None:
+            captured["config"] = config
+
+        def run(self, *, message: str) -> str:
+            captured["message"] = message
+            return '{"tasks": []}'
+
+    nexau.Agent = FakeAgent
+    nexau.AgentConfig = FakeAgentConfig
+    nexau.LLMConfig = FakeLLMConfig
+    nexau.Tool = FakeTool
+    monkeypatch.setitem(sys.modules, "nexau", nexau)
+
+    runner = _default_planner_factory({}, GreenfieldToolbox(context))
+
+    assert runner("create the plan") == '{"tasks": []}'
+    assert captured["message"] == "create the plan"
 
 
 def test_nexau_planner_retains_bounded_lifecycle(tmp_path: Path) -> None:

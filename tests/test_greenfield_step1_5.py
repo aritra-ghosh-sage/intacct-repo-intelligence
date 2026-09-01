@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import re
 import threading
@@ -9,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from pydantic import ValidationError
 from strands.types.exceptions import MaxTokensReachedException
 
 from greenfield.artifact_io import artifact_sha256
@@ -19,6 +21,7 @@ from greenfield.strands_agent import (
     StrandsAgentError,
     _prompt,
     _run_strands_json,
+    _Step15StructuredOutput,
     build_context,
     run_strands_trace,
 )
@@ -693,6 +696,130 @@ def test_run_strands_json_reads_nested_agent_message() -> None:
     assert delivery["continuation_attempts"] == 0
 
 
+def test_default_strands_agent_uses_structured_output_over_provider_prose() -> None:
+    class FakeStructuredOutput:
+        def model_dump(self, *, mode: str) -> dict[str, str]:
+            assert mode == "json"
+            return {"status": "ok"}
+
+    class FakeAgentResult:
+        def __init__(self) -> None:
+            self.stop_reason = "end_turn"
+            self.message = {
+                "content": [{"text": "Narrative output must not be parsed."}]
+            }
+            self.structured_output = FakeStructuredOutput()
+
+    def default_factory(
+        _model: str | None,
+        *,
+        tools: list[object] | None = None,
+        max_tokens: int | None = None,
+    ):
+        del tools, max_tokens
+
+        def agent(_prompt: str) -> FakeAgentResult:
+            return FakeAgentResult()
+
+        return agent
+
+    with patch("greenfield.strands_agent._default_agent_factory", default_factory):
+        parsed, delivery = _run_strands_json("prompt", model="test-model", timeout=1)
+
+    assert parsed == {"status": "ok"}
+    assert delivery == {"continuation_attempts": 0, "join_whitespace_trimmed": False}
+
+
+def test_explicit_structured_output_model_accepts_canonical_provider_shape() -> None:
+    raw = _trace()
+    for behavior in raw["behaviors"]:
+        behavior["symbol_paths"] = {
+            symbol: {"path": path}
+            for symbol, path in behavior["symbol_paths"].items()
+        }
+
+    provider_output = _Step15StructuredOutput.model_validate(raw).model_dump(
+        mode="json"
+    )
+    normalized = normalize_trace(
+        STEP1,
+        provider_output,
+        agent_metadata={"name": "test", "model": "test", "timeout_seconds": 1},
+        context_sha256="a" * 64,
+    )
+
+    assert validate_trace(STEP1, normalized) == []
+
+
+@pytest.mark.parametrize(
+    ("field", "message"),
+    [
+        ("entry_symbols", "Field required"),
+        ("target_path", "Field required"),
+    ],
+)
+def test_explicit_structured_output_model_rejects_required_provider_fields(
+    field: str, message: str
+) -> None:
+    raw = _trace()
+    raw["behaviors"] = copy.deepcopy(raw["behaviors"][:1])
+    raw["behaviors"][0]["symbol_paths"] = {
+        symbol: {"path": path}
+        for symbol, path in raw["behaviors"][0]["symbol_paths"].items()
+    }
+    if field == "target_path":
+        raw["behaviors"][0]["edges"] = copy.deepcopy(
+            raw["behaviors"][0]["edges"][:1]
+        )
+        raw["behaviors"][0]["edges"][0].pop("target_path")
+    else:
+        raw["behaviors"][0].pop(field)
+
+    with pytest.raises(ValidationError, match=message):
+        _Step15StructuredOutput.model_validate(raw)
+
+
+def test_default_strands_agent_rejects_missing_structured_output(tmp_path: Path) -> None:
+    repo, base, head = _trace_repo(tmp_path)
+    step1 = _changed_files_step1(base, head)
+    diagnostic_path = tmp_path / "step1.5.diagnostic.json"
+
+    class FakeAgentResult:
+        def __init__(self) -> None:
+            self.stop_reason = "end_turn"
+            self.message = {"content": [{"text": "secret provider prose"}]}
+            self.structured_output = None
+
+    def default_factory(
+        _model: str | None,
+        *,
+        tools: list[object] | None = None,
+        max_tokens: int | None = None,
+    ):
+        del tools, max_tokens
+
+        def agent(_prompt: str) -> FakeAgentResult:
+            return FakeAgentResult()
+
+        return agent
+
+    with patch("greenfield.strands_agent._default_agent_factory", default_factory), pytest.raises(
+        Step1TraceFailure, match="completed without structured output"
+    ):
+        run_strands_trace(
+            step1,
+            repo,
+            model="test-model",
+            diagnostic_output=diagnostic_path,
+        )
+
+    diagnostic = json.loads(diagnostic_path.read_text(encoding="utf-8"))
+    metadata = diagnostic["provider"]["response"]
+    assert metadata["extraction_strategy"] == "structured_output_missing"
+    assert metadata["stop_reason"] == "end_turn"
+    assert "secret provider prose" not in json.dumps(diagnostic)
+
+
 def test_run_strands_json_rejects_empty_output() -> None:
     def factory(_model: str | None, *, tools: list[object] | None = None):
         def agent(_prompt: str) -> str:
@@ -707,6 +834,85 @@ def test_run_strands_json_rejects_empty_output() -> None:
             timeout=1,
             agent_factory=factory,
         )
+
+
+def test_run_strands_trace_records_malformed_response_metadata(
+    tmp_path: Path,
+) -> None:
+    repo, base, head = _trace_repo(tmp_path)
+    step1 = _changed_files_step1(base, head)
+    diagnostic_path = tmp_path / "step1.5.diagnostic.json"
+    response = "This is not JSON."
+
+    def factory(_model: str | None, *, tools: list[object] | None = None):
+        def agent(_prompt: str) -> str:
+            return response
+
+        return agent
+
+    with pytest.raises(Step1TraceFailure, match="did not produce JSON"):
+        run_strands_trace(
+            step1,
+            repo,
+            model="test-model",
+            diagnostic_output=diagnostic_path,
+            agent_factory=factory,
+        )
+
+    diagnostic = json.loads(diagnostic_path.read_text(encoding="utf-8"))
+    metadata = diagnostic["provider"]["response"]
+    assert metadata == {
+        "content_block_keys": [],
+        "extraction_strategy": "direct_string",
+        "first_non_whitespace_character": "T",
+        "result_type": "builtins.str",
+        "stop_reason": None,
+        "text_bytes": len(response.encode("utf-8")),
+        "text_sha256": hashlib.sha256(response.encode("utf-8")).hexdigest(),
+    }
+    assert "raw_provider_response" not in diagnostic
+    assert response not in json.dumps(diagnostic)
+
+
+def test_run_strands_trace_rejects_unknown_response_shape_without_stringifying(
+    tmp_path: Path,
+) -> None:
+    repo, base, head = _trace_repo(tmp_path)
+    step1 = _changed_files_step1(base, head)
+    diagnostic_path = tmp_path / "step1.5.diagnostic.json"
+
+    class UnsupportedAgentResult:
+        def __init__(self) -> None:
+            self.stop_reason = "end_turn"
+            self.message = {
+                "content": [{"reasoningContent": {"text": "not retained"}}]
+            }
+
+        def __str__(self) -> str:
+            return "secret string fallback must not be used"
+
+    def factory(_model: str | None, *, tools: list[object] | None = None):
+        def agent(_prompt: str) -> UnsupportedAgentResult:
+            return UnsupportedAgentResult()
+
+        return agent
+
+    with pytest.raises(Step1TraceFailure, match="unsupported response shape"):
+        run_strands_trace(
+            step1,
+            repo,
+            model="test-model",
+            diagnostic_output=diagnostic_path,
+            agent_factory=factory,
+        )
+
+    diagnostic = json.loads(diagnostic_path.read_text(encoding="utf-8"))
+    metadata = diagnostic["provider"]["response"]
+    assert metadata["extraction_strategy"] == "unsupported"
+    assert metadata["stop_reason"] == "end_turn"
+    assert metadata["content_block_keys"] == [["reasoningContent"]]
+    assert "text_sha256" not in metadata
+    assert "secret string fallback" not in json.dumps(diagnostic)
 
 
 def test_run_strands_trace_persists_sanitized_provider_error(
@@ -1066,6 +1272,9 @@ def test_default_agent_factory_configures_bedrock_max_tokens() -> None:
 
     assert captured["model_id"] == "us.amazon.nova-pro-v1:0"
     assert captured["max_tokens"] == 5000
+    assert captured["agent_options"]["structured_output_model"].__name__ == (
+        "_Step15StructuredOutput"
+    )
 
 
 def test_default_agent_factory_without_max_tokens_passes_bare_model_string() -> None:
@@ -1082,6 +1291,7 @@ def test_default_agent_factory_without_max_tokens_passes_bare_model_string() -> 
 
     assert captured["model"] == "us.amazon.nova-pro-v1:0"
     assert "max_tokens" not in captured
+    assert captured["structured_output_model"].__name__ == "_Step15StructuredOutput"
 
 
 def test_strands_timeout_returns_without_waiting_for_blocked_agent() -> None:
