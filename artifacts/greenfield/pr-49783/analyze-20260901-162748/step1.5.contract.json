@@ -1,14 +1,22 @@
 {
   "artifact_kind": "generated_behavior_contract",
   "changed_symbols": [
-    "GLLedgerReporter",
     "GLLedgerReporter::CreateDataXML",
-    "GLLedgerReporter::DoQuery"
+    "GLLedgerReporter::DoQuery",
+    "GLLedgerReporter::Reporter_Instantiate",
+    "GLLedgerReporter::__construct",
+    "GLLedgerReporter::_getSryReportQuery",
+    "GLLedgerReporter::addSubTransaction",
+    "GLLedgerReporter::getChildrenPath",
+    "GLLedgerReporter::getElementHierarchy",
+    "GLLedgerReporter::getFullName",
+    "GLLedgerReporter::getFullPath",
+    "GLLedgerReporter::getReworkedTrans"
   ],
   "entry_surfaces": {},
   "evidence": {
     "path": "<generated>",
-    "sha256": "0eb8143d81c5374daf4eaca482d72117f4189ede4f484f4dcfec532779e0ff32"
+    "sha256": "540ac928f7aa763cd69985842a09081aa8a7ced5d0142dc644ec6225406bc850"
   },
   "generation": {
     "bounds": {
@@ -29,13 +37,6 @@
         "source_paths": [
           "app/source/gl/GLLedgerReporter.cls"
         ],
-        "symbol": "GLLedgerReporter"
-      },
-      {
-        "role": "entry",
-        "source_paths": [
-          "app/source/gl/GLLedgerReporter.cls"
-        ],
         "symbol": "GLLedgerReporter::CreateDataXML"
       },
       {
@@ -44,26 +45,79 @@
           "app/source/gl/GLLedgerReporter.cls"
         ],
         "symbol": "GLLedgerReporter::DoQuery"
+      },
+      {
+        "role": "entry",
+        "source_paths": [
+          "app/source/gl/GLLedgerReporter.cls"
+        ],
+        "symbol": "GLLedgerReporter::Reporter_Instantiate"
+      },
+      {
+        "role": "entry",
+        "source_paths": [
+          "app/source/gl/GLLedgerReporter.cls"
+        ],
+        "symbol": "GLLedgerReporter::__construct"
+      },
+      {
+        "role": "entry",
+        "source_paths": [
+          "app/source/gl/GLLedgerReporter.cls"
+        ],
+        "symbol": "GLLedgerReporter::_getSryReportQuery"
+      },
+      {
+        "role": "entry",
+        "source_paths": [
+          "app/source/gl/GLLedgerReporter.cls"
+        ],
+        "symbol": "GLLedgerReporter::addSubTransaction"
+      },
+      {
+        "role": "entry",
+        "source_paths": [
+          "app/source/gl/GLLedgerReporter.cls"
+        ],
+        "symbol": "GLLedgerReporter::getChildrenPath"
+      },
+      {
+        "role": "entry",
+        "source_paths": [
+          "app/source/gl/GLLedgerReporter.cls"
+        ],
+        "symbol": "GLLedgerReporter::getElementHierarchy"
+      },
+      {
+        "role": "entry",
+        "source_paths": [
+          "app/source/gl/GLLedgerReporter.cls"
+        ],
+        "symbol": "GLLedgerReporter::getFullName"
+      },
+      {
+        "role": "entry",
+        "source_paths": [
+          "app/source/gl/GLLedgerReporter.cls"
+        ],
+        "symbol": "GLLedgerReporter::getFullPath"
+      },
+      {
+        "role": "entry",
+        "source_paths": [
+          "app/source/gl/GLLedgerReporter.cls"
+        ],
+        "symbol": "GLLedgerReporter::getReworkedTrans"
       }
     ],
     "rule_set_version": "0.1",
     "source_trace_path": "artifacts/greenfield/pr-49783/analyze-20260901-162748/step1.5.trace.json",
-    "source_trace_sha256": "592bee6b3f39f084f911cea0e9c07b7dc17d548aaf39e778b146b4541e5bbbb0",
+    "source_trace_sha256": "6e4af61d09901c96696c1ead3f89b2e3b89a2d119b4deffa135b8bf39c2141b1",
     "status": "complete",
     "step1_evidence_sha256": "2a889c34f6a920c2477ccf22120e5c42c67e58a1fba8157cbefa9066ea868038",
     "surfaces": {}
   },
-  "impacted_files": [
-    {
-      "path": "app/source/gl/GLLedgerReporter.cls",
-      "status": "confirmed",
-      "symbols": [
-        "GLLedgerReporter",
-        "GLLedgerReporter::CreateDataXML",
-        "GLLedgerReporter::DoQuery"
-      ]
-    }
-  ],
+  "impacted_files": [],
   "input": {
     "base_sha": "88831b97966bf918cd08a882d2ac5d2aa4bf21a9",
     "changed_paths": [
@@ -84,18 +138,122 @@
     {
       "consumer_repository": "ia-app",
       "entry_surfaces": [],
-      "interface_id": "behavior:f9ae00bbc72efb86990049ce",
+      "interface_id": "behavior:d6b7ac3dc5715b655c8543fb",
       "owner": null,
       "owner_repository": "ia-main",
-      "protected_behavior": "The changed full source defines the GLLedgerReporter class and its report construction, query, filtering, rendering, drill-down, and helper methods. The source establishes multiple direct calls, but exact line evidence for persisted call edges was not safely established from the supplied byte context.",
+      "protected_behavior": "Constructs the GL ledger reporter, normalizes report parameters, initializes localization, authorization, currency, and feature-dependent state.",
       "relationship_type": "behavior_contract",
       "source_paths": [
         "app/source/gl/GLLedgerReporter.cls"
       ],
       "source_symbols": [
-        "GLLedgerReporter",
-        "GLLedgerReporter::CreateDataXML",
+        "GLLedgerReporter::__construct"
+      ],
+      "status": "active",
+      "test_obligations": []
+    },
+    {
+      "consumer_repository": "ia-app",
+      "entry_surfaces": [],
+      "interface_id": "behavior:1e7ff88ebe50c86009b0a5c1",
+      "owner": null,
+      "owner_repository": "ia-main",
+      "protected_behavior": "Instantiates the reporter and merges memorized user preferences with request parameters, including drill-filter and dimension defaults.",
+      "relationship_type": "behavior_contract",
+      "source_paths": [
+        "app/source/gl/GLLedgerReporter.cls"
+      ],
+      "source_symbols": [
+        "GLLedgerReporter::Reporter_Instantiate"
+      ],
+      "status": "active",
+      "test_obligations": []
+    },
+    {
+      "consumer_repository": "ia-app",
+      "entry_surfaces": [],
+      "interface_id": "behavior:78a210c603a56f7c3729c160",
+      "owner": null,
+      "owner_repository": "ia-main",
+      "protected_behavior": "Builds GL query filters, period and balance-forward data, transaction records, account maps, reporting-book state, and drill-down context.",
+      "relationship_type": "behavior_contract",
+      "source_paths": [
+        "app/source/gl/GLLedgerReporter.cls"
+      ],
+      "source_symbols": [
         "GLLedgerReporter::DoQuery"
+      ],
+      "status": "active",
+      "test_obligations": []
+    },
+    {
+      "consumer_repository": "ia-app",
+      "entry_surfaces": [],
+      "interface_id": "behavior:57fe53265e84cb8a329dc6a3",
+      "owner": null,
+      "owner_repository": "ia-main",
+      "protected_behavior": "Creates report XML by preprocessing, querying, rendering headers, grouping transactions, calculating totals, applying document-column processing, and serializing output.",
+      "relationship_type": "behavior_contract",
+      "source_paths": [
+        "app/source/gl/GLLedgerReporter.cls"
+      ],
+      "source_symbols": [
+        "GLLedgerReporter::CreateDataXML"
+      ],
+      "status": "active",
+      "test_obligations": []
+    },
+    {
+      "consumer_repository": "ia-app",
+      "entry_surfaces": [],
+      "interface_id": "behavior:b1ba10943885b56eb43564df",
+      "owner": null,
+      "owner_repository": "ia-main",
+      "protected_behavior": "Builds the primary and detailed GL transaction queries and populates transaction and subtransaction result state.",
+      "relationship_type": "behavior_contract",
+      "source_paths": [
+        "app/source/gl/GLLedgerReporter.cls"
+      ],
+      "source_symbols": [
+        "GLLedgerReporter::_getSryReportQuery"
+      ],
+      "status": "active",
+      "test_obligations": []
+    },
+    {
+      "consumer_repository": "ia-app",
+      "entry_surfaces": [],
+      "interface_id": "behavior:98e95371fbd924c066d129d7",
+      "owner": null,
+      "owner_repository": "ia-main",
+      "protected_behavior": "Transforms queried ledger entries into report rows, optionally adds subtransactions, drill-down metadata, dimensions, and currency information.",
+      "relationship_type": "behavior_contract",
+      "source_paths": [
+        "app/source/gl/GLLedgerReporter.cls"
+      ],
+      "source_symbols": [
+        "GLLedgerReporter::addSubTransaction",
+        "GLLedgerReporter::getReworkedTrans"
+      ],
+      "status": "active",
+      "test_obligations": []
+    },
+    {
+      "consumer_repository": "ia-app",
+      "entry_surfaces": [],
+      "interface_id": "behavior:0fb1098b6305204245d430f8",
+      "owner": null,
+      "owner_repository": "ia-main",
+      "protected_behavior": "Provides location and department hierarchy data used to group ledger output, including recursive parent, child, and path calculations.",
+      "relationship_type": "behavior_contract",
+      "source_paths": [
+        "app/source/gl/GLLedgerReporter.cls"
+      ],
+      "source_symbols": [
+        "GLLedgerReporter::getChildrenPath",
+        "GLLedgerReporter::getElementHierarchy",
+        "GLLedgerReporter::getFullName",
+        "GLLedgerReporter::getFullPath"
       ],
       "status": "active",
       "test_obligations": []

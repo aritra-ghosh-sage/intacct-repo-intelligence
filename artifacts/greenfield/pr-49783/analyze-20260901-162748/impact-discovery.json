@@ -3,21 +3,27 @@
   "claims": [
     {
       "behaviors": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
         null
       ],
       "evidence": [
         {
           "artifact": "step1.5.trace.json",
-          "sha256": "592bee6b3f39f084f911cea0e9c07b7dc17d548aaf39e778b146b4541e5bbbb0"
+          "sha256": "6e4af61d09901c96696c1ead3f89b2e3b89a2d119b4deffa135b8bf39c2141b1"
         },
         {
           "artifact": "step1.5.contract.json",
-          "sha256": "f43f78141f12bbfdc3998c9cbb3a7cb6fdd01357fed63517a8132cea02f14262"
+          "sha256": "21fdd7d1e8af668cba81af37592488a3dda59bc623e464acda7c3bcf08f31cf9"
         }
       ],
       "evidence_status": "confirmed",
       "inspected_revision": "071f786e237c0c92b385a19314f9a804c90ffedc",
-      "rationale": "exact source trace retained 1 behavior groups",
+      "rationale": "exact source trace retained 7 behavior groups",
       "repository": "intacct/ia-app"
     }
   ],
@@ -28,7 +34,7 @@
     "catalog_mutation": "none",
     "github_writes": "none",
     "read_only": true,
-    "request_sha256": "36588757cf8480fce189ead7645d6617ef39a420bf267cc2e67535844e9d8db3"
+    "request_sha256": "5da913c3d434d8b2f4fabb12812f02af8267a6afd5a333f350fead9aa3786dc0"
   },
   "read_requests": [],
   "schema_version": "0.1",

@@ -94,7 +94,7 @@
       "tracked_branch": "main"
     }
   ],
-  "context_sha256": "d00f337f4d015d5a03d8aefdc0f6964a9131f1cdda356082469f1a12a6eaca77",
+  "context_sha256": "fead96f78eb57eba7ec8ed11f8d17cb57bf79bca8690666cd587adbe991ca7fa",
   "evidence_artifacts": [],
   "execution": {
     "base_url": "https://bedrock-mantle.us-west-2.api.aws/openai/v1",
@@ -111,8 +111,8 @@
   "provenance": {
     "catalog_mutation": "none",
     "github_writes": "none",
-    "request_sha256": "36588757cf8480fce189ead7645d6617ef39a420bf267cc2e67535844e9d8db3",
-    "step1_sha256": "ae388a693ab70b9abed359ec97ed8962f6bf4778f9acbb7a68da83858d1d4f82"
+    "request_sha256": "5da913c3d434d8b2f4fabb12812f02af8267a6afd5a333f350fead9aa3786dc0",
+    "step1_sha256": "4df4c5219f9bf58f04cfcc4923f0dd0c98c2a4b10a7d04789689aaab8617b39c"
   },
   "repository_handbooks": [],
   "schema_version": "0.1",

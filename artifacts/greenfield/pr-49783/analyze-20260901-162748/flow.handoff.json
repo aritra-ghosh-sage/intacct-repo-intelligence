@@ -30,7 +30,7 @@
       "outputs": {
         "step1": {
           "path": "step1.json",
-          "sha256": "5621ec0bc1fa4fbe064245c6dc79ee88610c48fa2d87cfffb681ce1de8b46ab8"
+          "sha256": "132d3e6646efed59f17045c777dbee14dade3eac55a80230ae87120bbde91bc6"
         }
       },
       "status": "complete"
@@ -39,7 +39,7 @@
       "inputs": {
         "step1": {
           "path": "step1.json",
-          "sha256": "5621ec0bc1fa4fbe064245c6dc79ee88610c48fa2d87cfffb681ce1de8b46ab8"
+          "sha256": "132d3e6646efed59f17045c777dbee14dade3eac55a80230ae87120bbde91bc6"
         }
       },
       "name": "request",
@@ -50,7 +50,7 @@
         },
         "request": {
           "path": "pr-analysis.request.json",
-          "sha256": "23e0f07ea261aa7a6e56b837af327631fd0fb26fcfe23db9082fca102d10d814"
+          "sha256": "37d2c33384fa2f4def063eebff5c897b0ebcda0d31699457f260e0c5adb99a12"
         }
       },
       "status": "complete"
@@ -63,14 +63,14 @@
         },
         "step1": {
           "path": "step1.json",
-          "sha256": "5621ec0bc1fa4fbe064245c6dc79ee88610c48fa2d87cfffb681ce1de8b46ab8"
+          "sha256": "132d3e6646efed59f17045c777dbee14dade3eac55a80230ae87120bbde91bc6"
         }
       },
       "name": "capture",
       "outputs": {
         "run_context": {
           "path": "run-context.json",
-          "sha256": "1b20418248eb7f95af226d82708587060365a8578f4069608f509b751ea03e7f"
+          "sha256": "06b042919046a103463e6010f6ebb71c7d0f559fa6bf64505af9ebcbd00099ad"
         }
       },
       "status": "complete"
@@ -79,18 +79,18 @@
       "inputs": {
         "step1": {
           "path": "step1.json",
-          "sha256": "5621ec0bc1fa4fbe064245c6dc79ee88610c48fa2d87cfffb681ce1de8b46ab8"
+          "sha256": "132d3e6646efed59f17045c777dbee14dade3eac55a80230ae87120bbde91bc6"
         }
       },
       "name": "step1_5",
       "outputs": {
         "contract": {
           "path": "step1.5.contract.json",
-          "sha256": "d8daca73f38ff376e1f56d440ed955bff5fe86812fc37e2d2aaeff7691f78717"
+          "sha256": "56ca58671f0eb9259830bf74e055ddc3bbf075f9e53a7dfc8246b0207c753abe"
         },
         "trace": {
           "path": "step1.5.trace.json",
-          "sha256": "06144ca2f1c1ebf97db2c994d12ff49671651d6852a785499adc570796da8c0b"
+          "sha256": "9c284f67b2b982e081c10c3d55bf9994a39b9366f9d2e0ea75eb4006e4984ab6"
         }
       },
       "status": "complete"
@@ -99,7 +99,7 @@
       "inputs": {
         "request": {
           "path": "pr-analysis.request.json",
-          "sha256": "23e0f07ea261aa7a6e56b837af327631fd0fb26fcfe23db9082fca102d10d814"
+          "sha256": "37d2c33384fa2f4def063eebff5c897b0ebcda0d31699457f260e0c5adb99a12"
         }
       },
       "name": "repository_context",
@@ -119,22 +119,22 @@
         },
         "contract": {
           "path": "step1.5.contract.json",
-          "sha256": "d8daca73f38ff376e1f56d440ed955bff5fe86812fc37e2d2aaeff7691f78717"
+          "sha256": "56ca58671f0eb9259830bf74e055ddc3bbf075f9e53a7dfc8246b0207c753abe"
         },
         "request": {
           "path": "pr-analysis.request.json",
-          "sha256": "23e0f07ea261aa7a6e56b837af327631fd0fb26fcfe23db9082fca102d10d814"
+          "sha256": "37d2c33384fa2f4def063eebff5c897b0ebcda0d31699457f260e0c5adb99a12"
         },
         "trace": {
           "path": "step1.5.trace.json",
-          "sha256": "06144ca2f1c1ebf97db2c994d12ff49671651d6852a785499adc570796da8c0b"
+          "sha256": "9c284f67b2b982e081c10c3d55bf9994a39b9366f9d2e0ea75eb4006e4984ab6"
         }
       },
       "name": "impact_discovery",
       "outputs": {
         "discovery": {
           "path": "impact-discovery.json",
-          "sha256": "90daaabe8a992d35778ec2002f68f3fee8eca747b8d2e7e00fe3e8507532b2ed"
+          "sha256": "2cbe9bad324eaff318531dfcd6ccbd1fdd5460646d0e7e85030e47e4bdee0625"
         }
       },
       "status": "complete"
@@ -147,11 +147,91 @@
         },
         "step1": {
           "path": "step1.json",
-          "sha256": "5621ec0bc1fa4fbe064245c6dc79ee88610c48fa2d87cfffb681ce1de8b46ab8"
+          "sha256": "132d3e6646efed59f17045c777dbee14dade3eac55a80230ae87120bbde91bc6"
         }
       },
       "name": "inventory",
       "outputs": {},
+      "status": "complete"
+    },
+    {
+      "inputs": {
+        "contract": {
+          "path": "step1.5.contract.json",
+          "sha256": "56ca58671f0eb9259830bf74e055ddc3bbf075f9e53a7dfc8246b0207c753abe"
+        },
+        "manifest": {
+          "path": "/Users/aritra.ghosh/projects/intacct-repo-intelligence/config/workspace_repos.yaml",
+          "sha256": "21f0f828bdabd2c2194b0f0d8e302b6c36664d136962f3d27a6bc0ee9a0e7cad"
+        },
+        "step1": {
+          "path": "step1.json",
+          "sha256": "132d3e6646efed59f17045c777dbee14dade3eac55a80230ae87120bbde91bc6"
+        }
+      },
+      "name": "step2",
+      "outputs": {
+        "step2": {
+          "path": "step2.json",
+          "sha256": "e8eda340e5a29a68873fc2185a4523bb44effdb5dc46008ba51c3f5acb0b4381"
+        }
+      },
+      "status": "complete"
+    },
+    {
+      "inputs": {
+        "step2": {
+          "path": "step2.json",
+          "sha256": "e8eda340e5a29a68873fc2185a4523bb44effdb5dc46008ba51c3f5acb0b4381"
+        }
+      },
+      "name": "step3",
+      "outputs": {
+        "step3": {
+          "path": "step3.json",
+          "sha256": "8d438f56f1b2e9b9676eae6518f98623ff6ae95de2bf1c02a5e62907d6dd5454"
+        }
+      },
+      "status": "complete"
+    },
+    {
+      "inputs": {
+        "contract": {
+          "path": "step1.5.contract.json",
+          "sha256": "56ca58671f0eb9259830bf74e055ddc3bbf075f9e53a7dfc8246b0207c753abe"
+        },
+        "step3": {
+          "path": "step3.json",
+          "sha256": "8d438f56f1b2e9b9676eae6518f98623ff6ae95de2bf1c02a5e62907d6dd5454"
+        }
+      },
+      "name": "step4",
+      "outputs": {
+        "step4": {
+          "path": "step4.json",
+          "sha256": "f49e52e307c74d8e199487f70df1d08c78fd2a3997ab309ddcfd21b9dd0f387a"
+        }
+      },
+      "status": "complete"
+    },
+    {
+      "inputs": {
+        "step3": {
+          "path": "step3.json",
+          "sha256": "8d438f56f1b2e9b9676eae6518f98623ff6ae95de2bf1c02a5e62907d6dd5454"
+        },
+        "step4": {
+          "path": "step4.json",
+          "sha256": "f49e52e307c74d8e199487f70df1d08c78fd2a3997ab309ddcfd21b9dd0f387a"
+        }
+      },
+      "name": "step5",
+      "outputs": {
+        "step5": {
+          "path": "step5.json",
+          "sha256": "f99b15945ebe9ccfe5292edf29302b71a41a2f19131e6109a032e356125ccf40"
+        }
+      },
       "status": "complete"
     }
   ],
