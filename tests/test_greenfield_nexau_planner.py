@@ -7,8 +7,13 @@ from types import ModuleType
 import pytest
 
 from greenfield.nexau_planner import (
+    _PLANNER_PROMPT_MAX_BYTES,
     NexAUPlannerError,
+    _cycle_brief,
     _default_planner_factory,
+    _prompt,
+    _replan_prompt,
+    _response_text,
     run_nexau_planner,
 )
 from greenfield.planning_contract import build_planning_report, validate_planning_report
@@ -23,46 +28,153 @@ def _greenfield_llm_env(monkeypatch) -> None:
     monkeypatch.setenv("LLM_BASE_URL", "https://test.example/v1")
 
 
-def test_default_planner_factory_adapts_keyword_only_nexau_run(
+def _install_fake_strands(monkeypatch, captured: dict[str, object]) -> None:
+    strands = ModuleType("strands")
+    models = ModuleType("strands.models")
+    bedrock = ModuleType("strands.models.bedrock")
+
+    class FakeBedrockModel:
+        def __init__(self, **kwargs: object) -> None:
+            captured["bedrock_model"] = kwargs
+
+    class FakeAgent:
+        def __init__(self, **kwargs: object) -> None:
+            captured["agent"] = kwargs
+
+        def __call__(self, prompt: str) -> str:
+            captured["prompt"] = prompt
+            return '{"tasks": []}'
+
+    strands.Agent = FakeAgent
+    bedrock.BedrockModel = FakeBedrockModel
+    monkeypatch.setitem(sys.modules, "strands", strands)
+    monkeypatch.setitem(sys.modules, "strands.models", models)
+    monkeypatch.setitem(sys.modules, "strands.models.bedrock", bedrock)
+
+
+def test_default_planner_factory_uses_native_strands_bedrock(
     tmp_path: Path, monkeypatch
 ) -> None:
     context, _ = _context(tmp_path)
     captured: dict[str, object] = {}
-    nexau = ModuleType("nexau")
+    _install_fake_strands(monkeypatch, captured)
 
-    class FakeLLMConfig:
-        def __init__(self, **kwargs: object) -> None:
-            captured["llm"] = kwargs
+    runner = _default_planner_factory(
+        {"model": "us.anthropic.claude-sonnet-5"}, GreenfieldToolbox(context)
+    )
 
-    class FakeAgentConfig:
-        def __init__(self, **kwargs: object) -> None:
-            captured["agent_config"] = kwargs
+    assert runner("create the plan") == '{"tasks": []}'
+    assert captured["prompt"] == "create the plan"
+    assert captured["bedrock_model"] == {
+        "model_id": "us.anthropic.claude-sonnet-5",
+        "max_tokens": 8192,
+    }
+    assert captured["agent"] == {
+        "model": captured["agent"]["model"],
+        "system_prompt": captured["agent"]["system_prompt"],
+        "callback_handler": None,
+    }
 
-    class FakeTool:
-        @staticmethod
-        def from_yaml(path: Path, *, binding: object) -> object:
-            captured["tool_path"] = path
-            captured["binding"] = binding
-            return object()
 
-    class FakeAgent:
-        def __init__(self, *, config: object) -> None:
-            captured["config"] = config
+def test_default_planner_factory_rejects_missing_model(
+    tmp_path: Path, monkeypatch
+) -> None:
+    context, _ = _context(tmp_path)
+    monkeypatch.delenv("STRANDS_PLANNER_MODEL", raising=False)
+    with pytest.raises(NexAUPlannerError, match="planner model is not configured"):
+        _default_planner_factory({}, GreenfieldToolbox(context))
 
-        def run(self, *, message: str) -> str:
-            captured["message"] = message
-            return '{"tasks": []}'
 
-    nexau.Agent = FakeAgent
-    nexau.AgentConfig = FakeAgentConfig
-    nexau.LLMConfig = FakeLLMConfig
-    nexau.Tool = FakeTool
-    monkeypatch.setitem(sys.modules, "nexau", nexau)
+def test_default_planner_factory_uses_environment_model(
+    tmp_path: Path, monkeypatch
+) -> None:
+    context, _ = _context(tmp_path)
+    captured: dict[str, object] = {}
+    _install_fake_strands(monkeypatch, captured)
+    monkeypatch.setenv("STRANDS_PLANNER_MODEL", "us.anthropic.claude-sonnet-5")
 
     runner = _default_planner_factory({}, GreenfieldToolbox(context))
 
-    assert runner("create the plan") == '{"tasks": []}'
-    assert captured["message"] == "create the plan"
+    runner("create the plan")
+    assert captured["bedrock_model"]["model_id"] == "us.anthropic.claude-sonnet-5"
+
+
+def test_response_text_reads_strands_agent_message() -> None:
+    class Result:
+        def __init__(self) -> None:
+            self.message = {
+                "role": "assistant",
+                "content": [{"text": '{"tasks": []}'}],
+            }
+
+    assert _response_text(Result()) == '{"tasks": []}'
+
+
+def test_strands_prompts_use_bounded_handbook_oriented_briefs(tmp_path: Path) -> None:
+    context, _ = _context(tmp_path)
+    oversized = "unbounded-stage-detail-" + ("x" * 200_000)
+    summary = {
+        "step2_candidates": [
+            {"repository": "intacct/explicit-tests", "detail": oversized}
+            for _ in range(50)
+        ],
+        "step3_repositories": {f"repository-{index}": oversized for index in range(50)},
+        "step4_coverage": {f"surface-{index}": oversized for index in range(50)},
+        "step4_obligations": {f"obligation-{index}": oversized for index in range(50)},
+        "step5_actions": [
+            {
+                "action_id": f"action-{index}",
+                "target_repository": "intacct/explicit-tests",
+                "detail": oversized,
+            }
+            for index in range(50)
+        ],
+        "gaps": [oversized for _ in range(50)],
+    }
+    cycles = [
+        {
+            "task": {
+                "task_id": f"task-{index}",
+                "task_type": "screen_repository",
+                "repository": "intacct/explicit-tests",
+            },
+            "decision": "replan",
+            "error": oversized,
+            "evidence_refs": [{"tool_call_id": f"call-{index}"}],
+        }
+        for index in range(50)
+    ]
+    findings = {
+        "repository_impacts": [
+            {
+                "repository": "intacct/explicit-tests",
+                "evidence_state": "candidate",
+                "rationale": oversized,
+            }
+        ],
+        "actions": [],
+        "coverage": {"detail": oversized},
+        "gaps": [oversized],
+        "recommendation": oversized,
+    }
+
+    initial = _prompt(context, summary)
+    replanned = _replan_prompt(context, summary, cycles, findings)
+
+    assert len(initial.encode("utf-8")) <= _PLANNER_PROMPT_MAX_BYTES
+    assert len(replanned.encode("utf-8")) <= _PLANNER_PROMPT_MAX_BYTES
+    assert oversized not in initial
+    assert oversized not in replanned
+    assert context["source"]["head_revision"] in initial
+    assert "Use progressive disclosure" in initial
+    assert "read-only evidence tool" not in initial
+    assert "read-only evidence tool" not in replanned
+    assert "CodeGraph" not in initial
+    assert "action-0" in initial
+    assert "task-49" in replanned
+    cycle_brief = _cycle_brief(cycles)
+    assert len(cycle_brief["items"]) == 8
+    assert cycle_brief["completed_task_ids_omitted_count"] == 42
 
 
 def test_nexau_planner_retains_bounded_lifecycle(tmp_path: Path) -> None:
@@ -163,7 +275,7 @@ def test_nexau_planner_replans_before_synthesis(tmp_path: Path) -> None:
 
     task_types = [cycle["task"]["task_type"] for cycle in report["cycles"]]
     assert task_types == ["screen_repository", "challenge_claim", "synthesize_review"]
-    assert report["analysis"]["agent"]["name"] == "nexau"
+    assert report["analysis"]["agent"]["name"] == "strands-bedrock"
     assert validate_planning_report(report) == []
 
 

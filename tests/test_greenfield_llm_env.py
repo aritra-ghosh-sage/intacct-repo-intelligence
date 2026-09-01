@@ -10,19 +10,18 @@ from unittest.mock import patch
 
 import pytest
 
-import greenfield.llm_env as llm_env
+from greenfield import llm_env
 from greenfield.llm_env import (
     GreenfieldEnvError,
     load_greenfield_env,
     validate_greenfield_llm_env,
 )
 from greenfield.nexau_planner import run_nexau_planner
-from greenfield.strands_config import credential_status
-from greenfield.strands_config import StrandsRuntimeConfig
+from greenfield.strands_config import StrandsRuntimeConfig, credential_status
 from greenfield.strands_tools import GreenfieldToolbox
 from scripts import run_greenfield_strands, trace_greenfield_step1_5
-from tests.test_greenfield_step1_5 import _trace as build_trace
 from tests.test_greenfield_simplified_flow import _context
+from tests.test_greenfield_step1_5 import _trace as build_trace
 
 
 @pytest.fixture(autouse=True)
@@ -119,29 +118,23 @@ def test_validate_greenfield_llm_env_reports_clear_instructions(
     assert "Minimum example" in message
 
 
-def test_shared_env_values_are_available_to_strands_and_nexau(
+def test_aws_env_values_are_available_to_strands_planner(
     tmp_path: Path, monkeypatch
 ) -> None:
     env_path = tmp_path / ".env"
     env_path.write_text(
-        "\n".join(
-            [
-                "AWS_PROFILE=greenfield",
-                "AWS_REGION=us-west-2",
-                "LLM_API_KEY=shared-key",
-                "LLM_MODEL=shared-model",
-                "LLM_BASE_URL=https://shared.example/v1",
-            ]
-        )
-        + "\n",
+        """AWS_PROFILE=greenfield
+AWS_REGION=us-west-2
+STRANDS_MODEL=trace-model
+STRANDS_PLANNER_MODEL=planner-model
+""",
         encoding="utf-8",
     )
     for key in (
         "AWS_PROFILE",
         "AWS_REGION",
-        "LLM_API_KEY",
-        "LLM_MODEL",
-        "LLM_BASE_URL",
+        "STRANDS_MODEL",
+        "STRANDS_PLANNER_MODEL",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -154,9 +147,8 @@ def test_shared_env_values_are_available_to_strands_and_nexau(
 
     def planner_factory(_config: dict[str, object]):
         def runner(_prompt: str) -> str:
-            assert os.environ["LLM_API_KEY"] == "shared-key"
-            assert os.environ["LLM_MODEL"] == "shared-model"
-            assert os.environ["LLM_BASE_URL"] == "https://shared.example/v1"
+            assert os.environ["STRANDS_MODEL"] == "trace-model"
+            assert os.environ["STRANDS_PLANNER_MODEL"] == "planner-model"
             return json.dumps(
                 {
                     "tasks": [
@@ -179,7 +171,7 @@ def test_shared_env_values_are_available_to_strands_and_nexau(
         planner_factory=planner_factory,
     )
 
-    assert report["analysis"]["agent"]["name"] == "nexau"
+    assert report["analysis"]["agent"]["name"] == "strands-bedrock"
     assert report["status"] == "complete"
 
 
@@ -199,7 +191,7 @@ def test_llm_model_resolution_prefers_cli_over_config_and_env(monkeypatch) -> No
     )
 
     assert model == "cli-model"
-    assert base_url == "https://planner.example/v1"
+    assert base_url is None
 
 
 def test_llm_model_resolution_fails_when_unconfigured(monkeypatch) -> None:
@@ -214,27 +206,28 @@ def test_llm_model_resolution_fails_when_unconfigured(monkeypatch) -> None:
         )
 
 
-def test_stage_models_use_distinct_strands_and_nexau_identifiers(monkeypatch) -> None:
-    monkeypatch.setenv("STRANDS_MODEL", "us.openai.gpt-5.6-luna")
-    monkeypatch.setenv("LLM_MODEL", "openai.gpt-5.6-luna")
+def test_stage_models_use_distinct_native_strands_identifiers(monkeypatch) -> None:
+    monkeypatch.setenv("STRANDS_MODEL", "us.anthropic.claude-sonnet-4-5")
+    monkeypatch.setenv("STRANDS_PLANNER_MODEL", "us.anthropic.claude-sonnet-5")
 
-    strands_model, nexau_model = run_greenfield_strands._resolve_stage_models(
+    strands_model, planner_model = run_greenfield_strands._resolve_stage_models(
         StrandsRuntimeConfig()
     )
 
-    assert strands_model == "us.openai.gpt-5.6-luna"
-    assert nexau_model == "openai.gpt-5.6-luna"
+    assert strands_model == "us.anthropic.claude-sonnet-4-5"
+    assert planner_model == "us.anthropic.claude-sonnet-5"
 
 
 def test_stage_models_reject_a_mantle_gpt56_id_for_strands(monkeypatch) -> None:
-    monkeypatch.delenv("STRANDS_MODEL", raising=False)
-    monkeypatch.setenv("LLM_MODEL", "openai.gpt-5.6-luna")
+    monkeypatch.setenv("STRANDS_MODEL", "openai.gpt-5.6-luna")
 
-    with pytest.raises(ValueError, match="Bedrock ConverseStream"):
+    with pytest.raises(ValueError, match="Bedrock Runtime"):
         run_greenfield_strands._resolve_stage_models(StrandsRuntimeConfig())
 
 
-def test_capability_preflight_records_e2b_as_optional(monkeypatch, tmp_path: Path) -> None:
+def test_capability_preflight_records_e2b_as_optional(
+    monkeypatch, tmp_path: Path
+) -> None:
     real_find_spec = run_greenfield_strands.importlib.util.find_spec
 
     def find_spec(name: str):
@@ -243,13 +236,11 @@ def test_capability_preflight_records_e2b_as_optional(monkeypatch, tmp_path: Pat
         return real_find_spec(name)
 
     monkeypatch.setattr(run_greenfield_strands.importlib.util, "find_spec", find_spec)
-    monkeypatch.setitem(sys.modules, "nexau", types.ModuleType("nexau"))
     monkeypatch.setitem(sys.modules, "strands", types.ModuleType("strands"))
-    monkeypatch.setenv("LLM_API_KEY", "test-key")
     monkeypatch.setattr(
         run_greenfield_strands,
         "version",
-        lambda package: {"strands-agents": "1.53.0", "nexau": "0.4.1"}[package],
+        lambda package: {"strands-agents": "1.53.0"}[package],
     )
 
     result = run_greenfield_strands._capability_preflight(
@@ -264,7 +255,7 @@ def test_capability_preflight_records_e2b_as_optional(monkeypatch, tmp_path: Pat
         "python_executable": sys.executable,
         "python_prefix": sys.prefix,
         "python_version": run_greenfield_strands.platform.python_version(),
-        "packages": {"strands-agents": "1.53.0", "nexau": "0.4.1"},
+        "packages": {"strands-agents": "1.53.0"},
     }
     assert result["optional_capabilities"] == {"e2b": "unavailable"}
     assert result["optional_diagnostics"] == [
@@ -276,18 +267,15 @@ def test_capability_preflight_records_e2b_as_optional(monkeypatch, tmp_path: Pat
     ]
 
 
-def test_capability_preflight_names_greenfield_runtime_for_missing_nexau(
+def test_capability_preflight_does_not_require_nexau(
     monkeypatch, tmp_path: Path
 ) -> None:
     real_import = builtins.__import__
 
     def import_without_nexau(name: str, *args: object, **kwargs: object):
-        if name == "nexau":
-            raise ImportError("NexAU is unavailable")
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", import_without_nexau)
-    monkeypatch.setenv("LLM_API_KEY", "test-key")
     monkeypatch.setattr(
         run_greenfield_strands,
         "version",
@@ -301,18 +289,9 @@ def test_capability_preflight_names_greenfield_runtime_for_missing_nexau(
         planner_config={},
     )
 
-    assert result["nexau"] == "unavailable"
-    assert result["diagnostics"] == [
-        {
-            "component": "nexau",
-            "code": "dependency_unavailable",
-            "message": (
-                "pinned NexAU dependency is unavailable; run Greenfield with "
-                "./.venv-greenfield/bin/python after installing the "
-                "nexau-planner extra"
-            ),
-        }
-    ]
+    assert result["status"] == "ready"
+    assert result["strands"] == "ready"
+    assert result["diagnostics"] == []
 
 
 def test_missing_env_file_does_not_block_step1_5_runner(

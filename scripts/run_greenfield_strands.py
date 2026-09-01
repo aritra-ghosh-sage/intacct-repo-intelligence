@@ -32,12 +32,8 @@ from greenfield.github_repository_evidence import (
     collect_repository_evidence,
 )
 from greenfield.impact_discovery import discover_from_trace, validate_discovery
-from greenfield.llm_env import (
-    GreenfieldEnvError,
-    load_greenfield_env,
-    validate_greenfield_llm_env,
-)
-from greenfield.nexau_planner import NexAUPlannerError, run_nexau_planner
+from greenfield.llm_env import load_greenfield_env
+from greenfield.nexau_planner import StrandsPlannerError, run_strands_planner
 from greenfield.planning_contract import build_planning_report
 from greenfield.pr_analysis_contract import make_request
 from greenfield.pr_review import render_review, validate_review
@@ -219,54 +215,53 @@ def _resolve_llm_runtime(
     strands_config: Any,
     planner_config: dict[str, Any],
 ) -> tuple[str, str | None]:
+    """Resolve the legacy generic model helper without provider credentials."""
+
     model = (
-        cli_model or strands_config.model or os.environ.get("LLM_MODEL") or ""
+        cli_model or strands_config.model or os.environ.get("STRANDS_MODEL") or ""
     ).strip()
     if not model:
         raise ValueError(
-            "Greenfield LLM model is not configured; supply --model, set model in the Greenfield config, or export LLM_MODEL"
+            "Greenfield Strands model is not configured; supply --model, set model "
+            "in the Greenfield config, or export STRANDS_MODEL"
         )
-    base_url = (
-        str(
-            planner_config.get("base_url")
-            or strands_config.base_url
-            or os.environ.get("LLM_BASE_URL")
-            or ""
-        ).strip()
-        or None
-    )
-    if not base_url:
-        raise ValueError(
-            "NexAU is enabled but no base URL is configured; set base_url in the planner config or export LLM_BASE_URL"
-        )
-    return model, base_url
+    del planner_config
+    return model, None
 
 
 def _resolve_stage_models(strands_config: Any) -> tuple[str, str]:
-    """Resolve the native Strands and OpenAI-compatible NexAU model IDs.
+    """Resolve the trace model and the dedicated native planner model."""
 
-    Strands uses Bedrock ConverseStream, while NexAU uses an OpenAI-compatible
-    Chat Completions endpoint.  GPT-5.6 uses different identifiers for those
-    APIs, so a single shared LLM_MODEL cannot safely represent both runtimes.
-    """
-
-    nexau_model = (os.environ.get("LLM_MODEL") or "").strip()
     strands_model = (
-        strands_config.model or os.environ.get("STRANDS_MODEL") or nexau_model
+        strands_config.model or os.environ.get("STRANDS_MODEL") or ""
     ).strip()
     if not strands_model:
         raise ValueError(
             "Greenfield Strands model is not configured; set STRANDS_MODEL or "
             "model in the Strands config"
         )
-    if strands_model.startswith("openai.gpt-5.6-"):
+    if strands_model.startswith("openai."):
         raise ValueError(
-            "Greenfield Strands uses Bedrock ConverseStream and cannot use the "
-            f"Mantle model ID {strands_model!r}; set STRANDS_MODEL to the "
-            "corresponding Bedrock inference-profile ID (for example, "
-            "us.openai.gpt-5.6-luna) and retain LLM_MODEL for NexAU."
+            "Greenfield Strands uses Bedrock Runtime and cannot use the "
+            f"Mantle model ID {strands_model!r}; set STRANDS_MODEL to a Bedrock "
+            "model or inference-profile ID."
         )
-    return strands_model, nexau_model
+    planner_model = (
+        getattr(strands_config, "planner_model", None)
+        or os.environ.get("STRANDS_PLANNER_MODEL")
+        or "us.anthropic.claude-sonnet-5"
+    ).strip()
+    if not planner_model:
+        raise ValueError(
+            "Strands planner model is not configured; set STRANDS_PLANNER_MODEL "
+            "or planner_model in the Strands config"
+        )
+    if planner_model.startswith("openai."):
+        raise ValueError(
+            "Strands planner uses Bedrock Runtime; set STRANDS_PLANNER_MODEL to "
+            "a Bedrock model or inference-profile ID."
+        )
+    return strands_model, planner_model
 
 
 def _execution_context(
@@ -274,8 +269,7 @@ def _execution_context(
     dry_run: bool,
     planner_mode: str,
     strands_model: str,
-    nexau_model: str,
-    base_url: str | None,
+    planner_model: str,
 ) -> dict[str, Any]:
     context: dict[str, Any] = {
         "dry_run": dry_run,
@@ -284,10 +278,8 @@ def _execution_context(
         # bundles make the provider boundary explicit below.
         "model": strands_model,
         "strands_model": strands_model,
-        "nexau_model": nexau_model,
+        "planner_model": planner_model,
     }
-    if base_url is not None:
-        context["base_url"] = base_url
     return context
 
 
@@ -298,18 +290,17 @@ def _capability_preflight(
     env_path: Path,
     planner_config: Mapping[str, Any],
 ) -> dict[str, Any]:
+    """Check native Strands prerequisites without OpenAI-compatible env coupling."""
+
     diagnostics: list[dict[str, str]] = []
     optional_diagnostics: list[dict[str, str]] = []
-    try:
-        validate_greenfield_llm_env(
-            model=model or None, base_url=base_url, env_path=env_path
-        )
-    except GreenfieldEnvError as exc:
+    del base_url, env_path
+    if not model:
         diagnostics.append(
             {
-                "component": "llm",
+                "component": "strands_planner",
                 "code": "configuration_unavailable",
-                "message": redact(str(exc)),
+                "message": "Strands planner model is not configured",
             }
         )
     if not isinstance(planner_config, Mapping):
@@ -318,20 +309,6 @@ def _capability_preflight(
                 "component": "planner_config",
                 "code": "invalid",
                 "message": "planner config must be an object",
-            }
-        )
-    try:
-        import nexau  # noqa: F401
-    except ImportError:
-        diagnostics.append(
-            {
-                "component": "nexau",
-                "code": "dependency_unavailable",
-                "message": (
-                    "pinned NexAU dependency is unavailable; run Greenfield with "
-                    "./.venv-greenfield/bin/python after installing the "
-                    "nexau-planner extra"
-                ),
             }
         )
     try:
@@ -357,16 +334,13 @@ def _capability_preflight(
             }
         )
     packages: dict[str, str | None] = {}
-    for package in ("strands-agents", "nexau"):
+    for package in ("strands-agents",):
         try:
             packages[package] = version(package)
         except PackageNotFoundError:
             packages[package] = None
     return {
         "status": "ready" if not diagnostics else "unavailable",
-        "nexau": "ready"
-        if not any(row["component"] == "nexau" for row in diagnostics)
-        else "unavailable",
         "strands": "ready"
         if not any(row["component"] == "strands" for row in diagnostics)
         else "unavailable",
@@ -522,17 +496,14 @@ def main(argv: list[str] | None = None) -> int:
         strands_config = load_strands_config(args.strands_config)
         apply_strands_environment(strands_config)
         planner_config = {}
-        strands_model, nexau_model = _resolve_stage_models(strands_config)
-        base_url = (
-            strands_config.base_url or os.environ.get("LLM_BASE_URL") or ""
-        ).strip() or None
+        strands_model, planner_model = _resolve_stage_models(strands_config)
         dry_run = args.dry_run or not (args.publish_github or args.create_draft_pr)
         timeout = args.timeout or strands_config.timeout_seconds
         args.output_dir.mkdir(parents=True, exist_ok=True)
         telemetry = GreenfieldTelemetry(args.output_dir)
         preflight = _capability_preflight(
-            model=nexau_model,
-            base_url=base_url,
+            model=planner_model,
+            base_url=None,
             env_path=env_path,
             planner_config=planner_config,
         )
@@ -621,8 +592,7 @@ def main(argv: list[str] | None = None) -> int:
                 dry_run=dry_run,
                 planner_mode=args.planner_mode,
                 strands_model=strands_model,
-                nexau_model=nexau_model,
-                base_url=base_url,
+                planner_model=planner_model,
             ),
         )
         run_context_path = args.output_dir / "run-context.json"
@@ -885,66 +855,66 @@ def main(argv: list[str] | None = None) -> int:
         }
         planning_report: dict[str, Any] | None = None
         planning_path: Path | None = None
-        current_stage = "nexau_planning"
+        current_stage = "strands_planning"
         telemetry.emit(
             "analysis_inputs",
             context_sha256=run_context["context_sha256"],
             summary=compatibility_summary,
         )
         try:
-            planning_report = run_nexau_planner(
+            planning_report = run_strands_planner(
                 run_context,
                 compatibility_summary,
                 toolbox,
                 mode=args.planner_mode,
                 config={
                     **planner_config,
-                    "model": nexau_model,
-                    **({"base_url": base_url} if base_url else {}),
+                    "model": planner_model,
+                    "max_tokens": 8192,
                 },
                 model=strands_model,
                 timeout=timeout,
             )
             telemetry.emit(
-                "nexau_plan_generated",
+                "strands_plan_generated",
                 status=planning_report.get("status"),
                 planning_sha256=planning_report.get("planning_sha256"),
                 tasks=[
                     cycle.get("task") for cycle in planning_report.get("cycles", [])
                 ],
             )
-        except NexAUPlannerError as exc:
-            nexau_reason = redact(str(exc))
+        except StrandsPlannerError as exc:
+            strands_reason = redact(str(exc))
             planning_report = build_planning_report(
                 run_context,
                 mode="default",
                 planner={
-                    "name": "nexau",
+                    "name": "strands-bedrock",
                     "status": "unavailable",
-                    "reason": nexau_reason,
+                    "reason": strands_reason,
                 },
                 cycles=[],
                 status="unavailable",
                 stop_reason="planner_runtime_unavailable",
-                gaps=["nexau_planner_unavailable"],
+                gaps=["strands_planner_unavailable"],
                 analysis={
                     "repository_impacts": [],
                     "actions": [],
                     "coverage": {},
-                    "recommendation": "Review deterministic evidence; NexAU investigation is unavailable.",
-                    "gaps": ["nexau_planner_unavailable"],
+                    "recommendation": "Review deterministic evidence; Strands planner investigation is unavailable.",
+                    "gaps": ["strands_planner_unavailable"],
                     "agent": {
-                        "name": "nexau",
+                        "name": "strands-bedrock",
                         "status": "unavailable",
-                        "reason": nexau_reason,
+                        "reason": strands_reason,
                     },
                 },
             )
-            telemetry.emit("nexau_planner_unavailable", reason=nexau_reason)
+            telemetry.emit("strands_planner_unavailable", reason=strands_reason)
         planning_path = args.output_dir / "planning-report.json"
         write_json_atomic(planning_path, planning_report)
         handoff.complete_stage(
-            "nexau_planning",
+            "strands_planning",
             inputs={
                 "run_context": run_context_path,
                 "step2": step2_path,
@@ -962,12 +932,12 @@ def main(argv: list[str] | None = None) -> int:
                 in {"complete", "partial", "blocked", "unavailable"}
                 else None
             )
-            if (
-                isinstance(planned_analysis, dict)
-                and planning_report.get("status") in {"partial", "blocked"}
-            ):
+            if isinstance(planned_analysis, dict) and planning_report.get("status") in {
+                "partial",
+                "blocked",
+            }:
                 planned_analysis = _downgrade_incomplete_analysis(
-                    planned_analysis, reason="nexau_planner_incomplete"
+                    planned_analysis, reason="strands_planner_incomplete"
                 )
             if isinstance(planned_analysis, dict):
                 analysis = build_analysis_report(
@@ -984,7 +954,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             else:
                 raise AnalysisReportError(
-                    "NexAU planning report did not contain analysis for status "
+                    "Strands planning report did not contain analysis for status "
                     f"{planning_report.get('status')!r}"
                 )
         except (AnalysisReportError, ValueError) as exc:
@@ -996,11 +966,11 @@ def main(argv: list[str] | None = None) -> int:
                 step5=step5_report,
                 agent_analysis={
                     "agent": {
-                        "name": "nexau",
+                        "name": "strands-bedrock",
                         "status": "unavailable",
                         "reason": redact(str(exc)),
                     },
-                    "gaps": ["nexau_planner_unavailable"],
+                    "gaps": ["strands_planner_unavailable"],
                 },
                 tool_calls=toolbox.ledger(),
                 planning=planning_report,
@@ -1590,7 +1560,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         if args.mode == "draft":
             if planning_report.get("status") != "complete":
-                raise RuntimeError("draft blocked: NexAU planning is not complete")
+                raise RuntimeError("draft blocked: Strands planning is not complete")
             if step7_report is None or step7_report.get("status") != "validated":
                 raise RuntimeError("draft blocked: Step 7 validation did not pass")
             _require_draft_step8_success(step8_result)

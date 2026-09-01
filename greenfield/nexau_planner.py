@@ -1,4 +1,9 @@
-"""Optional NexAU planning adapter for bounded Greenfield investigation."""
+"""Native Strands/Bedrock planning adapter for bounded Greenfield investigation.
+
+The module name and compatibility aliases are retained temporarily because the
+planner report is part of the existing Greenfield artifact contract.  The
+runtime itself is Strands-native and does not depend on NexAU.
+"""
 
 from __future__ import annotations
 
@@ -12,19 +17,23 @@ from typing import Any
 import yaml
 
 from greenfield.artifact_io import artifact_sha256
-from greenfield.llm_env import (
-    GreenfieldEnvError,
-    load_greenfield_env,
-    validate_greenfield_llm_env,
-)
 from greenfield.planning_contract import TASK_TYPES, build_planning_report
 from greenfield.strands_agent import StrandsAgentError, run_strands_analysis
 from greenfield.strands_tools import GreenfieldToolbox
 from greenfield.telemetry import redact
 
+_PLANNER_PROMPT_MAX_BYTES = 48_000
+_PLANNER_MAX_ITEMS = 16
+_PLANNER_MAX_TEXT_LENGTH = 240
+_PLANNER_HANDOFF_MAX_CYCLES = 8
 
-class NexAUPlannerError(ValueError):
-    """Raised when the optional planner cannot produce a safe lifecycle."""
+
+class StrandsPlannerError(ValueError):
+    """Raised when the Strands planner cannot produce a safe lifecycle."""
+
+
+# Compatibility for callers and retained artifact readers during the migration.
+NexAUPlannerError = StrandsPlannerError
 
 
 def _redacted_error(value: Any) -> str:
@@ -40,7 +49,7 @@ def load_planner_config(path: str | Path | None) -> dict[str, Any]:
     if value is None:
         return {}
     if not isinstance(value, dict):
-        raise NexAUPlannerError("planner config must be an object")
+        raise StrandsPlannerError("planner config must be an object")
     forbidden_fragments = (
         "api_key",
         "apikey",
@@ -59,7 +68,10 @@ def load_planner_config(path: str | Path | None) -> dict[str, Any]:
     def contains_secret(value: Any) -> bool:
         if isinstance(value, Mapping):
             return any(
-                any(fragment in normalized_key_name(key) for fragment in forbidden_fragments)
+                any(
+                    fragment in normalized_key_name(key)
+                    for fragment in forbidden_fragments
+                )
                 or contains_secret(child)
                 for key, child in value.items()
             )
@@ -68,27 +80,231 @@ def load_planner_config(path: str | Path | None) -> dict[str, Any]:
         return False
 
     if contains_secret(value):
-        raise NexAUPlannerError("planner config must not contain secret fields")
+        raise StrandsPlannerError("planner config must not contain secret fields")
     return dict(value)
 
 
+def _bounded_text(value: Any) -> str:
+    text = str(value)
+    if len(text) <= _PLANNER_MAX_TEXT_LENGTH:
+        return text
+    return text[:_PLANNER_MAX_TEXT_LENGTH] + "..."
+
+
+def _bounded_strings(values: Any) -> dict[str, Any]:
+    rows = values if isinstance(values, list) else []
+    return {
+        "items": [_bounded_text(value) for value in rows[:_PLANNER_MAX_ITEMS]],
+        "count": len(rows),
+        "omitted_count": max(0, len(rows) - _PLANNER_MAX_ITEMS),
+        "sha256": artifact_sha256(rows),
+    }
+
+
+def _record_brief(rows: Any, fields: tuple[str, ...]) -> dict[str, Any]:
+    values = rows if isinstance(rows, list) else []
+    items = []
+    for row in values[:_PLANNER_MAX_ITEMS]:
+        if not isinstance(row, Mapping):
+            continue
+        item = {
+            field: _bounded_text(row[field])
+            if isinstance(row[field], str)
+            else row[field]
+            for field in fields
+            if row.get(field) is not None
+            and isinstance(row.get(field), (str, int, float, bool))
+        }
+        items.append(item)
+    return {
+        "items": items,
+        "count": len(values),
+        "omitted_count": max(0, len(values) - _PLANNER_MAX_ITEMS),
+        "sha256": artifact_sha256(values),
+    }
+
+
+def _mapping_brief(value: Any) -> dict[str, Any]:
+    mapping = value if isinstance(value, Mapping) else {}
+    keys = sorted(_bounded_text(key) for key in mapping)
+    return {
+        "key_count": len(keys),
+        "keys": keys[:_PLANNER_MAX_ITEMS],
+        "omitted_key_count": max(0, len(keys) - _PLANNER_MAX_ITEMS),
+        "sha256": artifact_sha256(mapping),
+    }
+
+
+def _planner_brief(
+    run_context: Mapping[str, Any], summary: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Project immutable evidence into bounded planner-routing context."""
+
+    source = run_context.get("source", {})
+    source_data = source if isinstance(source, Mapping) else {}
+    candidates = run_context.get("candidate_repositories", [])
+    handbooks = run_context.get("repository_handbooks", [])
+    artifacts = run_context.get("evidence_artifacts", [])
+    provenance = run_context.get("provenance", {})
+    provenance_data = provenance if isinstance(provenance, Mapping) else {}
+    return {
+        "source": {
+            field: source_data.get(field)
+            for field in (
+                "repository",
+                "repo_key",
+                "pr_number",
+                "base_revision",
+                "head_revision",
+            )
+            if source_data.get(field) is not None
+        }
+        | {"changed_paths": _bounded_strings(source_data.get("changed_paths"))},
+        "context_sha256": run_context.get("context_sha256"),
+        "provenance": {
+            field: value
+            for field, value in provenance_data.items()
+            if field.endswith("sha256")
+        },
+        "candidate_repositories": _record_brief(
+            candidates,
+            (
+                "repository",
+                "repo_key",
+                "priority",
+                "inspected_revision",
+                "discovery_eligible",
+            ),
+        ),
+        "repository_handbooks": _record_brief(handbooks, ("repository", "sha256")),
+        "evidence_artifacts": _record_brief(artifacts, ("sha256",)),
+        "evidence_summary": {
+            "step2_candidates": _record_brief(
+                summary.get("step2_candidates"),
+                ("repository", "priority", "evidence_state", "status"),
+            ),
+            "step3_repositories": _mapping_brief(summary.get("step3_repositories")),
+            "step4_coverage": _mapping_brief(summary.get("step4_coverage")),
+            "step4_obligations": _mapping_brief(summary.get("step4_obligations")),
+            "step5_actions": _record_brief(
+                summary.get("step5_actions"),
+                (
+                    "action_id",
+                    "action_type",
+                    "status",
+                    "target_repository",
+                    "evidence_state",
+                    "draft_eligible",
+                ),
+            ),
+            "gaps": _bounded_strings(summary.get("gaps")),
+        },
+    }
+
+
+def _cycle_brief(cycles: list[Mapping[str, Any]]) -> dict[str, Any]:
+    items = []
+    for cycle in cycles[-_PLANNER_HANDOFF_MAX_CYCLES:]:
+        task = cycle.get("task", {})
+        if not isinstance(task, Mapping):
+            continue
+        evidence_refs = cycle.get("evidence_refs", [])
+        if not isinstance(evidence_refs, list):
+            evidence_refs = []
+        item = {
+            field: _bounded_text(task[field])
+            if isinstance(task[field], str)
+            else task[field]
+            for field in ("task_id", "task_type", "repository")
+            if task.get(field) is not None
+        }
+        item.update(
+            {
+                field: _bounded_text(cycle[field])
+                if isinstance(cycle[field], str)
+                else cycle[field]
+                for field in ("decision", "status", "error")
+                if cycle.get(field) is not None
+            }
+        )
+        item.update(
+            {
+                "evidence_ref_count": len(evidence_refs),
+                "evidence_refs_sha256": artifact_sha256(evidence_refs),
+            }
+        )
+        items.append(item)
+    return {
+        "items": items,
+        "count": len(cycles),
+        "completed_task_ids": [
+            _bounded_text(cycle["task"]["task_id"])
+            for cycle in cycles[-_PLANNER_HANDOFF_MAX_CYCLES:]
+            if isinstance(cycle.get("task"), Mapping)
+            and cycle["task"].get("task_id") is not None
+        ],
+        "completed_task_ids_omitted_count": max(
+            0, len(cycles) - _PLANNER_HANDOFF_MAX_CYCLES
+        ),
+        "omitted_count": max(0, len(cycles) - _PLANNER_HANDOFF_MAX_CYCLES),
+        "sha256": artifact_sha256(cycles),
+    }
+
+
+def _findings_brief(findings: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "repository_impacts": _record_brief(
+            findings.get("repository_impacts"),
+            ("repository", "evidence_state", "rank", "challenge_task_id"),
+        ),
+        "actions": _record_brief(
+            findings.get("actions"),
+            (
+                "action_id",
+                "action_type",
+                "target_repository",
+                "evidence_state",
+                "draft_eligible",
+                "challenge_task_id",
+            ),
+        ),
+        "coverage": _mapping_brief(findings.get("coverage")),
+        "gaps": _bounded_strings(findings.get("gaps")),
+        "recommendation": _bounded_text(findings.get("recommendation", "")),
+    }
+
+
+def _render_planner_prompt(instructions: str, sections: Mapping[str, Any]) -> str:
+    prompt = (
+        instructions
+        + "\n\n"
+        + "\n\n".join(
+            f"{title}:\n```json\n{json.dumps(value, sort_keys=True)}\n```"
+            for title, value in sections.items()
+        )
+    )
+    if len(prompt.encode("utf-8")) > _PLANNER_PROMPT_MAX_BYTES:
+        raise StrandsPlannerError(
+            "Strands planner brief exceeds the bounded prompt budget after compaction"
+        )
+    return prompt
+
+
 def _prompt(run_context: Mapping[str, Any], summary: Mapping[str, Any]) -> str:
-    return f"""You are the Greenfield NexAU planner. Create a read-only investigation plan.
+    return _render_planner_prompt(
+        """You are the Greenfield Strands planner. Create a read-only investigation plan.
 Return JSON only with a `tasks` list. Each task requires `task_id`, `task_type`,
 `question`, and optional `repository`. Use only captured repositories. Inspect
 explicit-contract candidates before discovery-screen candidates. Plan a final
 challenge_claim task for any strong claim or draft-eligible action, and finish
 with synthesize_review. Do not claim impact, coverage, or execute writes.
 
-Run context:
-```json
-{json.dumps(run_context, sort_keys=True)}
-```
-Evidence summary:
-```json
-{json.dumps(summary, sort_keys=True)}
-```
-    """
+Use progressive disclosure. The brief is an index, not source authority. For a
+repository with a handbook, read its `index`, then only relevant behavior sections,
+and verify any candidate locator with the host-dispatched evidence tasks. Do not
+request broad evidence or source dumps.""",
+        {"Planner brief": _planner_brief(run_context, summary)},
+    )
 
 
 def _replan_prompt(
@@ -97,111 +313,78 @@ def _replan_prompt(
     cycles: list[Mapping[str, Any]],
     findings: Mapping[str, Any],
 ) -> str:
-    return f"""You are replanning the Greenfield NexAU read-only investigation.
+    return _render_planner_prompt(
+        """You are replanning the Greenfield Strands read-only investigation.
 Review the completed task results and choose only the next bounded tasks needed to
 resolve material evidence gaps. Return JSON only with a `tasks` list. Do not repeat
 completed task IDs. Use only captured repositories and finish with a challenge_claim
 task for any proposed confirmed or strong_candidate impact/action. Do not claim
 impact or coverage yourself.
 
-Run context:
-```json
-{json.dumps(run_context, sort_keys=True)}
-```
-Original evidence summary:
-```json
-{json.dumps(summary, sort_keys=True)}
-```
-Completed lifecycle:
-```json
-{json.dumps(cycles, sort_keys=True)}
-```
-Findings accumulated from bounded Strands tasks:
-```json
-{json.dumps(findings, sort_keys=True)}
-```
-"""
+Use the evidence hashes and bounded task records to choose the next task. If more
+context is necessary, schedule a bounded host-dispatched evidence task.""",
+        {
+            "Planner brief": _planner_brief(run_context, summary),
+            "Completed lifecycle": _cycle_brief(cycles),
+            "Accumulated findings": _findings_brief(findings),
+        },
+    )
 
 
 def _default_planner_factory(
     config: Mapping[str, Any], toolbox: GreenfieldToolbox
 ) -> Callable[[str], Any]:
-    """Create a programmatic NexAU agent when the optional runtime is installed."""
+    """Create a narrow Strands agent backed by Bedrock Runtime.
 
-    env_path = load_greenfield_env()
-    model = str(config.get("model") or os.environ.get("LLM_MODEL") or "").strip()
-    base_url = str(
-        config.get("base_url") or os.environ.get("LLM_BASE_URL") or ""
+    The planner deliberately has no model-facing tools.  It selects bounded
+    task descriptors; the host remains responsible for dispatching the
+    revision-bound evidence tools and validating every task result.
+    """
+
+    del toolbox
+    model = str(
+        config.get("model") or os.environ.get("STRANDS_PLANNER_MODEL") or ""
     ).strip()
-    try:
-        validate_greenfield_llm_env(
-            model=model or None,
-            base_url=base_url or None,
-            env_path=env_path,
+    if not model:
+        raise StrandsPlannerError(
+            "Strands planner model is not configured; set STRANDS_PLANNER_MODEL "
+            "or planner model in the runtime configuration"
         )
-    except GreenfieldEnvError as exc:
-        raise NexAUPlannerError(str(exc)) from exc
-    api_key = os.environ.get("LLM_API_KEY")
+    max_tokens = config.get("max_tokens", 8192)
+    if (
+        isinstance(max_tokens, bool)
+        or not isinstance(max_tokens, int)
+        or max_tokens <= 0
+    ):
+        raise StrandsPlannerError(
+            "Strands planner max_tokens must be a positive integer"
+        )
     try:
-        from nexau import Agent, AgentConfig, LLMConfig, Tool
+        from strands import Agent
+        from strands.models.bedrock import BedrockModel
     except ImportError as exc:  # pragma: no cover - depends on optional runtime
-        raise NexAUPlannerError(
-            "NexAU is not installed; install the pinned project dependency before enabling planner mode"
+        raise StrandsPlannerError(
+            "Strands Bedrock runtime is not installed; install strands-agents before enabling planner mode"
         ) from exc
-    llm = LLMConfig(
-        model=model,
-        base_url=base_url,
-        api_key=api_key,
-        api_type=config.get("api_type", "openai_chat_completion"),
-    )
 
-    def greenfield_evidence(
-        operation: str,
-        repository: str | None = None,
-        path: str | None = None,
-        query: str | None = None,
-        section: str | None = None,
-        start_line: int | None = None,
-        end_line: int | None = None,
-    ) -> dict[str, Any]:
-        """Expose only the shared revision-bound Greenfield evidence ledger."""
+    bedrock_model = BedrockModel(model_id=model, max_tokens=max_tokens)
 
-        if operation == "list_candidate_repositories":
-            return toolbox.list_candidate_repositories()
-        if operation == "repository_metadata" and repository:
-            return toolbox.repository_metadata(repository)
-        if operation == "read_handbook" and repository:
-            return toolbox.read_handbook(repository, section or "index")
-        if operation == "read_source" and repository and path:
-            return toolbox.read_source(
-                repository, path, start_line or 1, end_line or 200
-            )
-        if operation == "search_source" and repository and query:
-            return toolbox.search_source(repository, query, path or "")
-        if operation == "read_evidence_artifact" and path:
-            return toolbox.read_evidence_artifact(path)
-        if operation == "codegraph_explore" and repository and query:
-            return toolbox.codegraph_explore(repository, query)
-        raise NexAUPlannerError(
-            "planner evidence tool requires valid captured-scope arguments"
+    def new_agent() -> Any:
+        """Create a stateless turn agent so replan history cannot grow unbounded."""
+
+        return Agent(
+            model=bedrock_model,
+            system_prompt=(
+                "You plan bounded, read-only Greenfield investigations. Return only "
+                "the requested JSON task plan. Never claim evidence or execute writes."
+            ),
+            callback_handler=None,
         )
 
-    tool_path = (
-        Path(__file__).with_name("nexau_tools") / "greenfield_evidence.tool.yaml"
-    )
-    evidence_tool = Tool.from_yaml(tool_path, binding=greenfield_evidence)
-    agent = Agent(
-        config=AgentConfig(
-            name="greenfield_nexau_planner",
-            system_prompt="You plan bounded, read-only Greenfield investigations.",
-            llm_config=llm,
-            tools=[evidence_tool],
-        )
-    )
     def run_planner(prompt: str) -> Any:
-        """Adapt Greenfield's prompt runner to NexAU's keyword-only API."""
+        """Adapt the host prompt runner to Strands' callable Agent API."""
 
-        return agent.run(message=prompt)
+        return new_agent()(prompt)
 
     return run_planner
 
@@ -209,26 +392,50 @@ def _default_planner_factory(
 def _response_text(raw: Any) -> str:
     if isinstance(raw, str):
         return raw
-    for attribute in ("content", "message", "text"):
+    for attribute in ("content", "text"):
         value = getattr(raw, attribute, None)
         if isinstance(value, str):
             return value
+    message = getattr(raw, "message", None)
+    if isinstance(message, Mapping):
+        content = message.get("content")
+        if isinstance(content, list):
+            text = "\n".join(
+                str(block["text"])
+                for block in content
+                if isinstance(block, Mapping) and isinstance(block.get("text"), str)
+            )
+            if text:
+                return text
+        if isinstance(message.get("text"), str):
+            return str(message["text"])
     if isinstance(raw, Mapping):
         for key in ("content", "message", "text", "output"):
             value = raw.get(key)
             if isinstance(value, str):
                 return value
+            if key in {"content", "message", "output"} and isinstance(value, Mapping):
+                content = value.get("content")
+                if isinstance(content, list):
+                    text = "\n".join(
+                        str(block["text"])
+                        for block in content
+                        if isinstance(block, Mapping)
+                        and isinstance(block.get("text"), str)
+                    )
+                    if text:
+                        return text
     return str(raw)
 
 
 def _run_planner_call(runner: Callable[[str], Any], prompt: str) -> Any:
     try:
         return runner(prompt)
-    except NexAUPlannerError:
+    except StrandsPlannerError:
         raise
     except Exception as exc:  # pragma: no cover - provider-specific failure shape
-        raise NexAUPlannerError(
-            f"NexAU planner execution failed: {_redacted_error(exc)}"
+        raise StrandsPlannerError(
+            f"Strands planner execution failed: {_redacted_error(exc)}"
         ) from exc
 
 
@@ -246,10 +453,10 @@ def _parse_tasks(
     try:
         value = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise NexAUPlannerError("NexAU planner did not return JSON") from exc
+        raise StrandsPlannerError("Strands planner did not return JSON") from exc
     rows = value.get("tasks") if isinstance(value, Mapping) else None
     if not isinstance(rows, list):
-        raise NexAUPlannerError("NexAU planner response requires tasks")
+        raise StrandsPlannerError("Strands planner response requires tasks")
     allowed = {str(run_context["source"]["repository"])} | {
         str(row["repository"]) for row in run_context["candidate_repositories"]
     }
@@ -257,16 +464,16 @@ def _parse_tasks(
     seen_ids: set[str] = set()
     for index, row in enumerate(rows):
         if not isinstance(row, Mapping) or row.get("task_type") not in TASK_TYPES:
-            raise NexAUPlannerError(f"planner task {index} has an invalid task_type")
+            raise StrandsPlannerError(f"planner task {index} has an invalid task_type")
         repository = row.get("repository")
         if repository is not None and str(repository) not in allowed:
-            raise NexAUPlannerError(f"planner task {index} is outside captured scope")
+            raise StrandsPlannerError(f"planner task {index} is outside captured scope")
         question = str(row.get("question") or "").strip()
         if not question:
-            raise NexAUPlannerError(f"planner task {index} requires a question")
+            raise StrandsPlannerError(f"planner task {index} requires a question")
         task_id = str(row.get("task_id") or f"planner-{index + 1:02d}")
         if task_id in seen_ids:
-            raise NexAUPlannerError(f"planner task IDs must be unique: {task_id}")
+            raise StrandsPlannerError(f"planner task IDs must be unique: {task_id}")
         seen_ids.add(task_id)
         tasks.append(
             {
@@ -425,7 +632,7 @@ def _downgrade_incomplete_findings(findings: dict[str, Any], *, reason: str) -> 
     findings["gaps"].add(reason)
 
 
-def run_nexau_planner(
+def run_strands_planner(
     run_context: Mapping[str, Any],
     summary: Mapping[str, Any],
     toolbox: GreenfieldToolbox,
@@ -437,10 +644,10 @@ def run_nexau_planner(
     model: str | None = None,
     timeout: int = 300,
 ) -> dict[str, Any]:
-    """Run NexAU as the default bounded orchestrator for Analyze."""
+    """Run Strands as the default bounded orchestrator for Analyze."""
 
     if mode != "default":
-        raise NexAUPlannerError("planner mode must be default")
+        raise StrandsPlannerError("planner mode must be default")
     settings = dict(config or {})
     started = monotonic()
     runner = (
@@ -466,9 +673,9 @@ def run_nexau_planner(
     try:
         max_cycles = int(settings.get("max_cycles", 32))
     except (TypeError, ValueError) as exc:
-        raise NexAUPlannerError("planner max_cycles must be an integer") from exc
+        raise StrandsPlannerError("planner max_cycles must be an integer") from exc
     if max_cycles < 1:
-        raise NexAUPlannerError("planner max_cycles must be positive")
+        raise StrandsPlannerError("planner max_cycles must be positive")
     queue = list(tasks)
     terminal = False
     stop_reason = "planner_completed_captured_scope"
@@ -478,7 +685,7 @@ def run_nexau_planner(
         if task_id in completed_ids:
             continue
         if task_id in all_task_ids:
-            raise NexAUPlannerError(
+            raise StrandsPlannerError(
                 f"planner task IDs must be globally unique: {task_id}"
             )
         all_task_ids.add(task_id)
@@ -577,7 +784,7 @@ def run_nexau_planner(
     else:
         status = "partial" if findings["gaps"] else "complete"
     if status != "complete":
-        _downgrade_incomplete_findings(findings, reason="nexau_planner_incomplete")
+        _downgrade_incomplete_findings(findings, reason="strands_planner_incomplete")
     findings["gaps"] = sorted(findings["gaps"])
     for row in findings["repository_impacts"]:
         if isinstance(row, Mapping) and row.get("evidence_state") in {
@@ -590,14 +797,14 @@ def run_nexau_planner(
             row["challenge_task_id"] = f"challenge-action-{row.get('action_id')}"
     findings["agent"] = {
         "status": "complete" if status == "complete" else "partial",
-        "name": "nexau",
+        "name": "strands-bedrock",
         "mode": mode,
     }
     report = build_planning_report(
         run_context,
         mode=mode,
         planner={
-            "name": "nexau",
+            "name": "strands-bedrock",
             "model": settings.get("model") or "configured",
             "elapsed_ms": int((monotonic() - started) * 1000),
         },
@@ -610,4 +817,14 @@ def run_nexau_planner(
     return report
 
 
-__all__ = ["NexAUPlannerError", "load_planner_config", "run_nexau_planner"]
+# Temporary compatibility alias for retained callers and old artifact tooling.
+run_nexau_planner = run_strands_planner
+
+
+__all__ = [
+    "NexAUPlannerError",
+    "StrandsPlannerError",
+    "load_planner_config",
+    "run_nexau_planner",
+    "run_strands_planner",
+]

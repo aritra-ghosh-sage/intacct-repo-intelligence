@@ -21,6 +21,7 @@ class StrandsRuntimeConfig:
     region: str | None = None
     profile: str | None = None
     model: str | None = None
+    planner_model: str | None = None
     base_url: str | None = None
     timeout_seconds: int = 300
     max_tokens: int = 32000
@@ -86,8 +87,7 @@ def load_strands_config(path: str | Path | None = None) -> StrandsRuntimeConfig:
         unsafe = sorted(_secret_key_paths(raw))
         if unsafe:
             raise StrandsConfigError(
-                "Strands config must not contain secret fields: "
-                + ", ".join(unsafe)
+                "Strands config must not contain secret fields: " + ", ".join(unsafe)
             )
         data = raw
     timeout = data.get("timeout_seconds", 300)
@@ -97,6 +97,9 @@ def load_strands_config(path: str | Path | None = None) -> StrandsRuntimeConfig:
         region=str(data["region"]).strip() if data.get("region") else None,
         profile=str(data["profile"]).strip() if data.get("profile") else None,
         model=str(data["model"]).strip() if data.get("model") else None,
+        planner_model=(
+            str(data["planner_model"]).strip() if data.get("planner_model") else None
+        ),
         base_url=str(data["base_url"]).strip() if data.get("base_url") else None,
         timeout_seconds=_positive_int(timeout, "timeout_seconds"),
         max_tokens=_positive_int(max_tokens, "max_tokens"),
@@ -111,7 +114,8 @@ def credential_status() -> dict[str, object]:
     has_env_secret = bool(os.environ.get("AWS_SECRET_ACCESS_KEY"))
     return {
         "aws_profile": os.environ.get("AWS_PROFILE") or None,
-        "aws_region": os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION"),
+        "aws_region": os.environ.get("AWS_REGION")
+        or os.environ.get("AWS_DEFAULT_REGION"),
         "env_access_key_present": has_env_key,
         "env_secret_key_present": has_env_secret,
         "env_session_token_present": bool(os.environ.get("AWS_SESSION_TOKEN")),

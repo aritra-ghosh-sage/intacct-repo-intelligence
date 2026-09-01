@@ -1346,6 +1346,15 @@ def test_strands_config_defaults_to_large_output_budget(tmp_path: Path) -> None:
     assert config.max_continuations == 2
 
 
+def test_strands_config_accepts_dedicated_planner_model(tmp_path: Path) -> None:
+    config_path = tmp_path / "strands.yaml"
+    config_path.write_text(
+        "region: us-east-1\nplanner_model: us.anthropic.claude-sonnet-5\n",
+        encoding="utf-8",
+    )
+    assert load_strands_config(config_path).planner_model == "us.anthropic.claude-sonnet-5"
+
+
 def test_strands_config_accepts_configured_max_continuations(tmp_path: Path) -> None:
     config_path = tmp_path / "strands.yaml"
     config_path.write_text(

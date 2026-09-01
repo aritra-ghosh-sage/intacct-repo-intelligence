@@ -204,11 +204,11 @@ PYTHONPATH=. ./.venv/bin/python scripts/run_greenfield.py \
 ```
 
 `scripts/run_greenfield_strands.py` is the implementation entry point behind
-that command. NexAU is the mandatory internal Analyze orchestrator. Step 1.5
-uses Strands independently to trace exact source blobs; it is not an Analyze
-fallback. When NexAU is unavailable or incomplete, Analyze writes a degraded,
-explicitly gapped artifact bundle and automatic Draft creation remains blocked.
-Never substitute a direct Strands analysis for a failed NexAU lifecycle.
+that command. The native Strands/Bedrock planner is the mandatory internal
+Analyze orchestrator. Step 1.5 uses Strands independently to trace exact source
+blobs; it is not an Analyze fallback. When the planner is unavailable or
+incomplete, Analyze writes a degraded, explicitly gapped artifact bundle and
+automatic Draft creation remains blocked.
 
 The operator-facing flow has four phases:
 
@@ -271,7 +271,7 @@ create an independent dashboard data model.
   When external source access or immutable evidence is missing, change only
   supporting contract or validation code; never invent source facts.
 - Run focused validation first: Step 2 contracts and candidate logic use
-  `tests/test_greenfield_step2.py`; NexAU planner changes use
+  `tests/test_greenfield_step2.py`; Strands planner changes use
   `tests/test_greenfield_nexau_planner.py`; runner, artifact, and Draft-gate
   changes use `tests/test_greenfield_simplified_flow.py` and
   `tests/test_greenfield_replay.py`. Run `tests/test_greenfield_*.py` only

@@ -9,6 +9,8 @@ profile: null
 # Use a dated, versioned profile so a run stays reproducible; undated aliases
 # such as `us.anthropic.claude-sonnet-5` move underneath pinned evidence.
 model: us.anthropic.claude-sonnet-4-5-20250929-v1:0
+# Narrow Analyze planner model. This uses Bedrock Runtime directly.
+planner_model: us.anthropic.claude-sonnet-5
 timeout_seconds: 300
 # Claude Sonnet 4.5 allows 64,000 generated tokens; 32,000 leaves headroom while
 # bounding runaway generations. Amazon Nova models cap output at 5,000.

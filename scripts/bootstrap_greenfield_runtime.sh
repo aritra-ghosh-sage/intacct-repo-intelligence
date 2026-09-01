@@ -10,6 +10,6 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 
 UV_PROJECT_ENVIRONMENT="${runtime_environment}" \
-    uv sync --project "${repo_root}" --locked --extra nexau-planner --no-group dev
+    uv sync --project "${repo_root}" --locked --no-group dev
 
 echo "Greenfield runtime ready: ${runtime_environment}"
