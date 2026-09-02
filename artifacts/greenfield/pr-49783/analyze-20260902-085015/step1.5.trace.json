@@ -1,0 +1,134 @@
+{
+  "affected_symbols": [],
+  "analysis_kind": "greenfield_pr_impact_step_1_5",
+  "behaviors": [
+    {
+      "description": "Builds the SELECT clause fragment for user-chosen dimension columns based on the SHOWDIMENSIONVALUES parameter. Iterates configured dimensions and appends gl_info column references (optionally aliased) to the select string; no calls to other resolvable internal or external symbols are made within the shown hunk.",
+      "edges": [],
+      "entry_symbols": [
+        "GLLedgerReporter::GetSubTransSelectShowDimQuery"
+      ],
+      "kind": "behavior",
+      "source_paths": [
+        "app/source/gl/GLLedgerReporter.cls"
+      ],
+      "surfaces": {},
+      "symbol_paths": {
+        "GLLedgerReporter::GetSubTransSelectShowDimQuery": "app/source/gl/GLLedgerReporter.cls"
+      }
+    },
+    {
+      "description": "Builds select/from/where clause fragments for dimension display, including special-case handling for the employee dimension (joining contact/employeemst tables) and generic name/id column selection for other dimensions. Body is only partially shown (excerpt is cut off before completion at line 1236). Calls to the global helper isl_strpos() appear but its definition/target path is not present in the provided evidence, so no edge is emitted for it.",
+      "edges": [],
+      "entry_symbols": [
+        "GLLedgerReporter::BuildShowDimQuery"
+      ],
+      "kind": "behavior",
+      "source_paths": [
+        "app/source/gl/GLLedgerReporter.cls"
+      ],
+      "surfaces": {},
+      "symbol_paths": {
+        "GLLedgerReporter::BuildShowDimQuery": "app/source/gl/GLLedgerReporter.cls"
+      }
+    },
+    {
+      "description": "Returns false unconditionally, indicating the GL ledger report does not support a matching-letter column. No calls made.",
+      "edges": [],
+      "entry_symbols": [
+        "GLLedgerReporter::showMatchingLetterColumn"
+      ],
+      "kind": "behavior",
+      "source_paths": [
+        "app/source/gl/GLLedgerReporter.cls"
+      ],
+      "surfaces": {},
+      "symbol_paths": {
+        "GLLedgerReporter::showMatchingLetterColumn": "app/source/gl/GLLedgerReporter.cls"
+      }
+    },
+    {
+      "description": "Empty override hook for query-build customization prior to executing the report query; body contains only a comment and performs no calls.",
+      "edges": [],
+      "entry_symbols": [
+        "GLLedgerReporter::beforeQueryBuild"
+      ],
+      "kind": "behavior",
+      "source_paths": [
+        "app/source/gl/GLLedgerReporter.cls"
+      ],
+      "surfaces": {},
+      "symbol_paths": {
+        "GLLedgerReporter::beforeQueryBuild": "app/source/gl/GLLedgerReporter.cls"
+      }
+    }
+  ],
+  "calls": [],
+  "changed_paths": [
+    "app/source/gl/GLLedgerReporter.cls"
+  ],
+  "findings": [
+    {
+      "message": "The hunk spanning lines 1863-1949 (report header/line-population logic calling Reporter::populateReportingTitles, GLBookManager::IsConsolidationBook, $this->GenerateRelabeledTerms(), GetCurrentTZTime(), GetCurrentDate(), GetOperationId(), countArray()) begins mid-method; the enclosing method's declaration line is outside the provided excerpt range (omitted 1237-1862), so the entry symbol cannot be reliably identified and no behavior/edges were emitted for this region. Next check: fetch full method context around line ~1800-1863 to identify the containing method name and confirm these call targets/paths.",
+      "symbol": null,
+      "type": "unresolved_entry_symbol"
+    },
+    {
+      "message": "The hunk spanning the start of lines 5574-5601 (transaction grouping logic referencing $tempTransArray, Request::$r, kShowCSV, FormatDateForDisplay) is the tail end of a method whose declaration is outside the provided excerpt (omitted 1950-5573), so its entry symbol cannot be confirmed and no behavior/edges were emitted. Next check: fetch the method declaration preceding line 5574 to identify the containing symbol and validate the FormatDateForDisplay call target.",
+      "symbol": null,
+      "type": "unresolved_entry_symbol"
+    },
+    {
+      "message": "Calls to global/helper functions QueryResult(), array_column(), PrepINClauseStmt(), and isl_strpos() appear in the shown hunks but their defining file/line is not present in the provided changed-file evidence, so no CALLS edges were asserted for them per the exact-evidence requirement.",
+      "symbol": null,
+      "type": "unresolved_call_target"
+    }
+  ],
+  "input": {
+    "base_sha": "88831b97966bf918cd08a882d2ac5d2aa4bf21a9",
+    "changed_paths": [
+      "app/source/gl/GLLedgerReporter.cls"
+    ],
+    "head_sha": "071f786e237c0c92b385a19314f9a804c90ffedc",
+    "pr_number": 49783,
+    "repo_key": "ia-main",
+    "repository": "intacct/ia-app"
+  },
+  "omitted_counts": null,
+  "provenance": {
+    "agent": {
+      "continuation_attempts": 0,
+      "join_whitespace_trimmed": false,
+      "max_tokens": 32000,
+      "model": "us.anthropic.claude-sonnet-5",
+      "name": "strands",
+      "request": {
+        "agent_invocation_count": 1,
+        "elapsed_milliseconds": 80382,
+        "prompt_bytes": 16303,
+        "prompt_max_bytes": 96000,
+        "prompt_sha256": "cba0405bf279e57fde56943c106edbe414a20505b40cc75fdaf4185e46f63531",
+        "retry": {
+          "connect_timeout_seconds": 10,
+          "mode": "standard",
+          "read_timeout_seconds": 120,
+          "total_max_attempts": 2
+        }
+      },
+      "timeout_seconds": 300
+    },
+    "catalog_mutation": "none",
+    "context_sha256": "5695945e812b7c04c678eedcabe870da97b3a1ad4ee934fcd956998c30b3ed9c",
+    "github_writes": "none",
+    "read_only": true,
+    "source_revision": "071f786e237c0c92b385a19314f9a804c90ffedc",
+    "step1_evidence_sha256": "6f7567971f1c8dc607a82059a67cd77e1f15b80314925ca564532691b738a1b7",
+    "trace_sha256": "662544de36a967e3b7367a6d92659f9a575908eed432854e31851de48aad1fd0"
+  },
+  "repository": "intacct/ia-app",
+  "revision": "071f786e237c0c92b385a19314f9a804c90ffedc",
+  "schema_version": "0.1",
+  "surfaces": {},
+  "truncated": false,
+  "truncation_reason": null
+}

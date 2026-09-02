@@ -1,0 +1,56 @@
+{
+  "analysis": {
+    "actions": [],
+    "agent": {
+      "name": "strands-bedrock",
+      "reason": "planner task 0 has an invalid task_type",
+      "status": "unavailable"
+    },
+    "coverage": {},
+    "gaps": [
+      "strands_planner_unavailable"
+    ],
+    "recommendation": "Review deterministic evidence; Strands planner investigation is unavailable.",
+    "repository_impacts": []
+  },
+  "analysis_kind": "greenfield_analysis_plan",
+  "cycles": [],
+  "gaps": [
+    "strands_planner_unavailable"
+  ],
+  "input_artifacts": {
+    "compatibility_summary_sha256": "af4ee7fd25a3f83dc6bb20b0065456d6519f4f722282903aafa1738453b1cb41",
+    "run_context_sha256": "d11ac910855535e358e2067666d105ed75f0aeed566a1fd2b3e79ec436ff7ba2",
+    "step2_sha256": "6334c18a12faea1a18ede6bec0f8191e94f9bcc4d8d0336b0ac66c033c7e8a01",
+    "step3_sha256": "0794fd0d7dabcd4a46d762d6ec23c89eff35f1df9aa645b643db541524748d0c",
+    "step4_sha256": "09949e25280a1b4af624a22acbfebb70acc57f75276b7058c099f9f136b5562c",
+    "step5_sha256": "48dc89e107ae02bbf097540cda2124318691e6ad18dca79d5e93fca3cc5dbfb5"
+  },
+  "mode": "default",
+  "planner": {
+    "name": "strands-bedrock",
+    "reason": "planner task 0 has an invalid task_type",
+    "status": "unavailable"
+  },
+  "planning_sha256": "c8c91937f6fd144b674cfac33ed762aedf5ed63462fe5b650c37181fa7054ac3",
+  "provenance": {
+    "catalog_mutation": "none",
+    "github_writes": "none",
+    "read_only": true
+  },
+  "run_context_sha256": "d11ac910855535e358e2067666d105ed75f0aeed566a1fd2b3e79ec436ff7ba2",
+  "schema_version": "0.1",
+  "source": {
+    "base_revision": "88831b97966bf918cd08a882d2ac5d2aa4bf21a9",
+    "changed_paths": [
+      "app/source/gl/GLLedgerReporter.cls"
+    ],
+    "head_revision": "071f786e237c0c92b385a19314f9a804c90ffedc",
+    "local_root": "/Users/aritra.ghosh/projects/main",
+    "pr_number": 49783,
+    "repo_key": "ia-main",
+    "repository": "intacct/ia-app"
+  },
+  "status": "unavailable",
+  "stop_reason": "planner_runtime_unavailable"
+}

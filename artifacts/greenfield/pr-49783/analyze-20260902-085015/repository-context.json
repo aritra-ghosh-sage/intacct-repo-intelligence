@@ -1,0 +1,421 @@
+{
+  "analysis_kind": "greenfield_repository_context",
+  "gaps": [],
+  "guidance": [
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/add_delete_table_in_global_replication.instructions.md",
+      "sha256": "78d583e954d9cdcc1e5b5bb1831f6ba4667a59016f129990ac92243ecf2777a1"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/api-acronyms.instructions.md",
+      "sha256": "995d368f30603c6c6c9936f0dca328dce2b88f961fa662e34f48c5b98989fddf"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/api-doc-path.instructions.md",
+      "sha256": "9b380769f35a67b9f08b35a5f14e6c665f680d1eed382ea10d139188d44fa896"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/api-doc-schema.instructions.md",
+      "sha256": "adedae3d5ecf0fa5326e11bd1fb3a0e1537f7ba20390bd4634956d66338255a8"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/api-naming.instructions.md",
+      "sha256": "fec4653e84bf6b6493deaae95e7b3b8c702abc98466442a6ea69978c658f425f"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/api.instructions.md",
+      "sha256": "85088809b77526f1b3167a59a3169641c621852435c277a22c260a5edd41c09f"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/cls.instructions.md",
+      "sha256": "e0f392e5f478c28064dd58a1439aa7f2e9ee692afa296894c72ded3469861203"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/common-tasks/adding-new-field-to-automatedtransactionresponse.instructions.md",
+      "sha256": "cf8b20eb8c15fe133d84c05cf72a6723d2d63e9b7bbceacc05ccb7b7899d07f0"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/common-tasks/code-review.instructions.md",
+      "sha256": "d6ae0ca53531cd6d0ed7c42300ef7cd2df3a180bbb13891a5b73881d4f2b68b9"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/common-tasks/entity-to-openapi.instructions.md",
+      "sha256": "7d18aaf4c1afa624643e1c7021e2376774abe6a0a38aa46a4e0cf659dc4ee39e"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/common-tasks/import.instructions.md",
+      "sha256": "ba8873cee5e0b2abbccec678804d18930da99b811c293d05786a854df90dd7f5"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/common-tasks/new-module-preferences.instructions.md",
+      "sha256": "7165c2bada415ae7988d58731093ec59f23b0e52fad95e256c8ee87adc52529a"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/common-tasks/new-object.instructions.md",
+      "sha256": "672c27e7f3a6d9272b1bd391e93fbe871e74b3f5c88cf705acc765a759d57ab1"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/common-tasks/php-warnings.instructions.md",
+      "sha256": "e491014b07547a4c22833ba2d785960d378b7abb62bae3be63edcdf91b7bd030"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/common-tasks/updating-existing-object.instructions.md",
+      "sha256": "4903a925c610fcc52eb62acb823967274bd5f4c368d8713f5d3ef64deab25918"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/db-migration-scripts.instructions.md",
+      "sha256": "200a41a1d06ab45269ddcecd9629cdb7c14e115d19eb4cb70dedab7e98fb497b"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/dce-get-file.instructions.md",
+      "sha256": "1b69485eae833190fd289fd192bef7103704bb7ce340a2b4fb23c912f50e501a"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/dce.instructions.md",
+      "sha256": "c174d7d17744814b337aa164d89cbc24558abeccea4c2c895d8522f5178ff0e5"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/ent.instructions.md",
+      "sha256": "4c85971099197282adb9df9de73dd511ad1817bdbd7b0044ef8a96fb3c822080"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/flyway-migrations.instructions.md",
+      "sha256": "527273441405328dc5bca7a3a7a44f6e6261afc65f445765712a66c065caf513"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/gl/financial-context.instructions.md",
+      "sha256": "9df1e560d9ed46e2ceaa5ece563b2b547939b860783fdd705c49d5d3a4be2ef8"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/global-db-routing.instructions.md",
+      "sha256": "047725f044e372b05ec52045fbf2388f3c699f1bf8bfb73f12f4dd76cbfa20b8"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/global-db-rw-pr-validation.instructions.md",
+      "sha256": "9630c30b60a718dda765fe6db9333a85a90c8279c1eab19ab02acc82a0176515"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/i18n.instructions.md",
+      "sha256": "6249f30246705b06ec0dddb5789a17ab0e2792f18f16f8e74f766380a236110f"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/js.instructions.md",
+      "sha256": "81885837f04f1ed854a05220f7c3841936eac6aee112bcbfaf351a4c9b5768f7"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/large-migration-review.instructions.md",
+      "sha256": "76274b39dfa3c3854c128a5549fb06996318d8fc5193195dc4fc00f776afd7bb"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/migrations-checklist.instructions.md",
+      "sha256": "ac206e02d13f779f3c494102e9e6a0bc75b74cdf316ec4f74814284245e7c74d"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/migrations-slowness.instructions.md",
+      "sha256": "be2e33c17deeda39ab6670807ee85ebd417f67d9b6b48978d6ef19b3c391e2ba"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/oracle-dml-parent-child-batching.instructions.md",
+      "sha256": "f2e6c6cc6a28644c35c333a43f5c8fa3b09bb0481c8eb92b3a41cfd47072c7e2"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/php-warnings.instructions.md",
+      "sha256": "ea2fb1d54bf87afe10976b972086ceb61c820126c5bd54afee660627c46456d6"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/pre-migration-phases.instructions.md",
+      "sha256": "5503109cec743f0931381eb7acbe4a5e1e8328dcd46a94faa18c5a900b027011"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/spectral-validation.instructions.md",
+      "sha256": "ebb9e1b5263288cde18ffc26e6a82dc03ec1b0121ff1414a3f6a25a0d9720d58"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/sql.instructions.md",
+      "sha256": "02f3bf02c162d2ba176d595c8527a7d074dd7a5420cd052a689aedfd752ed2e3"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/strict-csp-migration-[pagename].instructions.md",
+      "sha256": "a7742806cee4928ea94bf46056413e5f96579b31d6c81ca2ecb3bdab22b2613b"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/strict-csp-migration-login.instructions.md",
+      "sha256": "3522654d02abd720e8ccd4bc8baa08360654b68bd3180b096d1659d090d8e261"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/token-custom-terminology.instructions.md",
+      "sha256": "c40d165208504d0258e244563c6437df743777e65f5f323fff7b6fa66e494b98"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/ui.instructions.md",
+      "sha256": "decfd9592aafb7a251c61c927f6df4cd9507669539b5c9d72bc8ae8175416a35"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/xml.instructions.md",
+      "sha256": "ee0aee21af0a771b33466c2241312cf1bd78f9bddb7b8ea53da4709e31ad25aa"
+    },
+    {
+      "kind": "guidance",
+      "path": ".github/instructions/xsl.instructions.md",
+      "sha256": "2a8f0a83cd89be37080cd833f055312e3d73442e9b6b6cdfa4a748a584639d60"
+    }
+  ],
+  "inspected_revision": "071f786e237c0c92b385a19314f9a804c90ffedc",
+  "owners": [
+    {
+      "owners": [
+        "@intacct/ia-app-gl"
+      ],
+      "path": "app/source/gl/GLLedgerReporter.cls",
+      "status": "available"
+    }
+  ],
+  "provenance": {
+    "files": [
+      {
+        "kind": "codeowners",
+        "path": ".github/CODEOWNERS",
+        "sha256": "8477aa85485599a96fbff9876d1a0633463f1f1c2c9e2037da5d97e37d11c3b4"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/add_delete_table_in_global_replication.instructions.md",
+        "sha256": "78d583e954d9cdcc1e5b5bb1831f6ba4667a59016f129990ac92243ecf2777a1"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/api-acronyms.instructions.md",
+        "sha256": "995d368f30603c6c6c9936f0dca328dce2b88f961fa662e34f48c5b98989fddf"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/api-doc-path.instructions.md",
+        "sha256": "9b380769f35a67b9f08b35a5f14e6c665f680d1eed382ea10d139188d44fa896"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/api-doc-schema.instructions.md",
+        "sha256": "adedae3d5ecf0fa5326e11bd1fb3a0e1537f7ba20390bd4634956d66338255a8"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/api-naming.instructions.md",
+        "sha256": "fec4653e84bf6b6493deaae95e7b3b8c702abc98466442a6ea69978c658f425f"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/api.instructions.md",
+        "sha256": "85088809b77526f1b3167a59a3169641c621852435c277a22c260a5edd41c09f"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/cls.instructions.md",
+        "sha256": "e0f392e5f478c28064dd58a1439aa7f2e9ee692afa296894c72ded3469861203"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/common-tasks/adding-new-field-to-automatedtransactionresponse.instructions.md",
+        "sha256": "cf8b20eb8c15fe133d84c05cf72a6723d2d63e9b7bbceacc05ccb7b7899d07f0"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/common-tasks/code-review.instructions.md",
+        "sha256": "d6ae0ca53531cd6d0ed7c42300ef7cd2df3a180bbb13891a5b73881d4f2b68b9"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/common-tasks/entity-to-openapi.instructions.md",
+        "sha256": "7d18aaf4c1afa624643e1c7021e2376774abe6a0a38aa46a4e0cf659dc4ee39e"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/common-tasks/import.instructions.md",
+        "sha256": "ba8873cee5e0b2abbccec678804d18930da99b811c293d05786a854df90dd7f5"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/common-tasks/new-module-preferences.instructions.md",
+        "sha256": "7165c2bada415ae7988d58731093ec59f23b0e52fad95e256c8ee87adc52529a"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/common-tasks/new-object.instructions.md",
+        "sha256": "672c27e7f3a6d9272b1bd391e93fbe871e74b3f5c88cf705acc765a759d57ab1"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/common-tasks/php-warnings.instructions.md",
+        "sha256": "e491014b07547a4c22833ba2d785960d378b7abb62bae3be63edcdf91b7bd030"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/common-tasks/updating-existing-object.instructions.md",
+        "sha256": "4903a925c610fcc52eb62acb823967274bd5f4c368d8713f5d3ef64deab25918"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/db-migration-scripts.instructions.md",
+        "sha256": "200a41a1d06ab45269ddcecd9629cdb7c14e115d19eb4cb70dedab7e98fb497b"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/dce-get-file.instructions.md",
+        "sha256": "1b69485eae833190fd289fd192bef7103704bb7ce340a2b4fb23c912f50e501a"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/dce.instructions.md",
+        "sha256": "c174d7d17744814b337aa164d89cbc24558abeccea4c2c895d8522f5178ff0e5"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/ent.instructions.md",
+        "sha256": "4c85971099197282adb9df9de73dd511ad1817bdbd7b0044ef8a96fb3c822080"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/flyway-migrations.instructions.md",
+        "sha256": "527273441405328dc5bca7a3a7a44f6e6261afc65f445765712a66c065caf513"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/gl/financial-context.instructions.md",
+        "sha256": "9df1e560d9ed46e2ceaa5ece563b2b547939b860783fdd705c49d5d3a4be2ef8"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/global-db-routing.instructions.md",
+        "sha256": "047725f044e372b05ec52045fbf2388f3c699f1bf8bfb73f12f4dd76cbfa20b8"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/global-db-rw-pr-validation.instructions.md",
+        "sha256": "9630c30b60a718dda765fe6db9333a85a90c8279c1eab19ab02acc82a0176515"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/i18n.instructions.md",
+        "sha256": "6249f30246705b06ec0dddb5789a17ab0e2792f18f16f8e74f766380a236110f"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/js.instructions.md",
+        "sha256": "81885837f04f1ed854a05220f7c3841936eac6aee112bcbfaf351a4c9b5768f7"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/large-migration-review.instructions.md",
+        "sha256": "76274b39dfa3c3854c128a5549fb06996318d8fc5193195dc4fc00f776afd7bb"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/migrations-checklist.instructions.md",
+        "sha256": "ac206e02d13f779f3c494102e9e6a0bc75b74cdf316ec4f74814284245e7c74d"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/migrations-slowness.instructions.md",
+        "sha256": "be2e33c17deeda39ab6670807ee85ebd417f67d9b6b48978d6ef19b3c391e2ba"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/oracle-dml-parent-child-batching.instructions.md",
+        "sha256": "f2e6c6cc6a28644c35c333a43f5c8fa3b09bb0481c8eb92b3a41cfd47072c7e2"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/php-warnings.instructions.md",
+        "sha256": "ea2fb1d54bf87afe10976b972086ceb61c820126c5bd54afee660627c46456d6"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/pre-migration-phases.instructions.md",
+        "sha256": "5503109cec743f0931381eb7acbe4a5e1e8328dcd46a94faa18c5a900b027011"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/spectral-validation.instructions.md",
+        "sha256": "ebb9e1b5263288cde18ffc26e6a82dc03ec1b0121ff1414a3f6a25a0d9720d58"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/sql.instructions.md",
+        "sha256": "02f3bf02c162d2ba176d595c8527a7d074dd7a5420cd052a689aedfd752ed2e3"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/strict-csp-migration-[pagename].instructions.md",
+        "sha256": "a7742806cee4928ea94bf46056413e5f96579b31d6c81ca2ecb3bdab22b2613b"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/strict-csp-migration-login.instructions.md",
+        "sha256": "3522654d02abd720e8ccd4bc8baa08360654b68bd3180b096d1659d090d8e261"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/token-custom-terminology.instructions.md",
+        "sha256": "c40d165208504d0258e244563c6437df743777e65f5f323fff7b6fa66e494b98"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/ui.instructions.md",
+        "sha256": "decfd9592aafb7a251c61c927f6df4cd9507669539b5c9d72bc8ae8175416a35"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/xml.instructions.md",
+        "sha256": "ee0aee21af0a771b33466c2241312cf1bd78f9bddb7b8ea53da4709e31ad25aa"
+      },
+      {
+        "kind": "guidance",
+        "path": ".github/instructions/xsl.instructions.md",
+        "sha256": "2a8f0a83cd89be37080cd833f055312e3d73442e9b6b6cdfa4a748a584639d60"
+      }
+    ],
+    "read_only": true,
+    "source": "local_git"
+  },
+  "repository": "intacct/ia-app",
+  "schema_version": "0.1",
+  "status": "available",
+  "test_roots": []
+}

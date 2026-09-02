@@ -8,6 +8,7 @@ import inspect
 import json
 import re
 import subprocess
+import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, Literal
@@ -90,6 +91,29 @@ class ProviderResponseError(StrandsAgentError):
 
 class ToolUseTruncatedError(StrandsAgentError):
     """Raised when the output limit cut a tool use rather than plain JSON."""
+
+
+class PromptBudgetError(StrandsAgentError):
+    """Raised when exact Step 1.5 evidence cannot fit the prompt budget."""
+
+    def __init__(
+        self,
+        *,
+        max_prompt_bytes: int,
+        prompt_bytes: int,
+        prompt_sha256: str,
+        changed_paths: list[str],
+    ) -> None:
+        self.max_prompt_bytes = max_prompt_bytes
+        self.prompt_bytes = prompt_bytes
+        self.prompt_sha256 = prompt_sha256
+        self.changed_paths = changed_paths
+        super().__init__(
+            "Step 1.5 prompt exceeds max_prompt_bytes="
+            f"{max_prompt_bytes} ({prompt_bytes} bytes) for changed paths: "
+            + ", ".join(changed_paths)
+            + "; progressive retrieval is required"
+        )
 
 
 class _ProviderSymbolPath(BaseModel):
@@ -205,6 +229,9 @@ def _git(source_root: Path, *args: str) -> str:
 
 _HUNK_CONTEXT_LINES = 40
 _HUNK_HEADER_PATTERN = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+_BEDROCK_CONNECT_TIMEOUT_SECONDS = 10
+_BEDROCK_READ_TIMEOUT_SECONDS = 120
+_BEDROCK_TOTAL_MAX_ATTEMPTS = 2
 
 
 def _parse_diff_hunk_windows(diff_text: str, *, context_lines: int) -> list[tuple[int, int]]:
@@ -246,10 +273,41 @@ def _build_hunk_excerpt(content: str, windows: list[tuple[int, int]]) -> str:
     return "\n\n".join(parts)
 
 
+def _omitted_ranges(total_lines: int, windows: list[tuple[int, int]]) -> list[dict[str, int]]:
+    """Return target-side line ranges intentionally absent from prompt evidence."""
+
+    omitted: list[dict[str, int]] = []
+    cursor = 1
+    for start, end in windows:
+        if cursor < start:
+            omitted.append({"start_line": cursor, "end_line": start - 1})
+        cursor = end + 1
+    if cursor <= total_lines:
+        omitted.append({"start_line": cursor, "end_line": total_lines})
+    return omitted
+
+
+def _prompt_context(context: Mapping[str, Any]) -> dict[str, Any]:
+    """Project retained source blobs to the bounded exact excerpts sent to Bedrock."""
+
+    projected = {key: value for key, value in context.items() if key != "changed_files"}
+    files: list[dict[str, Any]] = []
+    for row in context["changed_files"]:
+        files.append(
+            {
+                key: value
+                for key, value in row.items()
+                if key not in {"full_content", "excerpt"}
+            }
+        )
+    projected["changed_files"] = files
+    return projected
+
+
 def build_context(
     step1: Mapping[str, Any], source_root: str | Path, *, max_file_bytes: int = 500_000
 ) -> dict[str, Any]:
-    """Materialize only target-revision blobs needed by the agent."""
+    """Retain exact blobs while deriving bounded changed-hunk prompt evidence."""
 
     root = Path(source_root).resolve()
     errors = validate_step1(step1)
@@ -263,42 +321,56 @@ def build_context(
     for row in step1["changed_files"]:
         path = str(row.get("path") or row.get("filename"))
         status = str(row.get("status", "modified"))
-        content = None
-        truncated = False
-        context_mode = "full"
+        full_content = None
+        excerpt = None
+        windows: list[tuple[int, int]] = []
+        context_mode = "deleted"
         if status != "deleted":
-            content = _git(root, "show", f"{revision}:{path}")
-            if (
-                max_file_bytes > 0
-                and len(content.encode("utf-8")) > max_file_bytes
-                and status == "modified"
-                and base_revision
-            ):
+            full_content = _git(root, "show", f"{revision}:{path}")
+            if status == "modified" and base_revision:
                 diff_text = _git(root, "diff", f"{base_revision}..{revision}", "--", path)
                 windows = _parse_diff_hunk_windows(
                     diff_text, context_lines=_HUNK_CONTEXT_LINES
                 )
                 if windows:
-                    content = _build_hunk_excerpt(content, windows)
-                    truncated = True
+                    excerpt = _build_hunk_excerpt(full_content, windows)
                     context_mode = "hunk"
-            # Re-check after hunk-centering: scattered hunks across a huge file
-            # can still exceed the cap, so the excerpt must not bypass it.
-            if max_file_bytes > 0 and len(content.encode("utf-8")) > max_file_bytes:
-                detail = (
-                    "even after hunk-centering"
-                    if context_mode == "hunk"
-                    else "raise --max-file-bytes to preserve exact evidence"
-                )
-                raise StrandsAgentError(
-                    f"source blob exceeds max_file_bytes for {path}; {detail}"
-                )
+                else:
+                    # Git represents mode-only changes without @@ hunks. The target
+                    # blob remains the only exact source evidence, so keep it rather
+                    # than turning a valid source change into a runner failure.
+                    excerpt = full_content
+                    windows = [(1, len(full_content.splitlines()))] if full_content else []
+                    context_mode = "full_no_text_hunk"
+            else:
+                # Added files have no smaller target-side delta than their full bytes.
+                excerpt = full_content
+                windows = [(1, len(full_content.splitlines()))] if full_content else []
+                context_mode = "full"
+        full_bytes = full_content.encode("utf-8") if full_content is not None else b""
+        total_lines = len(full_content.splitlines()) if full_content is not None else 0
         files.append(
             {
                 "path": path,
                 "status": status,
-                "content": content,
-                "truncated": truncated,
+                "target_revision": revision,
+                "full_content": full_content,
+                "full_blob_sha256": hashlib.sha256(full_bytes).hexdigest(),
+                "full_blob_bytes": len(full_bytes),
+                "full_blob_lines": total_lines,
+                "excerpt": excerpt,
+                # Kept for prompt/schema compatibility; this is always the bounded
+                # excerpt, while full_content is retained only in the artifact.
+                "content": excerpt,
+                "excerpt_sha256": hashlib.sha256(
+                    (excerpt or "").encode("utf-8")
+                ).hexdigest(),
+                "excerpt_ranges": [
+                    {"start_line": start, "end_line": min(end, total_lines)}
+                    for start, end in windows
+                ],
+                "omitted_ranges": _omitted_ranges(total_lines, windows),
+                "truncated": context_mode == "hunk",
                 "context_mode": context_mode,
             }
         )
@@ -316,9 +388,11 @@ def build_context(
     return context
 
 
-def _prompt(context: Mapping[str, Any], source_root: Path) -> str:
-    context_json = json.dumps(context, sort_keys=True, indent=2)
-    return f"""You are the AWS Strands Step 1.5 source-impact analyst.
+def _prompt(
+    context: Mapping[str, Any], source_root: Path, *, max_prompt_bytes: int = 96_000
+) -> str:
+    context_json = json.dumps(_prompt_context(context), sort_keys=True, indent=2)
+    prompt = f"""You are the AWS Strands Step 1.5 source-impact analyst.
 
 The source repository is {source_root}. The following JSON contains exact
 target-revision file bytes; use these bytes as the primary source evidence.
@@ -375,6 +449,37 @@ Context JSON:
 {context_json}
 ```
 """
+    prompt_bytes = len(prompt.encode("utf-8"))
+    if prompt_bytes > max_prompt_bytes:
+        prompt_sha256 = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+        raise PromptBudgetError(
+            max_prompt_bytes=max_prompt_bytes,
+            prompt_bytes=prompt_bytes,
+            prompt_sha256=prompt_sha256,
+            changed_paths=[str(row["path"]) for row in context["changed_files"]],
+        )
+    return prompt
+
+
+def _bedrock_client_config() -> Any:
+    """Create the non-secret SDK policy used for one idempotent trace request."""
+
+    from botocore.config import Config
+
+    return Config(
+        connect_timeout=_BEDROCK_CONNECT_TIMEOUT_SECONDS,
+        read_timeout=_BEDROCK_READ_TIMEOUT_SECONDS,
+        retries={"mode": "standard", "total_max_attempts": _BEDROCK_TOTAL_MAX_ATTEMPTS},
+    )
+
+
+def _bedrock_retry_provenance() -> dict[str, Any]:
+    return {
+        "mode": "standard",
+        "total_max_attempts": _BEDROCK_TOTAL_MAX_ATTEMPTS,
+        "connect_timeout_seconds": _BEDROCK_CONNECT_TIMEOUT_SECONDS,
+        "read_timeout_seconds": _BEDROCK_READ_TIMEOUT_SECONDS,
+    }
 
 
 def _default_agent_factory(
@@ -382,6 +487,7 @@ def _default_agent_factory(
     *,
     tools: list[Any] | None = None,
     max_tokens: int | None = None,
+    boto_client_config: Any | None = None,
     structured_output_model: type[BaseModel] = _Step15StructuredOutput,
 ) -> Callable[[str], Any]:
     try:
@@ -398,9 +504,15 @@ def _default_agent_factory(
             from strands.models.bedrock import BedrockModel
 
             options["model"] = (
-                BedrockModel(model_id=model, max_tokens=max_tokens)
+                BedrockModel(
+                    model_id=model,
+                    max_tokens=max_tokens,
+                    boto_client_config=boto_client_config,
+                )
                 if model
-                else BedrockModel(max_tokens=max_tokens)
+                else BedrockModel(
+                    max_tokens=max_tokens, boto_client_config=boto_client_config
+                )
             )
         elif model:
             options["model"] = model
@@ -767,6 +879,8 @@ def _run_strands_json(
     factory = agent_factory or _default_agent_factory
     if factory is _default_agent_factory:
         factory_kwargs: dict[str, Any] = {"tools": tools, "max_tokens": max_tokens}
+        if "boto_client_config" in inspect.signature(factory).parameters:
+            factory_kwargs["boto_client_config"] = _bedrock_client_config()
         if "structured_output_model" in inspect.signature(factory).parameters:
             factory_kwargs["structured_output_model"] = structured_output_model
         agent = _default_agent_factory(model, **factory_kwargs)
@@ -841,10 +955,12 @@ def run_strands_trace(
     model: str | None = None,
     timeout: int = 300,
     max_file_bytes: int = 500_000,
+    max_prompt_bytes: int = 96_000,
     max_tokens: int | None = 32000,
     max_continuations: int = 2,
     contract_path: str | Path | None = None,
     diagnostic_output: str | Path | None = None,
+    context_output: str | Path | None = None,
     agent_factory: Callable[[str | None], Callable[[str], Any]] | None = None,
     tools: list[Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -853,9 +969,51 @@ def run_strands_trace(
     root = Path(source_root).resolve()
     context = build_context(step1, root, max_file_bytes=max_file_bytes)
     diagnostic_path = Path(diagnostic_output) if diagnostic_output is not None else None
+    if context_output is not None:
+        write_json_atomic(context_output, context)
+    try:
+        prompt = _prompt(context, root, max_prompt_bytes=max_prompt_bytes)
+    except PromptBudgetError as exc:
+        request_metadata = {
+            "agent_invocation_count": 0,
+            "prompt_bytes": exc.prompt_bytes,
+            "prompt_sha256": exc.prompt_sha256,
+            "prompt_max_bytes": max_prompt_bytes,
+            "retry": _bedrock_retry_provenance(),
+            "elapsed_milliseconds": 0,
+        }
+        if diagnostic_path is not None:
+            write_json_atomic(
+                diagnostic_path,
+                build_trace_rejection_diagnostic(
+                    step1,
+                    stage="prompt_budget",
+                    reason=str(exc),
+                    contract_path=contract_path,
+                    provider_name="strands",
+                    provider_model=model or "configured",
+                    provider_max_tokens=max_tokens,
+                    context_sha256=str(context["context_sha256"]),
+                    request_metadata=request_metadata,
+                ),
+            )
+        raise Step1TraceFailure(
+            str(exc),
+            stage="prompt_budget",
+            contract_path=str(contract_path) if contract_path is not None else None,
+            diagnostic_path=diagnostic_path,
+        ) from exc
+    request_started = time.monotonic()
+    request_metadata = {
+        "agent_invocation_count": 1,
+        "prompt_bytes": len(prompt.encode("utf-8")),
+        "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        "prompt_max_bytes": max_prompt_bytes,
+        "retry": _bedrock_retry_provenance(),
+    }
     try:
         raw, delivery = _run_strands_json(
-            _prompt(context, root),
+            prompt,
             model=model,
             timeout=timeout,
             agent_factory=agent_factory,
@@ -864,6 +1022,9 @@ def run_strands_trace(
             max_continuations=max_continuations,
         )
     except StrandsAgentError as exc:
+        request_metadata["elapsed_milliseconds"] = round(
+            (time.monotonic() - request_started) * 1000
+        )
         provider_error = getattr(exc, "provider_error", None)
         provider_response = getattr(exc, "provider_response", None)
         aws_credential_status = getattr(exc, "aws_credential_status", None)
@@ -885,6 +1046,7 @@ def run_strands_trace(
                     provider_error=provider_error,
                     provider_response_metadata=provider_response,
                     aws_credential_status=aws_credential_status,
+                    request_metadata=request_metadata,
                 ),
             )
         raise Step1TraceFailure(
@@ -898,8 +1060,18 @@ def run_strands_trace(
         "model": model or "configured",
         "timeout_seconds": timeout,
         "max_tokens": max_tokens,
+        "request": {
+            **request_metadata,
+            "elapsed_milliseconds": round(
+                (time.monotonic() - request_started) * 1000
+            ),
+        },
         **delivery,
     }
+    request_metadata["elapsed_milliseconds"] = round(
+        (time.monotonic() - request_started) * 1000
+    )
+    metadata["request"] = request_metadata
     try:
         trace = normalize_trace(
             step1,
@@ -920,6 +1092,7 @@ def run_strands_trace(
                     provider_model=model or "configured",
                     raw_provider_response=raw,
                     context_sha256=str(context["context_sha256"]),
+                    request_metadata=request_metadata,
                 ),
             )
         raise Step1TraceFailure(
@@ -944,6 +1117,7 @@ def run_strands_trace(
                     raw_provider_response=raw,
                     normalized_trace=trace,
                     context_sha256=str(context["context_sha256"]),
+                    request_metadata=request_metadata,
                 ),
             )
         raise Step1TraceFailure(

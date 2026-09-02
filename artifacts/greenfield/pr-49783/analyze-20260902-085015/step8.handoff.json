@@ -1,0 +1,18 @@
+{
+  "analysis_kind": "greenfield_pr_impact_step_8_handoff",
+  "details": [
+    "step6_report_not_supplied"
+  ],
+  "pr_eligible": false,
+  "provenance": {
+    "catalog_mutation": "none",
+    "github_writes": "none",
+    "read_only": true
+  },
+  "reason": "step7_report_not_supplied",
+  "required_inputs": [
+    "validated Step 7 report from an attested runner"
+  ],
+  "schema_version": "0.1",
+  "status": "blocked"
+}

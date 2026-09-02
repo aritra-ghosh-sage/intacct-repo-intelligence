@@ -1,0 +1,247 @@
+{
+  "analysis_kind": "greenfield_pr_impact_flow_handoff",
+  "failure": {
+    "reason": "handoff artifact is missing: /Users/aritra.ghosh/projects/intacct-repo-intelligence/artifacts/greenfield/pr-49783/analyze-20260902-reliability-slice-live/run-context.json",
+    "stage": "strands_planning"
+  },
+  "provenance": {
+    "catalog_mutation": "none",
+    "github_writes": "none",
+    "read_only": true
+  },
+  "schema_version": "0.1",
+  "source": {
+    "base_revision": "88831b97966bf918cd08a882d2ac5d2aa4bf21a9",
+    "base_sha": "88831b97966bf918cd08a882d2ac5d2aa4bf21a9",
+    "changed_paths": [
+      "app/source/gl/GLLedgerReporter.cls"
+    ],
+    "head_sha": "071f786e237c0c92b385a19314f9a804c90ffedc",
+    "pr_number": 49783,
+    "repo_key": "ia-main",
+    "repository": "intacct/ia-app",
+    "target_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
+  },
+  "stages": [
+    {
+      "inputs": {
+        "manifest": {
+          "path": "/Users/aritra.ghosh/projects/intacct-repo-intelligence/config/workspace_repos.yaml",
+          "sha256": "21f0f828bdabd2c2194b0f0d8e302b6c36664d136962f3d27a6bc0ee9a0e7cad"
+        }
+      },
+      "name": "step1",
+      "outputs": {
+        "step1": {
+          "path": "step1.json",
+          "sha256": "3db9a8bdbd4a3ebdcac63d46210d30a0a212ed2ffc0b118b27e49acf92049b6f"
+        }
+      },
+      "status": "succeeded"
+    },
+    {
+      "inputs": {
+        "step1": {
+          "path": "step1.json",
+          "sha256": "3db9a8bdbd4a3ebdcac63d46210d30a0a212ed2ffc0b118b27e49acf92049b6f"
+        }
+      },
+      "name": "request",
+      "outputs": {
+        "identity": {
+          "path": "bundle.identity.json",
+          "sha256": "13a22b593550f7434ca3a416bc56682402e960c3ee48c360d9307353fb169480"
+        },
+        "request": {
+          "path": "pr-analysis.request.json",
+          "sha256": "11ca26a7df206fbfbe642789474b2018c5eaeca0c6d88345825e73f2668d700c"
+        }
+      },
+      "status": "succeeded"
+    },
+    {
+      "inputs": {
+        "manifest": {
+          "path": "/Users/aritra.ghosh/projects/intacct-repo-intelligence/config/workspace_repos.yaml",
+          "sha256": "21f0f828bdabd2c2194b0f0d8e302b6c36664d136962f3d27a6bc0ee9a0e7cad"
+        },
+        "step1": {
+          "path": "step1.json",
+          "sha256": "3db9a8bdbd4a3ebdcac63d46210d30a0a212ed2ffc0b118b27e49acf92049b6f"
+        }
+      },
+      "name": "capture",
+      "outputs": {
+        "run_context": {
+          "path": "run-context.json",
+          "sha256": "bd35965fcbfc60f3a6b3f2121f7ce012a9266b427e187719fdcca3bbafc40588"
+        }
+      },
+      "status": "succeeded"
+    },
+    {
+      "inputs": {
+        "step1": {
+          "path": "step1.json",
+          "sha256": "3db9a8bdbd4a3ebdcac63d46210d30a0a212ed2ffc0b118b27e49acf92049b6f"
+        }
+      },
+      "name": "step1_5",
+      "outputs": {
+        "contract": {
+          "path": "step1.5.contract.json",
+          "sha256": "56844ff8c1c8181cf89c0c4897ee9da1799f0c6c592da8dc2aaa2281e6025541"
+        },
+        "source_context": {
+          "path": "step1.5.source-context.json",
+          "sha256": "51a7c978a80319749bb8c4b8236b172bd39f6c51083cc390e89bdc901f1a8436"
+        },
+        "trace": {
+          "path": "step1.5.trace.json",
+          "sha256": "832d1c8e281fcb18f415e9267b1ff26f90a213a3aa4d2768a8c5c97f68156fdb"
+        }
+      },
+      "status": "succeeded"
+    },
+    {
+      "inputs": {
+        "request": {
+          "path": "pr-analysis.request.json",
+          "sha256": "11ca26a7df206fbfbe642789474b2018c5eaeca0c6d88345825e73f2668d700c"
+        }
+      },
+      "name": "repository_context",
+      "outputs": {
+        "context": {
+          "path": "repository-context.json",
+          "sha256": "cd762c7aa3e6ee06fb277568e704befe6a0d9669a8800b88202c4930535c35d9"
+        }
+      },
+      "status": "succeeded"
+    },
+    {
+      "inputs": {
+        "context": {
+          "path": "repository-context.json",
+          "sha256": "cd762c7aa3e6ee06fb277568e704befe6a0d9669a8800b88202c4930535c35d9"
+        },
+        "contract": {
+          "path": "step1.5.contract.json",
+          "sha256": "56844ff8c1c8181cf89c0c4897ee9da1799f0c6c592da8dc2aaa2281e6025541"
+        },
+        "request": {
+          "path": "pr-analysis.request.json",
+          "sha256": "11ca26a7df206fbfbe642789474b2018c5eaeca0c6d88345825e73f2668d700c"
+        },
+        "trace": {
+          "path": "step1.5.trace.json",
+          "sha256": "832d1c8e281fcb18f415e9267b1ff26f90a213a3aa4d2768a8c5c97f68156fdb"
+        }
+      },
+      "name": "impact_discovery",
+      "outputs": {
+        "discovery": {
+          "path": "impact-discovery.json",
+          "sha256": "ca974e73eef135ef27b3ebbbedea5b4b5cb3eca9b0c91ee5b944c77acfc7bff5"
+        }
+      },
+      "status": "succeeded"
+    },
+    {
+      "inputs": {
+        "manifest": {
+          "path": "/Users/aritra.ghosh/projects/intacct-repo-intelligence/config/workspace_repos.yaml",
+          "sha256": "21f0f828bdabd2c2194b0f0d8e302b6c36664d136962f3d27a6bc0ee9a0e7cad"
+        },
+        "step1": {
+          "path": "step1.json",
+          "sha256": "3db9a8bdbd4a3ebdcac63d46210d30a0a212ed2ffc0b118b27e49acf92049b6f"
+        }
+      },
+      "name": "inventory",
+      "outputs": {},
+      "status": "skipped"
+    },
+    {
+      "inputs": {
+        "contract": {
+          "path": "step1.5.contract.json",
+          "sha256": "56844ff8c1c8181cf89c0c4897ee9da1799f0c6c592da8dc2aaa2281e6025541"
+        },
+        "manifest": {
+          "path": "/Users/aritra.ghosh/projects/intacct-repo-intelligence/config/workspace_repos.yaml",
+          "sha256": "21f0f828bdabd2c2194b0f0d8e302b6c36664d136962f3d27a6bc0ee9a0e7cad"
+        },
+        "step1": {
+          "path": "step1.json",
+          "sha256": "3db9a8bdbd4a3ebdcac63d46210d30a0a212ed2ffc0b118b27e49acf92049b6f"
+        }
+      },
+      "name": "step2",
+      "outputs": {
+        "step2": {
+          "path": "step2.json",
+          "sha256": "94bad59f56833044595bedfa440063790220ae242415fc077ac0122d6dc7cfd3"
+        }
+      },
+      "status": "succeeded"
+    },
+    {
+      "inputs": {
+        "step2": {
+          "path": "step2.json",
+          "sha256": "94bad59f56833044595bedfa440063790220ae242415fc077ac0122d6dc7cfd3"
+        }
+      },
+      "name": "step3",
+      "outputs": {
+        "step3": {
+          "path": "step3.json",
+          "sha256": "d9d406c2b9f5be2886c9ecc4db777a8c6f0dd797210fbf2bfc5951a82b9131a6"
+        }
+      },
+      "status": "succeeded"
+    },
+    {
+      "inputs": {
+        "contract": {
+          "path": "step1.5.contract.json",
+          "sha256": "56844ff8c1c8181cf89c0c4897ee9da1799f0c6c592da8dc2aaa2281e6025541"
+        },
+        "step3": {
+          "path": "step3.json",
+          "sha256": "d9d406c2b9f5be2886c9ecc4db777a8c6f0dd797210fbf2bfc5951a82b9131a6"
+        }
+      },
+      "name": "step4",
+      "outputs": {
+        "step4": {
+          "path": "step4.json",
+          "sha256": "57282cd56ce9bfa96b5a33f08abe17bd9565c7009953856b87424ee1cde0488c"
+        }
+      },
+      "status": "succeeded"
+    },
+    {
+      "inputs": {
+        "step3": {
+          "path": "step3.json",
+          "sha256": "d9d406c2b9f5be2886c9ecc4db777a8c6f0dd797210fbf2bfc5951a82b9131a6"
+        },
+        "step4": {
+          "path": "step4.json",
+          "sha256": "57282cd56ce9bfa96b5a33f08abe17bd9565c7009953856b87424ee1cde0488c"
+        }
+      },
+      "name": "step5",
+      "outputs": {
+        "step5": {
+          "path": "step5.json",
+          "sha256": "f2ea4af789dfda891307c76cfcde3685e31d2d5af16c743b4bab0b5132fa4fbb"
+        }
+      },
+      "status": "succeeded"
+    }
+  ],
+  "status": "failed"
+}

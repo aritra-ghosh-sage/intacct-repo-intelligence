@@ -26,6 +26,7 @@ class StrandsRuntimeConfig:
     timeout_seconds: int = 300
     max_tokens: int = 32000
     max_continuations: int = 2
+    max_prompt_bytes: int = 96_000
 
     def environment(self) -> dict[str, str]:
         values: dict[str, str] = {}
@@ -93,6 +94,7 @@ def load_strands_config(path: str | Path | None = None) -> StrandsRuntimeConfig:
     timeout = data.get("timeout_seconds", 300)
     max_tokens = data.get("max_tokens", 32000)
     max_continuations = data.get("max_continuations", 2)
+    max_prompt_bytes = data.get("max_prompt_bytes", 96_000)
     return StrandsRuntimeConfig(
         region=str(data["region"]).strip() if data.get("region") else None,
         profile=str(data["profile"]).strip() if data.get("profile") else None,
@@ -104,6 +106,7 @@ def load_strands_config(path: str | Path | None = None) -> StrandsRuntimeConfig:
         timeout_seconds=_positive_int(timeout, "timeout_seconds"),
         max_tokens=_positive_int(max_tokens, "max_tokens"),
         max_continuations=_positive_int(max_continuations, "max_continuations"),
+        max_prompt_bytes=_positive_int(max_prompt_bytes, "max_prompt_bytes"),
     )
 
 

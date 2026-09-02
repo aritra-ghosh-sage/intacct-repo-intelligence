@@ -17,6 +17,7 @@ from greenfield.artifact_io import artifact_sha256
 from greenfield.step1_5_trace import normalize_trace, validate_trace
 from greenfield.step1_capture import evidence_fingerprint
 from greenfield.strands_agent import (
+    PromptBudgetError,
     Step1TraceFailure,
     StrandsAgentError,
     _prompt,
@@ -447,6 +448,9 @@ def test_run_strands_trace_persists_failure_diagnostic(tmp_path: Path) -> None:
     assert diagnostic["contract_path"] == str(contract_path)
     assert diagnostic["raw_provider_response"]["surfaces"] == ["not-an-object"]
     assert diagnostic["source"]["target_revision"] == head
+    assert diagnostic["request"]["prompt_bytes"] > 0
+    assert len(diagnostic["request"]["prompt_sha256"]) == 64
+    assert diagnostic["request"]["elapsed_milliseconds"] >= 0
 
 
 def _changed_files_step1(base: str, head: str) -> dict[str, object]:
@@ -556,8 +560,10 @@ def test_continuation_rejects_truncated_tool_use(tmp_path: Path) -> None:
     step1 = _changed_files_step1(base, head)
     agent = _TruncatingAgent(
         [
-            '{"behaviors": The selected tool read_source\'s tool use was '
-            "incomplete due to maximum token limits being reached.",
+            (
+                '{"behaviors": The selected tool read_source\'s tool use was '
+                "incomplete due to maximum token limits being reached."
+            ),
             "{}",
         ]
     )
@@ -674,7 +680,8 @@ def test_run_strands_trace_reports_output_budget_rejection(tmp_path: Path) -> No
 
 def test_run_strands_json_reads_nested_agent_message() -> None:
     class FakeAgentResult:
-        message = {"content": [{"text": '{"status": "ok"}'}]}
+        def __init__(self) -> None:
+            self.message = {"content": [{"text": '{"status": "ok"}'}]}
 
         def __str__(self) -> str:
             return ""
@@ -697,6 +704,8 @@ def test_run_strands_json_reads_nested_agent_message() -> None:
 
 
 def test_default_strands_agent_uses_structured_output_over_provider_prose() -> None:
+    captured: dict[str, object] = {}
+
     class FakeStructuredOutput:
         def model_dump(self, *, mode: str) -> dict[str, str]:
             assert mode == "json"
@@ -715,8 +724,11 @@ def test_default_strands_agent_uses_structured_output_over_provider_prose() -> N
         *,
         tools: list[object] | None = None,
         max_tokens: int | None = None,
+        boto_client_config: object | None = None,
+        structured_output_model: object | None = None,
     ):
-        del tools, max_tokens
+        del tools, max_tokens, structured_output_model
+        captured["boto_client_config"] = boto_client_config
 
         def agent(_prompt: str) -> FakeAgentResult:
             return FakeAgentResult()
@@ -728,6 +740,11 @@ def test_default_strands_agent_uses_structured_output_over_provider_prose() -> N
 
     assert parsed == {"status": "ok"}
     assert delivery == {"continuation_attempts": 0, "join_whitespace_trimmed": False}
+    client_config = captured["boto_client_config"]
+    assert client_config is not None
+    assert client_config.retries == {"mode": "standard", "total_max_attempts": 2}
+    assert client_config.connect_timeout == 10
+    assert client_config.read_timeout == 120
 
 
 def test_explicit_structured_output_model_accepts_canonical_provider_shape() -> None:
@@ -1052,15 +1069,68 @@ def test_context_reads_target_revision_only(tmp_path: Path) -> None:
         }
     )
     step1["changed_files"] = [
-        {"path": "changed.php", "filename": "changed.php", "status": "modified"}
+        {"path": "changed.php", "filename": "changed.php", "status": "added"}
     ]
     step1["pr_metadata"]["base_revision"] = revision
     step1["pr_metadata"]["target_revision"] = revision
     step1["provenance"]["evidence_sha256"] = evidence_fingerprint(step1)
     context = build_context(step1, repo)
     assert context["changed_files"][0]["content"] == "<?php echo 'target';\n"
-    with pytest.raises(StrandsAgentError, match="max_file_bytes"):
-        build_context(step1, repo, max_file_bytes=5)
+    assert context["changed_files"][0]["full_blob_sha256"] == hashlib.sha256(
+        b"<?php echo 'target';\n"
+    ).hexdigest()
+
+
+def test_prompt_budget_failure_persists_source_context_and_diagnostic(tmp_path: Path) -> None:
+    repo, base, head = _trace_repo(tmp_path)
+    step1 = _changed_files_step1(base, head)
+    context_path = tmp_path / "step1.5.source-context.json"
+    diagnostic_path = tmp_path / "step1.5.diagnostic.json"
+
+    with pytest.raises(Step1TraceFailure, match="max_prompt_bytes"):
+        run_strands_trace(
+            step1,
+            repo,
+            model="test-model",
+            max_prompt_bytes=1,
+            context_output=context_path,
+            diagnostic_output=diagnostic_path,
+        )
+
+    context = json.loads(context_path.read_text(encoding="utf-8"))
+    diagnostic = json.loads(diagnostic_path.read_text(encoding="utf-8"))
+    assert context["changed_files"][0]["full_content"]
+    assert context["changed_files"][0]["full_blob_sha256"]
+    assert diagnostic["stage"] == "prompt_budget"
+    assert diagnostic["request"]["agent_invocation_count"] == 0
+    assert diagnostic["request"]["prompt_bytes"] > 1
+    assert len(diagnostic["request"]["prompt_sha256"]) == 64
+    assert diagnostic["request"]["prompt_max_bytes"] == 1
+
+
+def test_build_context_handles_mode_only_changed_file(tmp_path: Path) -> None:
+    repo, _base, base = _trace_repo(tmp_path)
+    import subprocess
+
+    path = "app/source/gl/GLBatchManager.cls"
+    subprocess.run(
+        ["git", "-C", str(repo), "update-index", "--chmod=+x", path], check=True
+    )
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "mode-only"], check=True)
+    head = subprocess.check_output(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+    ).strip()
+    step1 = _changed_files_step1(base, head)
+    step1["input"]["changed_paths"] = [path]
+    step1["changed_files"] = [{"path": path, "filename": path, "status": "modified"}]
+    step1["provenance"]["evidence_sha256"] = evidence_fingerprint(step1)
+
+    context = build_context(step1, repo)
+
+    entry = context["changed_files"][0]
+    assert entry["context_mode"] == "full_no_text_hunk"
+    assert entry["content"] == entry["full_content"]
+    assert entry["omitted_ranges"] == []
 
 
 def test_build_context_hunk_centers_large_modified_file(tmp_path: Path) -> None:
@@ -1106,7 +1176,7 @@ def test_build_context_hunk_centers_large_modified_file(tmp_path: Path) -> None:
     step1["pr_metadata"]["target_revision"] = head
     step1["provenance"]["evidence_sha256"] = evidence_fingerprint(step1)
 
-    context = build_context(step1, repo, max_file_bytes=1000)
+    context = build_context(step1, repo)
 
     entry = context["changed_files"][0]
     assert entry["context_mode"] == "hunk"
@@ -1115,6 +1185,9 @@ def test_build_context_hunk_centers_large_modified_file(tmp_path: Path) -> None:
     assert "line 200 changed\n" in entry["content"]
     assert "line 1\n" not in entry["content"]
     assert "line 300\n" not in entry["content"]
+    prompt = _prompt(context, repo)
+    assert "line 1\n" not in prompt
+    assert "line 200 changed\\n" in prompt
 
 
 def test_build_context_added_file_ignores_hunk_mode(tmp_path: Path) -> None:
@@ -1153,11 +1226,13 @@ def test_build_context_added_file_ignores_hunk_mode(tmp_path: Path) -> None:
     step1["pr_metadata"]["target_revision"] = head
     step1["provenance"]["evidence_sha256"] = evidence_fingerprint(step1)
 
-    with pytest.raises(StrandsAgentError, match="max_file_bytes"):
-        build_context(step1, repo, max_file_bytes=200)
+    context = build_context(step1, repo)
+    entry = context["changed_files"][0]
+    assert entry["context_mode"] == "full"
+    assert entry["full_blob_bytes"] == 1000
 
 
-def test_build_context_raises_when_hunk_excerpt_still_too_large(tmp_path: Path) -> None:
+def test_prompt_budget_rejects_large_hunk_context_without_losing_source(tmp_path: Path) -> None:
     repo = tmp_path / "source"
     repo.mkdir()
     import subprocess
@@ -1203,8 +1278,12 @@ def test_build_context_raises_when_hunk_excerpt_still_too_large(tmp_path: Path) 
     step1["pr_metadata"]["target_revision"] = head
     step1["provenance"]["evidence_sha256"] = evidence_fingerprint(step1)
 
-    with pytest.raises(StrandsAgentError, match="even after hunk-centering"):
-        build_context(step1, repo, max_file_bytes=200)
+    context = build_context(step1, repo)
+    entry = context["changed_files"][0]
+    assert entry["full_blob_lines"] == 2000
+    assert entry["omitted_ranges"], "omitted source must be explicit"
+    with pytest.raises(PromptBudgetError, match="max_prompt_bytes"):
+        _prompt(context, repo, max_prompt_bytes=1_000)
 
 
 def test_runner_writes_trace_and_contract(tmp_path: Path) -> None:
@@ -1344,6 +1423,7 @@ def test_strands_config_defaults_to_large_output_budget(tmp_path: Path) -> None:
     config = load_strands_config(config_path)
     assert config.max_tokens == 32000
     assert config.max_continuations == 2
+    assert config.max_prompt_bytes == 96_000
 
 
 def test_strands_config_accepts_dedicated_planner_model(tmp_path: Path) -> None:
@@ -1382,6 +1462,15 @@ def test_strands_config_rejects_non_positive_max_tokens(tmp_path: Path) -> None:
     config_path = tmp_path / "strands.yaml"
     config_path.write_text("region: us-east-1\nmax_tokens: 0\n", encoding="utf-8")
     with pytest.raises(StrandsConfigError, match="max_tokens must be a positive integer"):
+        load_strands_config(config_path)
+
+
+def test_strands_config_accepts_and_validates_prompt_budget(tmp_path: Path) -> None:
+    config_path = tmp_path / "strands.yaml"
+    config_path.write_text("max_prompt_bytes: 8000\n", encoding="utf-8")
+    assert load_strands_config(config_path).max_prompt_bytes == 8000
+    config_path.write_text("max_prompt_bytes: 0\n", encoding="utf-8")
+    with pytest.raises(StrandsConfigError, match="max_prompt_bytes"):
         load_strands_config(config_path)
 
 

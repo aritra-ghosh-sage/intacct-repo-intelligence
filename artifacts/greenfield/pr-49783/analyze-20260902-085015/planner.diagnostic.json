@@ -1,0 +1,16 @@
+{
+  "analysis_kind": "greenfield_planner_diagnostic",
+  "failure_reason": "planner task 0 has an invalid task_type",
+  "input_digests": {
+    "compatibility_summary_sha256": "e4fecf316929e33a659401682063e192ad47044410ba44802bd90e60788f7dc2",
+    "run_context_sha256": "71271f9738f493f0d13d356e8f64c4a7a8e2d7b4802e8b29c39eb5822ceeed58",
+    "step2_sha256": "75cb5a43737ffb4308c531ecbfeaeea3cd38a7cf201ec3a364d9a426f1a06a93",
+    "step3_sha256": "0b1e384e4ecc258eea495520f6f864d38670ec5fc64f67d0b802fce1500dd0d7",
+    "step4_sha256": "ac5926c96f5b8a7218d9dbdea194e0658ed4ffd2e6837f0ace720ef22834c768",
+    "step5_sha256": "fcd249c06af213db5b6a758403510753840b927f2b92efdd3c80ce5cbc65bb03"
+  },
+  "prompt_digest": "238e4351b2c12670d550b378273f5dc801519c134adaae458eb5130263fe842e",
+  "response_shape": "unavailable_or_invalid",
+  "schema_version": "0.1",
+  "task_index": 0
+}

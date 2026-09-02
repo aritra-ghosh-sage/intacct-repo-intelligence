@@ -572,6 +572,7 @@ def main(argv: list[str] | None = None) -> int:
         trace_path = args.output_dir / "step1.5.trace.json"
         contract_path = args.output_dir / "step1.5.contract.json"
         diagnostic_path = args.output_dir / "step1.5.diagnostic.json"
+        source_context_path = args.output_dir / "step1.5.source-context.json"
         try:
             trace, context = run_strands_trace(
                 step1,
@@ -579,10 +580,12 @@ def main(argv: list[str] | None = None) -> int:
                 model=strands_model,
                 timeout=timeout,
                 max_file_bytes=args.max_file_bytes,
+                max_prompt_bytes=strands_config.max_prompt_bytes,
                 max_tokens=strands_config.max_tokens,
                 max_continuations=strands_config.max_continuations,
                 contract_path=contract_path,
                 diagnostic_output=diagnostic_path,
+                context_output=source_context_path,
             )
             write_json_atomic(trace_path, trace)
             write_json_atomic(
@@ -590,11 +593,18 @@ def main(argv: list[str] | None = None) -> int:
             )
         except Step1TraceFailure as exc:
             if handoff is not None:
-                diagnostics = (
-                    {"step1_5_diagnostic": diagnostic_path}
-                    if diagnostic_path.exists()
-                    else None
-                )
+                diagnostics = {
+                    **(
+                        {"step1_5_diagnostic": diagnostic_path}
+                        if diagnostic_path.exists()
+                        else {}
+                    ),
+                    **(
+                        {"step1_5_source_context": source_context_path}
+                        if source_context_path.exists()
+                        else {}
+                    ),
+                } or None
                 handoff.fail(
                     current_stage,
                     exc,
@@ -606,7 +616,11 @@ def main(argv: list[str] | None = None) -> int:
         handoff.complete_stage(
             "step1_5",
             inputs={"step1": step1_path},
-            outputs={"trace": trace_path, "contract": contract_path},
+            outputs={
+                "trace": trace_path,
+                "contract": contract_path,
+                "source_context": source_context_path,
+            },
         )
         current_stage = "repository_context"
         context_path = args.output_dir / "repository-context.json"
