@@ -15,7 +15,7 @@ from .handoff import HarnessHandoff
 
 SHA = re.compile(r"^[0-9a-f]{40}$")
 DEFAULT_BUDGETS = {
-    "max_tool_calls": 8,
+    "max_evidence_reads": 8,
     "max_files": 8,
     "max_bytes": 120_000,
     "max_paths": 16,
@@ -387,11 +387,16 @@ def _l2_path_priority(item: Mapping[str, Any]) -> tuple[int, str]:
         Path(lowered).stem.startswith("test_")
         or Path(lowered).stem.endswith(("_test", "_spec"))
     )
-    is_application_source = lowered.startswith(("app/", "src/", "lib/")) or lowered.endswith(
+    is_application_source = lowered.startswith(
+        ("app/", "src/", "lib/")
+    ) or lowered.endswith(
         (".py", ".php", ".cls", ".js", ".ts", ".java", ".go", ".rb", ".cs")
     )
     # Stable lexical tie-breaking makes retained evidence independently replayable.
-    return (2 if is_metadata_or_docs else 0 if is_test or is_application_source else 1, path)
+    return (
+        2 if is_metadata_or_docs else 0 if is_test or is_application_source else 1,
+        path,
+    )
 
 
 def l1_locate(context: Mapping[str, Any], packet: Mapping[str, Any]) -> dict[str, Any]:
@@ -471,7 +476,7 @@ def l2_inspect(context: Mapping[str, Any], packet: Mapping[str, Any]) -> dict[st
             )
             continue
         if (
-            len(ledger) >= budget["max_tool_calls"]
+            len(ledger) >= budget["max_evidence_reads"]
             or len(accessed_paths) >= budget["max_files"]
             or len(accessed_paths) >= budget["max_paths"]
         ):
@@ -480,18 +485,18 @@ def l2_inspect(context: Mapping[str, Any], packet: Mapping[str, Any]) -> dict[st
                     "status": "unavailable",
                     "path": item["path"],
                     "reason": "context_budget_exhausted",
-                    "budget": "max_tool_calls_or_files_or_paths",
+                    "budget": "max_evidence_reads_or_files_or_paths",
                 }
             )
             break
         for excerpt in item["excerpt_ranges"]:
-            if len(ledger) >= budget["max_tool_calls"]:
+            if len(ledger) >= budget["max_evidence_reads"]:
                 gaps.append(
                     {
                         "status": "unavailable",
                         "path": item["path"],
                         "reason": "context_budget_exhausted",
-                        "budget": "max_tool_calls",
+                        "budget": "max_evidence_reads",
                     }
                 )
                 break
@@ -592,7 +597,7 @@ def l3_resolve(
         search_path = prefix or "."
         if (
             not query
-            or len(ledger) >= budget["max_tool_calls"]
+            or len(ledger) >= budget["max_evidence_reads"]
             or (
                 search_path not in searched_paths
                 and len(searched_paths) >= budget["max_paths"]

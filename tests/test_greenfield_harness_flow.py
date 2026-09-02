@@ -183,16 +183,14 @@ def test_deleted_path_and_l2_per_excerpt_budget_are_explicit_gaps(
     assert any(
         row["reason"] == "target_path_absent_at_revision" for row in analysis["gaps"]
     )
-    assert any(
-        row["reason"] == "target_path_absent_at_revision" for row in l2["gaps"]
-    )
+    assert any(row["reason"] == "target_path_absent_at_revision" for row in l2["gaps"])
 
     context = capture_context(
         source_root=repo,
         pr=1,
         base_revision=base,
         target_revision=head,
-        budgets={"max_tool_calls": 1},
+        budgets={"max_evidence_reads": 1},
     )
     packet = {
         "paths": [
@@ -208,7 +206,7 @@ def test_deleted_path_and_l2_per_excerpt_budget_are_explicit_gaps(
     }
     l2 = l2_inspect(context, packet)
     assert len(l2["ledger"]) == 1
-    assert any(row.get("budget") == "max_tool_calls" for row in l2["gaps"])
+    assert any(row.get("budget") == "max_evidence_reads" for row in l2["gaps"])
 
 
 def test_l2_prioritizes_application_excerpt_ahead_of_large_github_metadata(
@@ -234,7 +232,10 @@ def test_l2_prioritizes_application_excerpt_ahead_of_large_github_metadata(
     assert l2["used_bytes"] == len(l2["ledger"][0]["result"]["excerpt"].encode("utf-8"))
     assert any(row["path"] == ".github/CODEOWNERS" for row in l2["gaps"])
     ranked = l2_inspect(
-        {**context, "evidence_budgets": {**context["evidence_budgets"], "max_bytes": 140_000}},
+        {
+            **context,
+            "evidence_budgets": {**context["evidence_budgets"], "max_bytes": 140_000},
+        },
         packet,
     )
     assert [entry["result"]["path"] for entry in ranked["ledger"]] == [
@@ -250,9 +251,7 @@ def test_l2_counts_small_excerpt_not_large_target_blob(tmp_path: Path) -> None:
     _git(repo, "add", "app.py")
     _git(repo, "commit", "-qm", "large source base")
     base = _git(repo, "rev-parse", "HEAD")
-    (repo / "app.py").write_text(
-        "padding\n" * 20_000 + "changed\n", encoding="utf-8"
-    )
+    (repo / "app.py").write_text("padding\n" * 20_000 + "changed\n", encoding="utf-8")
     _git(repo, "commit", "-am", "large source change", "-q")
     head = _git(repo, "rev-parse", "HEAD")
     context = capture_context(
@@ -292,7 +291,10 @@ def test_l2_oversized_excerpt_is_local_and_provenance_is_bound(tmp_path: Path) -
     expected_blob = next(row for row in packet["paths"] if row["path"] == "service.txt")
     assert result["source_revision"] == head
     assert result["source_blob_sha256"] == expected_blob["target_blob_sha256"]
-    assert result["excerpt_sha256"] == hashlib.sha256(result["excerpt"].encode()).hexdigest()
+    assert (
+        result["excerpt_sha256"]
+        == hashlib.sha256(result["excerpt"].encode()).hexdigest()
+    )
 
 
 def test_l2_retains_exact_crlf_excerpt_bytes(tmp_path: Path) -> None:
