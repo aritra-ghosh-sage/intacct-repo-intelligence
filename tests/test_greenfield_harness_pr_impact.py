@@ -109,7 +109,7 @@ def test_pr_impact_retains_pinned_test_evidence_and_recommendations(monkeypatch:
     source, base, head = _source(tmp_path)
     candidate, revision = _candidate(tmp_path)
     monkeypatch.chdir(tmp_path)
-    candidates = [{"repository": "example/tests", "local_root": str(candidate), "revision": revision, "test_roots": ["tests"]}]
+    candidates = [{"repository": "example/tests", "local_root": str(candidate), "revision": revision, "test_roots": ["tests"], "eligibility_status": "eligible"}]
     candidates_path = tmp_path / "candidates.json"
     candidates_path.write_text(json.dumps(candidates), encoding="utf-8")
     output = tmp_path / "artifacts" / "greenfield-harness" / "pr-impact"
@@ -129,7 +129,7 @@ def test_pr_impact_stops_after_retained_ai_failure(monkeypatch: pytest.MonkeyPat
     monkeypatch.chdir(tmp_path)
     output = tmp_path / "artifacts" / "greenfield-harness" / "pr-impact-failed"
     with pytest.raises(PrImpactError, match="retained blocked bundle"):
-        run_pr_impact(source_root=source, output_dir=output, pr=1, base_revision=base, target_revision=head, candidates=[{"repository": "example/tests", "local_root": str(candidate), "revision": revision, "test_roots": ["tests"]}], provider=_BrokenProvider())
+        run_pr_impact(source_root=source, output_dir=output, pr=1, base_revision=base, target_revision=head, candidates=[{"repository": "example/tests", "local_root": str(candidate), "revision": revision, "test_roots": ["tests"], "eligibility_status": "eligible"}], provider=_BrokenProvider())
     assert (output / "planner-failure.json").is_file()
     assert ImpactHandoff.validate(output)["status"] == "blocked"
 
@@ -148,7 +148,7 @@ def test_pr_impact_recommends_a_test_only_for_a_retained_coverage_gap(monkeypatc
         pr=1,
         base_revision=base,
         target_revision=head,
-        candidates=[{"repository": "example/tests", "local_root": str(candidate), "revision": revision, "test_roots": ["tests"]}],
+        candidates=[{"repository": "example/tests", "local_root": str(candidate), "revision": revision, "test_roots": ["tests"], "eligibility_status": "eligible"}],
         provider=_Provider(),
     )
     assessment = json.loads(paths["assessment"].read_text())
@@ -165,7 +165,7 @@ def test_pr_impact_keeps_ai_expanded_test_match_as_candidate(monkeypatch: pytest
     _git(candidate, "commit", "-am", "semantic-only match", "-q")
     monkeypatch.chdir(tmp_path)
     output = tmp_path / "artifacts" / "greenfield-harness" / "pr-impact-ai-only"
-    paths = run_pr_impact(source_root=source, output_dir=output, pr=1, base_revision=base, target_revision=head, candidates=[{"repository": "example/tests", "local_root": str(candidate), "revision": _git(candidate, "rev-parse", "HEAD"), "test_roots": ["tests"]}], provider=_AiOnlyProvider())
+    paths = run_pr_impact(source_root=source, output_dir=output, pr=1, base_revision=base, target_revision=head, candidates=[{"repository": "example/tests", "local_root": str(candidate), "revision": _git(candidate, "rev-parse", "HEAD"), "test_roots": ["tests"], "eligibility_status": "eligible"}], provider=_AiOnlyProvider())
     assert json.loads(paths["assessment"].read_text())["coverage"][0]["status"] == "candidate"
     assert json.loads(paths["recommendations"].read_text())["recommendations"] == []
 
@@ -176,7 +176,7 @@ def test_pr_impact_blocks_invalid_planner_output(monkeypatch: pytest.MonkeyPatch
     monkeypatch.chdir(tmp_path)
     output = tmp_path / "artifacts" / "greenfield-harness" / "pr-impact-invalid"
     with pytest.raises(PrImpactError, match="planner initial turn failed"):
-        run_pr_impact(source_root=source, output_dir=output, pr=1, base_revision=base, target_revision=head, candidates=[{"repository": "example/tests", "local_root": str(candidate), "revision": revision, "test_roots": ["tests"]}], provider=_InvalidPlanner())
+        run_pr_impact(source_root=source, output_dir=output, pr=1, base_revision=base, target_revision=head, candidates=[{"repository": "example/tests", "local_root": str(candidate), "revision": revision, "test_roots": ["tests"], "eligibility_status": "eligible"}], provider=_InvalidPlanner())
     assert ImpactHandoff.validate(output)["status"] == "blocked"
 
 
@@ -186,7 +186,7 @@ def test_pr_impact_blocks_replan_failure(monkeypatch: pytest.MonkeyPatch, tmp_pa
     monkeypatch.chdir(tmp_path)
     output = tmp_path / "artifacts" / "greenfield-harness" / "pr-impact-replan-failed"
     with pytest.raises(PrImpactError, match="planner replan turn failed"):
-        run_pr_impact(source_root=source, output_dir=output, pr=1, base_revision=base, target_revision=head, candidates=[{"repository": "example/tests", "local_root": str(candidate), "revision": revision, "test_roots": ["tests"]}], provider=_ReplanBrokenProvider())
+        run_pr_impact(source_root=source, output_dir=output, pr=1, base_revision=base, target_revision=head, candidates=[{"repository": "example/tests", "local_root": str(candidate), "revision": revision, "test_roots": ["tests"], "eligibility_status": "eligible"}], provider=_ReplanBrokenProvider())
     assert ImpactHandoff.validate(output)["status"] == "blocked"
 
 
@@ -196,7 +196,7 @@ def test_pr_impact_retains_source_search_unavailable_gap(monkeypatch: pytest.Mon
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(impact, "_grep_at", lambda *_args, **_kwargs: (_ for _ in ()).throw(PrImpactError("search unavailable")))
     output = tmp_path / "artifacts" / "greenfield-harness" / "pr-impact-source-gap"
-    paths = run_pr_impact(source_root=source, output_dir=output, pr=1, base_revision=base, target_revision=head, candidates=[{"repository": "example/tests", "local_root": str(candidate), "revision": revision, "test_roots": ["tests"]}], provider=_Provider())
+    paths = run_pr_impact(source_root=source, output_dir=output, pr=1, base_revision=base, target_revision=head, candidates=[{"repository": "example/tests", "local_root": str(candidate), "revision": revision, "test_roots": ["tests"], "eligibility_status": "eligible"}], provider=_Provider())
     assert json.loads(paths["ledger"].read_text())["gaps"][0]["status"] == "unavailable"
 
 
@@ -206,7 +206,7 @@ def test_pr_impact_blocks_replan_that_omits_a_behavior(monkeypatch: pytest.Monke
     monkeypatch.chdir(tmp_path)
     output = tmp_path / "artifacts" / "greenfield-harness" / "pr-impact-uncovered"
     with pytest.raises(PrImpactError, match="planner replan turn failed"):
-        run_pr_impact(source_root=source, output_dir=output, pr=1, base_revision=base, target_revision=head, candidates=[{"repository": "example/tests", "local_root": str(candidate), "revision": revision, "test_roots": ["tests"]}], provider=_UncoveredBehaviorProvider())
+        run_pr_impact(source_root=source, output_dir=output, pr=1, base_revision=base, target_revision=head, candidates=[{"repository": "example/tests", "local_root": str(candidate), "revision": revision, "test_roots": ["tests"], "eligibility_status": "eligible"}], provider=_UncoveredBehaviorProvider())
 
 
 def test_pr_impact_caps_candidate_matches(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -216,10 +216,53 @@ def test_pr_impact_caps_candidate_matches(monkeypatch: pytest.MonkeyPatch, tmp_p
     _git(candidate, "commit", "-am", "many matches", "-q")
     monkeypatch.chdir(tmp_path)
     output = tmp_path / "artifacts" / "greenfield-harness" / "pr-impact-capped"
-    paths = run_pr_impact(source_root=source, output_dir=output, pr=1, base_revision=base, target_revision=head, candidates=[{"repository": "example/tests", "local_root": str(candidate), "revision": _git(candidate, "rev-parse", "HEAD"), "test_roots": ["tests"]}], provider=_Provider())
+    paths = run_pr_impact(source_root=source, output_dir=output, pr=1, base_revision=base, target_revision=head, candidates=[{"repository": "example/tests", "local_root": str(candidate), "revision": _git(candidate, "rev-parse", "HEAD"), "test_roots": ["tests"], "eligibility_status": "eligible"}], provider=_Provider())
     evidence = json.loads(paths["test_evidence"].read_text())
     assert len(evidence["evidence"]) == 20
     assert evidence["gaps"][0]["reason"] == "candidate_match_budget_exhausted"
+
+
+def test_pr_impact_searches_only_eligible_candidates(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    source, base, head = _source(tmp_path)
+    candidate, revision = _candidate(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    output = tmp_path / "artifacts" / "greenfield-harness" / "pr-impact-eligible-only"
+    candidates_path = tmp_path / "eligible-candidates.json"
+    candidates = [
+        {"repository": "example/tests", "local_root": str(candidate), "revision": revision, "test_roots": ["tests"], "eligibility_status": "eligible"},
+        {"repository": "example/excluded", "local_root": str(tmp_path / "missing"), "revision": "a" * 40, "test_roots": [], "eligibility_status": "excluded_archived"},
+    ]
+    candidates_path.write_text(json.dumps(candidates), encoding="utf-8")
+    paths = run_pr_impact(
+        source_root=source,
+        output_dir=output,
+        pr=1,
+        base_revision=base,
+        target_revision=head,
+        candidates=candidates,
+        provider=_Provider(),
+        input_paths=[candidates_path],
+    )
+    context = json.loads(paths["context"].read_text())
+    assert [row["repository"] for row in context["candidate_repositories"]] == ["example/tests"]
+    assert context["input_provenance"][0]["path"] == str(candidates_path.resolve())
+    assert len(context["input_provenance"][0]["sha256"]) == 64
+
+
+def test_pr_impact_rejects_candidate_without_eligibility_status(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    source, base, head = _source(tmp_path)
+    candidate, revision = _candidate(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(PrImpactError, match="eligibility_status must be explicit"):
+        run_pr_impact(
+            source_root=source,
+            output_dir=tmp_path / "artifacts" / "greenfield-harness" / "pr-impact-unvalidated",
+            pr=1,
+            base_revision=base,
+            target_revision=head,
+            candidates=[{"repository": "example/tests", "local_root": str(candidate), "revision": revision, "test_roots": ["tests"]}],
+            provider=_Provider(),
+        )
 
 
 def test_initial_plan_caps_behavior_count() -> None:

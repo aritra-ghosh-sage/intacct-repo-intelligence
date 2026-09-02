@@ -1,0 +1,200 @@
+{
+    "artifact_kind": "greenfield_harness_pr_impact_handoff",
+    "identity": {
+        "base_revision": "a2b8af9336f26a327b10bd3289594f6c94639da8",
+        "base_tree_sha256": "5574a124ad3d1deec1fdf4315ebb59e0285908b6",
+        "changed_paths": [
+            "app/source/gl/GLSetupAtEntityManager.cls",
+            "app/source/gl/GLSetupManager.cls"
+        ],
+        "local_root": "/Users/aritra.ghosh/projects/main",
+        "pr_number": 49987,
+        "repository": "intacct/ia-app",
+        "target_revision": "bcbd6bc483798bf90923eb00fb9b1fd570f02761",
+        "target_tree_sha256": "f76646deafdfa183bf11108636379fe50d4dc90e"
+    },
+    "provenance": {
+        "catalog_mutation": "none",
+        "github_writes": "none",
+        "read_only": true
+    },
+    "schema_version": "0.1",
+    "stages": [
+        {
+            "inputs": {},
+            "name": "capture",
+            "outputs": {
+                "context": {
+                    "path": "pr-impact-run-context.json",
+                    "sha256": "d2c3f25b79ca8f344c56d016b5611416577d2a65eff1a74861f4cc79abe2343d"
+                }
+            },
+            "status": "succeeded"
+        },
+        {
+            "inputs": {
+                "context": {
+                    "path": "pr-impact-run-context.json",
+                    "sha256": "d2c3f25b79ca8f344c56d016b5611416577d2a65eff1a74861f4cc79abe2343d"
+                }
+            },
+            "name": "extract",
+            "outputs": {
+                "extraction": {
+                    "path": "deterministic-extraction.json",
+                    "sha256": "45103e03cf93e4b5de5fd91593a1f68fede52ead88df88dcdc94b44f77627ae8"
+                }
+            },
+            "status": "succeeded"
+        },
+        {
+            "inputs": {
+                "extraction": {
+                    "path": "deterministic-extraction.json",
+                    "sha256": "45103e03cf93e4b5de5fd91593a1f68fede52ead88df88dcdc94b44f77627ae8"
+                }
+            },
+            "name": "planner_initial",
+            "outputs": {
+                "initial": {
+                    "path": "planner-initial.json",
+                    "sha256": "18322f7ae5e59b07c812751b6b5760e8db0a85d1cc07266076ee8b2df78e1753"
+                }
+            },
+            "status": "succeeded"
+        },
+        {
+            "inputs": {
+                "initial": {
+                    "path": "planner-initial.json",
+                    "sha256": "18322f7ae5e59b07c812751b6b5760e8db0a85d1cc07266076ee8b2df78e1753"
+                }
+            },
+            "name": "source_investigation",
+            "outputs": {
+                "tool_ledger": {
+                    "path": "tool-ledger.json",
+                    "sha256": "1628c1625bc1ac9842afd90a4e0983948bb42050454f158bc2f2f6d022c17b4e"
+                }
+            },
+            "status": "degraded"
+        },
+        {
+            "inputs": {
+                "tool_ledger": {
+                    "path": "tool-ledger.json",
+                    "sha256": "1628c1625bc1ac9842afd90a4e0983948bb42050454f158bc2f2f6d022c17b4e"
+                }
+            },
+            "name": "planner_replan",
+            "outputs": {
+                "replan": {
+                    "path": "planner-replan.json",
+                    "sha256": "f07b0159d647b520a2a37d70e752a73ba979f2cee22144e083629e8e5aab351c"
+                }
+            },
+            "status": "succeeded"
+        },
+        {
+            "inputs": {
+                "planning": {
+                    "path": "planning-report.json",
+                    "sha256": "fff295af1f2ec65951c55d17b8d188188b3532118f7d84e46e180fec5ee07b99"
+                }
+            },
+            "name": "candidate_discovery",
+            "outputs": {
+                "discovery": {
+                    "path": "candidate-discovery.json",
+                    "sha256": "df0988559c90259e712cb5f8cc57a7b6d0f4eac53e750af9c89f31c2cca0b6e4"
+                }
+            },
+            "status": "succeeded"
+        },
+        {
+            "inputs": {
+                "discovery": {
+                    "path": "candidate-discovery.json",
+                    "sha256": "df0988559c90259e712cb5f8cc57a7b6d0f4eac53e750af9c89f31c2cca0b6e4"
+                }
+            },
+            "name": "test_inspection",
+            "outputs": {
+                "test_evidence": {
+                    "path": "test-evidence.json",
+                    "sha256": "88d67bc92424bdb2faf3053671351b2aa3c01f6c2fb6503cf0bf4faebe3521d4"
+                }
+            },
+            "status": "succeeded"
+        },
+        {
+            "inputs": {
+                "test_evidence": {
+                    "path": "test-evidence.json",
+                    "sha256": "88d67bc92424bdb2faf3053671351b2aa3c01f6c2fb6503cf0bf4faebe3521d4"
+                }
+            },
+            "name": "coverage_assessment",
+            "outputs": {
+                "assessment": {
+                    "path": "coverage-assessment.json",
+                    "sha256": "1db85ed3d40092768d3004fbbb7512cec198df590018992279e609201ca22f98"
+                }
+            },
+            "status": "succeeded"
+        },
+        {
+            "inputs": {
+                "assessment": {
+                    "path": "coverage-assessment.json",
+                    "sha256": "1db85ed3d40092768d3004fbbb7512cec198df590018992279e609201ca22f98"
+                }
+            },
+            "name": "test_recommendations",
+            "outputs": {
+                "recommendations": {
+                    "path": "test-recommendations.json",
+                    "sha256": "8e5d51401d06b402cbf585a6b11888696e303513e969e3dd3d19337de4620a47"
+                }
+            },
+            "status": "succeeded"
+        },
+        {
+            "inputs": {
+                "assessment": {
+                    "path": "coverage-assessment.json",
+                    "sha256": "1db85ed3d40092768d3004fbbb7512cec198df590018992279e609201ca22f98"
+                },
+                "recommendations": {
+                    "path": "test-recommendations.json",
+                    "sha256": "8e5d51401d06b402cbf585a6b11888696e303513e969e3dd3d19337de4620a47"
+                }
+            },
+            "name": "analyze",
+            "outputs": {
+                "analysis": {
+                    "path": "pr-impact-analysis.json",
+                    "sha256": "537b493eb764e34436996c24a0c5099b1402854ec88a8a07b1589709ada37aa6"
+                }
+            },
+            "status": "succeeded"
+        },
+        {
+            "inputs": {
+                "analysis": {
+                    "path": "pr-impact-analysis.json",
+                    "sha256": "537b493eb764e34436996c24a0c5099b1402854ec88a8a07b1589709ada37aa6"
+                }
+            },
+            "name": "project",
+            "outputs": {
+                "markdown": {
+                    "path": "pr-impact-report.md",
+                    "sha256": "8a6dc2703b9442979b7ca421d37908ded4099449197e5159f153b75c82507d93"
+                }
+            },
+            "status": "succeeded"
+        }
+    ],
+    "status": "complete"
+}

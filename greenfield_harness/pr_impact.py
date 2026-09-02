@@ -47,6 +47,7 @@ _DECLARATION = re.compile(
 _PYTHON_DECLARATION = re.compile(r"^\s*(?:class|def)\s+([A-Za-z_][A-Za-z0-9_]*)", re.MULTILINE)
 _CONFIG_VALUE = re.compile(r"['\"]([A-Za-z][A-Za-z0-9_.:-]{2,})['\"]")
 MAX_CANDIDATE_MATCHES_PER_REPOSITORY = 20
+_ELIGIBILITY_STATUSES = {"eligible", "excluded_archived", "unavailable", "invalid"}
 
 
 class PrImpactError(ValueError):
@@ -136,6 +137,11 @@ def _capture(source_root: Path, pr: int, base: str, target: str, candidates: Seq
     for raw in candidates:
         if not isinstance(raw, Mapping):
             raise PrImpactError("candidate must be an object")
+        status = raw.get("eligibility_status")
+        if status not in _ELIGIBILITY_STATUSES:
+            raise PrImpactError("candidate eligibility_status must be explicit and valid")
+        if status != "eligible":
+            continue
         candidate_root = Path(str(raw.get("local_root", ""))).resolve()
         revision = str(raw.get("revision", ""))
         roots = raw.get("test_roots", [])

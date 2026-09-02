@@ -1,0 +1,12 @@
+{
+    "artifact_kind": "greenfield_harness_test_evidence",
+    "ci_execution": {
+        "reason": "live_ci_evidence_out_of_scope",
+        "status": "unavailable"
+    },
+    "discovery_sha256": "82684aaa82a70b193fc98596159cd2cbdf929a010436b5c1f48a60c383c53642",
+    "evidence": [],
+    "gaps": [],
+    "schema_version": "0.1",
+    "test_evidence_sha256": "94e8514183ffb6be288bf2eeb0cfccd2d91029e39f1a6b411d4e5ddbba9601fe"
+}
