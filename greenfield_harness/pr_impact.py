@@ -8,16 +8,27 @@ import re
 import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 import yaml
 
 from .artifacts import file_sha256, sha256, write_json, write_text
+from .pr_impact_planner import (
+    MAX_SOURCE_READS,
+    PlannerProvider,
+    initial_plan,
+    test_plan,
+)
+from .pr_impact_planner import (
+    report as planning_report,
+)
 
 STAGES = (
     "capture",
     "extract",
-    "ai_summary",
+    "planner_initial",
+    "source_investigation",
+    "planner_replan",
     "candidate_discovery",
     "test_inspection",
     "coverage_assessment",
@@ -37,10 +48,6 @@ _CONFIG_VALUE = re.compile(r"['\"]([A-Za-z][A-Za-z0-9_.:-]{2,})['\"]")
 
 class PrImpactError(ValueError):
     pass
-
-
-class ImpactProvider(Protocol):
-    def summarize(self, case_summary: Mapping[str, Any]) -> Mapping[str, Any]: ...
 
 
 def _git(root: Path, *args: str) -> bytes:
@@ -195,22 +202,6 @@ def deterministic_extraction(context: Mapping[str, Any]) -> dict[str, Any]:
     return value
 
 
-def _validate_summary(value: Mapping[str, Any], extraction: Mapping[str, Any]) -> dict[str, Any]:
-    allowed = {str(row["id"]) for row in extraction["items"]}
-    behaviors = value.get("behaviors")
-    if not isinstance(behaviors, list):
-        raise PrImpactError("AI summary must contain behaviors")
-    normalized = []
-    for index, row in enumerate(behaviors):
-        if not isinstance(row, Mapping) or not isinstance(row.get("summary"), str) or not row["summary"].strip():
-            raise PrImpactError("AI behavior summary is invalid")
-        evidence = row.get("evidence_ids")
-        if not isinstance(evidence, list) or not evidence or any(not isinstance(item, str) or item not in allowed for item in evidence):
-            raise PrImpactError("AI behavior must cite extracted evidence IDs")
-        normalized.append({"id": str(row.get("id") or f"behavior:{index + 1}"), "summary": row["summary"].strip(), "evidence_ids": sorted(set(evidence)), "status": "candidate"})
-    return {"schema_version": "0.1", "artifact_kind": "greenfield_harness_ai_behavior_summary", "extraction_sha256": extraction["extraction_sha256"], "behaviors": sorted(normalized, key=lambda row: row["id"])}
-
-
 def _grep_at(
     root: Path, revision: str, terms: Sequence[str], roots: Sequence[str]
 ) -> list[tuple[str, int, str]]:
@@ -239,8 +230,38 @@ def _grep_at(
     return rows
 
 
-def inspect_candidates(context: Mapping[str, Any], extraction: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-    terms = sorted({str(row["value"]) for row in extraction["items"]})
+def inspect_source_questions(
+    context: Mapping[str, Any], extraction: Mapping[str, Any], plan: Mapping[str, Any]
+) -> dict[str, Any]:
+    source = context["source"]
+    root, revision = Path(str(source["local_root"])), str(source["target_revision"])
+    rows: list[dict[str, Any]] = []
+    gaps: list[dict[str, Any]] = []
+    for question in plan["questions"]:
+        try:
+            for path, line, excerpt in _grep_at(root, revision, question["source_terms"], []):
+                if len(rows) >= MAX_SOURCE_READS:
+                    gaps.append({"status": "unavailable", "reason": "source_read_budget_exhausted"})
+                    break
+                raw = _git(root, "show", f"{revision}:{path}")
+                for term in question["source_terms"]:
+                    if term in excerpt:
+                        rows.append({"question_id": question["id"], "evidence_ids": question["evidence_ids"], "path": path, "line": line, "excerpt": excerpt, "matched_term": term, "source_blob_sha256": hashlib.sha256(raw).hexdigest(), "status": "available"})
+        except PrImpactError as exc:
+            gaps.append({"question_id": question["id"], "status": "unavailable", "reason": str(exc)})
+    value: dict[str, Any] = {"schema_version": "0.1", "artifact_kind": "greenfield_harness_source_tool_ledger", "extraction_sha256": extraction["extraction_sha256"], "evidence": rows[:MAX_SOURCE_READS], "gaps": gaps}
+    value["tool_ledger_sha256"] = sha256(value)
+    return value
+
+
+def inspect_candidates(context: Mapping[str, Any], replan: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    term_questions: dict[str, list[dict[str, Any]]] = {}
+    for question in replan["questions"]:
+        for term in question["source_terms"]:
+            term_questions.setdefault(term, []).append({"question": question, "origin": "exact_source"})
+        for term in question["ai_terms"]:
+            term_questions.setdefault(term, []).append({"question": question, "origin": "ai_expanded"})
+    terms = sorted(term_questions)
     discovery, evidence, gaps = [], [], []
     for candidate in context["candidate_repositories"]:
         root, revision = Path(candidate["local_root"]), candidate["revision"]
@@ -257,38 +278,40 @@ def inspect_candidates(context: Mapping[str, Any], extraction: Mapping[str, Any]
                     file_blobs[path] = blob
                 for term in terms:
                     if term in excerpt:
-                        row = {"repository": candidate["repository"], "revision": revision, "path": path, "line": line, "excerpt": excerpt, "source_blob_sha256": blob, "matched_value": term, "kind": "workflow" if path.startswith(".github/workflows/") else "test", "status": "available"}
-                        evidence.append(row)
-                        matched.append(row)
+                        for provenance in term_questions[term]:
+                            question = provenance["question"]
+                            row = {"repository": candidate["repository"], "revision": revision, "path": path, "line": line, "excerpt": excerpt, "source_blob_sha256": blob, "matched_value": term, "term_origin": provenance["origin"], "question_id": question["id"], "source_evidence_ids": question["evidence_ids"], "kind": "workflow" if path.startswith(".github/workflows/") else "test", "status": "available"}
+                            evidence.append(row)
+                            matched.append(row)
         except PrImpactError as exc:
             gaps.append({"repository": candidate["repository"], "status": "unavailable", "reason": str(exc)})
         discovery.append({"repository": candidate["repository"], "revision": revision, "status": "candidate" if matched else "no_evidence", "match_count": len(matched)})
-    discovery_value = {"schema_version": "0.1", "artifact_kind": "greenfield_harness_candidate_discovery", "extraction_sha256": extraction["extraction_sha256"], "candidates": discovery, "gaps": gaps}
+    discovery_value = {"schema_version": "0.1", "artifact_kind": "greenfield_harness_candidate_discovery", "planning_replan_sha256": replan["replan_sha256"], "candidates": discovery, "gaps": gaps}
     discovery_value["discovery_sha256"] = sha256(discovery_value)
     evidence_value = {"schema_version": "0.1", "artifact_kind": "greenfield_harness_test_evidence", "discovery_sha256": discovery_value["discovery_sha256"], "evidence": evidence, "ci_execution": {"status": "unavailable", "reason": "live_ci_evidence_out_of_scope"}, "gaps": gaps}
     evidence_value["test_evidence_sha256"] = sha256(evidence_value)
     return discovery_value, evidence_value
 
 
-def assess_and_recommend(summary: Mapping[str, Any], extraction: Mapping[str, Any], evidence: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+def assess_and_recommend(initial: Mapping[str, Any], evidence: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     coverage, recommendations = [], []
-    for behavior in summary["behaviors"]:
+    for behavior in initial["behaviors"]:
         source_ids = set(behavior["evidence_ids"])
-        source_values = {str(row["value"]) for row in extraction["items"] if row["id"] in source_ids}
-        matches = [row for row in evidence["evidence"] if row["matched_value"] in source_values and row["kind"] == "test"]
-        status = "strong_candidate" if matches else "no_evidence"
-        row = {"behavior_id": behavior["id"], "status": status, "source_evidence_ids": sorted(source_ids), "test_evidence": [{"repository": item["repository"], "revision": item["revision"], "path": item["path"], "line": item["line"], "source_blob_sha256": item["source_blob_sha256"]} for item in matches], "ci_execution": evidence["ci_execution"]}
+        matches = [row for row in evidence["evidence"] if source_ids & set(row["source_evidence_ids"]) and row["kind"] == "test"]
+        exact = [row for row in matches if row["term_origin"] == "exact_source"]
+        status = "strong_candidate" if exact else ("candidate" if matches else "no_evidence")
+        row = {"behavior_id": behavior["id"], "status": status, "source_evidence_ids": sorted(source_ids), "test_evidence": [{"repository": item["repository"], "revision": item["revision"], "path": item["path"], "line": item["line"], "source_blob_sha256": item["source_blob_sha256"], "term_origin": item["term_origin"], "question_id": item["question_id"]} for item in matches], "ci_execution": evidence["ci_execution"]}
         coverage.append(row)
         if not matches:
             recommendations.append({"id": f"recommendation:{behavior['id']}", "status": "candidate", "behavior_id": behavior["id"], "recommendation": f"Add a revision-pinned test that exercises: {behavior['summary']}", "source_evidence_ids": sorted(source_ids), "reason": "no_matching_pinned_test_evidence"})
-    assessment = {"schema_version": "0.1", "artifact_kind": "greenfield_harness_coverage_assessment", "ai_summary_sha256": summary["ai_summary_sha256"], "test_evidence_sha256": evidence["test_evidence_sha256"], "coverage": coverage}
+    assessment = {"schema_version": "0.1", "artifact_kind": "greenfield_harness_coverage_assessment", "planning_initial_sha256": initial["initial_sha256"], "test_evidence_sha256": evidence["test_evidence_sha256"], "coverage": coverage}
     assessment["assessment_sha256"] = sha256(assessment)
     proposal = {"schema_version": "0.1", "artifact_kind": "greenfield_harness_test_recommendations", "assessment_sha256": assessment["assessment_sha256"], "recommendations": recommendations}
     proposal["recommendations_sha256"] = sha256(proposal)
     return assessment, proposal
 
 
-def run_pr_impact(*, source_root: Path, output_dir: Path, pr: int, base_revision: str, target_revision: str, candidates: Sequence[Mapping[str, Any]], provider: ImpactProvider, input_paths: Sequence[Path] = ()) -> dict[str, Path]:
+def run_pr_impact(*, source_root: Path, output_dir: Path, pr: int, base_revision: str, target_revision: str, candidates: Sequence[Mapping[str, Any]], provider: PlannerProvider, input_paths: Sequence[Path] = ()) -> dict[str, Path]:
     root = output_dir.resolve()
     parent = (Path.cwd() / "artifacts" / "greenfield-harness").resolve()
     if root.parent != parent or root.exists():
@@ -302,28 +325,43 @@ def run_pr_impact(*, source_root: Path, output_dir: Path, pr: int, base_revision
     paths["extraction"] = write_json(root / "deterministic-extraction.json", extraction)
     handoff.complete("extract", inputs={"context": paths["context"]}, outputs={"extraction": paths["extraction"]})
     try:
-        raw_summary = provider.summarize({"source": context["source"], "extraction": extraction["items"]})
-        summary = _validate_summary(raw_summary, extraction)
+        initial = initial_plan(provider.initial_plan({"source": context["source"], "extraction": extraction["items"]}), extraction)
     except Exception as exc:  # noqa: BLE001 - provider failures must become retained evidence
-        failure = {"schema_version": "0.1", "artifact_kind": "greenfield_harness_pr_impact_failure", "stage": "ai_summary", "reason": str(exc)[:500], "extraction_sha256": extraction["extraction_sha256"]}
-        paths["failure"] = write_json(root / "failure.json", failure)
-        handoff.complete("ai_summary", inputs={"extraction": paths["extraction"]}, outputs={"failure": paths["failure"]}, status="blocked")
+        failure = {"schema_version": "0.1", "artifact_kind": "greenfield_harness_planner_failure", "stage": "planner_initial", "reason": str(exc)[:500], "extraction_sha256": extraction["extraction_sha256"]}
+        paths["failure"] = write_json(root / "planner-failure.json", failure)
+        handoff.complete("planner_initial", inputs={"extraction": paths["extraction"]}, outputs={"failure": paths["failure"]}, status="blocked")
         paths["handoff"] = handoff.finish(status="blocked")
-        raise PrImpactError("Strands/AWS impact summary failed; retained blocked bundle")
-    summary["ai_summary_sha256"] = sha256(summary)
-    paths["summary"] = write_json(root / "ai-behavior-summary.json", summary)
-    handoff.complete("ai_summary", inputs={"extraction": paths["extraction"]}, outputs={"summary": paths["summary"]})
-    discovery, test_evidence = inspect_candidates(context, extraction)
+        raise PrImpactError("planner initial turn failed; retained blocked bundle")
+    initial["initial_sha256"] = sha256(initial)
+    paths["initial"] = write_json(root / "planner-initial.json", initial)
+    handoff.complete("planner_initial", inputs={"extraction": paths["extraction"]}, outputs={"initial": paths["initial"]})
+    ledger = inspect_source_questions(context, extraction, initial)
+    paths["ledger"] = write_json(root / "tool-ledger.json", ledger)
+    handoff.complete("source_investigation", inputs={"initial": paths["initial"]}, outputs={"tool_ledger": paths["ledger"]}, status="degraded" if ledger["gaps"] else "succeeded")
+    try:
+        replan = test_plan(provider.replan({"source": context["source"], "extraction": extraction["items"], "initial": initial, "source_ledger": ledger}), extraction)
+    except Exception as exc:  # noqa: BLE001 - provider failures must become retained evidence
+        failure = {"schema_version": "0.1", "artifact_kind": "greenfield_harness_planner_failure", "stage": "planner_replan", "reason": str(exc)[:500], "tool_ledger_sha256": ledger["tool_ledger_sha256"]}
+        paths["failure"] = write_json(root / "planner-failure.json", failure)
+        handoff.complete("planner_replan", inputs={"tool_ledger": paths["ledger"]}, outputs={"failure": paths["failure"]}, status="blocked")
+        paths["handoff"] = handoff.finish(status="blocked")
+        raise PrImpactError("planner replan turn failed; retained blocked bundle")
+    replan["replan_sha256"] = sha256(replan)
+    paths["replan"] = write_json(root / "planner-replan.json", replan)
+    handoff.complete("planner_replan", inputs={"tool_ledger": paths["ledger"]}, outputs={"replan": paths["replan"]})
+    planning = planning_report(extraction=extraction, initial=initial, source_ledger=ledger, replan=replan)
+    paths["planning"] = write_json(root / "planning-report.json", planning)
+    discovery, test_evidence = inspect_candidates(context, replan)
     paths["discovery"] = write_json(root / "candidate-discovery.json", discovery)
-    handoff.complete("candidate_discovery", inputs={"summary": paths["summary"]}, outputs={"discovery": paths["discovery"]})
+    handoff.complete("candidate_discovery", inputs={"planning": paths["planning"]}, outputs={"discovery": paths["discovery"]})
     paths["test_evidence"] = write_json(root / "test-evidence.json", test_evidence)
     handoff.complete("test_inspection", inputs={"discovery": paths["discovery"]}, outputs={"test_evidence": paths["test_evidence"]})
-    assessment, recommendations = assess_and_recommend(summary, extraction, test_evidence)
+    assessment, recommendations = assess_and_recommend(initial, test_evidence)
     paths["assessment"] = write_json(root / "coverage-assessment.json", assessment)
     handoff.complete("coverage_assessment", inputs={"test_evidence": paths["test_evidence"]}, outputs={"assessment": paths["assessment"]})
     paths["recommendations"] = write_json(root / "test-recommendations.json", recommendations)
     handoff.complete("test_recommendations", inputs={"assessment": paths["assessment"]}, outputs={"recommendations": paths["recommendations"]})
-    analysis = {"schema_version": "0.1", "artifact_kind": "greenfield_harness_pr_impact_analysis", "context_sha256": context["context_sha256"], "ai_summary_sha256": summary["ai_summary_sha256"], "coverage_assessment_sha256": assessment["assessment_sha256"], "recommendations_sha256": recommendations["recommendations_sha256"], "coverage": assessment["coverage"], "recommendations": recommendations["recommendations"], "provenance": context["provenance"]}
+    analysis = {"schema_version": "0.1", "artifact_kind": "greenfield_harness_pr_impact_analysis", "context_sha256": context["context_sha256"], "planning_sha256": planning["planning_sha256"], "coverage_assessment_sha256": assessment["assessment_sha256"], "recommendations_sha256": recommendations["recommendations_sha256"], "behaviors": initial["behaviors"], "coverage": assessment["coverage"], "recommendations": recommendations["recommendations"], "provenance": context["provenance"]}
     analysis["analysis_sha256"] = sha256(analysis)
     paths["analysis"] = write_json(root / "pr-impact-analysis.json", analysis)
     handoff.complete("analyze", inputs={"assessment": paths["assessment"], "recommendations": paths["recommendations"]}, outputs={"analysis": paths["analysis"]})

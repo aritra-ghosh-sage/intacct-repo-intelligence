@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import greenfield_harness.pr_impact as impact
 from greenfield_harness.pr_impact import ImpactHandoff, PrImpactError, run_pr_impact
 
 
@@ -24,16 +25,45 @@ def _repo(root: Path, name: str) -> tuple[Path, str, str]:
 
 
 class _Provider:
-    def summarize(self, case_summary: dict[str, object]) -> dict[str, object]:
-        items = case_summary["extraction"]
+    def initial_plan(self, request: dict[str, object]) -> dict[str, object]:
+        items = request["extraction"]
         assert isinstance(items, list)
         item = next(row for row in items if row["value"] == "changedService")
-        return {"behaviors": [{"id": "behavior:service", "summary": "Service behavior changed.", "evidence_ids": [item["id"]]}]}
+        return {"behaviors": [{"id": "behavior:service", "summary": "Service behavior changed.", "evidence_ids": [item["id"]]}], "questions": [{"id": "source:service", "type": "source_flow", "question": "Find service flow.", "evidence_ids": [item["id"]], "source_terms": ["changedService"]}]}
+
+    def replan(self, request: dict[str, object]) -> dict[str, object]:
+        items = request["extraction"]
+        assert isinstance(items, list)
+        item = next(row for row in items if row["value"] == "changedService")
+        return {"questions": [{"id": "test:service", "type": "test_discovery", "question": "Find service tests.", "evidence_ids": [item["id"]], "source_terms": ["changedService"], "ai_terms": ["service behavior"]}]}
 
 
 class _BrokenProvider:
-    def summarize(self, case_summary: dict[str, object]) -> dict[str, object]:
+    def initial_plan(self, request: dict[str, object]) -> dict[str, object]:
         raise RuntimeError("AWS unavailable")
+
+    def replan(self, request: dict[str, object]) -> dict[str, object]:
+        raise AssertionError("replan must not run")
+
+
+class _AiOnlyProvider(_Provider):
+    def replan(self, request: dict[str, object]) -> dict[str, object]:
+        items = request["extraction"]
+        assert isinstance(items, list)
+        item = next(row for row in items if row["value"] == "changedService")
+        return {"questions": [{"id": "test:service", "type": "test_discovery", "question": "Find semantic service tests.", "evidence_ids": [item["id"]], "source_terms": ["changedService"], "ai_terms": ["service behavior"]}]}
+
+
+class _InvalidPlanner(_Provider):
+    def initial_plan(self, request: dict[str, object]) -> dict[str, object]:
+        value = super().initial_plan(request)
+        value["questions"][0]["source_terms"] = ["invented"]
+        return value
+
+
+class _ReplanBrokenProvider(_Provider):
+    def replan(self, request: dict[str, object]) -> dict[str, object]:
+        raise RuntimeError("replan unavailable")
 
 
 def _source(root: Path) -> tuple[Path, str, str]:
@@ -72,6 +102,8 @@ def test_pr_impact_retains_pinned_test_evidence_and_recommendations(monkeypatch:
     assert analysis["coverage"][0]["status"] == "strong_candidate"
     assert analysis["coverage"][0]["ci_execution"]["status"] == "unavailable"
     assert json.loads(paths["recommendations"].read_text())["recommendations"] == []
+    assert (output / "planning-report.json").is_file()
+    assert (output / "tool-ledger.json").is_file()
     assert ImpactHandoff.validate(output)["status"] == "complete"
 
 
@@ -82,7 +114,7 @@ def test_pr_impact_stops_after_retained_ai_failure(monkeypatch: pytest.MonkeyPat
     output = tmp_path / "artifacts" / "greenfield-harness" / "pr-impact-failed"
     with pytest.raises(PrImpactError, match="retained blocked bundle"):
         run_pr_impact(source_root=source, output_dir=output, pr=1, base_revision=base, target_revision=head, candidates=[{"repository": "example/tests", "local_root": str(candidate), "revision": revision, "test_roots": ["tests"]}], provider=_BrokenProvider())
-    assert (output / "failure.json").is_file()
+    assert (output / "planner-failure.json").is_file()
     assert ImpactHandoff.validate(output)["status"] == "blocked"
 
 
@@ -108,3 +140,45 @@ def test_pr_impact_recommends_a_test_only_for_a_retained_coverage_gap(monkeypatc
     assert assessment["coverage"][0]["status"] == "no_evidence"
     assert recommendations["recommendations"][0]["source_evidence_ids"]
     assert recommendations["recommendations"][0]["reason"] == "no_matching_pinned_test_evidence"
+
+
+def test_pr_impact_keeps_ai_expanded_test_match_as_candidate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    source, base, head = _source(tmp_path)
+    candidate, _revision = _candidate(tmp_path)
+    (candidate / "tests" / "service_test.php").write_text("service behavior\n", encoding="utf-8")
+    _git(candidate, "commit", "-am", "semantic-only match", "-q")
+    monkeypatch.chdir(tmp_path)
+    output = tmp_path / "artifacts" / "greenfield-harness" / "pr-impact-ai-only"
+    paths = run_pr_impact(source_root=source, output_dir=output, pr=1, base_revision=base, target_revision=head, candidates=[{"repository": "example/tests", "local_root": str(candidate), "revision": _git(candidate, "rev-parse", "HEAD"), "test_roots": ["tests"]}], provider=_AiOnlyProvider())
+    assert json.loads(paths["assessment"].read_text())["coverage"][0]["status"] == "candidate"
+    assert json.loads(paths["recommendations"].read_text())["recommendations"] == []
+
+
+def test_pr_impact_blocks_invalid_planner_output(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    source, base, head = _source(tmp_path)
+    candidate, revision = _candidate(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    output = tmp_path / "artifacts" / "greenfield-harness" / "pr-impact-invalid"
+    with pytest.raises(PrImpactError, match="planner initial turn failed"):
+        run_pr_impact(source_root=source, output_dir=output, pr=1, base_revision=base, target_revision=head, candidates=[{"repository": "example/tests", "local_root": str(candidate), "revision": revision, "test_roots": ["tests"]}], provider=_InvalidPlanner())
+    assert ImpactHandoff.validate(output)["status"] == "blocked"
+
+
+def test_pr_impact_blocks_replan_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    source, base, head = _source(tmp_path)
+    candidate, revision = _candidate(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    output = tmp_path / "artifacts" / "greenfield-harness" / "pr-impact-replan-failed"
+    with pytest.raises(PrImpactError, match="planner replan turn failed"):
+        run_pr_impact(source_root=source, output_dir=output, pr=1, base_revision=base, target_revision=head, candidates=[{"repository": "example/tests", "local_root": str(candidate), "revision": revision, "test_roots": ["tests"]}], provider=_ReplanBrokenProvider())
+    assert ImpactHandoff.validate(output)["status"] == "blocked"
+
+
+def test_pr_impact_retains_source_search_unavailable_gap(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    source, base, head = _source(tmp_path)
+    candidate, revision = _candidate(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(impact, "_grep_at", lambda *_args: (_ for _ in ()).throw(PrImpactError("search unavailable")))
+    output = tmp_path / "artifacts" / "greenfield-harness" / "pr-impact-source-gap"
+    paths = run_pr_impact(source_root=source, output_dir=output, pr=1, base_revision=base, target_revision=head, candidates=[{"repository": "example/tests", "local_root": str(candidate), "revision": revision, "test_roots": ["tests"]}], provider=_Provider())
+    assert json.loads(paths["ledger"].read_text())["gaps"][0]["status"] == "unavailable"

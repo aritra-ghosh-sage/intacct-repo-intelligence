@@ -1,0 +1,19 @@
+{
+    "artifact_kind": "greenfield_harness_test_recommendations",
+    "assessment_sha256": "641f7097837bb4360621917083f2943c91fd2752250d14adff1e4c5d0f284d95",
+    "recommendations": [
+        {
+            "behavior_id": "behavior:gl-setup-manager-classes-changed",
+            "id": "recommendation:behavior:gl-setup-manager-classes-changed",
+            "reason": "no_matching_pinned_test_evidence",
+            "recommendation": "Add a revision-pinned test that exercises: PR modifies GL setup manager classes (GLSetupAtEntityManager and GLSetupManager); source-level flow of data/control into and out of these classes needs investigation to characterize the change.",
+            "source_evidence_ids": [
+                "extract:app/source/gl/GLSetupAtEntityManager.cls:symbol:GLSetupAtEntityManager:11",
+                "extract:app/source/gl/GLSetupManager.cls:symbol:GLSetupManager:18"
+            ],
+            "status": "candidate"
+        }
+    ],
+    "recommendations_sha256": "dd52c15e8b0ccf99b4edff6c1dc0ad611135c7a01e97711c745a10a59cce6c13",
+    "schema_version": "0.1"
+}

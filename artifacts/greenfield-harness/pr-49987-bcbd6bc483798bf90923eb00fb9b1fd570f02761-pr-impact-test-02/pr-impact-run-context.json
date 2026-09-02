@@ -1,0 +1,59 @@
+{
+    "artifact_kind": "greenfield_harness_pr_impact_context",
+    "candidate_repositories": [
+        {
+            "local_root": "/Users/aritra.ghosh/projects/ia-restapi-automation-tests",
+            "repo_key": "ia-restapi-automation-tests",
+            "repository": "intacct/ia-restapi-automation-tests",
+            "revision": "ecd3b7120e516ea04bc9070d38594c2fe39a6495",
+            "test_roots": [
+                "features"
+            ]
+        },
+        {
+            "local_root": "/Users/aritra.ghosh/projects/ia-selenium",
+            "repo_key": "ia-selenium",
+            "repository": "intacct/ia-selenium",
+            "revision": "4ebd9007db47116c405779e06100ba8df7e7bceb",
+            "test_roots": [
+                "src"
+            ]
+        },
+        {
+            "local_root": "/Users/aritra.ghosh/projects/ia-test-automation",
+            "repo_key": "ia-test-automation",
+            "repository": "intacct/ia-test-automation",
+            "revision": "b99fb2b834a363ac9b5028bbb97a5905c8f79b80",
+            "test_roots": [
+                "tests"
+            ]
+        }
+    ],
+    "context_sha256": "4877d879aca6e30b14eac37ecd483276a906c3ab5376bc1df3d7173632ee042a",
+    "input_provenance": [
+        {
+            "path": "/Users/aritra.ghosh/projects/intacct-repo-intelligence/artifacts/greenfield-harness/pr-49987-inputs/candidates-20260902.json",
+            "sha256": "26988e6cbdfb935446124a8b4870a996d988412ff41e7af90ec6f9c867584a01"
+        }
+    ],
+    "provenance": {
+        "catalog_mutation": "none",
+        "github_writes": "none",
+        "model_calls": "strands_aws",
+        "read_only": true
+    },
+    "schema_version": "0.1",
+    "source": {
+        "base_revision": "a2b8af9336f26a327b10bd3289594f6c94639da8",
+        "base_tree_sha256": "5574a124ad3d1deec1fdf4315ebb59e0285908b6",
+        "changed_paths": [
+            "app/source/gl/GLSetupAtEntityManager.cls",
+            "app/source/gl/GLSetupManager.cls"
+        ],
+        "local_root": "/Users/aritra.ghosh/projects/main",
+        "pr_number": 49987,
+        "repository": "intacct/ia-app",
+        "target_revision": "bcbd6bc483798bf90923eb00fb9b1fd570f02761",
+        "target_tree_sha256": "f76646deafdfa183bf11108636379fe50d4dc90e"
+    }
+}

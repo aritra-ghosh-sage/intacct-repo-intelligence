@@ -1,0 +1,22 @@
+{
+    "artifact_kind": "greenfield_harness_coverage_assessment",
+    "assessment_sha256": "641f7097837bb4360621917083f2943c91fd2752250d14adff1e4c5d0f284d95",
+    "coverage": [
+        {
+            "behavior_id": "behavior:gl-setup-manager-classes-changed",
+            "ci_execution": {
+                "reason": "live_ci_evidence_out_of_scope",
+                "status": "unavailable"
+            },
+            "source_evidence_ids": [
+                "extract:app/source/gl/GLSetupAtEntityManager.cls:symbol:GLSetupAtEntityManager:11",
+                "extract:app/source/gl/GLSetupManager.cls:symbol:GLSetupManager:18"
+            ],
+            "status": "no_evidence",
+            "test_evidence": []
+        }
+    ],
+    "planning_initial_sha256": "d3d07ee97bf76d01afc2d3359697288352b8e45c51cdb7f5c6b7b26f2d77fdd2",
+    "schema_version": "0.1",
+    "test_evidence_sha256": "a29643de2ff325a94019e9d1bf494f002daa6fd1162786c6a794c60f4fd57370"
+}

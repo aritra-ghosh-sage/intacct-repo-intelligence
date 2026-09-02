@@ -52,7 +52,7 @@ def _json_object(text: str) -> Mapping[str, Any]:
 
 
 class StrandsAwsImpactProvider:
-    def summarize(self, case_summary: Mapping[str, Any]) -> Mapping[str, Any]:
+    def _ask(self, instruction: str, payload: Mapping[str, Any]) -> Mapping[str, Any]:
         model = (
             os.environ.get("STRANDS_HARNESS_MODEL")
             or os.environ.get("STRANDS_PLANNER_MODEL")
@@ -65,17 +65,25 @@ class StrandsAwsImpactProvider:
             from strands.models.bedrock import BedrockModel
         except ImportError as exc:  # pragma: no cover - runtime dependent
             raise PrImpactError("Strands Bedrock runtime is not installed") from exc
-        prompt = (
-            "Return JSON only: {behaviors:[{id,summary,evidence_ids}]}. "
-            "Summarize possible changed behavior from the supplied deterministic evidence. "
-            "Every behavior must cite one or more supplied evidence IDs. Do not claim test coverage or runtime behavior.\n"
-            + json.dumps(case_summary, sort_keys=True, separators=(",", ":"))
-        )
+        prompt = instruction + "\n" + json.dumps(payload, sort_keys=True, separators=(",", ":"))
         result = Agent(model=BedrockModel(model_id=model, max_tokens=2048), callback_handler=None)(prompt)
         text = _result_text(result)
         if not isinstance(text, str):
             raise PrImpactError("Strands did not return JSON text")
         return _json_object(text)
+
+    def initial_plan(self, request: Mapping[str, Any]) -> Mapping[str, Any]:
+        return self._ask(
+            "Return JSON only with behaviors and questions. behaviors entries require id, summary, evidence_ids. "
+            "questions entries require id, type=source_flow, question, evidence_ids, source_terms. "
+            "Use at most 4 questions and 3 source_terms per question. Every term must exactly equal a supplied extraction value and every evidence ID must be supplied. "
+            "Plan read-only source-flow investigation only; do not claim coverage, CI execution, or discover repositories.", request)
+
+    def replan(self, request: Mapping[str, Any]) -> Mapping[str, Any]:
+        return self._ask(
+            "Return JSON only: {questions:[...]}. Each entry requires id, type=test_discovery, question, evidence_ids, source_terms, ai_terms. "
+            "Use 1..6 questions, at most 3 source_terms and 3 ai_terms each. source_terms must exactly equal supplied extraction values; ai_terms are lexical candidate search terms only. "
+            "Use retained source-ledger results; do not claim coverage, CI execution, or discover repositories.", request)
 
 
 def main(argv: list[str] | None = None) -> int:
