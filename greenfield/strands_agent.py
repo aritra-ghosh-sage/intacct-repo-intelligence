@@ -477,11 +477,11 @@ Every asserted edge must preserve exact source evidence, use resolution="exact",
 and keep provider-only metadata out of the persisted contract.
 Use the target revision from the context and preserve all changed paths.
 
-A changed file with `"context_mode": "hunk"` has been reduced to only the
-changed-hunk regions plus surrounding context lines (see the `--- lines a-b
-of n ---` markers in its `content`), not the full file. For such a file, only
-trace calls/behaviors reachable from the shown regions; do not attempt to
-enumerate every symbol in the whole file. If the output would still not fit,
+A changed file whose `context_mode` starts with `"hunk"` has been reduced to
+only the changed-hunk regions plus surrounding context lines (see the
+`--- lines a-b of n ---` markers in its `content`), not the full file. For
+such a file, only trace calls/behaviors reachable from the shown regions; do
+not attempt to enumerate every symbol in the whole file. If the output would still not fit,
 emit a partial trace with the top-level fields `truncated: true`,
 `truncation_reason: <string>`, and `omitted_counts: {{"calls": <int>,
 "behaviors": <int>}}` rather than leaving the JSON incomplete.

@@ -304,8 +304,13 @@ def collect_repository_evidence(
                 if isinstance(total, int) and total > len(rows):
                     for page in range(2, _MAX_COLLECTION_PAGES + 1):
                         page_endpoint = f"{endpoint}&page={page}"
-                        page_response = _object(call(page_endpoint), page_endpoint)
                         endpoints.append(page_endpoint)
+                        try:
+                            page_response = _object(call(page_endpoint), page_endpoint)
+                        except RepositoryEvidenceError as exc:
+                            collection_errors.append(f"{page_endpoint}: {exc}")
+                            collection_errors.append(f"{endpoint}: pagination_incomplete")
+                            return rows
                         page_rows = _list(page_response.get(key, []), f"{page_endpoint}.{key}")
                         rows.extend(page_rows)
                         if len(rows) >= total or not page_rows:

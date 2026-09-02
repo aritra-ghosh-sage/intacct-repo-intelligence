@@ -849,6 +849,39 @@ def test_truncated_tree_is_retained_as_an_inventory_gap() -> None:
     assert report["status"] == "partial"
 
 
+def test_paginated_collection_retains_first_page_when_later_page_fails() -> None:
+    workflow = "name: test\njobs:\n  test:\n    steps:\n      - run: mvn test\n"
+    run = {
+        "id": 7,
+        "head_sha": DOWNSTREAM,
+        "source_repository": "ia-app",
+        "source_revision": TARGET,
+    }
+    original = provider_for(".github/workflows/test.yml", workflow, runs=[run])
+    runs_endpoint = (
+        f"repos/intacct/example/actions/runs?head_sha={DOWNSTREAM}&per_page=100"
+    )
+
+    def paginated_provider(endpoint: str):
+        if endpoint == runs_endpoint:
+            return {**original(endpoint), "total_count": 101}
+        if endpoint == f"{runs_endpoint}&page=2":
+            raise RepositoryEvidenceError("page unavailable")
+        return original(endpoint)
+
+    evidence = collect_repository_evidence(
+        "intacct/example",
+        source_repository="ia-app",
+        source_revision=TARGET,
+        provider=paginated_provider,
+    )
+
+    assert [row["id"] for row in evidence["workflow_runs"]] == [7]
+    assert evidence["ci_linkage"]["status"] == "available"
+    assert f"{runs_endpoint}: pagination_incomplete" in evidence["gaps"]
+    assert f"{runs_endpoint}&page=2: page unavailable" in evidence["gaps"]
+
+
 def test_validator_rejects_confirmed_inventory_evidence() -> None:
     workflow = "name: status\njobs: {}\n"
     evidence = collect_repository_evidence(

@@ -1209,6 +1209,7 @@ def test_build_context_hunk_centers_large_modified_file(tmp_path: Path) -> None:
     prompt = _prompt(context, repo)
     assert "line 1\\n" in prompt
     assert "line 200 changed\\n" in prompt
+    assert 'context_mode` starts with `"hunk"`' in prompt
 
 
 def test_build_context_added_file_ignores_hunk_mode(tmp_path: Path) -> None:
