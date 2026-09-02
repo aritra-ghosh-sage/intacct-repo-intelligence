@@ -5,7 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import select
 import subprocess
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -44,6 +46,7 @@ _DECLARATION = re.compile(
 )
 _PYTHON_DECLARATION = re.compile(r"^\s*(?:class|def)\s+([A-Za-z_][A-Za-z0-9_]*)", re.MULTILINE)
 _CONFIG_VALUE = re.compile(r"['\"]([A-Za-z][A-Za-z0-9_.:-]{2,})['\"]")
+MAX_CANDIDATE_MATCHES_PER_REPOSITORY = 20
 
 
 class PrImpactError(ValueError):
@@ -203,31 +206,47 @@ def deterministic_extraction(context: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _grep_at(
-    root: Path, revision: str, terms: Sequence[str], roots: Sequence[str]
-) -> list[tuple[str, int, str]]:
+    root: Path, revision: str, terms: Sequence[str], roots: Sequence[str], *, limit: int
+) -> tuple[list[tuple[str, int, str]], bool]:
     if not terms:
-        return []
+        return [], False
     command = ["git", "-C", str(root), "grep", "-n", "-F"]
     for term in terms:
         command.extend(("-e", term))
     command.extend((revision, "--", *roots))
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    assert process.stdout is not None
+    rows: list[tuple[str, int, str]] = []
+    truncated = False
+    deadline = time.monotonic() + 30
     try:
-        result = subprocess.run(command, check=False, capture_output=True, timeout=30)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(command, 30)
+            ready, _write, _error = select.select([process.stdout], [], [], remaining)
+            if not ready:
+                raise subprocess.TimeoutExpired(command, 30)
+            raw = process.stdout.readline()
+            if not raw:
+                break
+            try:
+                path, line, excerpt = raw.decode("utf-8", errors="replace").rstrip("\n").removeprefix(f"{revision}:").split(":", 2)
+                rows.append((path, int(line), excerpt))
+            except ValueError:
+                raise PrImpactError("git candidate search returned an invalid match") from None
+            if len(rows) >= limit:
+                truncated = True
+                process.kill()
+                break
+        _stdout, stderr = process.communicate(timeout=30)
     except subprocess.TimeoutExpired as exc:
+        process.kill()
+        process.communicate()
         raise PrImpactError("git candidate search timed out") from exc
-    if result.returncode not in {0, 1}:
-        raise PrImpactError(
-            result.stderr.decode("utf-8", errors="replace").strip()
-            or "git candidate search failed"
-        )
-    rows = []
-    for raw in result.stdout.decode("utf-8", errors="replace").splitlines():
-        try:
-            path, line, excerpt = raw.removeprefix(f"{revision}:").split(":", 2)
-            rows.append((path, int(line), excerpt))
-        except ValueError:
-            raise PrImpactError("git candidate search returned an invalid match") from None
-    return rows
+    if not truncated and process.returncode not in {0, 1}:
+        raise PrImpactError(stderr.decode("utf-8", errors="replace").strip() or "git candidate search failed")
+    return rows, truncated
 
 
 def inspect_source_questions(
@@ -238,11 +257,14 @@ def inspect_source_questions(
     rows: list[dict[str, Any]] = []
     gaps: list[dict[str, Any]] = []
     for question in plan["questions"]:
+        if len(rows) >= MAX_SOURCE_READS:
+            gaps.append({"question_id": question["id"], "status": "unavailable", "reason": "source_read_budget_exhausted"})
+            continue
         try:
-            for path, line, excerpt in _grep_at(root, revision, question["source_terms"], []):
-                if len(rows) >= MAX_SOURCE_READS:
-                    gaps.append({"status": "unavailable", "reason": "source_read_budget_exhausted"})
-                    break
+            matches, truncated = _grep_at(root, revision, question["source_terms"], [], limit=MAX_SOURCE_READS - len(rows))
+            if truncated:
+                gaps.append({"question_id": question["id"], "status": "unavailable", "reason": "source_read_budget_exhausted"})
+            for path, line, excerpt in matches:
                 raw = _git(root, "show", f"{revision}:{path}")
                 for term in question["source_terms"]:
                     if term in excerpt:
@@ -268,9 +290,10 @@ def inspect_candidates(context: Mapping[str, Any], replan: Mapping[str, Any]) ->
         matched = []
         try:
             file_blobs: dict[str, str] = {}
-            for path, line, excerpt in _grep_at(
-                root, revision, terms, [*candidate["test_roots"], ".github/workflows"]
-            ):
+            matches, truncated = _grep_at(root, revision, terms, [*candidate["test_roots"], ".github/workflows"], limit=MAX_CANDIDATE_MATCHES_PER_REPOSITORY)
+            if truncated:
+                gaps.append({"repository": candidate["repository"], "status": "unavailable", "reason": "candidate_match_budget_exhausted"})
+            for path, line, excerpt in matches:
                 blob = file_blobs.get(path)
                 if blob is None:
                     raw = _git(root, "show", f"{revision}:{path}")
@@ -339,7 +362,7 @@ def run_pr_impact(*, source_root: Path, output_dir: Path, pr: int, base_revision
     paths["ledger"] = write_json(root / "tool-ledger.json", ledger)
     handoff.complete("source_investigation", inputs={"initial": paths["initial"]}, outputs={"tool_ledger": paths["ledger"]}, status="degraded" if ledger["gaps"] else "succeeded")
     try:
-        replan = test_plan(provider.replan({"source": context["source"], "extraction": extraction["items"], "initial": initial, "source_ledger": ledger}), extraction)
+        replan = test_plan(provider.replan({"source": context["source"], "extraction": extraction["items"], "initial": initial, "source_ledger": ledger}), extraction, behaviors=initial["behaviors"])
     except Exception as exc:  # noqa: BLE001 - provider failures must become retained evidence
         failure = {"schema_version": "0.1", "artifact_kind": "greenfield_harness_planner_failure", "stage": "planner_replan", "reason": str(exc)[:500], "tool_ledger_sha256": ledger["tool_ledger_sha256"]}
         paths["failure"] = write_json(root / "planner-failure.json", failure)

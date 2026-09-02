@@ -9,6 +9,7 @@ from .artifacts import sha256
 
 MAX_INITIAL_QUESTIONS = 4
 MAX_TEST_QUESTIONS = 6
+MAX_BEHAVIORS = 4
 MAX_SOURCE_READS = 12
 MAX_TERMS = 3
 MAX_TEXT = 240
@@ -79,7 +80,7 @@ def initial_plan(value: Mapping[str, Any], extraction: Mapping[str, Any]) -> dic
     allowed_terms = {str(item["value"]) for item in extraction["items"]}
     raw_behaviors = value.get("behaviors")
     raw_questions = value.get("questions")
-    if not isinstance(raw_behaviors, list) or not raw_behaviors or not isinstance(raw_questions, list) or not raw_questions or len(raw_questions) > MAX_INITIAL_QUESTIONS:
+    if not isinstance(raw_behaviors, list) or not raw_behaviors or len(raw_behaviors) > MAX_BEHAVIORS or not isinstance(raw_questions, list) or not raw_questions or len(raw_questions) > MAX_INITIAL_QUESTIONS:
         raise PlannerError("initial plan requires behaviors and 1..4 questions")
     behaviors = []
     for index, row in enumerate(raw_behaviors):
@@ -95,7 +96,9 @@ def initial_plan(value: Mapping[str, Any], extraction: Mapping[str, Any]) -> dic
     return {"behaviors": sorted(behaviors, key=lambda row: row["id"]), "questions": sorted(questions, key=lambda row: row["id"])}
 
 
-def test_plan(value: Mapping[str, Any], extraction: Mapping[str, Any]) -> dict[str, Any]:
+def test_plan(
+    value: Mapping[str, Any], extraction: Mapping[str, Any], *, behaviors: list[Mapping[str, Any]]
+) -> dict[str, Any]:
     allowed_ids = {str(item["id"]) for item in extraction["items"]}
     allowed_terms = {str(item["value"]) for item in extraction["items"]}
     raw = value.get("questions")
@@ -105,6 +108,9 @@ def test_plan(value: Mapping[str, Any], extraction: Mapping[str, Any]) -> dict[s
     if len({row["id"] for row in questions}) != len(questions):
         raise PlannerError("question IDs must be unique")
     _validate_anchoring(questions, extraction)
+    covered = {item for question in questions for item in question["evidence_ids"]}
+    if any(not set(behavior["evidence_ids"]) <= covered for behavior in behaviors):
+        raise PlannerError("test questions must cover every behavior evidence ID")
     return {"questions": sorted(questions, key=lambda row: row["id"])}
 
 
@@ -113,7 +119,7 @@ def report(*, extraction: Mapping[str, Any], initial: Mapping[str, Any], source_
         "schema_version": "0.1",
         "artifact_kind": "greenfield_harness_planning_report",
         "extraction_sha256": extraction["extraction_sha256"],
-        "budget": {"planner_invocations": 2, "initial_questions": MAX_INITIAL_QUESTIONS, "test_questions": MAX_TEST_QUESTIONS, "source_reads": MAX_SOURCE_READS},
+        "budget": {"planner_invocations": 2, "behaviors": MAX_BEHAVIORS, "initial_questions": MAX_INITIAL_QUESTIONS, "test_questions": MAX_TEST_QUESTIONS, "source_reads": MAX_SOURCE_READS},
         "initial": initial,
         "source_ledger_sha256": source_ledger["tool_ledger_sha256"],
         "replan": replan,

@@ -8,6 +8,7 @@ import pytest
 
 import greenfield_harness.pr_impact as impact
 from greenfield_harness.pr_impact import ImpactHandoff, PrImpactError, run_pr_impact
+from greenfield_harness.pr_impact_planner import PlannerError, initial_plan
 
 
 def _git(root: Path, *args: str) -> str:
@@ -64,6 +65,21 @@ class _InvalidPlanner(_Provider):
 class _ReplanBrokenProvider(_Provider):
     def replan(self, request: dict[str, object]) -> dict[str, object]:
         raise RuntimeError("replan unavailable")
+
+
+class _UncoveredBehaviorProvider(_Provider):
+    def initial_plan(self, request: dict[str, object]) -> dict[str, object]:
+        items = request["extraction"]
+        assert isinstance(items, list)
+        service = next(row for row in items if row["value"] == "changedService")
+        new = next(row for row in items if row["value"] == "newBehavior")
+        return {"behaviors": [{"id": "behavior:service", "summary": "Service behavior changed.", "evidence_ids": [service["id"]]}, {"id": "behavior:new", "summary": "New behavior changed.", "evidence_ids": [new["id"]]}], "questions": [{"id": "source:both", "type": "source_flow", "question": "Find flows.", "evidence_ids": [service["id"], new["id"]], "source_terms": ["changedService", "newBehavior"]}]}
+
+    def replan(self, request: dict[str, object]) -> dict[str, object]:
+        items = request["extraction"]
+        assert isinstance(items, list)
+        service = next(row for row in items if row["value"] == "changedService")
+        return {"questions": [{"id": "test:service", "type": "test_discovery", "question": "Find service tests.", "evidence_ids": [service["id"]], "source_terms": ["changedService"], "ai_terms": []}]}
 
 
 def _source(root: Path) -> tuple[Path, str, str]:
@@ -178,7 +194,36 @@ def test_pr_impact_retains_source_search_unavailable_gap(monkeypatch: pytest.Mon
     source, base, head = _source(tmp_path)
     candidate, revision = _candidate(tmp_path)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(impact, "_grep_at", lambda *_args: (_ for _ in ()).throw(PrImpactError("search unavailable")))
+    monkeypatch.setattr(impact, "_grep_at", lambda *_args, **_kwargs: (_ for _ in ()).throw(PrImpactError("search unavailable")))
     output = tmp_path / "artifacts" / "greenfield-harness" / "pr-impact-source-gap"
     paths = run_pr_impact(source_root=source, output_dir=output, pr=1, base_revision=base, target_revision=head, candidates=[{"repository": "example/tests", "local_root": str(candidate), "revision": revision, "test_roots": ["tests"]}], provider=_Provider())
     assert json.loads(paths["ledger"].read_text())["gaps"][0]["status"] == "unavailable"
+
+
+def test_pr_impact_blocks_replan_that_omits_a_behavior(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    source, base, head = _source(tmp_path)
+    candidate, revision = _candidate(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    output = tmp_path / "artifacts" / "greenfield-harness" / "pr-impact-uncovered"
+    with pytest.raises(PrImpactError, match="planner replan turn failed"):
+        run_pr_impact(source_root=source, output_dir=output, pr=1, base_revision=base, target_revision=head, candidates=[{"repository": "example/tests", "local_root": str(candidate), "revision": revision, "test_roots": ["tests"]}], provider=_UncoveredBehaviorProvider())
+
+
+def test_pr_impact_caps_candidate_matches(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    source, base, head = _source(tmp_path)
+    candidate, _revision = _candidate(tmp_path)
+    (candidate / "tests" / "service_test.php").write_text("changedService\n" * 25, encoding="utf-8")
+    _git(candidate, "commit", "-am", "many matches", "-q")
+    monkeypatch.chdir(tmp_path)
+    output = tmp_path / "artifacts" / "greenfield-harness" / "pr-impact-capped"
+    paths = run_pr_impact(source_root=source, output_dir=output, pr=1, base_revision=base, target_revision=head, candidates=[{"repository": "example/tests", "local_root": str(candidate), "revision": _git(candidate, "rev-parse", "HEAD"), "test_roots": ["tests"]}], provider=_Provider())
+    evidence = json.loads(paths["test_evidence"].read_text())
+    assert len(evidence["evidence"]) == 20
+    assert evidence["gaps"][0]["reason"] == "candidate_match_budget_exhausted"
+
+
+def test_initial_plan_caps_behavior_count() -> None:
+    extraction = {"items": [{"id": "extract:one", "value": "one"}]}
+    plan = {"behaviors": [{"id": f"behavior:{index}", "summary": "Changed.", "evidence_ids": ["extract:one"]} for index in range(5)], "questions": [{"id": "source:one", "type": "source_flow", "question": "Find one.", "evidence_ids": ["extract:one"], "source_terms": ["one"]}]}
+    with pytest.raises(PlannerError, match="initial plan requires"):
+        initial_plan(plan, extraction)
