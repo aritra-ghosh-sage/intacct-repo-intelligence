@@ -34,6 +34,10 @@ _PLANNER_HANDOFF_MAX_CYCLES = 8
 class StrandsPlannerError(ValueError):
     """Raised when the Strands planner cannot produce a safe lifecycle."""
 
+    def __init__(self, message: str, *, diagnostic: Mapping[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.diagnostic = dict(diagnostic or {})
+
 
 class PlannerTaskResponse(BaseModel):
     """Typed response boundary for initial and replanning turns."""
@@ -260,6 +264,10 @@ explicit-contract candidates before discovery-screen candidates. Plan a final
 challenge_claim task for any strong claim or draft-eligible action, and finish
 with synthesize_review. Do not claim impact, coverage, or execute writes.
 
+Allowed task types: """
+        + ", ".join(sorted(TASK_TYPES))
+        + """.
+
 Use progressive disclosure. The brief is an index, not source authority. For a
 repository with a handbook, read its `index`, then only relevant behavior sections,
 and verify any candidate locator with the host-dispatched evidence tasks. Do not
@@ -449,7 +457,17 @@ def _parse_tasks(
     seen_ids: set[str] = set()
     for index, row in enumerate(rows):
         if not isinstance(row, Mapping) or row.get("task_type") not in TASK_TYPES:
-            raise StrandsPlannerError(f"planner task {index} has an invalid task_type")
+            invalid_type = row.get("task_type") if isinstance(row, Mapping) else None
+            raise StrandsPlannerError(
+                f"planner task {index} has an invalid task_type",
+                diagnostic={
+                    "response_sha256": artifact_sha256(text),
+                    "response_bytes": len(text.encode("utf-8")),
+                    "task_count": len(rows),
+                    "task_index": index,
+                    "invalid_task_type": _redacted_error(invalid_type),
+                },
+            )
         repository = row.get("repository")
         if repository is not None and str(repository) not in allowed:
             raise StrandsPlannerError(f"planner task {index} is outside captured scope")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -130,6 +131,51 @@ def _projection_lines(
     return lines
 
 
+def _rendered_template(
+    template: str, *, request: Mapping[str, Any], gaps: list[str]
+) -> str:
+    """Replace sample template content with evidence-bound values or explicit unknowns."""
+
+    changed_paths = request.get("changed_paths", [])
+    paths = [str(path) for path in changed_paths if isinstance(path, str)]
+    reviewed_rows = "\n".join(
+        f"| `{path}` | Changed source | Not assessed | No complete evidence-backed code finding. |"
+        for path in paths
+    ) or "| Not recorded | Not assessed | Not assessed | No changed-path evidence was supplied. |"
+    replacements = {
+        "**Type:** Bug Fix | Feature | Refactor | Docs | Chore": "**Type:** Not classified from retained evidence",
+        "**Scope:** [1-2 sentence description]": f"**Scope:** {len(paths)} changed file(s) retained in the source request" if paths else "**Scope:** Not computed; changed-path evidence unavailable",
+        "**Risk Level:** Low | Medium | High | Critical": "**Risk Level:** Not computed; incomplete evidence is not a risk classification",
+        "**Evidence identity:** Source repository `[repo]` | Base `[sha]` | Head `[sha]`": f"**Evidence identity:** Source repository `{request['source_repository']}` | Base `{request['base_revision']}` | Head `{request['head_revision']}`",
+        "**Assessment boundary:** Repositories assessed `[list]` | Owner evidence `[available/unavailable]` | CI execution `[status]`": "**Assessment boundary:** See retained evidence and explicit gaps below.",
+        "- **Files:** X changed, Y additions, Z deletions": f"- **Files:** {len(paths)} changed; additions/deletions not computed by this projection",
+        "- **Commits:** N (avg. message quality: good/needs work)": "- **Commits:** Not assessed",
+        "- **Coverage:** API changes [Y/N] | DB migrations [Y/N] | UI [Y/N]": "- **Coverage:** Not assessed from retained evidence",
+        "| Confirmed | [API/workflow/database/permission] | `path/to/entity.ent` or flow path | Confirmed | [catalog record/revision] |\n| Candidate | Caller chain | `path/to/caller.cls` | Candidate | [relationship/revision] |": "| Not assessed | No inferred surface | Not assessed | Partial | Retained evidence projection below |",
+        "- [Missing, unavailable, stale, ambiguous, not-modelled, or not-recorded-in-PR evidence]": "- Explicit gaps are rendered from retained artifacts below.",
+        "| `path/to/file1.cls` | Logic | ✓ | [brief comment] |\n| `path/to/file2.js` | UI | ⚠ | [specific concern] |": reviewed_rows,
+        "| `repo/key` | `feature > scenario` | Confirmed / Candidate / Uncovered | Keep / Update / Add / Review | [revision and lines] |": "| Not assessed | No revision-bound test evidence | not_assessed | Provide bound test evidence | Retained analysis |",
+        "- [Exact missing, stale, unavailable, or weak coverage]\n- [Use `not_assessed` when a nominated test repository lacks a confirmed relation and revision-bound test evidence]": "- Coverage remains `not_assessed` until revision-bound test and CI evidence is retained.",
+        "- **[File:Line]** Exact issue with reproducible impact and fix": "- No evidence-backed critical finding recorded.",
+        "- **[File:Line]** Pattern/inconsistency; recommend action": "- No evidence-backed medium-priority finding recorded.",
+        "- **[File:Line]** Suggestion for improvement": "- No evidence-backed nice-to-have finding recorded.",
+        "- **[File:Line]** What was done well": "- No strength claim is made without retained evidence.",
+        "**Confidence:** [score or `Not computed`; describe evidence scope, not business risk]": "**Confidence:** Not computed; describe only retained evidence scope.",
+        "**Recommendation:** Approve ✓ / Request Changes ⚠ / Comment 💬": "**Recommendation:** Comment; evidence is partial or unavailable.",
+        "- [Explicit unresolved, unavailable, stale, or deferred evidence]\n- [Evidence scope and target revision limitation]\n- [AI guidance files are advisory context and never establish impact, ownership, or coverage]": "- See explicit gaps and retained source identity above.",
+        "**Next Reviewer:** @team-compliance (domain experts for e-invoicing logic)": "**Next Reviewer:** Not assigned by retained evidence",
+    }
+    for source, replacement in replacements.items():
+        template = template.replace(source, replacement)
+    if gaps:
+        template = template.replace(
+            "---\n\n## ✅ Reviewed",
+            "**Required evidence to continue:** Provide revision-bound source, test, and CI evidence for the explicit gaps; unavailable evidence remains unavailable.\n\n---\n\n## ✅ Reviewed",
+            1,
+        )
+    return template
+
+
 def render_review(
     *,
     request: dict[str, Any],
@@ -202,7 +248,8 @@ def render_review(
     )
     gaps = sorted(set(gaps))
     marker = "**Explicit gaps:**\n"
-    markdown = template.replace(marker, marker + "\n" + "\n".join(evidence_lines + [f"- {gap}" for gap in gaps]) + "\n", 1)
+    markdown = _rendered_template(template, request=request, gaps=gaps)
+    markdown = markdown.replace(marker, marker + "\n" + "\n".join(evidence_lines + [f"- {gap}" for gap in gaps]) + "\n", 1)
     report = {"schema_version": "0.1", "analysis_kind": "greenfield_pr_review", "status": "partial" if gaps else "complete", "claims": discovery.get("claims", []), "markdown": markdown, "gaps": gaps, "provenance": {"template": str(TEMPLATE.relative_to(TEMPLATE.parents[2])), "read_only": True, "analysis_report_sha256": analysis.get("report_sha256") if isinstance(analysis, dict) else None, "behavior_impact_sha256": behavior_impact.get("handbook_sha256") if isinstance(behavior_impact, dict) else None, "planning_sha256": planning.get("planning_sha256") if isinstance(planning, dict) else None}, **({"canonical_analysis": canonical_analysis_projection(analysis)} if isinstance(analysis, dict) else {})}
     report["review_sha256"] = artifact_sha256(report)
     return report

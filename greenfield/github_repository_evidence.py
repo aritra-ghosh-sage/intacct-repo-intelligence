@@ -29,6 +29,7 @@ _INVENTORY_PATH = re.compile(
     r"(?:^|/)(?:features?|tests?|testdefinitions|testscripts|specs?)(?:/|$)|\.(?:feature|feature\.xml|jmx|test\.xml)$",
     re.IGNORECASE,
 )
+_MAX_COLLECTION_PAGES = 5
 
 
 class RepositoryEvidenceError(RuntimeError):
@@ -152,11 +153,66 @@ class MappingLike(dict[str, Any]):
     """Typing helper for provider response objects."""
 
 
+def _scoped_tree_entries(
+    call: Provider,
+    *,
+    repository: str,
+    revision: str,
+    roots: list[str],
+    endpoints: list[str],
+) -> tuple[list[Any], list[str]]:
+    """Enumerate only declared inventory roots when a recursive root tree truncates."""
+
+    errors: list[str] = []
+    root_endpoint = f"repos/{repository}/git/trees/{revision}"
+    root = _object(call(root_endpoint), root_endpoint)
+    endpoints.append(root_endpoint)
+    current = _list(root.get("tree"), f"{root_endpoint}.tree")
+    result: list[Any] = []
+    for configured_root in sorted(set(roots)):
+        parts = [part for part in configured_root.split("/") if part]
+        entries = current
+        tree_sha: str | None = None
+        for part in parts:
+            match = next(
+                (
+                    row
+                    for row in entries
+                    if isinstance(row, dict)
+                    and row.get("path") == part
+                    and row.get("type") == "tree"
+                    and isinstance(row.get("sha"), str)
+                ),
+                None,
+            )
+            if match is None:
+                tree_sha = None
+                break
+            tree_sha = str(match["sha"])
+            endpoint = f"repos/{repository}/git/trees/{tree_sha}"
+            subtree = _object(call(endpoint), endpoint)
+            endpoints.append(endpoint)
+            entries = _list(subtree.get("tree"), f"{endpoint}.tree")
+        if tree_sha is None:
+            continue
+        endpoint = f"repos/{repository}/git/trees/{tree_sha}?recursive=1"
+        subtree = _object(call(endpoint), endpoint)
+        endpoints.append(endpoint)
+        if subtree.get("truncated") is True:
+            errors.append(f"{endpoint}: response_truncated")
+            continue
+        for row in _list(subtree.get("tree"), f"{endpoint}.tree"):
+            if isinstance(row, dict) and isinstance(row.get("path"), str):
+                result.append({**row, "path": f"{configured_root}/{row['path']}"})
+    return result, errors
+
+
 def collect_repository_evidence(
     repository: str,
     *,
     source_repository: str,
     source_revision: str,
+    test_roots: list[str] | None = None,
     provider: Provider | None = None,
 ) -> dict[str, Any]:
     """Collect a pinned repository/workflow inventory without mutating GitHub."""
@@ -186,6 +242,20 @@ def collect_repository_evidence(
         collection_errors: list[str] = []
         if tree.get("truncated") is True:
             collection_errors.append(f"{tree_endpoint}: response_truncated")
+            if test_roots:
+                try:
+                    scoped_entries, scoped_errors = _scoped_tree_entries(
+                        call,
+                        repository=repository,
+                        revision=inspected_revision,
+                        roots=[".github/workflows", *test_roots],
+                        endpoints=endpoints,
+                    )
+                    collection_errors.extend(scoped_errors)
+                    if scoped_entries:
+                        tree_entries = scoped_entries
+                except RepositoryEvidenceError as exc:
+                    collection_errors.append(f"scoped_tree_fallback_unavailable: {exc}")
         workflow_paths = sorted(
             str(item["path"])
             for item in tree_entries
@@ -229,7 +299,20 @@ def collect_repository_evidence(
             try:
                 response = _object(call(endpoint), endpoint)
                 endpoints.append(endpoint)
-                return _list(response.get(key, []), f"{endpoint}.{key}")
+                rows = _list(response.get(key, []), f"{endpoint}.{key}")
+                total = response.get("total_count")
+                if isinstance(total, int) and total > len(rows):
+                    for page in range(2, _MAX_COLLECTION_PAGES + 1):
+                        page_endpoint = f"{endpoint}&page={page}"
+                        page_response = _object(call(page_endpoint), page_endpoint)
+                        endpoints.append(page_endpoint)
+                        page_rows = _list(page_response.get(key, []), f"{page_endpoint}.{key}")
+                        rows.extend(page_rows)
+                        if len(rows) >= total or not page_rows:
+                            break
+                    if len(rows) < total:
+                        collection_errors.append(f"{endpoint}: pagination_incomplete")
+                return rows
             except RepositoryEvidenceError as exc:
                 collection_errors.append(f"{endpoint}: {exc}")
                 return []

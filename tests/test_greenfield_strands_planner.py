@@ -14,6 +14,7 @@ from greenfield.strands_planner import (
     StrandsPlannerError,
     _cycle_brief,
     _default_planner_factory,
+    _parse_tasks,
     _prompt,
     _replan_prompt,
     _response_text,
@@ -229,6 +230,21 @@ def test_strands_planner_rejects_out_of_scope_task(tmp_path: Path) -> None:
             planner_factory=planner_factory,
         )
 
+
+def test_invalid_task_type_has_safe_actionable_diagnostic(tmp_path: Path) -> None:
+    context, _ = _context(tmp_path)
+    response = '{"tasks": [{"task_id": "bad", "task_type": "invent", "question": "no"}]}'
+
+    with pytest.raises(StrandsPlannerError, match="invalid task_type") as raised:
+        _parse_tasks(response, context)
+
+    diagnostic = raised.value.diagnostic
+    assert diagnostic["task_index"] == 0
+    assert diagnostic["invalid_task_type"] == "invent"
+    assert diagnostic["response_bytes"] == len(response.encode("utf-8"))
+    assert len(diagnostic["response_sha256"]) == 64
+    assert "question" not in diagnostic
+    assert "Allowed task types:" in _prompt(context, {})
 
 def test_strands_planner_enforces_one_wall_clock_deadline(tmp_path: Path) -> None:
     context, _ = _context(tmp_path)

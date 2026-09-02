@@ -23,6 +23,7 @@ from greenfield.strands_agent import (
     _prompt,
     _run_strands_json,
     _Step15StructuredOutput,
+    _with_preceding_context,
     build_context,
     run_strands_trace,
 )
@@ -1081,6 +1082,26 @@ def test_context_reads_target_revision_only(tmp_path: Path) -> None:
     ).hexdigest()
 
 
+def test_hunk_context_adds_bounded_preceding_exact_lines() -> None:
+    windows, added, limited = _with_preceding_context(
+        [(300, 340)], total_lines=500
+    )
+
+    assert windows == [(44, 340)]
+    assert added is True
+    assert limited is False
+
+
+def test_hunk_context_preserves_budget_limit_as_explicit_state() -> None:
+    windows, added, limited = _with_preceding_context(
+        [(300, 340), (700, 740), (1_100, 1_140)], total_lines=1_200
+    )
+
+    assert windows == [(44, 340), (444, 740), (1_100, 1_140)]
+    assert added is True
+    assert limited is True
+
+
 def test_prompt_budget_failure_persists_source_context_and_diagnostic(tmp_path: Path) -> None:
     repo, base, head = _trace_repo(tmp_path)
     step1 = _changed_files_step1(base, head)
@@ -1179,14 +1200,14 @@ def test_build_context_hunk_centers_large_modified_file(tmp_path: Path) -> None:
     context = build_context(step1, repo)
 
     entry = context["changed_files"][0]
-    assert entry["context_mode"] == "hunk"
+    assert entry["context_mode"] == "hunk_with_preceding_context"
     assert entry["truncated"] is True
     assert "--- lines" in entry["content"]
     assert "line 200 changed\n" in entry["content"]
-    assert "line 1\n" not in entry["content"]
+    assert "line 1\n" in entry["content"]
     assert "line 300\n" not in entry["content"]
     prompt = _prompt(context, repo)
-    assert "line 1\n" not in prompt
+    assert "line 1\\n" in prompt
     assert "line 200 changed\\n" in prompt
 
 

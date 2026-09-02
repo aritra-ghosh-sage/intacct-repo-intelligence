@@ -144,6 +144,17 @@ def _collect_inventories(
         ]
     targets = sorted(set(repositories) | set(discovered))
     paths: list[str] = []
+    manifest_data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+    configured_roots: dict[str, list[str]] = {}
+    for row in manifest_data.get("repositories", []) if isinstance(manifest_data, dict) else []:
+        if not isinstance(row, Mapping):
+            continue
+        remote = str(row.get("remote_url") or "")
+        repository = remote.split("github.com:", 1)[-1].split("github.com/", 1)[-1].removesuffix(".git")
+        analysis = row.get("greenfield_analysis")
+        roots = analysis.get("test_roots") if isinstance(analysis, Mapping) else []
+        if repository and isinstance(roots, list):
+            configured_roots[repository] = [str(root) for root in roots if isinstance(root, str)]
     for index, repository in enumerate(targets):
         try:
             evidence = normalize_repository_inventory(
@@ -153,6 +164,7 @@ def _collect_inventories(
                     source_revision=str(
                         source.get("target_revision") or source.get("head_sha")
                     ),
+                    test_roots=configured_roots.get(repository, []),
                 )
             )
         except RepositoryEvidenceError as exc:
@@ -873,6 +885,8 @@ def main(argv: list[str] | None = None) -> int:
             )
         except StrandsPlannerError as exc:
             strands_reason = redact(str(exc))
+            planner_diagnostic = dict(getattr(exc, "diagnostic", {}))
+            diagnostic_task_index = planner_diagnostic.pop("task_index", None)
             write_json_atomic(
                 planner_diagnostic_path,
                 {
@@ -880,7 +894,9 @@ def main(argv: list[str] | None = None) -> int:
                     "analysis_kind": "greenfield_planner_diagnostic",
                     "failure_reason": strands_reason,
                     "response_shape": "unavailable_or_invalid",
-                    "task_index": (
+                    "task_index": diagnostic_task_index
+                    if diagnostic_task_index is not None
+                    else (
                         int(match.group(1))
                         if (match := re.search(r"planner task (\d+)", strands_reason))
                         else None
@@ -894,6 +910,7 @@ def main(argv: list[str] | None = None) -> int:
                         }
                     ),
                     "input_digests": planning_input_artifacts,
+                    **planner_diagnostic,
                 },
             )
             planning_report = build_planning_report(

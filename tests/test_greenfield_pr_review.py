@@ -9,6 +9,9 @@ def test_review_keeps_canonical_template_and_explicit_gap() -> None:
     assert "## 🧪 Test Coverage & Obligations" in review["markdown"]
     assert "test_repository_not_assessed" in review["markdown"]
     assert validate_review(review) == []
+    assert "path/to/file1.cls" not in review["markdown"]
+    assert "[1-2 sentence description]" not in review["markdown"]
+    assert "Required evidence to continue" in review["markdown"]
 
 
 def test_review_retains_validated_analysis_and_planning_provenance() -> None:

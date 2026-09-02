@@ -228,6 +228,8 @@ def _git(source_root: Path, *args: str) -> str:
 
 
 _HUNK_CONTEXT_LINES = 40
+_PRECEDING_CONTEXT_LINES = 256
+_MAX_PRECEDING_CONTEXT_LINES_PER_FILE = 512
 _HUNK_HEADER_PATTERN = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 _BEDROCK_CONNECT_TIMEOUT_SECONDS = 10
 _BEDROCK_READ_TIMEOUT_SECONDS = 120
@@ -271,6 +273,34 @@ def _build_hunk_excerpt(content: str, windows: list[tuple[int, int]]) -> str:
         excerpt = "\n".join(lines[clipped_start - 1 : clipped_end])
         parts.append(f"--- lines {clipped_start}-{clipped_end} of {total} ---\n{excerpt}")
     return "\n\n".join(parts)
+
+
+def _with_preceding_context(
+    windows: list[tuple[int, int]], *, total_lines: int
+) -> tuple[list[tuple[int, int]], bool, bool]:
+    """Extend changed hunks with bounded exact leading context without parsing symbols."""
+
+    remaining = _MAX_PRECEDING_CONTEXT_LINES_PER_FILE
+    expanded: list[tuple[int, int]] = []
+    limited = False
+    added = False
+    for start, end in windows:
+        available = max(0, start - 1)
+        requested = min(_PRECEDING_CONTEXT_LINES, available)
+        granted = min(requested, remaining)
+        if granted < requested:
+            limited = True
+        if granted:
+            added = True
+        remaining -= granted
+        expanded.append((start - granted, min(end, total_lines)))
+    merged: list[tuple[int, int]] = []
+    for start, end in expanded:
+        if merged and start <= merged[-1][1] + 1:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged, added, limited
 
 
 def _omitted_ranges(total_lines: int, windows: list[tuple[int, int]]) -> list[dict[str, int]]:
@@ -325,6 +355,7 @@ def build_context(
         excerpt = None
         windows: list[tuple[int, int]] = []
         context_mode = "deleted"
+        context_limited = False
         if status != "deleted":
             full_content = _git(root, "show", f"{revision}:{path}")
             if status == "modified" and base_revision:
@@ -333,8 +364,14 @@ def build_context(
                     diff_text, context_lines=_HUNK_CONTEXT_LINES
                 )
                 if windows:
+                    total_lines = len(full_content.splitlines())
+                    windows, added_context, context_limited = _with_preceding_context(
+                        windows, total_lines=total_lines
+                    )
                     excerpt = _build_hunk_excerpt(full_content, windows)
-                    context_mode = "hunk"
+                    context_mode = (
+                        "hunk_with_preceding_context" if added_context else "hunk"
+                    )
                 else:
                     # Git represents mode-only changes without @@ hunks. The target
                     # blob remains the only exact source evidence, so keep it rather
@@ -370,8 +407,13 @@ def build_context(
                     for start, end in windows
                 ],
                 "omitted_ranges": _omitted_ranges(total_lines, windows),
-                "truncated": context_mode == "hunk",
+                "truncated": context_mode.startswith("hunk"),
                 "context_mode": context_mode,
+                "context_gaps": (
+                    ["preceding_context_budget_exhausted"]
+                    if context_limited
+                    else []
+                ),
             }
         )
     context = {
