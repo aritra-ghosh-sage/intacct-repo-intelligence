@@ -17,6 +17,7 @@ import yaml
 from .artifacts import file_sha256, sha256, write_json, write_text
 from .pr_impact_planner import (
     MAX_SOURCE_READS,
+    MAX_SOURCE_READS_PER_QUESTION,
     PlannerProvider,
     initial_plan,
     test_plan,
@@ -266,15 +267,24 @@ def inspect_source_questions(
         if len(rows) >= MAX_SOURCE_READS:
             gaps.append({"question_id": question["id"], "status": "unavailable", "reason": "source_read_budget_exhausted"})
             continue
+        question_limit = min(
+            MAX_SOURCE_READS_PER_QUESTION, MAX_SOURCE_READS - len(rows)
+        )
+        question_rows = 0
         try:
-            matches, truncated = _grep_at(root, revision, question["source_terms"], [], limit=MAX_SOURCE_READS - len(rows))
+            matches, truncated = _grep_at(
+                root, revision, question["source_terms"], [], limit=question_limit
+            )
             if truncated:
-                gaps.append({"question_id": question["id"], "status": "unavailable", "reason": "source_read_budget_exhausted"})
+                gaps.append({"question_id": question["id"], "status": "unavailable", "reason": "source_question_read_budget_exhausted"})
             for path, line, excerpt in matches:
                 raw = _git(root, "show", f"{revision}:{path}")
                 for term in question["source_terms"]:
+                    if question_rows >= question_limit:
+                        break
                     if term in excerpt:
                         rows.append({"question_id": question["id"], "evidence_ids": question["evidence_ids"], "path": path, "line": line, "excerpt": excerpt, "matched_term": term, "source_blob_sha256": hashlib.sha256(raw).hexdigest(), "status": "available"})
+                        question_rows += 1
         except PrImpactError as exc:
             gaps.append({"question_id": question["id"], "status": "unavailable", "reason": str(exc)})
     value: dict[str, Any] = {"schema_version": "0.1", "artifact_kind": "greenfield_harness_source_tool_ledger", "extraction_sha256": extraction["extraction_sha256"], "evidence": rows[:MAX_SOURCE_READS], "gaps": gaps}

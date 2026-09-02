@@ -200,6 +200,34 @@ def test_pr_impact_retains_source_search_unavailable_gap(monkeypatch: pytest.Mon
     assert json.loads(paths["ledger"].read_text())["gaps"][0]["status"] == "unavailable"
 
 
+def test_source_investigation_caps_each_question_without_starving_later_questions(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source, _base, head = _source(tmp_path)
+    context = {"source": {"local_root": str(source), "target_revision": head}}
+    extraction = {"extraction_sha256": "a" * 64}
+    plan = {
+        "questions": [
+            {
+                "id": f"source:{index}",
+                "evidence_ids": ["extract:service"],
+                "source_terms": ["changedService"],
+            }
+            for index in range(3)
+        ]
+    }
+    limits: list[int] = []
+
+    def grep(*_args: object, **kwargs: object) -> tuple[list[tuple[str, int, str]], bool]:
+        limits.append(int(kwargs["limit"]))
+        return [("src/Service.php", line, "function changedService() {}") for line in range(1, 5)], False
+
+    monkeypatch.setattr(impact, "_grep_at", grep)
+    ledger = impact.inspect_source_questions(context, extraction, plan)
+    assert limits == [4, 4, 4]
+    assert [row["question_id"] for row in ledger["evidence"]].count("source:2") == 4
+
+
 def test_pr_impact_blocks_replan_that_omits_a_behavior(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     source, base, head = _source(tmp_path)
     candidate, revision = _candidate(tmp_path)

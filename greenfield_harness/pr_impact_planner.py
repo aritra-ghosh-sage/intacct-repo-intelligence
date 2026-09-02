@@ -10,7 +10,8 @@ from .artifacts import sha256
 MAX_INITIAL_QUESTIONS = 4
 MAX_TEST_QUESTIONS = 6
 MAX_BEHAVIORS = 4
-MAX_SOURCE_READS = 12
+MAX_SOURCE_READS = 16
+MAX_SOURCE_READS_PER_QUESTION = 4
 MAX_TERMS = 3
 MAX_TEXT = 240
 
@@ -119,7 +120,7 @@ def report(*, extraction: Mapping[str, Any], initial: Mapping[str, Any], source_
         "schema_version": "0.1",
         "artifact_kind": "greenfield_harness_planning_report",
         "extraction_sha256": extraction["extraction_sha256"],
-        "budget": {"planner_invocations": 2, "behaviors": MAX_BEHAVIORS, "initial_questions": MAX_INITIAL_QUESTIONS, "test_questions": MAX_TEST_QUESTIONS, "source_reads": MAX_SOURCE_READS},
+        "budget": {"planner_invocations": 2, "behaviors": MAX_BEHAVIORS, "initial_questions": MAX_INITIAL_QUESTIONS, "test_questions": MAX_TEST_QUESTIONS, "source_reads": MAX_SOURCE_READS, "source_reads_per_question": MAX_SOURCE_READS_PER_QUESTION},
         "initial": initial,
         "source_ledger_sha256": source_ledger["tool_ledger_sha256"],
         "replan": replan,
