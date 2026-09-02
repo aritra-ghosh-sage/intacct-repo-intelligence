@@ -1,0 +1,23 @@
+[
+  {
+    "repository": "intacct/ia-restapi-automation-tests",
+    "repo_key": "ia-restapi-automation-tests",
+    "local_root": "/Users/aritra.ghosh/projects/ia-restapi-automation-tests",
+    "revision": "ecd3b7120e516ea04bc9070d38594c2fe39a6495",
+    "test_roots": ["features"]
+  },
+  {
+    "repository": "intacct/ia-selenium",
+    "repo_key": "ia-selenium",
+    "local_root": "/Users/aritra.ghosh/projects/ia-selenium",
+    "revision": "4ebd9007db47116c405779e06100ba8df7e7bceb",
+    "test_roots": ["src"]
+  },
+  {
+    "repository": "intacct/ia-test-automation",
+    "repo_key": "ia-test-automation",
+    "local_root": "/Users/aritra.ghosh/projects/ia-test-automation",
+    "revision": "b99fb2b834a363ac9b5028bbb97a5905c8f79b80",
+    "test_roots": ["tests"]
+  }
+]
