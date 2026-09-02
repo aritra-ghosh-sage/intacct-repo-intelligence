@@ -1,0 +1,91 @@
+{
+  "analysis_kind": "greenfield_pr_impact_flow_handoff",
+  "failure": {
+    "contract_path": "artifacts/greenfield/pr-49783/analyze-20260901-162748/step1.5.contract.json",
+    "diagnostics": {
+      "step1_5_diagnostic": {
+        "path": "step1.5.diagnostic.json",
+        "sha256": "b1009f92d3102d3cc348a4303ebb010a1f2a6f8f588cb2bc0b791ec64cd7ab86"
+      }
+    },
+    "reason": "Strands execution failed: ReadTimeoutError: AWSHTTPSConnectionPool(host='bedrock-runtime.us-west-2.amazonaws.com', port=443): Read timed out.; AWS credential status is {\"aws_profile\": null, \"aws_region\": \"us-west-2\", \"env_access_key_present\": true, \"env_secret_key_present\": true, \"env_session_token_present\": true, \"secrets_redacted\": true}",
+    "stage": "step1_5"
+  },
+  "provenance": {
+    "catalog_mutation": "none",
+    "github_writes": "none",
+    "read_only": true
+  },
+  "schema_version": "0.1",
+  "source": {
+    "base_revision": "88831b97966bf918cd08a882d2ac5d2aa4bf21a9",
+    "base_sha": "88831b97966bf918cd08a882d2ac5d2aa4bf21a9",
+    "changed_paths": [
+      "app/source/gl/GLLedgerReporter.cls"
+    ],
+    "head_sha": "071f786e237c0c92b385a19314f9a804c90ffedc",
+    "pr_number": 49783,
+    "repo_key": "ia-main",
+    "repository": "intacct/ia-app",
+    "target_revision": "071f786e237c0c92b385a19314f9a804c90ffedc"
+  },
+  "stages": [
+    {
+      "inputs": {
+        "manifest": {
+          "path": "/Users/aritra.ghosh/projects/intacct-repo-intelligence/config/workspace_repos.yaml",
+          "sha256": "21f0f828bdabd2c2194b0f0d8e302b6c36664d136962f3d27a6bc0ee9a0e7cad"
+        }
+      },
+      "name": "step1",
+      "outputs": {
+        "step1": {
+          "path": "step1.json",
+          "sha256": "c1867e829fda122db379fecdbbf9ed0deccc5a6246458717b31abc03c5f5a806"
+        }
+      },
+      "status": "succeeded"
+    },
+    {
+      "inputs": {
+        "step1": {
+          "path": "step1.json",
+          "sha256": "c1867e829fda122db379fecdbbf9ed0deccc5a6246458717b31abc03c5f5a806"
+        }
+      },
+      "name": "request",
+      "outputs": {
+        "identity": {
+          "path": "bundle.identity.json",
+          "sha256": "13a22b593550f7434ca3a416bc56682402e960c3ee48c360d9307353fb169480"
+        },
+        "request": {
+          "path": "pr-analysis.request.json",
+          "sha256": "07826c975c96530c7ad397b24e58199b3aca33f44434e889acdce24424d0ec89"
+        }
+      },
+      "status": "succeeded"
+    },
+    {
+      "inputs": {
+        "manifest": {
+          "path": "/Users/aritra.ghosh/projects/intacct-repo-intelligence/config/workspace_repos.yaml",
+          "sha256": "21f0f828bdabd2c2194b0f0d8e302b6c36664d136962f3d27a6bc0ee9a0e7cad"
+        },
+        "step1": {
+          "path": "step1.json",
+          "sha256": "c1867e829fda122db379fecdbbf9ed0deccc5a6246458717b31abc03c5f5a806"
+        }
+      },
+      "name": "capture",
+      "outputs": {
+        "run_context": {
+          "path": "run-context.json",
+          "sha256": "c13d9a78326f5ef43fdf258505076479918e30d9ea33b537bfa978264256878e"
+        }
+      },
+      "status": "succeeded"
+    }
+  ],
+  "status": "failed"
+}
