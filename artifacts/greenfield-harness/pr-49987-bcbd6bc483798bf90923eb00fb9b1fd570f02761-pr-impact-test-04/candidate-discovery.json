@@ -1,0 +1,33 @@
+{
+    "artifact_kind": "greenfield_harness_candidate_discovery",
+    "candidates": [
+        {
+            "match_count": 0,
+            "repository": "intacct/ia-gwdata-gl",
+            "revision": "b159255de66a41e368fd67263f72cbc46761a537",
+            "status": "no_evidence"
+        },
+        {
+            "match_count": 0,
+            "repository": "intacct/ia-restapi-automation-tests",
+            "revision": "ecd3b7120e516ea04bc9070d38594c2fe39a6495",
+            "status": "no_evidence"
+        },
+        {
+            "match_count": 0,
+            "repository": "intacct/ia-selenium",
+            "revision": "4ebd9007db47116c405779e06100ba8df7e7bceb",
+            "status": "no_evidence"
+        },
+        {
+            "match_count": 0,
+            "repository": "intacct/ia-test-automation",
+            "revision": "b99fb2b834a363ac9b5028bbb97a5905c8f79b80",
+            "status": "no_evidence"
+        }
+    ],
+    "discovery_sha256": "879fbdd901d5c696e9553fac64af5ee5977072def7bd6598195b9d80d6aa8861",
+    "gaps": [],
+    "planning_replan_sha256": "436c94bbed88a7d286dbce26e2cc18297876f761b51c68077c04aff6b2302e3b",
+    "schema_version": "0.1"
+}

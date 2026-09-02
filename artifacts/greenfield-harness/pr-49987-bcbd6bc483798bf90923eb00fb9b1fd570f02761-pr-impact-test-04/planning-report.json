@@ -1,0 +1,162 @@
+{
+    "artifact_kind": "greenfield_harness_planning_report",
+    "budget": {
+        "behaviors": 4,
+        "initial_questions": 4,
+        "planner_invocations": 2,
+        "source_reads": 16,
+        "source_reads_per_question": 4,
+        "test_questions": 6
+    },
+    "extraction_sha256": "30de7c8785c0623e7a8450cfc65956bbbad7bef55176396efdd2ea34ddfb87a4",
+    "initial": {
+        "behaviors": [
+            {
+                "evidence_ids": [
+                    "extract:app/source/gl/GLSetupAtEntityManager.cls:symbol:GLSetupAtEntityManager:11"
+                ],
+                "id": "behavior:GLSetupAtEntityManager:changed",
+                "status": "candidate",
+                "summary": "GLSetupAtEntityManager class was modified in this PR; its role in GL entity-level setup flows warrants source-level review."
+            },
+            {
+                "evidence_ids": [
+                    "extract:app/source/gl/GLSetupManager.cls:symbol:GLSetupManager:18"
+                ],
+                "id": "behavior:GLSetupManager:changed",
+                "status": "candidate",
+                "summary": "GLSetupManager class was modified in this PR; its role in GL setup flows warrants source-level review."
+            }
+        ],
+        "initial_sha256": "f2da0bc86a73362b9ea6e02122f70a3e2d6d9a78c6b94f91e1aebd4430e533b9",
+        "questions": [
+            {
+                "evidence_ids": [
+                    "extract:app/source/gl/GLSetupAtEntityManager.cls:symbol:GLSetupAtEntityManager:11"
+                ],
+                "id": "q1",
+                "question": "What changed in GLSetupAtEntityManager and how does it affect entity-level GL setup logic invoked by this class?",
+                "source_terms": [
+                    "GLSetupAtEntityManager"
+                ],
+                "type": "source_flow"
+            },
+            {
+                "evidence_ids": [
+                    "extract:app/source/gl/GLSetupManager.cls:symbol:GLSetupManager:18"
+                ],
+                "id": "q2",
+                "question": "What changed in GLSetupManager and how does it affect the general GL setup workflow?",
+                "source_terms": [
+                    "GLSetupManager"
+                ],
+                "type": "source_flow"
+            },
+            {
+                "evidence_ids": [
+                    "extract:app/source/gl/GLSetupAtEntityManager.cls:symbol:GLSetupAtEntityManager:11",
+                    "extract:app/source/gl/GLSetupManager.cls:symbol:GLSetupManager:18"
+                ],
+                "id": "q3",
+                "question": "Does GLSetupAtEntityManager invoke or extend GLSetupManager, and if so, how do the changes in both files interact in the setup flow?",
+                "source_terms": [
+                    "GLSetupAtEntityManager",
+                    "GLSetupManager"
+                ],
+                "type": "source_flow"
+            }
+        ]
+    },
+    "planning_sha256": "e92c6aac097c04d6e2e27cf08af429f8190f2c9085b89e1d3cfceb61e83e085c",
+    "replan": {
+        "questions": [
+            {
+                "ai_terms": [
+                    "GLSetupAtEntityManagerTest",
+                    "ModuleSetupAtEntityManager",
+                    "entity setup test"
+                ],
+                "evidence_ids": [
+                    "extract:app/source/gl/GLSetupAtEntityManager.cls:symbol:GLSetupAtEntityManager:11"
+                ],
+                "id": "q1",
+                "question": "Are there existing unit or integration tests that exercise GLSetupAtEntityManager's entity-level GL setup behavior, particularly its extension of ModuleSetupAtEntityManager?",
+                "source_terms": [
+                    "GLSetupAtEntityManager"
+                ],
+                "type": "test_discovery"
+            },
+            {
+                "ai_terms": [
+                    "GL setup workflow test",
+                    "GLSetupManagerTest",
+                    "resolveDimKeys"
+                ],
+                "evidence_ids": [
+                    "extract:app/source/gl/GLSetupManager.cls:symbol:GLSetupManager:18"
+                ],
+                "id": "q2",
+                "question": "Is there test coverage for GLSetupManager's general GL setup workflow, including any resolveDimKeys()-related logic referenced elsewhere in the codebase?",
+                "source_terms": [
+                    "GLSetupManager"
+                ],
+                "type": "test_discovery"
+            },
+            {
+                "ai_terms": [
+                    "GLSetupManager branch test",
+                    "atEntityManager routing test",
+                    "instanceof GLSetupAtEntityManager"
+                ],
+                "evidence_ids": [
+                    "extract:app/source/gl/GLSetupAtEntityManager.cls:symbol:GLSetupAtEntityManager:11",
+                    "extract:app/source/gl/GLSetupManager.cls:symbol:GLSetupManager:18"
+                ],
+                "id": "q3",
+                "question": "Do any tests cover the instanceof check in GLSetupManager (line 168) that branches logic when the atEntityManager is a GLSetupAtEntityManager, verifying correct routing between the two classes?",
+                "source_terms": [
+                    "GLSetupAtEntityManager",
+                    "GLSetupManager"
+                ],
+                "type": "test_discovery"
+            },
+            {
+                "ai_terms": [
+                    "GLSetupAdapter",
+                    "REST PATCH sparse test",
+                    "adapter reject test"
+                ],
+                "evidence_ids": [
+                    "extract:app/source/gl/GLSetupAtEntityManager.cls:symbol:GLSetupAtEntityManager:11"
+                ],
+                "id": "q4",
+                "question": "Is there test coverage for the GLSetupAdapter REST PATCH behavior that comments reference as remaining in GLSetupAtEntityManager, ensuring sparse PATCH rejection logic is validated?",
+                "source_terms": [
+                    "GLSetupAtEntityManager"
+                ],
+                "type": "test_discovery"
+            },
+            {
+                "ai_terms": [
+                    "dimension key mapping test",
+                    "glsetup_modulepref_data_migration",
+                    "migration script test"
+                ],
+                "evidence_ids": [
+                    "extract:app/source/gl/GLSetupManager.cls:symbol:GLSetupManager:18"
+                ],
+                "id": "q5",
+                "question": "Are there tests validating the data migration script (V2611.0.20260413.89546.001__glsetup_modulepref_data_migration.sql) that mirrors GLSetupManager::resolveDimKeys() dimension key mapping logic?",
+                "source_terms": [
+                    "GLSetupManager"
+                ],
+                "type": "test_discovery"
+            }
+        ],
+        "replan_sha256": "436c94bbed88a7d286dbce26e2cc18297876f761b51c68077c04aff6b2302e3b"
+    },
+    "schema_version": "0.1",
+    "source_ledger_sha256": "b3f82d9dd54a0d0df3da8a97e6eff7b3cb618342fb1ce781a8666c202425520f",
+    "status": "complete",
+    "stop_reason": "budget_exhausted_after_replan"
+}
