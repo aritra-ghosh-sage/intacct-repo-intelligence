@@ -5,32 +5,21 @@
                 "extract:app/source/gl/GLSetupAtEntityManager.cls:symbol:GLSetupAtEntityManager:11",
                 "extract:app/source/gl/GLSetupManager.cls:symbol:GLSetupManager:18"
             ],
-            "id": "behavior:gl-setup-manager-classes-changed",
+            "id": "behavior:gl-setup-manager-changes",
             "status": "candidate",
-            "summary": "PR modifies two GL setup manager classes, GLSetupAtEntityManager and GLSetupManager, whose source-level data/control flow changes are not yet characterized."
+            "summary": "PR modifies GLSetupAtEntityManager and GLSetupManager class files; investigation needed to trace how these managers are invoked and what source flows lead into their logic."
         }
     ],
-    "initial_sha256": "a476852e8b7c280b79282d9dbf731c1882d461a58aa8198af09a26c9083c583d",
+    "initial_sha256": "751c0785acb02cfe881c6b6deb5de8ab00002d9765c8314193cc5d77d05aa245",
     "questions": [
         {
             "evidence_ids": [
                 "extract:app/source/gl/GLSetupAtEntityManager.cls:symbol:GLSetupAtEntityManager:11"
             ],
-            "id": "q1",
-            "question": "What inputs and internal state does GLSetupAtEntityManager consume, and how do they flow through its methods to produce outputs or side effects?",
+            "id": "question:glsetupatentitymanager-callers",
+            "question": "What call sites or subclasses invoke GLSetupAtEntityManager, and what upstream entry points trigger its use?",
             "source_terms": [
                 "GLSetupAtEntityManager"
-            ],
-            "type": "source_flow"
-        },
-        {
-            "evidence_ids": [
-                "extract:app/source/gl/GLSetupManager.cls:symbol:GLSetupManager:18"
-            ],
-            "id": "q2",
-            "question": "What inputs and internal state does GLSetupManager consume, and how do they flow through its methods to produce outputs or side effects?",
-            "source_terms": [
-                "GLSetupManager"
             ],
             "type": "source_flow"
         },
@@ -39,10 +28,21 @@
                 "extract:app/source/gl/GLSetupAtEntityManager.cls:symbol:GLSetupAtEntityManager:11",
                 "extract:app/source/gl/GLSetupManager.cls:symbol:GLSetupManager:18"
             ],
-            "id": "q3",
-            "question": "Does GLSetupAtEntityManager invoke or reference GLSetupManager (or vice versa), and if so, what data is passed between them along that call/reference path?",
+            "id": "question:glsetupatentitymanager-glsetupmanager-relationship",
+            "question": "Does GLSetupAtEntityManager extend, compose, or otherwise depend on GLSetupManager, and how does data/control flow between them?",
             "source_terms": [
                 "GLSetupAtEntityManager",
+                "GLSetupManager"
+            ],
+            "type": "source_flow"
+        },
+        {
+            "evidence_ids": [
+                "extract:app/source/gl/GLSetupManager.cls:symbol:GLSetupManager:18"
+            ],
+            "id": "question:glsetupmanager-callers",
+            "question": "What call sites or subclasses invoke GLSetupManager, and what upstream entry points trigger its use?",
+            "source_terms": [
                 "GLSetupManager"
             ],
             "type": "source_flow"

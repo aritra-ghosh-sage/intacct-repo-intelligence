@@ -1,1 +1,0 @@
-{"artifact_kind":"greenfield_harness_pr_impact_failure","extraction_sha256":"c14cb99c6861c62661bdf8d0d5835a8d997b073b94ad5dcce5e0194972b2605e","reason":"Could not connect to the endpoint URL: \"https://bedrock-runtime.us-west-2.amazonaws.com/model/us.anthropic.claude-sonnet-5/converse-stream\"","schema_version":"0.1","stage":"ai_summary"}

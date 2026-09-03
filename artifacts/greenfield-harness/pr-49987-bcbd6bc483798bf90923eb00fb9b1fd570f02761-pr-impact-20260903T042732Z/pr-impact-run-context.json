@@ -2,6 +2,16 @@
     "artifact_kind": "greenfield_harness_pr_impact_context",
     "candidate_repositories": [
         {
+            "local_root": "/Users/aritra.ghosh/projects/ia-gwdata-gl",
+            "repo_key": "ia-gwdata-gl",
+            "repository": "intacct/ia-gwdata-gl",
+            "revision": "b159255de66a41e368fd67263f72cbc46761a537",
+            "test_roots": [
+                "testdefinitions",
+                "testscripts"
+            ]
+        },
+        {
             "local_root": "/Users/aritra.ghosh/projects/ia-restapi-automation-tests",
             "repo_key": "ia-restapi-automation-tests",
             "repository": "intacct/ia-restapi-automation-tests",
@@ -29,11 +39,11 @@
             ]
         }
     ],
-    "context_sha256": "4877d879aca6e30b14eac37ecd483276a906c3ab5376bc1df3d7173632ee042a",
+    "context_sha256": "72d72d4e3e3ad8a7d980b079720c541db62d1c1656de39d16e93c17c3d52b313",
     "input_provenance": [
         {
             "path": "/Users/aritra.ghosh/projects/intacct-repo-intelligence/artifacts/greenfield-harness/pr-49987-inputs/candidates-20260902.json",
-            "sha256": "26988e6cbdfb935446124a8b4870a996d988412ff41e7af90ec6f9c867584a01"
+            "sha256": "811dbab552aade46f3ae57346400c2770eafce45b627f618d5561440e62e6c1d"
         }
     ],
     "provenance": {
