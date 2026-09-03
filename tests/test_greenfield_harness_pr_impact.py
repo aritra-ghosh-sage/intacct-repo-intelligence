@@ -8,7 +8,8 @@ import pytest
 
 import greenfield_harness.pr_impact as impact
 from greenfield_harness.pr_impact import ImpactHandoff, PrImpactError, run_pr_impact
-from greenfield_harness.pr_impact_planner import PlannerError, initial_plan
+from greenfield_harness.pr_impact_planner import MAX_TEXT, PlannerError, initial_plan
+from scripts.run_greenfield_harness_pr_impact import StrandsAwsImpactProvider
 
 
 def _git(root: Path, *args: str) -> str:
@@ -80,6 +81,24 @@ class _UncoveredBehaviorProvider(_Provider):
         assert isinstance(items, list)
         service = next(row for row in items if row["value"] == "changedService")
         return {"questions": [{"id": "test:service", "type": "test_discovery", "question": "Find service tests.", "evidence_ids": [service["id"]], "source_terms": ["changedService"], "ai_terms": []}]}
+
+
+def test_strands_provider_prompts_state_the_planner_text_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = StrandsAwsImpactProvider()
+    instructions: list[str] = []
+
+    def ask(instruction: str, _payload: object) -> dict[str, object]:
+        instructions.append(instruction)
+        return {}
+
+    monkeypatch.setattr(provider, "_ask", ask)
+    provider.initial_plan({})
+    provider.replan({})
+
+    assert len(instructions) == 2
+    assert all(f"no more than {MAX_TEXT} characters" in value for value in instructions)
 
 
 def _source(root: Path) -> tuple[Path, str, str]:
