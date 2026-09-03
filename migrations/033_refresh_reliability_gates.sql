@@ -1,3 +1,0 @@
--- 033 is implemented transactionally in catalog.migrations because SQLite
--- table reconstruction is required to preserve legacy refresh-attempt IDs.
--- This marker is retained for operator-visible migration inventory.

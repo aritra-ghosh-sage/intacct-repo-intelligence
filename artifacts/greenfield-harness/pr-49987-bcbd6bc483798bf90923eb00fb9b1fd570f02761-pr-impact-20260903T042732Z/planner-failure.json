@@ -1,7 +1,0 @@
-{
-    "artifact_kind": "greenfield_harness_planner_failure",
-    "reason": "Model stopped generating due to maximum token limit. The partial message has been added to the conversation history. You can continue by calling the agent again. For more information see: https://strandsagents.com/docs/user-guide/concepts/agents/agent-loop/#maxtokensreachedexception",
-    "schema_version": "0.1",
-    "stage": "planner_replan",
-    "tool_ledger_sha256": "705c2294c07d58545df7adca904011ddf81d29984d0e1a313c60b456aa6b8b86"
-}

@@ -1,1 +1,0 @@
-{"source_file": "app/source/openapispec/template.s1.schema.yaml", "reason": "invalid_yaml_syntax", "detail": "while scanning for the next token\nfound character '`' that cannot start any token\n  in \"<unicode string>\", line 100, column 18:\n            example: `649`\n                     ^"}

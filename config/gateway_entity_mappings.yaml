@@ -1,4 +1,0 @@
-# Reviewed, direct Gateway operation/object mappings only.  Do not add aliases
-# or inferred entity names: unresolved evidence remains a diagnostic.
-version: 1
-mappings: []
