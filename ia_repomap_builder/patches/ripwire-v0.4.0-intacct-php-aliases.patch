@@ -1,0 +1,69 @@
+diff --git a/src/ingest_crawl.h b/src/ingest_crawl.h
+--- a/src/ingest_crawl.h
++++ b/src/ingest_crawl.h
+@@ -55,3 +55,4 @@
+ // The extent is EXACT, not headroom: it was 32 with 32 rows, .toml made it 33, .pyi made it 34 and the
+-// .yml/.yaml pair made it 36, and the .php/.phtml/.lua trio made it 40. Sizing it to the row count is what makes
++// .yml/.yaml pair made it 36, and the .php/.phtml/.lua trio made it 40. The Intacct aliases add twelve rows,
++// making the table 52 entries. Sizing it to the row count is what makes
+ // `std::array<bool, kLangTable.size()> present` (the grammar-prewarm set,
+@@ -59,3 +60,3 @@
+ // silent drop.
+-constexpr std::array<LangEntry, 40> kLangTable = {{
++constexpr std::array<LangEntry, 52> kLangTable = {{
+     { ".cpp",  Lang::Cpp,        &tree_sitter_cpp,        "cpp"        },
+@@ -147,2 +148,17 @@
+     { ".phtml", Lang::Php,       &tree_sitter_php,        "php"        },   // PHP template (markup + <?php ?> islands) — same grammar, same query
++    // Intacct PHP-family suffixes share the existing PHP grammar and query.
++    // `.map` is intended for the PHP source map under app/source; callers
++    // scanning a broader tree must exclude third-party resource maps.
++    { ".cls",  Lang::Php,        &tree_sitter_php,        "php"        },
++    { ".ent",  Lang::Php,        &tree_sitter_php,        "php"        },
++    { ".inc",  Lang::Php,        &tree_sitter_php,        "php"        },
++    { ".cqry", Lang::Php,        &tree_sitter_php,        "php"        },
++    { ".rpt",  Lang::Php,        &tree_sitter_php,        "php"        },
++    { ".menu", Lang::Php,        &tree_sitter_php,        "php"        },
++    { ".pol",  Lang::Php,        &tree_sitter_php,        "php"        },
++    { ".wfl",  Lang::Php,        &tree_sitter_php,        "php"        },
++    { ".shortcuts", Lang::Php,  &tree_sitter_php,        "php"        },
++    { ".qry",  Lang::Php,        &tree_sitter_php,        "php"        },
++    { ".bin",  Lang::Php,        &tree_sitter_php,        "php"        },
++    { ".map",  Lang::Php,        &tree_sitter_php,        "php"        },
+     // Lua: no classes, no imports. The five function-definition spellings and the one call node are the
+diff --git a/src/lintrules.h b/src/lintrules.h
+--- a/src/lintrules.h
++++ b/src/lintrules.h
+@@ -126,3 +126,3 @@
+     struct Row { std::string_view ext; Lang lang; };
+-    static const std::array<Row, 30> kExt = { {
++    static const std::array<Row, 43> kExt = { {
+         { ".cpp", Lang::Cpp }, { ".cc", Lang::Cpp }, { ".cxx", Lang::Cpp },
+@@ -140,3 +140,7 @@
+         { ".cs", Lang::CSharp },
+-        { ".php", Lang::Php },
++        { ".php", Lang::Php }, { ".phtml", Lang::Php },
++        { ".cls", Lang::Php }, { ".ent", Lang::Php }, { ".inc", Lang::Php },
++        { ".cqry", Lang::Php }, { ".rpt", Lang::Php }, { ".menu", Lang::Php },
++        { ".pol", Lang::Php }, { ".wfl", Lang::Php }, { ".shortcuts", Lang::Php },
++        { ".qry", Lang::Php }, { ".bin", Lang::Php }, { ".map", Lang::Php },
+         { ".lua", Lang::Lua },
+diff --git a/src/ingest_cache.h b/src/ingest_cache.h
+--- a/src/ingest_cache.h
++++ b/src/ingest_cache.h
+@@ -192,3 +192,6 @@
+                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
+-constexpr std::uint32_t kParserVer    = 77;           // bump on any grammar/.scm/extraction change
++constexpr std::uint32_t kParserVer    = 78;           // bump on any grammar/.scm/extraction change
++                                                      // 78 = 2026-09-07: Intacct PHP-family extension aliases
++                                                      //      (.cls/.ent/.inc/.cqry/.rpt/.menu/.pol/.wfl/
++                                                      //      .shortcuts/.qry/.bin/.map) join the PHP parser.
+                                                       // 77 = 2026-09-03 (Phase 5, docs/EVALS.md): two Python
+diff --git a/src/quality.h b/src/quality.h
+--- a/src/quality.h
++++ b/src/quality.h
+@@ -1400,3 +1400,4 @@
+ constexpr std::uint32_t kIngestCacheVersionMirror = 15;   // MUST equal ingest.cpp's kCacheVersion (gated)
+-constexpr std::uint32_t kIngestParserVerMirror    = 77;   // MUST equal ingest.cpp's kParserVer   (gated)
++constexpr std::uint32_t kIngestParserVerMirror    = 78;   // MUST equal ingest.cpp's kParserVer   (gated)
++                                                          // 78 = Intacct PHP-family extension aliases; see ingest_cache.h.
+                                                           // 77 = 2026-09-03 (Phase 5): Python super() receiver kind +

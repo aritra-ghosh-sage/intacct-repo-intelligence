@@ -1,0 +1,10 @@
+# Repository-local declaration consumed by a future harness adapter.
+# Keep generated maps and caches outside the repository.
+engine = "ripwire"
+scope = ["app/source"]
+token_budget = 4000
+php_family_extensions = [
+  ".php", ".phtml", ".cls", ".ent", ".inc", ".cqry", ".rpt",
+  ".menu", ".pol", ".wfl", ".shortcuts", ".qry", ".bin", ".map",
+]
+map_php_scope = ["app/source"]
