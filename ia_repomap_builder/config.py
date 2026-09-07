@@ -42,7 +42,7 @@ class BuildRequest:
     scope: tuple[str, ...] = ("app/source",)
     query: str | None = None
     token_budget: int = 4000
-    engine: str = "lexical"
+    engine: str = "ripwire"
     revision: str | None = None
 
 

@@ -173,6 +173,42 @@ class RepoMapBuilderTests(unittest.TestCase):
         self.assertIn(result.status, {"ok", "unavailable", "error"})
         self.assertNotEqual(result.identity.get("scope"), ["."])
 
+    @unittest.skipUnless(
+        os.environ.get("IA_APP_REPO"),
+        "set IA_APP_REPO to run the read-only Ripwire ia-app smoke test",
+    )
+    def test_live_ripwire_ia_app_scope_smoke(self) -> None:
+        ripwire_bin = os.environ.get("RIPWIRE_BIN")
+        self.assertIsNotNone(ripwire_bin, "RIPWIRE_BIN must be set for the live Ripwire smoke test")
+        binary = Path(ripwire_bin or "")
+        self.assertTrue(binary.is_file(), f"RIPWIRE_BIN is not a file: {binary}")
+        self.assertTrue(os.access(binary, os.X_OK), f"RIPWIRE_BIN is not executable: {binary}")
+
+        repo = Path(os.environ["IA_APP_REPO"])
+        result = build(
+            BuildRequest(
+                repo_root=repo,
+                scope=("app/source",),
+                query="GLSetupManager",
+                engine="ripwire",
+                token_budget=4000,
+            )
+        )
+
+        self.assertEqual(result.status, "ok", result.diagnostics)
+        self.assertTrue(result.context.strip())
+        self.assertTrue(
+            any(
+                item.path == "app/source/gl/GLSetupManager.cls"
+                and item.symbol == "GLSetupManager"
+                for item in result.items
+            ),
+            "Ripwire did not return the expected GLSetupManager symbol",
+        )
+        self.assertFalse(any(item.path.startswith("app/resources/") for item in result.items))
+        self.assertEqual(result.identity.get("engine"), "ripwire")
+        self.assertEqual(result.identity.get("scope"), ["app/source"])
+
     def test_known_answer_scoring_uses_strict_file_recall_and_mrr(self) -> None:
         task = EvaluationTask(
             "manager",
