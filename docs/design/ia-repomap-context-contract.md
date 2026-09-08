@@ -170,6 +170,23 @@ The first Ripwire adapter reports definitions found in changed files as
 `candidate` symbols. This is not hunk-exact changed-symbol extraction and must
 not be described as such.
 
+## Execution status
+
+This record is append-only. Each completed slice adds a numbered row using the
+same format; future work is not recorded as complete until its validation has
+run. The entries describe this repository's implementation only. They do not
+mean that a target `ia-app` checkout has been onboarded.
+
+| Step | Status | Completed outcome | Validation |
+| --- | --- | --- | --- |
+| 1 | `complete` | Repository declaration and the `ia_repomap` contract are documented. | Contract, template, README, and repository guidance cross-reference the same schema. |
+| 2 | `complete` | The Ripwire Intacct PHP-family extension patch is established, including `.map` only within `app/source`. | Patch identity and extension routing are covered by focused tests and the contract. |
+| 3 | `complete` | External, revision-bound Ripwire index preparation is implemented. | Preparation verifies clean `HEAD`, staged cache files, and writes the manifest only after verification. |
+| 4 | `complete` | Exact-head readiness and named-cache validation are implemented. | Readiness checks identity, base/merge-base resolution, and Ripwire `--doctor` cache use. |
+| 5 | `complete` | PR-context invocation returns normalized changed-file and candidate-symbol seeds. | Focused tests cover Git status normalization, command construction, and XML symbol parsing. |
+| 6 | `complete` | Explicit statuses, gaps, raw XML retention, and deterministic normalized output are implemented. | Tests cover unavailable/error paths, truncation and ambiguity gaps, raw XML, and repeatability. |
+| 7 | `complete` | Lightweight validation and the P1/P2 regressions are complete. | The test suite passes with 31 tests (3 opt-in skips), and `git diff --check` passes. |
+
 ## Acceptance criteria
 
 The map is ready for PR context only when:

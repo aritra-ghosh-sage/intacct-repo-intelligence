@@ -172,3 +172,9 @@ navigation evidence. Agents must verify consequential conclusions against
 source, tests, build configuration, and CI. The bakeoff acceptance criteria in
 that contract are measured on Intacct examples; Ripwire's published comparison
 does not substitute for that evaluation.
+
+The implemented repository-map slice and its validation history are recorded in
+the contract's [execution status](ia-repomap-context-contract.md#execution-status).
+Live `ia-app` onboarding remains a separate prerequisite; this research does
+not imply that its marker, guidance, or revision-bound external index is
+present.

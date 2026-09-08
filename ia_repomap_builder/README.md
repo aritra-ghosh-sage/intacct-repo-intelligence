@@ -9,6 +9,8 @@ silently substituted: an absent installation is returned as
 The canonical repository-map contract, including configuration, artifact
 identity, PR-context output, assumptions, and acceptance criteria, is in
 [`docs/design/ia-repomap-context-contract.md`](../docs/design/ia-repomap-context-contract.md).
+Its [execution status](../docs/design/ia-repomap-context-contract.md#execution-status)
+records the completed implementation slices and their validation evidence.
 
 ## Input and output
 
@@ -75,6 +77,10 @@ result = build_pr_context(PrContextRequest(repo, artifacts, base_ref="origin/mai
 only external artifacts. `build_pr_context` requires that exact prepared
 artifact and returns `ok`, `unavailable`, or `error` without falling back to a
 cold index build.
+
+The current implementation status is recorded in the canonical contract. Live
+`ia-app` onboarding remains a separate prerequisite; this package does not
+claim that checkout, MCP, editor, or harness integration is complete.
 
 For a participating Intacct repository, copy the small
 `templates/.ia-repomap.toml` declaration and the
