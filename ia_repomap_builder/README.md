@@ -108,8 +108,12 @@ under `app/resources` remain excluded. See
 [`patches/README.md`](patches/README.md) for the full build-from-source,
 patch-application, and CLI setup instructions.
 
-The live `ia-app` smoke test is deliberately opt-in through `IA_APP_REPO` and
-must not be used to commit source excerpts or generated maps.
+The live `ia-app` smoke tests are deliberately opt-in. The repository scope
+smoke requires `IA_APP_REPO`; the Ripwire scope smoke additionally requires
+`RIPWIRE_BIN`; and the PR-context smoke requires all of
+`IA_APP_REPO`, `IA_REPOMAP_ARTIFACT_ROOT`, `IA_APP_BASE_REF`, and
+`RIPWIRE_BIN`. These checks are read-only and must not be used to commit
+source excerpts or generated maps.
 
 For the bakeoff, keep known-answer labels outside the source tree and run one
 report per engine:
