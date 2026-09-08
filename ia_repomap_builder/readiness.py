@@ -362,14 +362,18 @@ def _engine_identity(binary: str) -> dict[str, str]:
         raise ValueError(completed.stderr.strip() or f"exit {completed.returncode}")
     patch = Path(__file__).with_name("patches") / "ripwire-v0.4.0-intacct-php-aliases.patch"
     patch_digest = file_digest(patch)
+    binary_digest = file_digest(Path(binary).resolve())
     version = completed.stdout.strip()
-    engine_id = hashlib.sha256(f"{version}\n{patch_digest}".encode()).hexdigest()
+    engine_id = hashlib.sha256(
+        f"{version}\n{patch_digest}\n{binary_digest}".encode()
+    ).hexdigest()
     return {
         "name": "ripwire",
         "binary": binary,
         "version": version,
         "patch": patch.name,
         "patch_sha256": patch_digest,
+        "binary_sha256": binary_digest,
         "id": engine_id,
     }
 
@@ -457,6 +461,7 @@ def _manifest(root: Path, config: RepoMapConfig, head: str, engine: dict[str, st
             "version": engine["version"],
             "patch": engine["patch"],
             "patch_sha256": engine["patch_sha256"],
+            "binary_sha256": engine["binary_sha256"],
             "id": engine["id"],
             "extensions": list(config.php_family_extensions),
         },
@@ -496,6 +501,7 @@ def _manifest_matches(
             "version": engine["version"],
             "patch": engine["patch"],
             "patch_sha256": engine["patch_sha256"],
+            "binary_sha256": engine["binary_sha256"],
             "id": engine["id"],
             "extensions": list(config.php_family_extensions),
         }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -21,7 +22,7 @@ from ia_repomap_builder import (
     prepare_repomap,
 )
 from ia_repomap_builder.pr_context import _GitChange, _in_scope_changes, _parse_pr_context_xml
-from ia_repomap_builder.readiness import artifact_locations
+from ia_repomap_builder.readiness import _engine_identity, artifact_locations
 
 
 CONFIG = """\
@@ -42,6 +43,7 @@ ENGINE = {
     "version": "ripwire test-build",
     "patch": "ripwire-v0.4.0-intacct-php-aliases.patch",
     "patch_sha256": "patch-digest",
+    "binary_sha256": "binary-digest",
     "id": "engine-id",
 }
 
@@ -169,6 +171,24 @@ class PrContextTests(unittest.TestCase):
         manifest = json.loads(locations.manifest.read_text(encoding="utf-8"))
         self.assertEqual(manifest["repository"]["revision"], self._git_head())
         self.assertEqual(manifest["artifacts"]["lean_cache"], "index.lean.ripwirecache")
+        self.assertEqual(manifest["engine"]["binary_sha256"], "binary-digest")
+
+    def test_engine_identity_is_bound_to_binary_bytes(self) -> None:
+        binary = self.root / "ripwire-test"
+        binary.write_bytes(b"first binary")
+        version = "ripwire test-build"
+        completed = SimpleNamespace(returncode=0, stdout=f"{version}\n", stderr="")
+
+        with patch("ia_repomap_builder.readiness.subprocess.run", return_value=completed):
+            first = _engine_identity(str(binary))
+        self.assertRegex(first["binary_sha256"], r"^[0-9a-f]{64}$")
+        self.assertEqual(first["binary_sha256"], hashlib.sha256(b"first binary").hexdigest())
+
+        binary.write_bytes(b"second binary")
+        with patch("ia_repomap_builder.readiness.subprocess.run", return_value=completed):
+            second = _engine_identity(str(binary))
+        self.assertNotEqual(first["binary_sha256"], second["binary_sha256"])
+        self.assertNotEqual(first["id"], second["id"])
 
     def test_readiness_requires_matching_manifest_clean_checkout_and_base(self) -> None:
         self.assertEqual(self._prepare().status, "ok")
@@ -209,6 +229,19 @@ class PrContextTests(unittest.TestCase):
             patch("ia_repomap_builder.readiness._engine_identity", return_value=ENGINE),
         ):
             result = check_repomap_readiness(PrContextRequest(self.root, self.artifacts, "HEAD~1"))
+        self.assertEqual(result.status, "unavailable")
+        self.assertIn("does not match", result.diagnostics[0])
+
+    def test_binary_digest_mismatch_is_unavailable(self) -> None:
+        self.assertEqual(self._prepare().status, "ok")
+        changed_engine = {**ENGINE, "binary_sha256": "different-binary-digest"}
+        with (
+            patch("ia_repomap_builder.readiness._ripwire_binary", return_value="/bin/ripwire"),
+            patch("ia_repomap_builder.readiness._engine_identity", return_value=changed_engine),
+        ):
+            result = check_repomap_readiness(
+                PrContextRequest(self.root, self.artifacts, "HEAD~1")
+            )
         self.assertEqual(result.status, "unavailable")
         self.assertIn("does not match", result.diagnostics[0])
 

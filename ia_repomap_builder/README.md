@@ -104,7 +104,9 @@ The release-pinned alias patch used by the evaluation is recorded at
 `patches/ripwire-v0.4.0-intacct-php-aliases.patch`. It maps the configured
 Intacct PHP-family suffixes to Ripwire's existing PHP grammar; it does not add
 a parser. `.map` is included only under `app/source`; third-party source maps
-under `app/resources` remain excluded.
+under `app/resources` remain excluded. See
+[`patches/README.md`](patches/README.md) for the full build-from-source,
+patch-application, and CLI setup instructions.
 
 The live `ia-app` smoke test is deliberately opt-in through `IA_APP_REPO` and
 must not be used to commit source excerpts or generated maps.

@@ -95,6 +95,7 @@ The manifest is JSON with this minimum shape:
     "version": "<reported-version>",
     "patch": "ripwire-v0.4.0-intacct-php-aliases.patch",
     "patch_sha256": "<patch-digest>",
+    "binary_sha256": "<executable-digest>",
     "id": "<engine-identity>",
     "extensions": [".php", ".phtml", ".cls", "...", ".map"]
   },
@@ -105,10 +106,13 @@ The manifest is JSON with this minimum shape:
 }
 ```
 
-The exact clean `HEAD`, scope, configuration digest, engine version, and
-parser/patch identity must match before an artifact is used. A stale, missing,
-or dirty artifact is unavailable; the PR adapter does not silently perform a
-cold build.
+The exact clean `HEAD`, scope, configuration digest, engine version,
+executable digest, and parser/patch identity must match before an artifact is
+used. The engine identity is the SHA-256 of the version, patch digest, and
+executable digest joined by newlines. Consequently, rebuilding different
+executable bytes cannot reuse an existing artifact directory even when the
+reported version is unchanged. A stale, missing, or dirty artifact is
+unavailable; the PR adapter does not silently perform a cold build.
 
 ## PR-context request and result
 
