@@ -22,7 +22,12 @@ from ia_repomap_builder import (
     prepare_repomap,
 )
 from ia_repomap_builder.pr_context import _GitChange, _in_scope_changes, _parse_pr_context_xml
-from ia_repomap_builder.readiness import _engine_identity, artifact_locations
+from ia_repomap_builder.readiness import (
+    _CacheValidation,
+    _engine_identity,
+    _validate_ripwire_lean_cache,
+    artifact_locations,
+)
 
 
 CONFIG = """\
@@ -107,14 +112,15 @@ class PrContextTests(unittest.TestCase):
         self.assertEqual(config.map_php_scope, ("app/source",))
         self.assertEqual(set(config.php_family_extensions), PHP_FAMILY_EXTENSIONS)
 
-    def _prepare(self) -> BuildResult:
+    def _prepare(self, doctor_returncode: int = 0, doctor_stdout: str | None = None) -> BuildResult:
         real_run = subprocess.run
 
         def index_run(command, **_kwargs):
             if "--doctor" in command:
                 return SimpleNamespace(
-                    returncode=0,
-                    stdout='<doctor><c n="index-cache" source="cache-flag" lean="ok"/></doctor>',
+                    returncode=doctor_returncode,
+                    stdout=doctor_stdout
+                    or '<doctor><c n="index-cache" source="cache-flag" lean="ok"/></doctor>',
                     stderr="",
                 )
             if not any(item.startswith("--index-out=") for item in command):
@@ -131,6 +137,57 @@ class PrContextTests(unittest.TestCase):
             patch("ia_repomap_builder.readiness.subprocess.run", side_effect=index_run),
         ):
             return prepare_repomap(PrepareRepoMapRequest(self.root, self.artifacts))
+
+    def test_nonzero_doctor_exit_with_valid_cache_is_a_warning(self) -> None:
+        completed = SimpleNamespace(
+            returncode=1,
+            stdout='<doctor><c n="index-cache" source="cache-flag" lean="ok"/></doctor>',
+            stderr="",
+        )
+        with patch("ia_repomap_builder.readiness.subprocess.run", return_value=completed):
+            result = _validate_ripwire_lean_cache(
+                "/bin/ripwire", self.root / "app/source", self.artifacts / "index.lean.ripwirecache"
+            )
+        self.assertEqual(result.status, "ok")
+        self.assertIn("exited 1", result.diagnostic or "")
+
+    def test_nonzero_doctor_exit_with_incompatible_cache_is_unavailable(self) -> None:
+        completed = SimpleNamespace(
+            returncode=1,
+            stdout='<doctor><c n="index-cache" source="cache-flag" lean="stale"/></doctor>',
+            stderr="",
+        )
+        with patch("ia_repomap_builder.readiness.subprocess.run", return_value=completed):
+            result = _validate_ripwire_lean_cache(
+                "/bin/ripwire", self.root / "app/source", self.artifacts / "index.lean.ripwirecache"
+            )
+        self.assertEqual(result.status, "unavailable")
+
+    def test_nonzero_doctor_exit_with_non_named_cache_is_unavailable(self) -> None:
+        completed = SimpleNamespace(
+            returncode=1,
+            stdout='<doctor><c n="index-cache" source="auto" lean="ok"/></doctor>',
+            stderr="",
+        )
+        with patch("ia_repomap_builder.readiness.subprocess.run", return_value=completed):
+            result = _validate_ripwire_lean_cache(
+                "/bin/ripwire", self.root / "app/source", self.artifacts / "index.lean.ripwirecache"
+            )
+        self.assertEqual(result.status, "unavailable")
+
+    def test_nonzero_doctor_exit_with_malformed_xml_is_an_error(self) -> None:
+        completed = SimpleNamespace(returncode=1, stdout="not xml", stderr="")
+        with patch("ia_repomap_builder.readiness.subprocess.run", return_value=completed):
+            result = _validate_ripwire_lean_cache(
+                "/bin/ripwire", self.root / "app/source", self.artifacts / "index.lean.ripwirecache"
+            )
+        self.assertEqual(result.status, "error")
+        self.assertIn("invalid XML", result.diagnostic or "")
+
+    def test_preparation_retains_nonzero_doctor_warning(self) -> None:
+        result = self._prepare(doctor_returncode=1)
+        self.assertEqual(result.status, "ok", result.diagnostics)
+        self.assertIn("exited 1", " ".join(result.diagnostics))
 
     def test_loads_valid_marker_and_rejects_unknown_or_unsafe_configuration(self) -> None:
         config = self._config()
@@ -196,7 +253,10 @@ class PrContextTests(unittest.TestCase):
         with (
             patch("ia_repomap_builder.readiness._ripwire_binary", return_value="/bin/ripwire"),
             patch("ia_repomap_builder.readiness._engine_identity", return_value=ENGINE),
-            patch("ia_repomap_builder.readiness._validate_ripwire_lean_cache", return_value=None),
+            patch(
+                "ia_repomap_builder.readiness._validate_ripwire_lean_cache",
+                return_value=_CacheValidation("ok"),
+            ),
         ):
             ready = check_repomap_readiness(request)
         self.assertEqual(ready.status, "ok", ready.diagnostics)
@@ -206,7 +266,10 @@ class PrContextTests(unittest.TestCase):
         with (
             patch("ia_repomap_builder.readiness._ripwire_binary", return_value="/bin/ripwire"),
             patch("ia_repomap_builder.readiness._engine_identity", return_value=ENGINE),
-            patch("ia_repomap_builder.readiness._validate_ripwire_lean_cache", return_value=None),
+            patch(
+                "ia_repomap_builder.readiness._validate_ripwire_lean_cache",
+                return_value=_CacheValidation("ok"),
+            ),
         ):
             dirty = check_repomap_readiness(request)
         self.assertEqual(dirty.status, "unavailable")
@@ -252,12 +315,28 @@ class PrContextTests(unittest.TestCase):
             patch("ia_repomap_builder.readiness._engine_identity", return_value=ENGINE),
             patch(
                 "ia_repomap_builder.readiness._validate_ripwire_lean_cache",
-                return_value=("unavailable", "prepared lean cache cannot be consumed"),
+                return_value=_CacheValidation(
+                    "unavailable", "prepared lean cache cannot be consumed"
+                ),
             ),
         ):
             result = check_repomap_readiness(PrContextRequest(self.root, self.artifacts, "HEAD~1"))
         self.assertEqual(result.status, "unavailable")
         self.assertIn("cannot be consumed", result.diagnostics[0])
+
+    def test_readiness_retains_doctor_warning_on_success(self) -> None:
+        self.assertEqual(self._prepare(doctor_returncode=1).status, "ok")
+        with (
+            patch("ia_repomap_builder.readiness._ripwire_binary", return_value="/bin/ripwire"),
+            patch("ia_repomap_builder.readiness._engine_identity", return_value=ENGINE),
+            patch(
+                "ia_repomap_builder.readiness._validate_ripwire_lean_cache",
+                return_value=_CacheValidation("ok", "Ripwire doctor exited 1; named lean cache passed validation"),
+            ),
+        ):
+            result = check_repomap_readiness(PrContextRequest(self.root, self.artifacts, "HEAD~1"))
+        self.assertEqual(result.status, "ok")
+        self.assertIn("exited 1", result.diagnostics[0])
 
     def test_malformed_manifest_is_an_error(self) -> None:
         self.assertEqual(self._prepare().status, "ok")

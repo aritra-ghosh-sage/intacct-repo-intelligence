@@ -53,8 +53,11 @@ clean exact-head checkout must have a matching Ripwire index and manifest in a
 caller-provided artifact root outside the repository. Missing or stale map
 context is reported as `unavailable`; the adapter does not silently cold-build
 an index. Readiness uses Ripwire `--doctor` to reject a named lean cache that
-the current binary would replace with a cold parse. See the canonical contract
-for the manifest and normalized result formats.
+the current binary would replace with a cold parse. Readiness gates on the
+doctor report's named `index-cache` row (`source="cache-flag"` and
+`lean="ok"`); unrelated doctor failures remain visible as warnings rather
+than invalidating an otherwise consumable named cache. See the canonical
+contract for the manifest and normalized result formats.
 
 The Python-only readiness and PR-context APIs are:
 

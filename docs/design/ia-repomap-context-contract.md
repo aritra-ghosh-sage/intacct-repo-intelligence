@@ -189,7 +189,7 @@ mean that a target `ia-app` checkout has been onboarded.
 | 4 | `complete` | Exact-head readiness and named-cache validation are implemented. | Readiness checks identity, base/merge-base resolution, and Ripwire `--doctor` cache use. |
 | 5 | `complete` | PR-context invocation returns normalized changed-file and candidate-symbol seeds. | Focused tests cover Git status normalization, command construction, and XML symbol parsing. |
 | 6 | `complete` | Explicit statuses, gaps, raw XML retention, and deterministic normalized evidence are implemented. | Tests cover unavailable/error paths, truncation and ambiguity gaps, raw XML, and repeatability; runtime metrics are excluded from deterministic comparisons. |
-| 7 | `complete` | Lightweight validation and the P1/P2 regressions are complete. | The test suite passes with 34 tests (3 opt-in skips), and `git diff --check` passes. |
+| 7 | `complete` | Lightweight validation and the P1/P2 regressions are complete. | The test suite passes with 40 tests (3 opt-in skips), including doctor-cache exit handling, and `git diff --check` passes. |
 | 8 | `complete` | A clean local `ia-app` onboarding commit tracks the repository declaration and root agent guidance; review and merge remain pending. | The maintained declaration loads successfully, target files match their templates, and target commit `658face817ce6b474c481ad96bc42333ebf7dc05` is clean at its expected parent. |
 
 ## Acceptance criteria
@@ -202,7 +202,8 @@ The map is ready for PR context only when:
    engine, and parser/patch identity;
 4. Ripwire `--doctor` reports the named lean cache as `source="cache-flag"`
    and `lean="ok"`; a cache that would self-heal to a cold parse is
-   unavailable;
+   unavailable. An unrelated nonzero doctor exit remains a warning when this
+   cache row is valid and does not make the named cache unavailable;
 5. the patched Ripwire binary recognizes all configured Intacct extensions and
    does not regress ordinary `.php` or `.phtml` files;
 6. repeated requests over identical clean inputs produce byte-identical raw XML

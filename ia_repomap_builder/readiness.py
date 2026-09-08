@@ -58,6 +58,12 @@ class ArtifactLocations:
     rich_cache: Path
 
 
+@dataclass(frozen=True)
+class _CacheValidation:
+    status: str
+    diagnostic: str | None = None
+
+
 def load_repomap_config(repo_root: Path) -> RepoMapConfig:
     """Load and strictly validate a repository-local ``.ia-repomap.toml``."""
 
@@ -197,12 +203,11 @@ def prepare_repomap(request: PrepareRepoMapRequest) -> BuildResult:
                 identity=identity,
             )
         cache_check = _validate_ripwire_lean_cache(engine["binary"], root / config.scope[0], staged_lean)
-        if cache_check is not None:
-            status, diagnostic = cache_check
+        if cache_check.status != "ok":
             return BuildResult(
                 engine="ripwire",
-                status=status,
-                diagnostics=[diagnostic],
+                status=cache_check.status,
+                diagnostics=[cache_check.diagnostic or "Ripwire cache validation failed"],
                 identity=identity,
             )
         manifest = _manifest(root, config, head, engine)
@@ -222,10 +227,13 @@ def prepare_repomap(request: PrepareRepoMapRequest) -> BuildResult:
         if staging.exists():
             shutil.rmtree(staging, ignore_errors=True)
 
+    diagnostics = ["prepared revision-bound external Ripwire index"]
+    if cache_check.diagnostic:
+        diagnostics.append(cache_check.diagnostic)
     return BuildResult(
         engine="ripwire",
         status="ok",
-        diagnostics=["prepared revision-bound external Ripwire index"],
+        diagnostics=diagnostics,
         metrics={"prepared": True, "elapsed_ms": _elapsed_ms(started)},
         identity=identity,
     )
@@ -278,10 +286,15 @@ def check_repomap_readiness(request: PrContextRequest) -> BuildResult:
     cache_check = _validate_ripwire_lean_cache(
         engine["binary"], root / config.scope[0], locations.lean_cache
     )
-    if cache_check is not None:
-        status, diagnostic = cache_check
-        return BuildResult("ripwire", status, diagnostics=[diagnostic], identity=identity)
-    return BuildResult("ripwire", "ok", identity=identity)
+    if cache_check.status != "ok":
+        return BuildResult(
+            "ripwire",
+            cache_check.status,
+            diagnostics=[cache_check.diagnostic or "Ripwire cache validation failed"],
+            identity=identity,
+        )
+    diagnostics = [cache_check.diagnostic] if cache_check.diagnostic else []
+    return BuildResult("ripwire", "ok", diagnostics=diagnostics, identity=identity)
 
 
 def artifact_locations(
@@ -416,7 +429,7 @@ def _verify_ripwire_extensions(binary: str, extensions: tuple[str, ...]) -> str 
 
 def _validate_ripwire_lean_cache(
     binary: str, scope_root: Path, lean_cache: Path
-) -> tuple[str, str] | None:
+) -> _CacheValidation:
     """Refuse a cache Ripwire would silently replace with a cold parse."""
 
     try:
@@ -428,27 +441,31 @@ def _validate_ripwire_lean_cache(
             timeout=300,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        return "error", f"Ripwire cache validation failed: {exc}"
-    if completed.returncode != 0:
-        return "error", f"Ripwire cache validation exited {completed.returncode}: {completed.stderr.strip()[:500]}"
+        return _CacheValidation("error", f"Ripwire cache validation failed: {exc}")
     try:
         root = ET.fromstring(completed.stdout)
     except ET.ParseError as exc:
-        return "error", f"Ripwire cache validation emitted invalid XML: {exc}"
+        return _CacheValidation("error", f"Ripwire cache validation emitted invalid XML: {exc}")
     if root.tag != "doctor":
-        return "error", "Ripwire cache validation did not emit a doctor report"
+        return _CacheValidation("error", "Ripwire cache validation did not emit a doctor report")
     cache_row = next((node for node in root.findall("./c") if node.attrib.get("n") == "index-cache"), None)
     if cache_row is None:
-        return "error", "Ripwire cache validation did not report index-cache status"
+        return _CacheValidation("error", "Ripwire cache validation did not report index-cache status")
     lean_status = cache_row.attrib.get("lean")
     source = cache_row.attrib.get("source")
     if source != "cache-flag" or lean_status != "ok":
-        return (
+        return _CacheValidation(
             "unavailable",
             "prepared lean cache cannot be consumed by the current Ripwire binary: "
             f"source={source or 'missing'}, lean={lean_status or 'missing'}",
         )
-    return None
+    if completed.returncode != 0:
+        detail = completed.stderr.strip()[:500]
+        warning = f"Ripwire doctor exited {completed.returncode}; named lean cache passed validation"
+        if detail:
+            warning += f": {detail}"
+        return _CacheValidation("ok", warning)
+    return _CacheValidation("ok")
 
 
 def _manifest(root: Path, config: RepoMapConfig, head: str, engine: dict[str, str]) -> dict[str, Any]:
