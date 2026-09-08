@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from ia_repomap_builder import (
     BuildResult,
+    PHP_FAMILY_EXTENSIONS,
     PrepareRepoMapRequest,
     PrContextRequest,
     RepoMapConfig,
@@ -84,6 +85,25 @@ class PrContextTests(unittest.TestCase):
 
     def _config(self) -> RepoMapConfig:
         return load_repomap_config(self.root)
+
+    def test_maintained_marker_template_matches_contract(self) -> None:
+        template = (
+            Path(__file__).parents[1]
+            / "ia_repomap_builder"
+            / "templates"
+            / ".ia-repomap.toml"
+        )
+        (self.root / ".ia-repomap.toml").write_text(
+            template.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+
+        config = self._config()
+        self.assertEqual(config.schema_version, 1)
+        self.assertEqual(config.engine, "ripwire")
+        self.assertEqual(config.scope, ("app/source",))
+        self.assertEqual(config.token_budget, 4000)
+        self.assertEqual(config.map_php_scope, ("app/source",))
+        self.assertEqual(set(config.php_family_extensions), PHP_FAMILY_EXTENSIONS)
 
     def _prepare(self) -> BuildResult:
         real_run = subprocess.run

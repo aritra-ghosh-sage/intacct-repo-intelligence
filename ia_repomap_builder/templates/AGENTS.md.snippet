@@ -1,7 +1,11 @@
 ## Repository context discovery
 
-For task-shaped code discovery, consult the repository's `.ia-repomap.toml`
-and generate a current `ia_repomap` context bundle for the requested scope.
-Treat ranked symbols and relationships as navigation evidence, not proof:
-open and verify the referenced source before changing code. Do not commit
-generated maps or caches; they are revision- and configuration-derived.
+For task-shaped code discovery, first consult the root `.ia-repomap.toml`.
+When the active coding harness provides `ia_repomap` context, request it for
+the current exact revision and declared scope before broad repository search.
+If map context is missing or stale, report it as unavailable and continue with
+normal source discovery; do not build or reuse an unverified cache implicitly.
+
+Treat ranked symbols and relationships as navigation evidence, not proof.
+Open and verify referenced source before making changes. Generated maps,
+caches, XML evidence, and context bundles must remain outside tracked source.

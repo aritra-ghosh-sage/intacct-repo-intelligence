@@ -1,5 +1,5 @@
 # Repository-local ia_repomap declaration (schema v1).
-# See docs/design/ia-repomap-context-contract.md for the contract.
+# The canonical contract is maintained in intacct-repo-intelligence.
 # Keep generated maps, caches, and context bundles outside the repository.
 schema_version = 1
 engine = "ripwire"

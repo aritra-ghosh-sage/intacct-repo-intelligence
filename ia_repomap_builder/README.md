@@ -78,9 +78,10 @@ only external artifacts. `build_pr_context` requires that exact prepared
 artifact and returns `ok`, `unavailable`, or `error` without falling back to a
 cold index build.
 
-The current implementation status is recorded in the canonical contract. Live
-`ia-app` onboarding remains a separate prerequisite; this package does not
-claim that checkout, MCP, editor, or harness integration is complete.
+The current implementation status is recorded in the canonical contract. A
+local `ia-app` onboarding commit prepares the marker and agent guidance, but it
+is not live until reviewed and merged; an external exact-revision index is still
+required. MCP, CLI, editor, and harness integrations remain deferred.
 
 For a participating Intacct repository, copy the small
 `templates/.ia-repomap.toml` declaration and the

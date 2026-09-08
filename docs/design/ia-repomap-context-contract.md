@@ -186,6 +186,7 @@ mean that a target `ia-app` checkout has been onboarded.
 | 5 | `complete` | PR-context invocation returns normalized changed-file and candidate-symbol seeds. | Focused tests cover Git status normalization, command construction, and XML symbol parsing. |
 | 6 | `complete` | Explicit statuses, gaps, raw XML retention, and deterministic normalized output are implemented. | Tests cover unavailable/error paths, truncation and ambiguity gaps, raw XML, and repeatability. |
 | 7 | `complete` | Lightweight validation and the P1/P2 regressions are complete. | The test suite passes with 31 tests (3 opt-in skips), and `git diff --check` passes. |
+| 8 | `complete` | A clean local `ia-app` onboarding commit tracks the repository declaration and root agent guidance; review and merge remain pending. | The maintained declaration loads successfully, target files match their templates, and target commit `658face817ce6b474c481ad96bc42333ebf7dc05` is clean at its expected parent. |
 
 ## Acceptance criteria
 
