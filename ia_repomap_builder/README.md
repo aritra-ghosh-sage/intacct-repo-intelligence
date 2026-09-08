@@ -6,6 +6,10 @@ optional Aider RepoMap and Ripwire engines. The optional engines are never
 silently substituted: an absent installation is returned as
 `status: unavailable`.
 
+The canonical repository-map contract, including configuration, artifact
+identity, PR-context output, assumptions, and acceptance criteria, is in
+[`docs/design/ia-repomap-context-contract.md`](../docs/design/ia-repomap-context-contract.md).
+
 ## Input and output
 
 ```python
@@ -25,6 +29,52 @@ print(result.as_dict())
 The request is revision-aware and scope-relative. The result contains ranked
 items, rendered context, diagnostics, runtime metrics, and a cache identity.
 Generated context is intentionally not written into the repository.
+
+## Repository declaration and readiness
+
+Participating repositories commit this root declaration:
+
+```toml
+schema_version = 1
+engine = "ripwire"
+scope = ["app/source"]
+token_budget = 4000
+php_family_extensions = [
+  ".php", ".phtml", ".cls", ".ent", ".inc", ".cqry", ".rpt",
+  ".menu", ".pol", ".wfl", ".shortcuts", ".qry", ".bin", ".map",
+]
+map_php_scope = ["app/source"]
+```
+
+The declaration is only a discovery marker. Before PR-context analysis, a
+clean exact-head checkout must have a matching Ripwire index and manifest in a
+caller-provided artifact root outside the repository. Missing or stale map
+context is reported as `unavailable`; the adapter does not silently cold-build
+an index. Readiness uses Ripwire `--doctor` to reject a named lean cache that
+the current binary would replace with a cold parse. See the canonical contract
+for the manifest and normalized result formats.
+
+The Python-only readiness and PR-context APIs are:
+
+```python
+from pathlib import Path
+from ia_repomap_builder import (
+    PrepareRepoMapRequest,
+    PrContextRequest,
+    build_pr_context,
+    prepare_repomap,
+)
+
+repo = Path("/path/to/ia-app")
+artifacts = Path("/safe/external/ia-repomap-artifacts")
+prepare_repomap(PrepareRepoMapRequest(repo, artifacts))
+result = build_pr_context(PrContextRequest(repo, artifacts, base_ref="origin/main"))
+```
+
+`prepare_repomap` requires a valid root marker and a clean checkout. It writes
+only external artifacts. `build_pr_context` requires that exact prepared
+artifact and returns `ok`, `unavailable`, or `error` without falling back to a
+cold index build.
 
 For a participating Intacct repository, copy the small
 `templates/.ia-repomap.toml` declaration and the
@@ -71,5 +121,5 @@ as a successful zero-score result.
 ## Tests
 
 ```shell
-python3 -m unittest discover -s tests -p 'test_*.py'
+./.venv/bin/python -m unittest discover -s tests -p 'test_*.py'
 ```

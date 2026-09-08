@@ -1,5 +1,7 @@
-# Repository-local declaration consumed by a future harness adapter.
-# Keep generated maps and caches outside the repository.
+# Repository-local ia_repomap declaration (schema v1).
+# See docs/design/ia-repomap-context-contract.md for the contract.
+# Keep generated maps, caches, and context bundles outside the repository.
+schema_version = 1
 engine = "ripwire"
 scope = ["app/source"]
 token_budget = 4000

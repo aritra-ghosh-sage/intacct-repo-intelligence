@@ -151,3 +151,24 @@ regardless of the vendor decision.
    gaps.
 4. Ship blast radius + test suggestions as a single evidence-bound JSON
    artifact before wiring any GitHub-write side effects (Check/comment).
+
+## 11. Repository-map context contract
+
+The first repository-context layer is specified in
+[`ia-repomap-context-contract.md`](ia-repomap-context-contract.md). It makes
+the research rules operational for Intacct's `app/source` slice:
+
+- the committed `.ia-repomap.toml` is a small machine-readable declaration;
+- generated Ripwire indexes and caches are external, revision-bound artifacts;
+- the exact clean PR head, explicit base, configuration, and engine identity
+  must match before context is served;
+- XML is retained as canonical evidence while normalized records are an
+  adapter convenience;
+- `candidate`, `unresolved`, `unavailable`, and truncation states remain
+  explicit rather than being collapsed into a confident-looking answer.
+
+The contract assumes that ranked symbols and static relationships are
+navigation evidence. Agents must verify consequential conclusions against
+source, tests, build configuration, and CI. The bakeoff acceptance criteria in
+that contract are measured on Intacct examples; Ripwire's published comparison
+does not substitute for that evaluation.

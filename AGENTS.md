@@ -2,21 +2,21 @@
 
 ## Project Structure & Module Organization
 
-This branch is a documentation-focused research workspace. Design notes live in
-`docs/design/`; the current primary artifact is
-`docs/design/llm-agent-pr-blast-radius-research.md`. Keep new research documents
-in that directory and use descriptive, kebab-case filenames. The repository does
-not currently contain application source, generated assets, or a test suite. If
-code is introduced, add an obvious top-level source directory and mirror its
-layout under `tests/`.
+This repository contains the `ia_repomap_builder/` Python package, its tests in
+`tests/`, and design notes in `docs/design/`. Keep new research documents in
+that directory and use descriptive, kebab-case filenames. The canonical
+repository-map contract is
+`docs/design/ia-repomap-context-contract.md`; the independent blast-radius
+research is `docs/design/llm-agent-pr-blast-radius-research.md`.
 
 ## Development and Validation Commands
 
-There is no build system or automated test command on this branch. Use lightweight
-checks from the repository root:
+There is no packaging build step. Use lightweight checks from the repository
+root:
 
 - `git diff --check` detects whitespace errors before a commit.
 - `rg -n '^#{1,6} ' docs/` reviews heading structure across the documentation.
+- `./.venv/bin/python -m unittest discover -s tests -p 'test_*.py'` runs the package tests.
 - `git status --short` confirms that only intended files are included.
 
 Also preview edited Markdown in a renderer that supports tables and Mermaid, and
@@ -36,8 +36,10 @@ their date and scope near the top.
 Treat rendered-document review as the current acceptance check. Confirm that
 tables remain readable, Mermaid syntax renders, examples match the surrounding
 claims, and revision- or file-specific assertions include traceable citations.
-When executable code is added, include automated tests in the same change and
-document the exact command required to run them.
+Executable changes require automated tests in the same change. Document the
+exact command required to run them, and keep repository-map indexes, caches,
+context bundles, proprietary source excerpts, and credentials out of tracked
+source.
 
 ## Commit & Pull Request Guidelines
 

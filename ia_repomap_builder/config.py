@@ -28,6 +28,9 @@ PHP_FAMILY_EXTENSIONS = frozenset(
     }
 )
 
+REPOMAP_CONFIG_FILENAME = ".ia-repomap.toml"
+REPOMAP_SCHEMA_VERSION = 1
+
 
 @dataclass(frozen=True)
 class BuildRequest:
@@ -78,6 +81,94 @@ class BuildResult:
             "status": self.status,
             "items": [item.__dict__ for item in self.items],
             "context": self.context,
+            "diagnostics": list(self.diagnostics),
+            "metrics": dict(self.metrics),
+            "identity": dict(self.identity),
+        }
+
+
+@dataclass(frozen=True)
+class RepoMapConfig:
+    """Validated repository-local configuration for the Ripwire PR slice."""
+
+    schema_version: int
+    engine: str
+    scope: tuple[str, ...]
+    token_budget: int
+    php_family_extensions: tuple[str, ...]
+    map_php_scope: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class PrepareRepoMapRequest:
+    """Prepare a revision-bound Ripwire index outside a repository checkout."""
+
+    repo_root: Path
+    artifact_root: Path
+
+
+@dataclass(frozen=True)
+class PrContextRequest:
+    """Request deterministic Ripwire PR-context seed evidence."""
+
+    repo_root: Path
+    artifact_root: Path
+    base_ref: str
+    token_budget: int | None = None
+    limit: int = 20
+    offset: int = 0
+
+
+@dataclass(frozen=True)
+class PrSymbolCandidate:
+    path: str
+    name: str
+    line: int | None
+    kind: str | None = None
+    confidence: str = "candidate"
+
+
+@dataclass(frozen=True)
+class PrChangedFile:
+    path: str
+    change: str
+    old_path: str | None = None
+    symbols: tuple[PrSymbolCandidate, ...] = ()
+
+
+@dataclass(frozen=True)
+class PrContextGap:
+    kind: str
+    detail: str
+    count: int | None = None
+
+
+@dataclass
+class PrContextResult:
+    """PR-context evidence, normalized only as far as this initial slice needs."""
+
+    status: str
+    changed_files: list[PrChangedFile] = field(default_factory=list)
+    raw_xml: str = ""
+    gaps: list[PrContextGap] = field(default_factory=list)
+    diagnostics: list[str] = field(default_factory=list)
+    metrics: dict[str, Any] = field(default_factory=dict)
+    identity: dict[str, Any] = field(default_factory=dict)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "changed_files": [
+                {
+                    "path": changed.path,
+                    "change": changed.change,
+                    "old_path": changed.old_path,
+                    "symbols": [symbol.__dict__ for symbol in changed.symbols],
+                }
+                for changed in self.changed_files
+            ],
+            "raw_xml": self.raw_xml,
+            "gaps": [gap.__dict__ for gap in self.gaps],
             "diagnostics": list(self.diagnostics),
             "metrics": dict(self.metrics),
             "identity": dict(self.identity),
