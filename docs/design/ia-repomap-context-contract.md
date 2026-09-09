@@ -114,6 +114,8 @@ executable bytes cannot reuse an existing artifact directory even when the
 reported version is unchanged. A stale, missing, or dirty artifact is
 unavailable; the PR adapter does not silently perform a cold build.
 
+Retention: retain artifacts for the current active HEAD and the two immediately preceding SHAs per repository. Purge on branch deletion. Operator must not delete the artifact for an in-flight PR readiness check.
+
 ## PR-context request and result
 
 The Python adapter accepts an explicit request equivalent to:
