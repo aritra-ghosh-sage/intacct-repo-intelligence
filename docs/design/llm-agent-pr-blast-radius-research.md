@@ -156,16 +156,17 @@ regardless of the vendor decision.
 
 Revision-bound map preparation, exact-head readiness, and PR-context seed
 extraction are implemented. The adapter returns Git-authoritative changed-file
-records and candidate symbols; a changed symbol currently means a definition
-found in a changed file, not a hunk-exact symbol. Ripwire callers, impact,
-affected-test, co-change, and owner relationships remain canonical XML
-evidence and are not yet normalized as blast-radius conclusions.
+records and `hunk-enclosing-v1` candidate symbols. Definition spans are inferred
+from ordered Ripwire start lines and intersected with positive-side Git hunks;
+the result remains candidate navigation evidence. Ripwire callers, impact,
+affected-test, co-change, and owner relationships remain canonical XML evidence
+and are not yet normalized as blast-radius conclusions.
 
 The research MVP is therefore at these boundaries:
 
 | Capability | Status | Current boundary |
 | --- | --- | --- |
-| Changed-file and candidate-symbol seeds | Partial | Implemented for the declared scope with explicit identity and gap checks. |
+| Changed-file and candidate-symbol seeds | Partial | Implemented with hunk-to-enclosing-definition attribution, explicit identity, and gap checks. |
 | Callers, blast radius, and affected tests | Not implemented | Available only in retained Ripwire XML; no normalized result contract yet. |
 | Agent loop and test-index cross-reference | Not implemented | No task summarization, graph-query loop, or test-index routing exists. |
 | Evidence-bound blast-radius/test-suggestion JSON | Not implemented | The current normalized output is limited to PR-context seeds. |
@@ -179,8 +180,11 @@ the large repository history. Cache readiness and Intacct extension routing
 were not the failure. The current remediation bounds both history scans to the
 latest 500 commits anchored at `HEAD`, and discloses
 `history_scope="head-count"`, `history_commits`, and a `bounded_history` gap.
-No successful live XML and normalized result pair has yet been retained, so
-this remediation is not recorded as a completed live proof.
+An isolated local PR #50176 proof now retains successful XML and normalized
+evidence: hunk attribution reduced 14 file-wide definitions to the enclosing
+`buildTemplateFilters` candidate and resolved all four changed hunks. This is a
+local implementation proof, not evidence that onboarding is merged or broadly
+available.
 
 ## 11. Repository-map context contract
 
@@ -207,5 +211,6 @@ The implemented repository-map slice and its validation history are recorded in
 the contract's [execution status](ia-repomap-context-contract.md#execution-status).
 The local `ia-app` onboarding revision and a matching external prepared artifact
 are now present for the named revision, but they are not merged or generally
-available. Successful live PR-context evidence remains pending. This research
-does not imply that an editor, MCP, CLI, or harness integration is available.
+available. Successful local PR-context evidence is retained for the isolated
+PR #50176 validation revision. This research does not imply that an editor,
+MCP, CLI, or harness integration is available.

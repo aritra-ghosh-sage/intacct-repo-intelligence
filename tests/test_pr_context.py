@@ -15,13 +15,20 @@ from ia_repomap_builder import (
     PHP_FAMILY_EXTENSIONS,
     PrepareRepoMapRequest,
     PrContextRequest,
+    PrSymbolCandidate,
     RepoMapConfig,
     build_pr_context,
     check_repomap_readiness,
     load_repomap_config,
     prepare_repomap,
 )
-from ia_repomap_builder.pr_context import _GitChange, _in_scope_changes, _parse_pr_context_xml
+from ia_repomap_builder.pr_context import (
+    _GitChange,
+    _hunk_line_ranges,
+    _in_scope_changes,
+    _parse_pr_context_xml,
+    _select_hunk_symbols,
+)
 from ia_repomap_builder.readiness import (
     _CacheValidation,
     _engine_identity,
@@ -427,6 +434,163 @@ class PrContextTests(unittest.TestCase):
         self.assertEqual(metrics["budget_tokens"], 8000)
         self.assertEqual(metrics["history_commits"], 500)
 
+    def test_hunk_line_ranges_parse_zero_context_diff(self) -> None:
+        output = """\
+@@ -10,5 +45,3 @@ method
+not a hunk @@ -1 +2 @@
+@@ -1,2 +1,2 @@
+@@ -20,0 +20 @@
+@@ -30,5 +32,0 @@
+"""
+        completed = SimpleNamespace(stdout=output)
+        with patch("ia_repomap_builder.pr_context.subprocess.run", return_value=completed) as run:
+            ranges = _hunk_line_ranges(self.root, "base", "head", "app/source/foo.cls")
+        self.assertEqual(ranges, ((45, 47), (1, 2), (20, 20)))
+        self.assertEqual(
+            run.call_args.args[0],
+            [
+                "git",
+                "-C",
+                str(self.root),
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-color",
+                "-U0",
+                "base",
+                "head",
+                "--",
+                "app/source/foo.cls",
+            ],
+        )
+        self.assertEqual(run.call_args.kwargs["timeout"], 30)
+
+    def test_hunk_line_ranges_convert_subprocess_failures(self) -> None:
+        failures = (
+            OSError("missing git"),
+            subprocess.CalledProcessError(1, ["git"]),
+            subprocess.TimeoutExpired(["git"], 30),
+        )
+        for failure in failures:
+            with self.subTest(failure=type(failure).__name__):
+                with patch("ia_repomap_builder.pr_context.subprocess.run", side_effect=failure):
+                    with self.assertRaisesRegex(ValueError, "cannot read Git hunks"):
+                        _hunk_line_ranges(self.root, "base", "head", "app/source/foo.cls")
+
+    def test_selects_enclosing_method_for_method_body_hunks(self) -> None:
+        path = "app/source/apar/CustomerPrintTemplateValidator.cls"
+        symbols = (
+            PrSymbolCandidate(path, "CustomerPrintTemplateValidator", 8, "cls"),
+            PrSymbolCandidate(path, "DOCUMENT_TYPE_INVOICE", 10, "var"),
+            PrSymbolCandidate(path, "buildTemplateFilters", 126, "method"),
+            PrSymbolCandidate(path, "getPrintTemplateTypes", 166, "method"),
+            PrSymbolCandidate(path, "unknown", None, "method"),
+        )
+        selected, missing_lines, unresolved = _select_hunk_symbols(
+            symbols,
+            ((132, 135), (138, 145), (150, 157), (161, 163)),
+        )
+        self.assertEqual([symbol.name for symbol in selected], ["buildTemplateFilters"])
+        self.assertEqual(missing_lines, 1)
+        self.assertEqual(unresolved, 0)
+
+    def test_symbol_selection_includes_boundaries_and_same_line_symbols(self) -> None:
+        path = "app/source/foo.cls"
+        symbols = (
+            PrSymbolCandidate(path, "alpha", 45, "method"),
+            PrSymbolCandidate(path, "alphaAlias", 45, "method"),
+            PrSymbolCandidate(path, "beta", 48, "method"),
+            PrSymbolCandidate(path, "gamma", 80, "method"),
+        )
+        selected, missing_lines, unresolved = _select_hunk_symbols(
+            symbols,
+            ((45, 47), (48, 48), (80, 80)),
+        )
+        self.assertEqual(
+            [symbol.name for symbol in selected],
+            ["alpha", "alphaAlias", "beta", "gamma"],
+        )
+        self.assertEqual(missing_lines, 0)
+        self.assertEqual(unresolved, 0)
+
+        next_only, _, next_unresolved = _select_hunk_symbols(symbols, ((48, 48),))
+        self.assertEqual([symbol.name for symbol in next_only], ["beta"])
+        self.assertEqual(next_unresolved, 0)
+
+    def test_parser_filters_symbols_and_reports_hunk_gaps(self) -> None:
+        changed, gaps, metrics = _parse_pr_context_xml(
+            self.root,
+            "app/source",
+            PR_XML,
+            [_GitChange("app/source/gl/Added.ent", "A")],
+            hunk_ranges={"app/source/gl/Added.ent": ((3, 3),)},
+        )
+        self.assertEqual([symbol.name for symbol in changed[0].symbols], ["run"])
+        self.assertEqual(metrics["symbol_selection"], "hunk-enclosing-v1")
+        self.assertEqual(metrics["candidate_symbols_before"], 2)
+        self.assertEqual(metrics["candidate_symbols_after"], 1)
+        self.assertEqual(metrics["hunks_total"], 1)
+        self.assertEqual(metrics["hunks_unresolved"], 0)
+        self.assertNotIn("hunk_symbol_unresolved", {gap.kind for gap in gaps})
+
+        added, _, _ = _parse_pr_context_xml(
+            self.root,
+            "app/source",
+            PR_XML,
+            [_GitChange("app/source/gl/Added.ent", "A")],
+            hunk_ranges={"app/source/gl/Added.ent": ((1, 3),)},
+        )
+        self.assertEqual([symbol.name for symbol in added[0].symbols], ["Added", "run"])
+
+        no_lines, no_line_gaps, no_line_metrics = _parse_pr_context_xml(
+            self.root,
+            "app/source",
+            PR_XML,
+            [_GitChange("app/source/gl/Added.ent", "R", "app/source/gl/Old.ent")],
+            hunk_ranges={"app/source/gl/Added.ent": ()},
+        )
+        self.assertEqual(no_lines[0].symbols, ())
+        self.assertIn("hunk_no_head_lines", {gap.kind for gap in no_line_gaps})
+        self.assertEqual(no_line_metrics["candidate_symbols_after"], 0)
+
+        unresolved, unresolved_gaps, unresolved_metrics = _parse_pr_context_xml(
+            self.root,
+            "app/source",
+            PR_XML,
+            [_GitChange("app/source/gl/Added.ent", "M")],
+            hunk_ranges={"app/source/gl/Added.ent": ((1, 1),)},
+        )
+        self.assertEqual(unresolved[0].symbols, ())
+        self.assertIn("hunk_symbol_unresolved", {gap.kind for gap in unresolved_gaps})
+        self.assertEqual(unresolved_metrics["hunks_unresolved"], 1)
+
+        deleted, _, deleted_metrics = _parse_pr_context_xml(
+            self.root,
+            "app/source",
+            PR_XML,
+            [_GitChange("app/source/gl/Added.ent", "D")],
+            hunk_ranges={},
+        )
+        self.assertEqual(deleted[0].symbols, ())
+        self.assertEqual(deleted_metrics["candidate_symbols_after"], 0)
+
+    def test_parser_excludes_symbols_without_lines_with_gap(self) -> None:
+        xml = PR_XML.replace(
+            '<s t="method" n="run" p="gl/Added.ent:3"/>',
+            '<s t="method" n="run" p="gl/Added.ent"/>',
+        )
+        changed, gaps, metrics = _parse_pr_context_xml(
+            self.root,
+            "app/source",
+            xml,
+            [_GitChange("app/source/gl/Added.ent", "M")],
+            hunk_ranges={"app/source/gl/Added.ent": ((2, 3),)},
+        )
+        self.assertEqual([symbol.name for symbol in changed[0].symbols], ["Added"])
+        self.assertIn("hunk_symbol_line_unavailable", {gap.kind for gap in gaps})
+        self.assertEqual(metrics["candidate_symbols_before"], 2)
+        self.assertEqual(metrics["candidate_symbols_after"], 1)
+
     def test_scope_filtering_preserves_explicit_gaps(self) -> None:
         selected, gaps = _in_scope_changes(
             [
@@ -462,7 +626,11 @@ class PrContextTests(unittest.TestCase):
         with (
             patch("ia_repomap_builder.pr_context.check_repomap_readiness", return_value=ready),
             patch("ia_repomap_builder.pr_context._ripwire_binary", return_value="/bin/ripwire"),
-            patch("ia_repomap_builder.pr_context._git_changes", return_value=[_GitChange("app/source/gl/Added.ent", "A")]),
+            patch(
+                "ia_repomap_builder.pr_context._git_changes",
+                return_value=[_GitChange("app/source/gl/Added.ent", "A")],
+            ),
+            patch("ia_repomap_builder.pr_context._hunk_line_ranges", return_value=((2, 3),)),
             patch("ia_repomap_builder.pr_context.subprocess.run", return_value=completed) as run,
             patch("ia_repomap_builder.pr_context.git_revision", return_value="head-sha"),
             patch("ia_repomap_builder.pr_context.is_dirty", return_value=False),
@@ -478,6 +646,50 @@ class PrContextTests(unittest.TestCase):
         self.assertIn("--limit=7", command)
         self.assertIn("--offset=2", command)
         self.assertIn("--pr-history-commits=17", command)
+        self.assertEqual(result.metrics["candidate_symbols_before"], 2)
+        self.assertEqual(result.metrics["candidate_symbols_after"], 2)
+
+    def test_hunk_range_failure_is_an_ok_gap_with_file_wide_fallback(self) -> None:
+        ready = BuildResult(
+            engine="ripwire",
+            status="ok",
+            identity={
+                "head": "head-sha",
+                "merge_base": "base-sha",
+                "lean_cache": "/tmp/index.lean.ripwirecache",
+            },
+        )
+        completed = SimpleNamespace(returncode=0, stdout=PR_XML, stderr="")
+        with (
+            patch("ia_repomap_builder.pr_context.check_repomap_readiness", return_value=ready),
+            patch("ia_repomap_builder.pr_context._ripwire_binary", return_value="/bin/ripwire"),
+            patch(
+                "ia_repomap_builder.pr_context._git_changes",
+                return_value=[_GitChange("app/source/gl/Added.ent", "R", "app/source/gl/Old.ent")],
+            ),
+            patch(
+                "ia_repomap_builder.pr_context._hunk_line_ranges",
+                side_effect=ValueError("diff failed"),
+            ) as hunks,
+            patch("ia_repomap_builder.pr_context.subprocess.run", return_value=completed),
+            patch("ia_repomap_builder.pr_context.git_revision", return_value="head-sha"),
+            patch("ia_repomap_builder.pr_context.is_dirty", return_value=False),
+        ):
+            result = build_pr_context(PrContextRequest(self.root, self.artifacts, "HEAD~1"))
+        self.assertEqual(result.status, "ok", result.diagnostics)
+        self.assertEqual(result.raw_xml, PR_XML)
+        self.assertEqual(
+            [symbol.name for symbol in result.changed_files[0].symbols],
+            ["Added", "run"],
+        )
+        self.assertIn("hunk_range_unavailable", {gap.kind for gap in result.gaps})
+        self.assertEqual(result.metrics["candidate_symbols_after"], 2)
+        hunks.assert_called_once_with(
+            self.root.resolve(),
+            "base-sha",
+            "head-sha",
+            "app/source/gl/Added.ent",
+        )
 
     def test_post_run_checkout_change_discards_context(self) -> None:
         ready = BuildResult(

@@ -81,10 +81,18 @@ only external artifacts. `build_pr_context` requires that exact prepared
 artifact and returns `ok`, `unavailable`, or `error` without falling back to a
 cold index build.
 
+Normalized changed-symbol seeds use `hunk-enclosing-v1`: Git's positive-side
+hunks are attributed to spans inferred from Ripwire definition start lines.
+The filtered definitions remain `candidate` evidence. Git hunk failures retain
+file-wide candidates with an explicit gap; deletion-only changes, unattributed
+hunks, and missing symbol lines are also disclosed rather than silently
+treated as complete evidence. Canonical Ripwire XML is retained verbatim.
+
 The current implementation status is recorded in the canonical contract. A
 local `ia-app` onboarding commit prepares the marker and agent guidance, but it
-is not live until reviewed and merged; an external exact-revision index is still
-required. MCP, CLI, editor, and harness integrations remain deferred.
+is not live until reviewed and merged. Hunk attribution has been validated on
+an isolated, exact-revision PR #50176 checkout with an external index; it is not
+generally available. MCP, CLI, editor, and harness integrations remain deferred.
 
 For a participating Intacct repository, copy the small
 `templates/.ia-repomap.toml` declaration and the

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 import time
 import xml.etree.ElementTree as ET
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,6 +27,11 @@ class _GitChange:
     path: str
     change: str
     old_path: str | None = None
+
+
+_HUNK_HEADER = re.compile(
+    r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@"
+)
 
 
 def build_pr_context(request: PrContextRequest) -> PrContextResult:
@@ -56,6 +63,24 @@ def build_pr_context(request: PrContextRequest) -> PrContextResult:
         return PrContextResult(status="error", diagnostics=[str(exc)], identity=readiness.identity)
 
     in_scope, gaps = _in_scope_changes(changes, config.scope)
+    hunk_ranges: dict[str, tuple[tuple[int, int], ...]] = {}
+    for change in in_scope:
+        if change.change not in {"A", "M", "R"}:
+            continue
+        try:
+            hunk_ranges[change.path] = _hunk_line_ranges(
+                root,
+                readiness.identity["merge_base"],
+                readiness.identity["head"],
+                change.path,
+            )
+        except ValueError as exc:
+            gaps.append(
+                PrContextGap(
+                    kind="hunk_range_unavailable",
+                    detail=f"Git hunk ranges are unavailable for {change.path}: {exc}",
+                )
+            )
     binary = _ripwire_binary()
     if binary is None:
         return PrContextResult(
@@ -105,6 +130,7 @@ def build_pr_context(request: PrContextRequest) -> PrContextResult:
             config.scope[0],
             completed.stdout,
             in_scope,
+            hunk_ranges=hunk_ranges,
         )
     except ValueError as exc:
         return PrContextResult(
@@ -177,6 +203,50 @@ def _git_changes(root: Path, merge_base: str) -> list[_GitChange]:
     return sorted(changes, key=lambda item: (item.path, item.old_path or "", item.change))
 
 
+def _hunk_line_ranges(
+    root: Path,
+    merge_base: str,
+    head: str,
+    path: str,
+) -> tuple[tuple[int, int], ...]:
+    """Return inclusive new-file line ranges from a zero-context Git diff."""
+
+    try:
+        completed = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-color",
+                "-U0",
+                merge_base,
+                head,
+                "--",
+                path,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ValueError(f"cannot read Git hunks: {exc}") from exc
+
+    ranges: list[tuple[int, int]] = []
+    for line in completed.stdout.splitlines():
+        match = _HUNK_HEADER.match(line)
+        if match is None:
+            continue
+        start = int(match.group(1))
+        count = int(match.group(2) or "1")
+        if count > 0:
+            ranges.append((start, start + count - 1))
+    return tuple(ranges)
+
+
 def _in_scope_changes(
     changes: list[_GitChange], scope: tuple[str, ...]
 ) -> tuple[list[_GitChange], list[PrContextGap]]:
@@ -217,6 +287,8 @@ def _parse_pr_context_xml(
     scope: str,
     output: str,
     changes: list[_GitChange],
+    *,
+    hunk_ranges: Mapping[str, Sequence[tuple[int, int]]] | None = None,
 ) -> tuple[list[PrChangedFile], list[PrContextGap], dict[str, int | str]]:
     try:
         root = ET.fromstring(output)
@@ -251,11 +323,57 @@ def _parse_pr_context_xml(
         symbols_by_path[path] = tuple(sorted(symbols, key=lambda item: (item.line or 0, item.name)))
 
     changed_files: list[PrChangedFile] = []
+    gaps = _root_gaps(root)
     missing = 0
+    symbols_before = 0
+    symbols_after = 0
+    hunks_total = 0
+    hunks_unresolved = 0
     for change in changes:
         symbols = symbols_by_path.get(change.path, ())
+        symbols_before += len(symbols)
         if change.change != "D" and change.path not in xml_paths:
             missing += 1
+        if change.change == "D":
+            symbols = ()
+        elif hunk_ranges is not None and change.path in hunk_ranges:
+            ranges = tuple(hunk_ranges[change.path])
+            hunks_total += len(ranges)
+            if not ranges:
+                symbols = ()
+                gaps.append(
+                    PrContextGap(
+                        kind="hunk_no_head_lines",
+                        detail=(
+                            "Git reported no changed lines in the current version of "
+                            f"{change.path}"
+                        ),
+                        count=1,
+                    )
+                )
+            else:
+                symbols, missing_lines, unresolved = _select_hunk_symbols(symbols, ranges)
+                hunks_unresolved += unresolved
+                if missing_lines:
+                    gaps.append(
+                        PrContextGap(
+                            kind="hunk_symbol_line_unavailable",
+                            detail=(
+                                "Ripwire symbols without line numbers could not be "
+                                f"attributed in {change.path}"
+                            ),
+                            count=missing_lines,
+                        )
+                    )
+                if unresolved:
+                    gaps.append(
+                        PrContextGap(
+                            kind="hunk_symbol_unresolved",
+                            detail=f"Changed hunks could not be attributed to a symbol in {change.path}",
+                            count=unresolved,
+                        )
+                    )
+        symbols_after += len(symbols)
         changed_files.append(
             PrChangedFile(
                 path=change.path,
@@ -267,7 +385,6 @@ def _parse_pr_context_xml(
 
     changed_paths = {change.path for change in changes}
     unmatched = len(xml_paths - changed_paths)
-    gaps = _root_gaps(root)
     if missing:
         gaps.append(
             PrContextGap(
@@ -292,7 +409,53 @@ def _parse_pr_context_xml(
         value = root.attrib.get(name)
         if value is not None:
             metrics[name] = int(value) if value.isdigit() else value
+    if hunk_ranges is not None:
+        metrics.update(
+            {
+                "symbol_selection": "hunk-enclosing-v1",
+                "candidate_symbols_before": symbols_before,
+                "candidate_symbols_after": symbols_after,
+                "hunks_total": hunks_total,
+                "hunks_unresolved": hunks_unresolved,
+            }
+        )
     return changed_files, gaps, metrics
+
+
+def _select_hunk_symbols(
+    symbols: Sequence[PrSymbolCandidate],
+    ranges: Sequence[tuple[int, int]],
+) -> tuple[tuple[PrSymbolCandidate, ...], int, int]:
+    """Select candidate definitions whose inferred spans overlap Git hunks."""
+
+    ordered = sorted(
+        (symbol for symbol in symbols if symbol.line is not None),
+        key=lambda item: (item.line or 0, item.kind or "", item.name),
+    )
+    missing_lines = len(symbols) - len(ordered)
+    groups: list[tuple[int, list[PrSymbolCandidate]]] = []
+    for symbol in ordered:
+        if groups and groups[-1][0] == symbol.line:
+            groups[-1][1].append(symbol)
+        else:
+            groups.append((symbol.line or 0, [symbol]))
+
+    selected: list[PrSymbolCandidate] = []
+    matched_hunks: set[int] = set()
+    last_hunk_line = max((end for _, end in ranges), default=0)
+    for index, (start, group) in enumerate(groups):
+        end = groups[index + 1][0] - 1 if index + 1 < len(groups) else last_hunk_line
+        matching = {
+            hunk_index
+            for hunk_index, (hunk_start, hunk_end) in enumerate(ranges)
+            if start <= hunk_end and hunk_start <= end
+        }
+        if matching:
+            selected.extend(group)
+            matched_hunks.update(matching)
+
+    selected.sort(key=lambda item: (item.line or 0, item.kind or "", item.name))
+    return tuple(selected), missing_lines, len(ranges) - len(matched_hunks)
 
 
 def _normalize_scope_path(repo_root: Path, scope: str, raw_path: str) -> str | None:

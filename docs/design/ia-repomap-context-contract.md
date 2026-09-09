@@ -172,9 +172,19 @@ prerequisite, and unavailable capability is represented as a diagnostic or
 gap. Confidence follows the research contract: `confirmed`,
 `strong_candidate`, `candidate`, `unresolved`, or `unavailable`.
 
-The first Ripwire adapter reports definitions found in changed files as
-`candidate` symbols. This is not hunk-exact changed-symbol extraction and must
-not be described as such.
+The adapter uses `hunk-enclosing-v1` to narrow Ripwire's file-wide definitions
+to candidates whose inferred definition span overlaps a positive-side Git
+hunk. Ripwire supplies definition start lines but not end lines, so each span
+ends immediately before the next definition starts. The final definition is
+extended through the final changed hunk. These inferred enclosing definitions
+remain `candidate` navigation evidence rather than confirmed changed symbols.
+
+Git hunk failures retain file-wide candidates and produce a
+`hunk_range_unavailable` gap. A successful diff with no current-head lines
+produces `hunk_no_head_lines`; hunks before the first line-bearing definition
+produce `hunk_symbol_unresolved`; and Ripwire symbols without usable line
+numbers produce `hunk_symbol_line_unavailable`. Raw Ripwire XML remains
+verbatim canonical evidence in every successful result.
 
 ## Execution status
 
@@ -193,6 +203,7 @@ mean that a target `ia-app` checkout has been onboarded.
 | 6 | `complete` | Explicit statuses, gaps, raw XML retention, and deterministic normalized evidence are implemented. | Tests cover unavailable/error paths, truncation and ambiguity gaps, raw XML, and repeatability; runtime metrics are excluded from deterministic comparisons. |
 | 7 | `complete` | Lightweight validation and the P1/P2 regressions are complete. | The test suite passes with 40 tests (3 opt-in skips), including doctor-cache exit handling, and `git diff --check` passes. |
 | 8 | `complete` | A clean local `ia-app` onboarding commit tracks the repository declaration and root agent guidance; review and merge remain pending. | The maintained declaration loads successfully, target files match their templates, and target commit `658face817ce6b474c481ad96bc42333ebf7dc05` is clean at its expected parent. |
+| 9 | `complete` | Hunk-to-enclosing-symbol attribution narrows file-wide Ripwire definitions while retaining explicit fallback gaps and canonical XML. | Focused tests cover hunk parsing, inferred spans, boundary cases, missing lines, deletion/rename behavior, and Git failures. An isolated PR #50176 rerun reduced 14 candidates to `buildTemplateFilters` at line 126 and attributed all four hunks. |
 
 ## Acceptance criteria
 
@@ -247,3 +258,15 @@ ambiguous/unresolved graph counts as explicit gaps. The measurement uses the
 real PR #50176 source change, while the onboarding metadata from PR #50173 was
 applied only in an isolated local worktree; neither PR is represented as
 merged by this entry.
+
+### Post-remediation validation
+
+| Date | PR and revision | Candidates before | Candidates after | Selected candidate | Hunks attributed | Result |
+| --- | --- | ---: | ---: | --- | ---: | --- |
+| 2026-09-09 | #50176, base `82025f5229a43a67d147897b9da93d9b1a6ac7dd`, isolated head `adf48f320f4f546738cc8520acb00f7947235580` | 14 | 1 | `buildTemplateFilters` at line 126 | 4/4 | accepted |
+
+Two runs from the same explicit worktree returned byte-identical raw XML and
+equal normalized output after excluding elapsed time. The output used 3,812
+of the 4,000-token budget. Evidence is retained outside tracked source. The
+result validates local hunk attribution only; onboarding review and merge
+remain pending.
