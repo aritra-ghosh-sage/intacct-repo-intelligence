@@ -152,6 +152,36 @@ regardless of the vendor decision.
 4. Ship blast radius + test suggestions as a single evidence-bound JSON
    artifact before wiring any GitHub-write side effects (Check/comment).
 
+### Current implementation status
+
+Revision-bound map preparation, exact-head readiness, and PR-context seed
+extraction are implemented. The adapter returns Git-authoritative changed-file
+records and candidate symbols; a changed symbol currently means a definition
+found in a changed file, not a hunk-exact symbol. Ripwire callers, impact,
+affected-test, co-change, and owner relationships remain canonical XML
+evidence and are not yet normalized as blast-radius conclusions.
+
+The research MVP is therefore at these boundaries:
+
+| Capability | Status | Current boundary |
+| --- | --- | --- |
+| Changed-file and candidate-symbol seeds | Partial | Implemented for the declared scope with explicit identity and gap checks. |
+| Callers, blast radius, and affected tests | Not implemented | Available only in retained Ripwire XML; no normalized result contract yet. |
+| Agent loop and test-index cross-reference | Not implemented | No task summarization, graph-query loop, or test-index routing exists. |
+| Evidence-bound blast-radius/test-suggestion JSON | Not implemented | The current normalized output is limited to PR-context seeds. |
+| Aider/Ripwire/lexical bakeoff | Not run | The acceptance dataset and comparative measurements remain outstanding. |
+
+### Live retrieval finding
+
+The first live PR-context retrieval attempt exceeded the adapter's 300-second
+timeout while Ripwire mined unbounded co-change and ownership history across
+the large repository history. Cache readiness and Intacct extension routing
+were not the failure. The current remediation bounds both history scans to the
+latest 500 commits anchored at `HEAD`, and discloses
+`history_scope="head-count"`, `history_commits`, and a `bounded_history` gap.
+No successful live XML and normalized result pair has yet been retained, so
+this remediation is not recorded as a completed live proof.
+
 ## 11. Repository-map context contract
 
 The first repository-context layer is specified in
@@ -175,6 +205,7 @@ does not substitute for that evaluation.
 
 The implemented repository-map slice and its validation history are recorded in
 the contract's [execution status](ia-repomap-context-contract.md#execution-status).
-Live `ia-app` onboarding remains a separate prerequisite; this research does
-not imply that its marker, guidance, or revision-bound external index is
-present.
+The local `ia-app` onboarding revision and a matching external prepared artifact
+are now present for the named revision, but they are not merged or generally
+available. Successful live PR-context evidence remains pending. This research
+does not imply that an editor, MCP, CLI, or harness integration is available.
