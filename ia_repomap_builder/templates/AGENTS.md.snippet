@@ -9,3 +9,7 @@ normal source discovery; do not build or reuse an unverified cache implicitly.
 Treat ranked symbols and relationships as navigation evidence, not proof.
 Open and verify referenced source before making changes. Generated maps,
 caches, XML evidence, and context bundles must remain outside tracked source.
+
+## Known limits
+
+ripwire's call-graph traversal identifies primary PHP touch points. For changes that span multiple files, the blast radius is a lower bound — verify sibling files in source.
