@@ -1,1 +1,362 @@
-# This generated patch is replaced after the bounded-history Ripwire changes are applied.
+diff --git a/README.md b/README.md
+index 448888b..7602b32 100644
+--- a/README.md
++++ b/README.md
+@@ -1566,3 +1566,3 @@ wrong, and it has. These are the results that say so, all in-tree, all published
+
+-`test/regression.sh` names **547 gate scripts** and is the authoritative list;
++`test/regression.sh` names **549 gate scripts** and is the authoritative list;
+ `python3 test/pargates.py . ./build/ripwire -j 6` runs the same set in parallel. On top of them sit the
+diff --git a/docs/EVALS.md b/docs/EVALS.md
+index 4fd69ef..0417680 100644
+--- a/docs/EVALS.md
++++ b/docs/EVALS.md
+@@ -23,3 +23,3 @@ section, and it is not an afterthought.
+ | **Differential argv harness** | `test/argvdiffcheck.sh` | That a refactor changed *nothing observable*: two binaries, every argv vector, stdout + stderr + exit code byte-identical. |
+-| **The gate suite** | `test/regression.sh`, `test/pargates.py` | 547 gate scripts plus the determinism, cache-transparency and golden contracts. |
++| **The gate suite** | `test/regression.sh`, `test/pargates.py` | 549 gate scripts plus the determinism, cache-transparency and golden contracts. |
+ | **`--quality-delta`** | `src/quality.h` | Ten measured code-quality failure modes, reported only where a change made them worse. |
+@@ -5311,3 +5311,3 @@ tags, wrap, stable-order defaults), seven individually invoked standalone gates
+ `taskroutecheck`), and a single loop
+-naming **547 gate scripts**, all of which exist on disk.
++naming **549 gate scripts**, all of which exist on disk.
+
+@@ -6216,3 +6216,3 @@ Listed because the reason is more useful than the silence.
+ - **A single round gate-count.** Two in-tree numbers disagree (`test/pargates.py`'s docstring says
+-  ~210; `test/argvdiffcheck.sh` says 200+), while the loop in `test/regression.sh` names 547. The
++  ~210; `test/argvdiffcheck.sh` says 200+), while the loop in `test/regression.sh` names 549. The
+   loop is the authority; the stale docstrings are a known drift. `test/manifestcheck.sh` asserts this
+diff --git a/present/deck5_ripwire_build.js b/present/deck5_ripwire_build.js
+index ef66e99..594ee6d 100644
+--- a/present/deck5_ripwire_build.js
++++ b/present/deck5_ripwire_build.js
+@@ -710,3 +710,3 @@ function row(s, y, h, cols, opts={}){
+   const cards = [
+-    ["547 gate scripts", "the suite runs on every push — plus determinism, cache-transparency and golden contracts; the gate count itself is gated against the runner's own loop"],
++    ["549 gate scripts", "the suite runs on every push — plus determinism, cache-transparency and golden contracts; the gate count itself is gated against the runner's own loop"],
+     ["byte-identical, always", "two runs over the same tree produce the same bytes; warm equals cold. Enforced in CI, twice — Release AND a plain flavour, because NDEBUG once blinded a whole class of checks"],
+@@ -734,3 +734,3 @@ function row(s, y, h, cols, opts={}){
+   card(s, MX, 1.72, 3.86, 1.72);
+-  stat(s, "547", "gate scripts named by test/regression.sh — and the COUNT itself is gated against the runner's own loop, so it cannot go stale quietly",
++  stat(s, "549", "gate scripts named by test/regression.sh — and the COUNT itself is gated against the runner's own loop, so it cannot go stale quietly",
+     MX+0.15, 1.86, 3.56, CYAN, { bsize: 42, bh: 0.66, lsize: 9.5 });
+@@ -973,3 +973,3 @@ function row(s, y, h, cols, opts={}){
+     ["74.7% fewer element bytes",         "bash test/showcasecapturecheck.sh"],
+-    ["547 gate scripts",                  "bash test/manifestcheck.sh"],
++    ["549 gate scripts",                  "bash test/manifestcheck.sh"],
+     ["41 repos · 67 papers · 237 surveyed","bash test/readmedriftcheck.sh"],
+diff --git a/src/cli.h b/src/cli.h
+index a4c8c56..897cfed 100644
+--- a/src/cli.h
++++ b/src/cli.h
+@@ -354,2 +354,3 @@ struct Config
+     std::string_view prContextBase;                        // --pr-context=BASEREF: diff vs this ref (else the working-tree diff)
++    int              prHistoryCommits = 0;                 // --pr-history-commits=N: bound PR co-change/ownership history at HEAD (0 = legacy)
+     bool             mergeScoutFlag  = false;               // --merge-scout was given at all (tracked separately from the CSV value so a bare
+@@ -1689,2 +1690,3 @@ inline void printUsage( std::FILE* out ) noexcept
+         "                               its symbols + callers + blast radius + affected tests + co-change partners + owners.\n"
++        "                               --pr-history-commits=N bounds the co-change and owner history to the latest N commits from HEAD;\n"
+         "                               The bundle is BUDGETED by default (8000 tokens, budget_default=\"1\" on the root; --token-budget=N\n"
+@@ -2738,2 +2740,3 @@ inline constexpr IntFlag kIntFlags[] =
+     { "--max-tokens=",       &Config::maxTokens,     false, kIntFlagMax,       "a positive integer",         "--max-tokens=16000" },
++    { "--pr-history-commits=", &Config::prHistoryCommits, false, kIntFlagMax, "a positive integer", "--pr-history-commits=500" },
+     // r27-emitters T2: --top-k=0 means "emit NO ranked map, only the explicitly requested payload"
+@@ -2800,3 +2803,3 @@ inline constexpr IntFlag kIntFlags[] =
+ inline constexpr std::size_t kHandWrittenFlagArms = 22;   // +1: --color-by= (enum-value arm); +3 G3 (2026-08-15 harvest): --and=/--not=/--grep-scope= (repeatable-value arms, same shape as --exclude=); +1 R-H: --grep-in= (closed-value arm, same shape as --grep-scope=)
+-inline constexpr std::size_t kTotalFlagArms = 209;  // +2 P4 (capture-audit 2026-09-04, lane L7): --zoom-levels= (kIntFlags row, the printed-levels ceiling) and --include-builtins (kBoolFlags row, the external-surface builtin opt-in); +1 P9 (capture-audit 2026-09-04, lane L8): --no-post-check (kBoolFlags row, the edit receipt's folded verification opt-out); +1 lane/ca-L2 (2026-09-04, H11): --allow-dirty (kBoolFlags row) — the explicit consent --quality-baseline needs before it pins a floor on a tree that differs from HEAD; +1 lane/n6-c (2026-09-03): --no-ignore (kBoolFlags row, the .gitignore-by-default escape hatch); +1 lane/af-scope (2026-08-29): --scope= (kViewFlags row, the quality-delta ownership partition); +1 --quality-delta= (kViewFlags, R-I ref-pair form); +1 --help-task= (kViewFlags); +2 VT-1: --run-trace= (kViewFlags) and --run-timeout= (kIntFlags); +1: --handoff (kBoolFlags row); +1 --readability (kBoolFlags row); +2 §CLIO: --cochange-groups (kBoolFlags), --cochange-recur= (kIntFlags); +1 --context-ratio (kBoolFlags row); +1 --nonlocal-state (kBoolFlags row); +2 --field-affinity (kBoolFlags) and --field-affinity= (kViewFlags); +1 --comment-coherence (kBoolFlags row); +2 --dmm (kBoolFlags) and --dmm= (kViewFlags); +2 --quality-panel (kBoolFlags) and --quality-panel= (kViewFlags); +1 --naming-consistency (kBoolFlags row); +1 --naming-locals (kBoolFlags row, local-variable-indexing plan Phase 2); +1 --skipped (kBoolFlags row, §P0.5d itemization); +1 --with-profile= (kViewFlags row, the --lint × #PROF_TSV heat join); +1 --color-by= (hand-written enum-value arm); +1 --sarif (kBoolFlags row, W1-SARIF: SARIF 2.1.0 export for --lint); +1 --signatures-only (kBoolFlags row, T3 terminal-by-default --for opt-out); +3 L7: --lint-catalog (kBoolFlags), --lint-select= and --lint-ignore= (kViewFlags); +3 G3 (2026-08-15 harvest): --and=/--not=/--grep-scope= (hand-written arms); +1 R-H: --grep-in= (hand-written arm); +1 R2: --pattern= (kViewFlags row, the code-shaped structural search); +1 lane/safe-delete (2026-08-21): --safe-delete= (kViewFlags row, the composed "can I delete this?" read); +1 lane/compact-conceptual (2026-08-22): --auto-bodies (kBoolFlags row, the compact-conceptual-serving opt-out); +5 CLI edit bridge (2026-08-27): --replace-symbol-body=/--insert-before-symbol=/--insert-after-symbol=/--edit-payload=/--edit-target-file= (kViewFlags rows); +1 --handles (kBoolFlags row, grep edit handles); +1 --legend= (kViewFlags row, compact schema dialect); +3 edit-plan: --edit-plan= (kViewFlags) and --dry-run/--apply (kBoolFlags rows); +1 --agent= (kViewFlags row, the --doctor Codex surface); +1 lane/paper-slice (2026-08-28): --slice= (kViewFlags row, the ARISE-motivated def-use slice); +1 lane/af-planlint (2026-08-29): --plan-lint= (kViewFlags row, the PLAN-format structure gate, P3.2); +2 lane/or-arise (2026-08-30): --slice-flow= (kViewFlags row) and --slice-depth= (kIntFlags row) — the ARISE rung-2 cross-statement data-flow slice; +1 lane/at-seed (2026-08-30): --at= (kViewFlags row) — the FILE:LINE enclosing-chain report, with the @FILE:LINE selector spelling resolved in graph.h (no flag arm of its own); +1 CARD-1 phase 2 (2026-08-31): --pin-census= (kViewFlags row) — the eval-only S6-C silent-pin census, written beside the map and never into it
++inline constexpr std::size_t kTotalFlagArms = 210;  // +2 P4 (capture-audit 2026-09-04, lane L7): --zoom-levels= (kIntFlags row, the printed-levels ceiling) and --include-builtins (kBoolFlags row, the external-surface builtin opt-in); +1 P9 (capture-audit 2026-09-04, lane L8): --no-post-check (kBoolFlags row, the edit receipt's folded verification opt-out); +1 lane/ca-L2 (2026-09-04, H11): --allow-dirty (kBoolFlags row) — the explicit consent --quality-baseline needs before it pins a floor on a tree that differs from HEAD; +1 lane/n6-c (2026-09-03): --no-ignore (kBoolFlags row, the .gitignore-by-default escape hatch); +1 lane/af-scope (2026-08-29): --scope= (kViewFlags row, the quality-delta ownership partition); +1 --quality-delta= (kViewFlags, R-I ref-pair form); +1 --help-task= (kViewFlags); +2 VT-1: --run-trace= (kViewFlags) and --run-timeout= (kIntFlags); +1: --handoff (kBoolFlags row); +1 --readability (kBoolFlags row); +2 §CLIO: --cochange-groups (kBoolFlags), --cochange-recur= (kIntFlags); +1 --context-ratio (kBoolFlags row); +1 --nonlocal-state (kBoolFlags row); +2 --field-affinity (kBoolFlags) and --field-affinity= (kViewFlags); +1 --comment-coherence (kBoolFlags row); +2 --dmm (kBoolFlags) and --dmm= (kViewFlags); +2 --quality-panel (kBoolFlags) and --quality-panel= (kViewFlags); +1 --naming-consistency (kBoolFlags row); +1 --naming-locals (kBoolFlags row, local-variable-indexing plan Phase 2); +1 --skipped (kBoolFlags row, §P0.5d itemization); +1 --with-profile= (kViewFlags row, the --lint × #PROF_TSV heat join); +1 --color-by= (hand-written enum-value arm); +1 --sarif (kBoolFlags row, W1-SARIF: SARIF 2.1.0 export for --lint); +1 --signatures-only (kBoolFlags row, T3 terminal-by-default --for opt-out); +3 L7: --lint-catalog (kBoolFlags), --lint-select= and --lint-ignore= (kViewFlags); +3 G3 (2026-08-15 harvest): --and=/--not=/--grep-scope= (hand-written arms); +1 R-H: --grep-in= (hand-written arm); +1 R2: --pattern= (kViewFlags row, the code-shaped structural search); +1 lane/safe-delete (2026-08-21): --safe-delete= (kViewFlags row, the composed "can I delete this?" read); +1 lane/compact-conceptual (2026-08-22): --auto-bodies (kBoolFlags row, the compact-conceptual-serving opt-out); +5 CLI edit bridge (2026-08-27): --replace-symbol-body=/--insert-before-symbol=/--insert-after-symbol=/--edit-payload=/--edit-target-file= (kViewFlags rows); +1 --handles (kBoolFlags row, grep edit handles); +1 --legend= (kViewFlags row, compact schema dialect); +3 edit-plan: --edit-plan= (kViewFlags) and --dry-run/--apply (kBoolFlags rows); +1 --agent= (kViewFlags row, the --doctor Codex surface); +1 lane/paper-slice (2026-08-28): --slice= (kViewFlags row, the ARISE-motivated def-use slice); +1 lane/af-planlint (2026-08-29): --plan-lint= (kViewFlags row, the PLAN-format structure gate, P3.2); +2 lane/or-arise (2026-08-30): --slice-flow= (kViewFlags row) and --slice-depth= (kIntFlags row) — the ARISE rung-2 cross-statement data-flow slice; +1 lane/at-seed (2026-08-30): --at= (kViewFlags row) — the FILE:LINE enclosing-chain report, with the @FILE:LINE selector spelling resolved in graph.h (no flag arm of its own); +1 CARD-1 phase 2 (2026-08-31): --pin-census= (kViewFlags row) — the eval-only S6-C silent-pin census, written beside the map and never into it
+ static_assert( std::size( kBoolFlags ) + std::size( kViewFlags ) + std::size( kIntFlags ) + kHandWrittenFlagArms == kTotalFlagArms,
+@@ -3921,2 +3924,8 @@ inline void validateConfig( Config& c ) noexcept
+
++    if( c.prHistoryCommits > 0 && !c.prContext )
++    {
++        std::fprintf( stderr, "ripwire: --pr-history-commits=N modifies --pr-context — pass both (e.g. ripwire <dir> --pr-context --pr-history-commits=500)\n" );
++        c.ok = false;
++    }
++
+     // H10 (capture-audit 2026-09-04): --quality-ack=REASON implies the --quality-delta report it acks. The
+diff --git a/src/gitmine.h b/src/gitmine.h
+index 35c611f..cea569a 100644
+--- a/src/gitmine.h
++++ b/src/gitmine.h
+@@ -2059,3 +2059,4 @@ inline std::vector<FileOwnership> gitFileAuthors(
+     double halfLifeDays = 182.5,   // 6 months ≈ 182.5 days
+-    std::uint32_t onlyRoot = UINT32_MAX   // multi-root §5: mine this repo ONLY against its own files
++    std::uint32_t onlyRoot = UINT32_MAX,   // multi-root §5: mine this repo ONLY against its own files
++    std::uint32_t historyCommitCount = 0  // 0 = full history; >0 = latest N commits from HEAD
+ )
+@@ -2102,4 +2103,9 @@ inline std::vector<FileOwnership> gitFileAuthors(
+     // until a blank line / the next header. Mirrors gitCommitFileSets' exact invocation style.
+-    std::string cmd = "git -c core.quotepath=false -C " + shSingleQuote( root )
+-                     + " log " + kMergeDiffArgs + "--name-only --format=tformat:__C__%ae\\|%at";
++    std::string cmd = "git -c core.quotepath=false -C " + shSingleQuote( root ) + " log ";
++    if( historyCommitCount > 0 )
++    {
++        cmd += "-" + std::to_string( historyCommitCount ) + " ";
++    }
++    cmd += kMergeDiffArgs;
++    cmd += "--name-only --format=tformat:__C__%ae\\|%at";
+     if( singleFile )
+diff --git a/src/ingest_cache.h b/src/ingest_cache.h
+index bd3a9b0..ec986a4 100644
+--- a/src/ingest_cache.h
++++ b/src/ingest_cache.h
+@@ -192,3 +192,6 @@ constexpr std::uint32_t kCacheVersion = 15;           // 15 (offset-table blob):
+                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
+-constexpr std::uint32_t kParserVer    = 77;           // bump on any grammar/.scm/extraction change
++constexpr std::uint32_t kParserVer    = 78;           // bump on any grammar/.scm/extraction change
++                                                      // 78 = 2026-09-07: Intacct PHP-family extension aliases
++                                                      //      (.cls/.ent/.inc/.cqry/.rpt/.menu/.pol/.wfl/
++                                                      //      .shortcuts/.qry/.bin/.map) join the PHP parser.
+                                                       // 77 = 2026-09-03 (Phase 5, docs/EVALS.md): two Python
+diff --git a/src/ingest_crawl.h b/src/ingest_crawl.h
+index af10e26..d20387e 100644
+--- a/src/ingest_crawl.h
++++ b/src/ingest_crawl.h
+@@ -55,3 +55,4 @@ struct LangEntry
+ // The extent is EXACT, not headroom: it was 32 with 32 rows, .toml made it 33, .pyi made it 34 and the
+-// .yml/.yaml pair made it 36, and the .php/.phtml/.lua trio made it 40. Sizing it to the row count is what makes
++// .yml/.yaml pair made it 36, and the .php/.phtml/.lua trio made it 40. The Intacct aliases add twelve rows,
++// making the table 52 entries. Sizing it to the row count is what makes
+ // `std::array<bool, kLangTable.size()> present` (the grammar-prewarm set,
+@@ -59,3 +60,3 @@ struct LangEntry
+ // silent drop.
+-constexpr std::array<LangEntry, 40> kLangTable = {{
++constexpr std::array<LangEntry, 52> kLangTable = {{
+     { ".cpp",  Lang::Cpp,        &tree_sitter_cpp,        "cpp"        },
+@@ -147,2 +148,17 @@ constexpr std::array<LangEntry, 40> kLangTable = {{
+     { ".phtml", Lang::Php,       &tree_sitter_php,        "php"        },   // PHP template (markup + <?php ?> islands) — same grammar, same query
++    // Intacct PHP-family suffixes share the existing PHP grammar and query.
++    // `.map` is intended for the PHP source map under app/source; callers
++    // scanning a broader tree must exclude third-party resource maps.
++    { ".cls",  Lang::Php,        &tree_sitter_php,        "php"        },
++    { ".ent",  Lang::Php,        &tree_sitter_php,        "php"        },
++    { ".inc",  Lang::Php,        &tree_sitter_php,        "php"        },
++    { ".cqry", Lang::Php,        &tree_sitter_php,        "php"        },
++    { ".rpt",  Lang::Php,        &tree_sitter_php,        "php"        },
++    { ".menu", Lang::Php,        &tree_sitter_php,        "php"        },
++    { ".pol",  Lang::Php,        &tree_sitter_php,        "php"        },
++    { ".wfl",  Lang::Php,        &tree_sitter_php,        "php"        },
++    { ".shortcuts", Lang::Php,  &tree_sitter_php,        "php"        },
++    { ".qry",  Lang::Php,        &tree_sitter_php,        "php"        },
++    { ".bin",  Lang::Php,        &tree_sitter_php,        "php"        },
++    { ".map",  Lang::Php,        &tree_sitter_php,        "php"        },
+     // Lua: no classes, no imports. The five function-definition spellings and the one call node are the
+diff --git a/src/lintrules.h b/src/lintrules.h
+index 43bca51..bdd9739 100644
+--- a/src/lintrules.h
++++ b/src/lintrules.h
+@@ -126,3 +126,3 @@ inline Lang langOfPath( std::string_view path ) noexcept
+     struct Row { std::string_view ext; Lang lang; };
+-    static const std::array<Row, 30> kExt = { {
++    static const std::array<Row, 43> kExt = { {
+         { ".cpp", Lang::Cpp }, { ".cc", Lang::Cpp }, { ".cxx", Lang::Cpp },
+@@ -140,3 +140,7 @@ inline Lang langOfPath( std::string_view path ) noexcept
+         { ".cs", Lang::CSharp },
+-        { ".php", Lang::Php },
++        { ".php", Lang::Php }, { ".phtml", Lang::Php },
++        { ".cls", Lang::Php }, { ".ent", Lang::Php }, { ".inc", Lang::Php },
++        { ".cqry", Lang::Php }, { ".rpt", Lang::Php }, { ".menu", Lang::Php },
++        { ".pol", Lang::Php }, { ".wfl", Lang::Php }, { ".shortcuts", Lang::Php },
++        { ".qry", Lang::Php }, { ".bin", Lang::Php }, { ".map", Lang::Php },
+         { ".lua", Lang::Lua },
+diff --git a/src/prcontext.h b/src/prcontext.h
+index 8c8da61..2f3e532 100644
+--- a/src/prcontext.h
++++ b/src/prcontext.h
+@@ -456,2 +456,3 @@ struct PrBudget
+     int         pageOffset = 0;       // --offset=M over the changed files
++    int         historyCommits = 0;   // --pr-history-commits=N; 0 preserves the legacy history window
+ };
+@@ -628,2 +629,3 @@ inline std::string prLegendText( const std::string& baseEscaped )
+                  "&lt;cochange window= commits=&gt;: the git window the partners were mined in (a DEFAULT window is measured back from HEAD's own committer date and says so: 18mo@HEAD) and how many commits it contained — commits=0 means the window could not look, which is not the same fact as no partners. "
++                 "history_scope=head-count and history_commits=N disclose when co-change and ownership are limited to the latest N commits from HEAD. "
+                  "max-tokens only lowers these further via the trim ladder, nothing raises them past L0): each capped element carries its own shown=/capped= pair so the cut is never silent — for the untrimmed list use impact=SYM/callers=SYM "
+@@ -905,3 +907,6 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
+     const std::string anchorAttr  = prAnchorAttr( anchor, ex );
+-    const std::string sharedAttrs = " base=\"" + escBase + "\"" + rootAttr + anchorAttr + prDirectionAttr( anchor );
++    const std::string historyAttrs = budget.historyCommits > 0
++                                         ? " history_scope=\"head-count\" history_commits=\"" + std::to_string( budget.historyCommits ) + "\""
++                                         : std::string();
++    const std::string sharedAttrs = " base=\"" + escBase + "\"" + rootAttr + anchorAttr + prDirectionAttr( anchor ) + historyAttrs;
+
+@@ -957,4 +962,8 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
+     // Mined ONCE here even when the budget forces several render passes below (each pass is pure re-emission).
+-    const auto        coSets   = gitCommitFileSets( root, ing, "18 months ago", 30, nullptr, onlyRoot );
+-    const std::string coWindow = defaultWindowLabel( root, "18mo" );   // F2: <cochange commits=> had no window to read it against
++    const auto coSets = budget.historyCommits > 0
++                            ? gitRecentCommitFileSets( root, ing, std::uint32_t( budget.historyCommits ), 30, onlyRoot )
++                            : gitCommitFileSets( root, ing, "18 months ago", 30, nullptr, onlyRoot );
++    const std::string coWindow = budget.historyCommits > 0
++                                     ? "last-" + std::to_string( budget.historyCommits ) + "-commits@HEAD"
++                                     : defaultWindowLabel( root, "18mo" );
+
+@@ -964,3 +973,4 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
+     // pure binary search into it, byte-identical to the old single-file query per file.
+-    const auto allOwners = gitFileAuthors( root, ing, UINT32_MAX, 182.5, onlyRoot );
++    const auto allOwners = gitFileAuthors( root, ing, UINT32_MAX, 182.5, onlyRoot,
++                                           std::uint32_t( budget.historyCommits > 0 ? budget.historyCommits : 0 ) );
+
+diff --git a/src/quality.h b/src/quality.h
+index 1edae8a..14c32df 100644
+--- a/src/quality.h
++++ b/src/quality.h
+@@ -1400,3 +1400,4 @@ inline std::string headSnapRepoHex( const std::string& root )
+ constexpr std::uint32_t kIngestCacheVersionMirror = 15;   // MUST equal ingest.cpp's kCacheVersion (gated)
+-constexpr std::uint32_t kIngestParserVerMirror    = 77;   // MUST equal ingest.cpp's kParserVer   (gated)
++constexpr std::uint32_t kIngestParserVerMirror    = 78;   // MUST equal ingest.cpp's kParserVer   (gated)
++                                                          // 78 = Intacct PHP-family extension aliases; see ingest_cache.h.
+                                                           // 77 = 2026-09-03 (Phase 5): Python super() receiver kind +
+diff --git a/src/verbs_change.h b/src/verbs_change.h
+index adb1a94..d4bba85 100644
+--- a/src/verbs_change.h
++++ b/src/verbs_change.h
+@@ -512,3 +512,3 @@ std::optional<int> runChangeViews( const MainDispatch& d )
+                 rw::writePrContext( stdout, ws[r].arg, ing, g, masks[r].mask, baseLabel, masks[r].skippedModeOnly,
+-                                     rw::PrBudget{ rootBudget[r], prBudgetDefault, cfg.pageLimit, cfg.pageOffset }, r, ws[r].label, masks[r] );
++                    rw::PrBudget{ rootBudget[r], prBudgetDefault, cfg.pageLimit, cfg.pageOffset, cfg.prHistoryCommits }, r, ws[r].label, masks[r] );
+             }
+@@ -546,3 +546,3 @@ std::optional<int> runChangeViews( const MainDispatch& d )
+                                    : cfg.maxTokens > 0  ? std::size_t( cfg.maxTokens ) : rw::kPrDefaultBudgetTokens,
+-                                     cfg.tokenBudget == 0 && cfg.maxTokens == 0, cfg.pageLimit, cfg.pageOffset };
++                                     cfg.tokenBudget == 0 && cfg.maxTokens == 0, cfg.pageLimit, cfg.pageOffset, cfg.prHistoryCommits };
+         return rw::writePrContext( stdout, root, ing, g, pcm.mask, baseLabel, pcm.skippedModeOnly, prBudget,
+diff --git a/test/regression.sh b/test/regression.sh
+index ff03428..e76da11 100755
+--- a/test/regression.sh
++++ b/test/regression.sh
+@@ -262,3 +262,3 @@ fi
+ # retired: cacheexclkeycheck — the per-configuration auto-cache key it pinned is a registered NEGATIVE (docs/EVALS.md, "The auto-cache key ignores --exclude", RUN 2026-09-03: a 158K-file root with >= 12 gate configurations thrashed the 2 GiB sweep); the retry design keeps ONE superset blob per root and will bring its own gate
+-for _g in anchorbodycheck archcheck lintcheck swiftcheck ownerscheck baselinecheck resolvecheck canoncheck deadcheck hasacheck zoomcheck situdiffcheck xmlwellformed localitycheck mcpverbscheck regexcheck narrowcheck usescheck archmetricscheck querycheck qualitycheck clicheck grepcheck emptycorpuscheck bm25check rankbycheck callerscheck prcheck mcprobustcheck hostilecheck langcheck lintrulescheck prcontextcheck ccjsoncheck scipcheck mcpeditcheck redactcheck mcpstalecheck baselineportcheck clonecachecheck cachehashcheck tornreadcheck metricscheck propcostcheck coplintcheck forlenscheck exemplarcheck tokenbudgetcheck paginationcheck portablecachecheck mcphandlecheck fillordercheck filerootcheck jslangcheck expandrangecheck importnarrowcheck mcpreloadcheck reachcheck mapdiffcheck affectedcheck reportcheck evalcheck outlinecheck recallrelcheck treecheck javarubycheck jsonlangcheck tomllangcheck type3clonecheck clonebandcheck zonecheck sincecheck jsmetricscheck jsnestedcheck jsverbscheck mcprangeedgecheck narrowlangcheck rangecomposecheck unreachablecheck grepcontextcheck cyclecutcheck rubymetricscheck type3check sincewindowcheck zoneconsistencycheck w2verbscheck sincecochangecheck includeanglecheck includeprecisecheck crossdirincludecheck legocheck pyimportprecisecheck tsimportprecisecheck rustimportprecisecheck unresolvedcheck resolverhonestycheck depsprecisecheck cppoperatorcheck skillinstallcheck skilltruthcheck qualitystalecheck qualitykindscheck mcpeditkindcheck mcpeditracecheck swiftmemberscheck gointerfacecheck mcpflagshipcheck didyoumeancheck routecheck writetargetcheck clonelexcheck qualityexcludecheck prrenamecheck gitquotepathcheck mcpaudit4hardencheck mcpremotecheck regexbombcheck adaptivecutshapecheck columnarcommacheck overbudgetcommentcheck utf8scrubcheck wrapverbscheck cachesplitcheck testgatecheck shellgateindexcheck editplancheck headsnapcachecheck qsnapcachecheck qsnapprefetchcheck fficheck statgatecheck prbudgetcheck detailcheck candidatescheck batchcheck traceminecheck connectcheck artifactcheck indexoutcheck spectimingcheck multirootcheck cachefuzzcheck clonededupcheck doctorcheck evictioncheck adaptivecheck anchorcheck columnarcheck connectcorecheck expandtokencheck expandsibscheck expandtopk0check knownitemcheck mcpeditmodecheck mcpredactcheck mcpwatchercheck savecachecheck manifestcheck loopconservationcheck selfcontainedcheck dependencypincheck g1configcheck communitylabelcheck lintprecisioncheck isolateprovenancecheck deadprecisioncheck retrievalqualitycheck postingscheck chacheck cochangeboostcheck qualitysignalcheck hookcheck routehookcheck mentioncheck sibliftcheck csharpcheck routeedgecheck relinkcheck mergescoutcheck scoutkeycheck planlanescheck editcheckcheck tracecheck runtracecheck notescheck packtaskcheck packtaskquotacheck cppbenchcheck versioncheck aritycheck qchurncheck qschemetripcheck qualifiedresolvecheck racymtimecheck ordercheck jsoncheck ccheck portablebuildcheck weaksignalcheck withgraphcheck scorecardcheck multiswecheck docmentioncheck crossrefcheck flagscheck partitioncheck metalcheck cudacheck layoutcheck docdriftcheck skillevalcheck flipcheck historyoraclecheck landingcheck abicheck qualityorigincheck pranchorcheck scoutheadconflictcheck gitstampcheck gateabilitycheck deckcheck skillevalsplitcheck prrefsafecheck prmaskanchorcheck emittertruthcheck bundleidcheck chainidcheck crossrefdegradecheck grepscancheck grepbytescheck grepandcheck grepcorpuscheck qextractionkeycheck qackorigincheck ackonlycheck flagsurfacecheck argvdiffcheck qrowlocatorcheck qoriginoraclecheck qchurnmemocheck qrevtokencheck morecontractcheck flagsnoisecheck docanchorcheck dispatchordercheck precedencecheck guardmsgcheck flagtablecheck qualitycrosslangcheck lintbudgetcheck lintpayloadcapcheck bodiesshowncheck langcensuscheck forrootlegendcheck deadfiltercheck regexrefusecheck graphqueryrefusecheck hotspotsincecheck maxfilesizecheck matchcapturecheck skillscanreadcheck cochangesurprisecheck cochangecliocheck recallbudgetcheck exemplarconfcheck mdembedcheck legobundlecheck lintdedupcheck qualitysymcheck duprowcheck pagingsweepcheck selectorchaincheck modifierguardcheck truncvocabcheck collectioncapcheck attrvocabcheck usesselectorcheck recallevalcheck exercisescheck runhintcheck communitydrillcheck genrecallcheck expandcallscheck grepseamcheck testgatepagecheck jsonparitycheck selectorhonestycheck mentionsverbcheck a9disclosurecheck jsonredactcheck recalltotalcheck columnarattrcheck churnjsonstampcheck fornotesjsoncheck jsonrefusallegendcheck prnestedcapcheck emptyvaluerefusecheck numericrefusecheck mcptranchecheck mcptoolprunecheck mcpclidiffcheck mcpw2fixcheck selectorrefusecheck sigredactcheck fornotesbudgetcheck taskechocheck mcpw3fixcheck w3fixlegendcheck w3fixbudgetcheck mcpreadloopcheck recallbufcheck recallboundarycheck recalltablecheck recallanchorcheck mcpeditpresencecheck mcpframehonestycheck churnjoincheck estchargecheck nulbytecheck bodydialectcheck jsonwalkcheck mcpcontractcheck probecheck fixedbufsweep shapingflagcheck gateexitcheck showcasecapturecheck legendcoveragecheck legenddriftcheck compactlegendcheck csharpcondcheck qualnewcheck objcfieldcheck goinstcheck mergechurncheck cppqualcheck floormarkcheck rustqualcheck callformcheck ripwirepubliccheck docscommandscheck readmedriftcheck padscalecheck constcheck dynmapsimdcheck pmccheck tsshapecheck jsshapecheck cacheisolationcheck nongitqmetricscheck perfharnesscheck docdriftcommentcheck lintscopecheck mcpcodexmetacheck codexplugincheck codexwrapcheck opencodewrapcheck readmeexamplecheck deckclaimcheck testedreachcheck skillroutingjudgedcheck reusefirstworkflowcheck agentloopcodexcheck agentloopopencodecheck atomscheck naminglenscheck nameinfocheck readabilitycheck nonlocalstatecheck dmmcheck optremarkscheck preproccondcheck nestedimportcheck namingcalibrationcheck ensemblecheck ensembleavailcheck contextratiocheck fieldaffinitycheck qualitypanelcheck commentcoherencecheck namingconsistencycheck localscountcheck naminglocalscheck accessshapecheck ppaltcheck nestprofilecheck essentialcxcheck skippedcheck cachelintcheck docmdcachecheck withprofilecheck routeoncecheck panellegendcheck expandmodecheck lb3namecheck macroedgecheck fnptrcheck usingdeclcheck shadowcheck infraportcheck svectorcheck radixsimdcheck pyshapecheck swiftshapecheck htmlcolorcheck vendorpatchcheck sarifcheck fieldnarrowcheck yamllangcheck pargatescheck churndecaycheck layerquerycheck mcpincrementalcheck moduleconstcheck grepfollowupcheck completecheck forautobodycheck mdsectioncheck verifycheck agentloopclaudecheck agentloopgradercheck lintcatalogcheck lintselectcheck matchgrammarcheck skipreasoncheck parsehealthcheck staleackcheck testscopecheck qdrefpaircheck queryfilescancheck packtaskmonotoncheck prconvergecheck rootrelcheck subtokencheck greptiercheck grepfastcheck agentlooplockcheck patterncheck typerefcheck nsfiltercheck composelangcheck phpcheck luacheck safedeletecheck packcallersharecheck mergescoutlonglinecheck binoverridecheck chainguardcheck aiderbytescheck relevancefloorcheck neighbourcapcheck testmacrocheck forbudgetmonotoncheck vendoredassetcheck vendoredbundlecheck fordisclosurecheck compactroutecheck impactimportcheck freshclonecheck defoverdeclcheck identitycheck rootrelemitcheck testgaterefusecheck nestedqualcheck candheadcheck recallrankdepthcheck recallparitycheck qualitykeycheck codexinstallhonestycheck meterdisclosurecheck graphlegendbudgetcheck testgatelegendbudgetcheck donelegendcheck editpayloadbinarycheck edittargetfileabscheck editplanrollbackmsgcheck editplanrecheckcheck edithandlehintcheck editplanpayloadconfinecheck editchecknotecheck forcompresscheck slicecheck docdemotecheck tracehopcheck deeptailcheck registermacrocheck cloneidiomcheck qualityscopecheck planlintcheck forcalibfactscheck redactfixcheck sliceflowcheck objcsniffcheck selectorscopecheck degradedhintcheck mcpdegradedhintcheck atcheck mcpgrepdegradedcheck mcpslicecheck ariseshimcheck pincensuscheck fieldusescheck freshnesscheck impactpartitioncheck editpreviewcheck scipjoincheck droppedpositivecheck agentloopfollowupcheck arisefollowupcheck routingreportcheck toolcallroutecheck slicediffcheck lpincheck clsrecvcheck mcpforparitycheck qackconcurrencycheck gitignorecheck cacheoffsetcheck externalvetocheck mrowalkcheck sliceflowsenscheck fileselectorrefusecheck singledefcheck substrfiltercheck namedfileinputcheck seedboundscheck refusaltailcheck sublistcountcheck notecanoncheck baselinedirtycheck budgetpolicycheck mcpattrparitycheck mcpmanifestcheck testrowruncheck receiptpostcheck nextverbcheck defaultceilingcheck formatgatecheck forrankordercheck agentloopeditsuitecheck editroundtripcheck cacheidentitycheck connectjoincheck termmargincheck bm25boundcheck htmlrendercheck htmlhostcheck; do
++for _g in anchorbodycheck archcheck lintcheck swiftcheck ownerscheck baselinecheck resolvecheck canoncheck deadcheck hasacheck zoomcheck situdiffcheck xmlwellformed localitycheck mcpverbscheck regexcheck narrowcheck usescheck archmetricscheck querycheck qualitycheck clicheck grepcheck emptycorpuscheck bm25check rankbycheck callerscheck prcheck mcprobustcheck hostilecheck langcheck lintrulescheck prcontextcheck prhistoryboundcheck intacctaliasescheck ccjsoncheck scipcheck mcpeditcheck redactcheck mcpstalecheck baselineportcheck clonecachecheck cachehashcheck tornreadcheck metricscheck propcostcheck coplintcheck forlenscheck exemplarcheck tokenbudgetcheck paginationcheck portablecachecheck mcphandlecheck fillordercheck filerootcheck jslangcheck expandrangecheck importnarrowcheck mcpreloadcheck reachcheck mapdiffcheck affectedcheck reportcheck evalcheck outlinecheck recallrelcheck treecheck javarubycheck jsonlangcheck tomllangcheck type3clonecheck clonebandcheck zonecheck sincecheck jsmetricscheck jsnestedcheck jsverbscheck mcprangeedgecheck narrowlangcheck rangecomposecheck unreachablecheck grepcontextcheck cyclecutcheck rubymetricscheck type3check sincewindowcheck zoneconsistencycheck w2verbscheck sincecochangecheck includeanglecheck includeprecisecheck crossdirincludecheck legocheck pyimportprecisecheck tsimportprecisecheck rustimportprecisecheck unresolvedcheck resolverhonestycheck depsprecisecheck cppoperatorcheck skillinstallcheck skilltruthcheck qualitystalecheck qualitykindscheck mcpeditkindcheck mcpeditracecheck swiftmemberscheck gointerfacecheck mcpflagshipcheck didyoumeancheck routecheck writetargetcheck clonelexcheck qualityexcludecheck prrenamecheck gitquotepathcheck mcpaudit4hardencheck mcpremotecheck regexbombcheck adaptivecutshapecheck columnarcommacheck overbudgetcommentcheck utf8scrubcheck wrapverbscheck cachesplitcheck testgatecheck shellgateindexcheck editplancheck headsnapcachecheck qsnapcachecheck qsnapprefetchcheck fficheck statgatecheck prbudgetcheck detailcheck candidatescheck batchcheck traceminecheck connectcheck artifactcheck indexoutcheck spectimingcheck multirootcheck cachefuzzcheck clonededupcheck doctorcheck evictioncheck adaptivecheck anchorcheck columnarcheck connectcorecheck expandtokencheck expandsibscheck expandtopk0check knownitemcheck mcpeditmodecheck mcpredactcheck mcpwatchercheck savecachecheck manifestcheck loopconservationcheck selfcontainedcheck dependencypincheck g1configcheck communitylabelcheck lintprecisioncheck isolateprovenancecheck deadprecisioncheck retrievalqualitycheck postingscheck chacheck cochangeboostcheck qualitysignalcheck hookcheck routehookcheck mentioncheck sibliftcheck csharpcheck routeedgecheck relinkcheck mergescoutcheck scoutkeycheck planlanescheck editcheckcheck tracecheck runtracecheck notescheck packtaskcheck packtaskquotacheck cppbenchcheck versioncheck aritycheck qchurncheck qschemetripcheck qualifiedresolvecheck racymtimecheck ordercheck jsoncheck ccheck portablebuildcheck weaksignalcheck withgraphcheck scorecardcheck multiswecheck docmentioncheck crossrefcheck flagscheck partitioncheck metalcheck cudacheck layoutcheck docdriftcheck skillevalcheck flipcheck historyoraclecheck landingcheck abicheck qualityorigincheck pranchorcheck scoutheadconflictcheck gitstampcheck gateabilitycheck deckcheck skillevalsplitcheck prrefsafecheck prmaskanchorcheck emittertruthcheck bundleidcheck chainidcheck crossrefdegradecheck grepscancheck grepbytescheck grepandcheck grepcorpuscheck qextractionkeycheck qackorigincheck ackonlycheck flagsurfacecheck argvdiffcheck qrowlocatorcheck qoriginoraclecheck qchurnmemocheck qrevtokencheck morecontractcheck flagsnoisecheck docanchorcheck dispatchordercheck precedencecheck guardmsgcheck flagtablecheck qualitycrosslangcheck lintbudgetcheck lintpayloadcapcheck bodiesshowncheck langcensuscheck forrootlegendcheck deadfiltercheck regexrefusecheck graphqueryrefusecheck hotspotsincecheck maxfilesizecheck matchcapturecheck skillscanreadcheck cochangesurprisecheck cochangecliocheck recallbudgetcheck exemplarconfcheck mdembedcheck legobundlecheck lintdedupcheck qualitysymcheck duprowcheck pagingsweepcheck selectorchaincheck modifierguardcheck truncvocabcheck collectioncapcheck attrvocabcheck usesselectorcheck recallevalcheck exercisescheck runhintcheck communitydrillcheck genrecallcheck expandcallscheck grepseamcheck testgatepagecheck jsonparitycheck selectorhonestycheck mentionsverbcheck a9disclosurecheck jsonredactcheck recalltotalcheck columnarattrcheck churnjsonstampcheck fornotesjsoncheck jsonrefusallegendcheck prnestedcapcheck emptyvaluerefusecheck numericrefusecheck mcptranchecheck mcptoolprunecheck mcpclidiffcheck mcpw2fixcheck selectorrefusecheck sigredactcheck fornotesbudgetcheck taskechocheck mcpw3fixcheck w3fixlegendcheck w3fixbudgetcheck mcpreadloopcheck recallbufcheck recallboundarycheck recalltablecheck recallanchorcheck mcpeditpresencecheck mcpframehonestycheck churnjoincheck estchargecheck nulbytecheck bodydialectcheck jsonwalkcheck mcpcontractcheck probecheck fixedbufsweep shapingflagcheck gateexitcheck showcasecapturecheck legendcoveragecheck legenddriftcheck compactlegendcheck csharpcondcheck qualnewcheck objcfieldcheck goinstcheck mergechurncheck cppqualcheck floormarkcheck rustqualcheck callformcheck ripwirepubliccheck docscommandscheck readmedriftcheck padscalecheck constcheck dynmapsimdcheck pmccheck tsshapecheck jsshapecheck cacheisolationcheck nongitqmetricscheck perfharnesscheck docdriftcommentcheck lintscopecheck mcpcodexmetacheck codexplugincheck codexwrapcheck opencodewrapcheck readmeexamplecheck deckclaimcheck testedreachcheck skillroutingjudgedcheck reusefirstworkflowcheck agentloopcodexcheck agentloopopencodecheck atomscheck naminglenscheck nameinfocheck readabilitycheck nonlocalstatecheck dmmcheck optremarkscheck preproccondcheck nestedimportcheck namingcalibrationcheck ensemblecheck ensembleavailcheck contextratiocheck fieldaffinitycheck qualitypanelcheck commentcoherencecheck namingconsistencycheck localscountcheck naminglocalscheck accessshapecheck ppaltcheck nestprofilecheck essentialcxcheck skippedcheck cachelintcheck docmdcachecheck withprofilecheck routeoncecheck panellegendcheck expandmodecheck lb3namecheck macroedgecheck fnptrcheck usingdeclcheck shadowcheck infraportcheck svectorcheck radixsimdcheck pyshapecheck swiftshapecheck htmlcolorcheck vendorpatchcheck sarifcheck fieldnarrowcheck yamllangcheck pargatescheck churndecaycheck layerquerycheck mcpincrementalcheck moduleconstcheck grepfollowupcheck completecheck forautobodycheck mdsectioncheck verifycheck agentloopclaudecheck agentloopgradercheck lintcatalogcheck lintselectcheck matchgrammarcheck skipreasoncheck parsehealthcheck staleackcheck testscopecheck qdrefpaircheck queryfilescancheck packtaskmonotoncheck prconvergecheck rootrelcheck subtokencheck greptiercheck grepfastcheck agentlooplockcheck patterncheck typerefcheck nsfiltercheck composelangcheck phpcheck luacheck safedeletecheck packcallersharecheck mergescoutlonglinecheck binoverridecheck chainguardcheck aiderbytescheck relevancefloorcheck neighbourcapcheck testmacrocheck forbudgetmonotoncheck vendoredassetcheck vendoredbundlecheck fordisclosurecheck compactroutecheck impactimportcheck freshclonecheck defoverdeclcheck identitycheck rootrelemitcheck testgaterefusecheck nestedqualcheck candheadcheck recallrankdepthcheck recallparitycheck qualitykeycheck codexinstallhonestycheck meterdisclosurecheck graphlegendbudgetcheck testgatelegendbudgetcheck donelegendcheck editpayloadbinarycheck edittargetfileabscheck editplanrollbackmsgcheck editplanrecheckcheck edithandlehintcheck editplanpayloadconfinecheck editchecknotecheck forcompresscheck slicecheck docdemotecheck tracehopcheck deeptailcheck registermacrocheck cloneidiomcheck qualityscopecheck planlintcheck forcalibfactscheck redactfixcheck sliceflowcheck objcsniffcheck selectorscopecheck degradedhintcheck mcpdegradedhintcheck atcheck mcpgrepdegradedcheck mcpslicecheck ariseshimcheck pincensuscheck fieldusescheck freshnesscheck impactpartitioncheck editpreviewcheck scipjoincheck droppedpositivecheck agentloopfollowupcheck arisefollowupcheck routingreportcheck toolcallroutecheck slicediffcheck lpincheck clsrecvcheck mcpforparitycheck qackconcurrencycheck gitignorecheck cacheoffsetcheck externalvetocheck mrowalkcheck sliceflowsenscheck fileselectorrefusecheck singledefcheck substrfiltercheck namedfileinputcheck seedboundscheck refusaltailcheck sublistcountcheck notecanoncheck baselinedirtycheck budgetpolicycheck mcpattrparitycheck mcpmanifestcheck testrowruncheck receiptpostcheck nextverbcheck defaultceilingcheck formatgatecheck forrankordercheck agentloopeditsuitecheck editroundtripcheck cacheidentitycheck connectjoincheck termmargincheck bm25boundcheck htmlrendercheck htmlhostcheck; do
+     [ -f "$ROOT/test/$_g.sh" ] || continue
+diff --git a/test/prhistoryboundcheck.sh b/test/prhistoryboundcheck.sh
+new file mode 100755
+index 0000000..4d2f080
+--- /dev/null
++++ b/test/prhistoryboundcheck.sh
+@@ -0,0 +1,89 @@
++#!/usr/bin/env bash
++# prhistoryboundcheck.sh — bounded PR-context history is explicit, deterministic, and effective.
++
++set -u
++ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
++BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
++[ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
++TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
++fail=0
++ok(){ printf '  PASS  %s\n' "$*"; }
++no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
++
++[ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first"; exit 2; }
++REPO="$TMP/repo"
++mkdir -p "$REPO/src"
++git -C "$REPO" init -q
++
++commit_as(){
++    local email="$1" message="$2"
++    git -C "$REPO" -c user.email="$email" -c user.name="${email%@*}" add -A
++    GIT_AUTHOR_NAME="${email%@*}" GIT_AUTHOR_EMAIL="$email" \
++    GIT_COMMITTER_NAME="${email%@*}" GIT_COMMITTER_EMAIL="$email" \
++        git -C "$REPO" commit -qm "$message"
++}
++
++printf 'int core() { return 1; }\n' > "$REPO/src/core.cpp"
++printf 'int old_partner() { return 0; }\n' > "$REPO/src/old_partner.cpp"
++commit_as old@example.invalid base
++for n in 2 3; do
++    printf 'int core() { return %s; }\n' "$n" > "$REPO/src/core.cpp"
++    printf 'int old_partner() { return %s; }\n' "$n" > "$REPO/src/old_partner.cpp"
++    commit_as old@example.invalid "old-$n"
++done
++
++printf 'int recent_partner() { return 0; }\n' > "$REPO/src/recent_partner.cpp"
++for n in 4 5 6; do
++    printf 'int core() { return %s; }\n' "$n" > "$REPO/src/core.cpp"
++    printf 'int recent_partner() { return %s; }\n' "$n" > "$REPO/src/recent_partner.cpp"
++    commit_as recent@example.invalid "recent-$n"
++done
++
++printf 'int core() { return 3; }\n' > "$REPO/src/core.cpp"
++
++OUT="$($BIN "$REPO" --pr-context=HEAD --pr-history-commits=3 --no-cache 2>/dev/null)"
++[ -n "$OUT" ] && ok "bounded PR context emits output" || no "bounded PR context output is empty"
++printf '%s' "$OUT" | grep -q 'history_scope="head-count" history_commits="3"' \
++    && ok "root discloses the bounded history" || no "history bound is not disclosed"
++printf '%s' "$OUT" | grep -q 'window="last-3-commits@HEAD"' \
++    && ok "co-change row discloses the commit-count window" || no "co-change window does not disclose the bound"
++printf '%s' "$OUT" | grep -q 'recent_partner.cpp' \
++    && ok "recent co-change partner is retained" || no "recent co-change partner is missing"
++if printf '%s' "$OUT" | grep -q 'old_partner.cpp'; then
++    no "old co-change partner escaped the three-commit window"
++else
++    ok "old co-change partner is excluded by the three-commit window"
++fi
++printf '%s' "$OUT" | grep -q 'recent@example.invalid' \
++    && ok "recent owner is retained" || no "recent owner is missing"
++if printf '%s' "$OUT" | grep -q 'old@example.invalid'; then
++    no "old owner escaped the three-commit window"
++else
++    ok "old owner is excluded by the three-commit window"
++fi
++
++OUT2="$($BIN "$REPO" --pr-context=HEAD --pr-history-commits=3 --no-cache 2>/dev/null)"
++[ "$OUT" = "$OUT2" ] && ok "bounded PR context is deterministic" || no "bounded PR context differs between runs"
++
++DEFAULT="$($BIN "$REPO" --pr-context=HEAD --no-cache 2>/dev/null)"
++if printf '%s' "$DEFAULT" | grep -q '<pr-context[^>]*history_scope='; then
++    no "legacy PR context unexpectedly carries bounded-history attributes"
++else
++    ok "legacy PR context remains unbounded when the option is absent"
++fi
++
++for value in 0 -1 nope; do
++    if "$BIN" "$REPO" --pr-context=HEAD --pr-history-commits="$value" --no-cache >/dev/null 2>&1; then
++        no "invalid history value '$value' was accepted"
++    else
++        ok "invalid history value '$value' is rejected"
++    fi
++done
++
++if "$BIN" "$REPO" --pr-history-commits=1 --no-cache >/dev/null 2>&1; then
++    no "history option was accepted without --pr-context"
++else
++    ok "history option requires --pr-context"
++fi
++
++if [ "$fail" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "SOME CHECKS FAILED"; exit 1; fi
+diff --git a/test/intacctaliasescheck.sh b/test/intacctaliasescheck.sh
+new file mode 100755
+index 0000000..c3d90b2
+--- /dev/null
++++ b/test/intacctaliasescheck.sh
+@@ -0,0 +1,29 @@
++#!/usr/bin/env bash
++# intacctaliasescheck.sh — every configured Intacct PHP-family suffix routes to PHP.
++
++set -u
++ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
++BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
++[ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
++TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
++fail=0
++ok(){ printf '  PASS  %s\n' "$*"; }
++no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
++
++[ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first"; exit 2; }
++for extension in .php .phtml .cls .ent .inc .cqry .rpt .menu .pol .wfl .shortcuts .qry .bin .map; do
++    filename="Alias${extension#.}${extension}"
++    printf '<?php class Alias%s { function method%s() {} }\n' "${extension#.}" "${extension#.}" > "$TMP/$filename"
++done
++
++OUT="$($BIN "$TMP" --top-k=200 --no-cache 2>/dev/null)"
++for extension in .php .phtml .cls .ent .inc .cqry .rpt .menu .pol .wfl .shortcuts .qry .bin .map; do
++    filename="Alias${extension#.}${extension}"
++    if printf '%s' "$OUT" | grep -q "p=\"$filename\""; then
++        ok "$extension routes to the PHP parser"
++    else
++        no "$extension was skipped or not parsed"
++    fi
++done
++
++if [ "$fail" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "SOME CHECKS FAILED"; exit 1; fi

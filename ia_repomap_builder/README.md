@@ -103,11 +103,12 @@ repository instructions. Neither file is a generated map.
   scopes to `app/source`, because the binary cannot exclude third-party `.map`
   files in a broader directory.
 
-The release-pinned alias patch used by the evaluation is recorded at
-`patches/ripwire-v0.4.0-intacct-php-aliases.patch`. It maps the configured
-Intacct PHP-family suffixes to Ripwire's existing PHP grammar; it does not add
-a parser. `.map` is included only under `app/source`; third-party source maps
-under `app/resources` remain excluded. See
+The release-pinned consolidated patch used by the evaluation is recorded at
+`patches/ripwire-v0.4.0-intacct-repomap.patch`. It maps the configured
+Intacct PHP-family suffixes to Ripwire's existing PHP grammar and adds the
+bounded `--pr-history-commits` capability; it does not add a parser. `.map` is
+included only under `app/source`; third-party source maps under `app/resources`
+remain excluded. See
 [`patches/README.md`](patches/README.md) for the full build-from-source,
 patch-application, and CLI setup instructions.
 

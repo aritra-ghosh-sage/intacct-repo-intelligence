@@ -1,7 +1,7 @@
 # Building Ripwire for Intacct PHP support
 
 This project requires a Ripwire binary built from source at the exact tag
-`v0.4.0`, patched with `ripwire-v0.4.0-intacct-php-aliases.patch` in this
+`v0.4.0`, patched with `ripwire-v0.4.0-intacct-repomap.patch` in this
 directory. The pinned prebuilt release binaries **cannot** be used: they do
 not carry the Intacct PHP-family extension aliases (`.cls`, `.inc`, `.map`,
 etc.), and there is no runtime config to add them (see
@@ -31,22 +31,27 @@ The patch's diff context is line-pinned to `v0.4.0`. A newer tag (e.g.
 git checkout v0.4.0
 ```
 
-## 3. Apply the Intacct alias patch
+## 3. Apply the consolidated Intacct patch
 
 ```bash
-PATCH_FILE=/path/to/intacct-repo-intelligence/ia_repomap_builder/patches/ripwire-v0.4.0-intacct-php-aliases.patch
+PATCH_FILE=/path/to/intacct-repo-intelligence/ia_repomap_builder/patches/ripwire-v0.4.0-intacct-repomap.patch
 git apply --check "$PATCH_FILE"   # dry run
 git apply "$PATCH_FILE"
 ```
 
-This patch touches four files and adds twelve Intacct PHP-family extension
+This consolidated patch adds twelve Intacct PHP-family extension
 aliases (`.cls`, `.ent`, `.inc`, `.cqry`, `.rpt`, `.menu`, `.pol`, `.wfl`,
 `.shortcuts`, `.qry`, `.bin`, `.map`) that map to the existing PHP grammar —
-it does not add a new parser:
+it does not add a new parser. It also adds the bounded PR-history option used
+by the adapter and focused regression tests:
 
 - `src/ingest_crawl.h` — extends `kLangTable` (40 → 52 rows)
 - `src/lintrules.h` — extends the lint extension table (30 → 43 rows)
 - `src/quality.h`, `src/ingest_cache.h` — parser-version bookkeeping
+- `src/cli.h`, `src/prcontext.h`, `src/gitmine.h`, `src/verbs_change.h` —
+  `--pr-history-commits=N` and bounded co-change/ownership evidence
+- `test/prhistoryboundcheck.sh`, `test/intacctaliasescheck.sh` — focused
+  regressions
 
 ## 4. Build
 
@@ -124,7 +129,7 @@ patch's hunks are anchored — so `git apply` will reject the
 `ingest_crawl.h` hunk on a newer tag. Upgrading requires hand-porting the same
 alias rows onto the new file layout (adjusting the table's declared size
 accordingly), producing a new patch file (e.g.
-`ripwire-v0.5.0-intacct-php-aliases.patch`), and updating this document and
+`ripwire-v0.5.0-intacct-repomap.patch`), and updating this document and
 `ia_repomap_builder/README.md` to reference it. Do this deliberately — it is
 not a drop-in `git apply` after a `git checkout` version bump.
 

@@ -93,7 +93,7 @@ The manifest is JSON with this minimum shape:
   "engine": {
     "name": "ripwire",
     "version": "<reported-version>",
-    "patch": "ripwire-v0.4.0-intacct-php-aliases.patch",
+    "patch": "ripwire-v0.4.0-intacct-repomap.patch",
     "patch_sha256": "<patch-digest>",
     "binary_sha256": "<executable-digest>",
     "id": "<engine-identity>",

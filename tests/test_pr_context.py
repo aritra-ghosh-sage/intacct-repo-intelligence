@@ -26,6 +26,7 @@ from ia_repomap_builder.readiness import (
     _CacheValidation,
     _engine_identity,
     _validate_ripwire_lean_cache,
+    _verify_ripwire_pr_history,
     artifact_locations,
 )
 
@@ -56,7 +57,8 @@ ENGINE = {
 PR_XML = """\
 <pr-context schema="ripwire.pr-context/v1" files="2" budget_tokens="8000"
  est_tokens="30" trim_level="0" truncated="none" graph_ambiguous="1"
- graph_unresolved="2" counts_floor="1">
+ graph_unresolved="2" counts_floor="1" history_scope="head-count"
+ history_commits="500">
   <file p="gl/Added.ent" symbols="2">
     <changed-symbols count="2">
       <s t="cls" n="Added" p="gl/Added.ent:2"/>
@@ -112,6 +114,29 @@ class PrContextTests(unittest.TestCase):
         self.assertEqual(config.token_budget, 4000)
         self.assertEqual(config.map_php_scope, ("app/source",))
         self.assertEqual(set(config.php_family_extensions), PHP_FAMILY_EXTENSIONS)
+
+    def test_history_bound_defaults_and_rejects_nonpositive_values(self) -> None:
+        self.assertEqual(PrContextRequest(self.root, self.artifacts, "HEAD~1").history_commits, 500)
+        for value in (0, -1):
+            with self.subTest(value=value):
+                result = build_pr_context(
+                    PrContextRequest(self.root, self.artifacts, "HEAD~1", history_commits=value)
+                )
+                self.assertEqual(result.status, "error")
+                self.assertIn("history_commits must be positive", result.diagnostics[0])
+
+    def test_consolidated_ripwire_patch_contains_required_features(self) -> None:
+        patch_file = (
+            Path(__file__).parents[1]
+            / "ia_repomap_builder"
+            / "patches"
+            / "ripwire-v0.4.0-intacct-repomap.patch"
+        )
+        patch_text = patch_file.read_text(encoding="utf-8")
+        self.assertGreater(len(patch_text), 1000)
+        self.assertIn("--pr-history-commits=", patch_text)
+        self.assertIn('".map"', patch_text)
+        self.assertIn("test/prhistoryboundcheck.sh", patch_text)
 
     def _prepare(self, doctor_returncode: int = 0, doctor_stdout: str | None = None) -> BuildResult:
         real_run = subprocess.run
@@ -251,6 +276,12 @@ class PrContextTests(unittest.TestCase):
         self.assertNotEqual(first["binary_sha256"], second["binary_sha256"])
         self.assertNotEqual(first["id"], second["id"])
 
+    def test_missing_history_capability_is_reported(self) -> None:
+        completed = SimpleNamespace(returncode=0, stdout="ripwire 0.4.0 --pr-context", stderr="")
+        with patch("ia_repomap_builder.readiness.subprocess.run", return_value=completed):
+            diagnostic = _verify_ripwire_pr_history("/bin/ripwire")
+        self.assertIn("does not support --pr-history-commits", diagnostic or "")
+
     def test_readiness_requires_matching_manifest_clean_checkout_and_base(self) -> None:
         self.assertEqual(self._prepare().status, "ok")
         request = PrContextRequest(self.root, self.artifacts, "HEAD~1")
@@ -389,8 +420,12 @@ class PrContextTests(unittest.TestCase):
         self.assertEqual(changed[0].symbols[0].name, "Added")
         self.assertEqual(changed[0].symbols[1].line, 3)
         self.assertEqual(changed[1].symbols, ())
-        self.assertEqual({gap.kind for gap in gaps}, {"graph_ambiguous", "graph_unresolved"})
+        self.assertEqual(
+            {gap.kind for gap in gaps},
+            {"bounded_history", "graph_ambiguous", "graph_unresolved"},
+        )
         self.assertEqual(metrics["budget_tokens"], 8000)
+        self.assertEqual(metrics["history_commits"], 500)
 
     def test_scope_filtering_preserves_explicit_gaps(self) -> None:
         selected, gaps = _in_scope_changes(
@@ -415,7 +450,15 @@ class PrContextTests(unittest.TestCase):
             },
         )
         completed = SimpleNamespace(returncode=0, stdout=PR_XML, stderr="")
-        request = PrContextRequest(self.root, self.artifacts, "HEAD~1", token_budget=5000, limit=7, offset=2)
+        request = PrContextRequest(
+            self.root,
+            self.artifacts,
+            "HEAD~1",
+            token_budget=5000,
+            limit=7,
+            offset=2,
+            history_commits=17,
+        )
         with (
             patch("ia_repomap_builder.pr_context.check_repomap_readiness", return_value=ready),
             patch("ia_repomap_builder.pr_context._ripwire_binary", return_value="/bin/ripwire"),
@@ -434,6 +477,7 @@ class PrContextTests(unittest.TestCase):
         self.assertIn("--token-budget=5000", command)
         self.assertIn("--limit=7", command)
         self.assertIn("--offset=2", command)
+        self.assertIn("--pr-history-commits=17", command)
 
     def test_post_run_checkout_change_discards_context(self) -> None:
         ready = BuildResult(
