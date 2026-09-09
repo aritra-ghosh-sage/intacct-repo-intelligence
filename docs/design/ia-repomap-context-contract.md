@@ -229,3 +229,21 @@ evaluation.
   driven wiring; those cases remain explicit gaps.
 - Generated artifacts are regenerable and keyed by revision and configuration.
 - MCP, editor, harness, and public CLI integration are deferred.
+
+## Measurement log
+
+This appendix records empirical seed-over-seeding checks. Evidence remains
+external to tracked source.
+
+| Date | PR and revision | Changed file | Seeds | Seeds in diff hunks | Ratio | Decision |
+| --- | --- | --- | ---: | ---: | ---: | --- |
+| 2026-09-09 | #50176, base `82025f5229a43a67d147897b9da93d9b1a6ac7dd`, isolated head `adf48f320f4f546738cc8520acb00f7947235580` with #50173 metadata applied locally | `app/source/apar/CustomerPrintTemplateValidator.cls` | 14 | 0 | 0.0 | hunk-level extraction needed: yes |
+
+The run returned one in-scope modified file and three out-of-scope metadata
+changes. Raw XML was byte-stable across two runs; normalized output was equal
+after excluding elapsed time; estimated output was 3,810 of the 4,000-token
+budget. Ripwire disclosed the bounded 500-commit history, truncation, and
+ambiguous/unresolved graph counts as explicit gaps. The measurement uses the
+real PR #50176 source change, while the onboarding metadata from PR #50173 was
+applied only in an isolated local worktree; neither PR is represented as
+merged by this entry.
