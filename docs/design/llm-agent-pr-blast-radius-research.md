@@ -212,5 +212,6 @@ the contract's [execution status](ia-repomap-context-contract.md#execution-statu
 The local `ia-app` onboarding revision and a matching external prepared artifact
 are now present for the named revision, but they are not merged or generally
 available. Successful local PR-context evidence is retained for the isolated
-PR #50176 validation revision. This research does not imply that an editor,
-MCP, CLI, or harness integration is available.
+PR #50176 validation revision. A local Python module interface now supports
+explicit preparation and PR-context retrieval; editor, MCP, and harness wiring
+remain deferred.

@@ -20,8 +20,9 @@ The first Intacct path uses the patched Ripwire PHP grammar for files under
 guidance are committed to a participating repository. Generated indexes,
 caches, and context bundles remain outside tracked source.
 
-This contract does not define an MCP server, editor integration, public CLI,
-LLM prompt, or GitHub write operation.
+This contract does not define an MCP server, editor integration, installable
+public CLI, LLM prompt, or GitHub write operation. It does define the local
+Python module interface used by developers and coding harnesses below.
 
 ## Repository declaration
 
@@ -172,6 +173,45 @@ prerequisite, and unavailable capability is represented as a diagnostic or
 gap. Confidence follows the research contract: `confirmed`,
 `strong_candidate`, `candidate`, `unresolved`, or `unavailable`.
 
+### Local module interface
+
+The package exposes two explicit module commands. Preparation and analysis are
+separate so PR-context retrieval never builds or refreshes an index implicitly:
+run them from the builder repository root, or make this package available on
+`PYTHONPATH`.
+
+```shell
+./.venv/bin/python -m ia_repomap_builder prepare \
+  --repo /path/to/ia-app \
+  --artifact-root /safe/external/ia-repomap-artifacts
+
+./.venv/bin/python -m ia_repomap_builder pr-context \
+  --repo /path/to/ia-app \
+  --artifact-root /safe/external/ia-repomap-artifacts \
+  --base origin/main \
+  [--output /safe/external/pr-context.json]
+```
+
+Each command emits one JSON envelope with this shape:
+
+```json
+{
+  "schema": "ia-repomap.command-result/v1",
+  "command": "pr-context",
+  "status": "ok",
+  "request": {},
+  "result": {},
+  "remediation": []
+}
+```
+
+`result` preserves the existing adapter result shape, including raw XML. An
+optional `--output` path receives the byte-identical JSON envelope and must be
+outside the target checkout; an existing path is not overwritten. Exit code
+`0` represents `ok`, `3` represents `unavailable`, and `2` represents invalid
+input or an execution error. Unavailable results include actionable
+remediation while preserving the underlying status and diagnostics.
+
 The adapter uses `hunk-enclosing-v1` to narrow Ripwire's file-wide definitions
 to candidates whose inferred definition span overlaps a positive-side Git
 hunk. Ripwire supplies definition start lines but not end lines, so each span
@@ -204,6 +244,7 @@ mean that a target `ia-app` checkout has been onboarded.
 | 7 | `complete` | Lightweight validation and the P1/P2 regressions are complete. | The test suite passes with 40 tests (3 opt-in skips), including doctor-cache exit handling, and `git diff --check` passes. |
 | 8 | `complete` | A clean local `ia-app` onboarding commit tracks the repository declaration and root agent guidance; review and merge remain pending. | The maintained declaration loads successfully, target files match their templates, and target commit `658face817ce6b474c481ad96bc42333ebf7dc05` is clean at its expected parent. |
 | 9 | `complete` | Hunk-to-enclosing-symbol attribution narrows file-wide Ripwire definitions while retaining explicit fallback gaps and canonical XML. | Focused tests cover hunk parsing, inferred spans, boundary cases, missing lines, deletion/rename behavior, and Git failures. An isolated PR #50176 rerun reduced 14 candidates to `buildTemplateFilters` at line 126 and attributed all four hunks. |
+| 10 | `complete` | A local module interface performs explicit index preparation and readiness-gated PR-context retrieval with JSON results and remediation. | CLI-focused tests cover command construction, status/exit mapping, output safety, raw JSON preservation, and the no-implicit-preparation boundary; the complete suite passes. |
 
 ## Acceptance criteria
 
@@ -239,7 +280,8 @@ evaluation.
 - Static analysis may miss dynamic dispatch, reflection, or configuration-
   driven wiring; those cases remain explicit gaps.
 - Generated artifacts are regenerable and keyed by revision and configuration.
-- MCP, editor, harness, and public CLI integration are deferred.
+- MCP, editor, harness, and installable public CLI integration are deferred; the
+  local Python module interface is implemented.
 
 ## Measurement log
 

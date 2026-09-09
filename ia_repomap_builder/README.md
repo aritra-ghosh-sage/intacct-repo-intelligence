@@ -92,7 +92,32 @@ The current implementation status is recorded in the canonical contract. A
 local `ia-app` onboarding commit prepares the marker and agent guidance, but it
 is not live until reviewed and merged. Hunk attribution has been validated on
 an isolated, exact-revision PR #50176 checkout with an external index; it is not
-generally available. MCP, CLI, editor, and harness integrations remain deferred.
+generally available. A local Python module interface is available for explicit
+preparation and PR-context retrieval; MCP, editor, and harness integrations
+remain deferred.
+
+For a developer or coding harness, use the module interface:
+
+Run these commands from the builder repository root (or add this repository to
+`PYTHONPATH`); the project does not install a console entry point.
+
+```shell
+./.venv/bin/python -m ia_repomap_builder prepare \
+  --repo /path/to/ia-app \
+  --artifact-root /safe/external/ia-repomap-artifacts
+
+./.venv/bin/python -m ia_repomap_builder pr-context \
+  --repo /path/to/ia-app \
+  --artifact-root /safe/external/ia-repomap-artifacts \
+  --base origin/main \
+  --output /safe/external/pr-context.json
+```
+
+Both commands emit one JSON result to stdout. `--output` is optional and, when
+provided, receives the same JSON outside the target checkout. `pr-context`
+checks readiness and never prepares an index implicitly. Exit code `0` means
+`ok`, `3` means `unavailable` with remediation, and `2` means invalid input or
+an execution error.
 
 For a participating Intacct repository, copy the small
 `templates/.ia-repomap.toml` declaration and the
