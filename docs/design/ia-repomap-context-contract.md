@@ -210,7 +210,12 @@ optional `--output` path receives the byte-identical JSON envelope and must be
 outside the target checkout; an existing path is not overwritten. Exit code
 `0` represents `ok`, `3` represents `unavailable`, and `2` represents invalid
 input or an execution error. Unavailable results include actionable
-remediation while preserving the underlying status and diagnostics.
+remediation while preserving the underlying status and diagnostics. The clean
+checked-out `HEAD` is the PR head and `--base` is an explicit local Git ref;
+the interface does not accept a GitHub PR number or perform remote PR lookup.
+Callers must select or create the desired PR checkout before invoking it. A
+PR number such as `50176` is descriptive metadata only: a test for that PR must
+use its exact checked-out head and intended base commit as the command inputs.
 
 The adapter uses `hunk-enclosing-v1` to narrow Ripwire's file-wide definitions
 to candidates whose inferred definition span overlaps a positive-side Git

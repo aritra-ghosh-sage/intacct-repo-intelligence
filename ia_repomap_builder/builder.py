@@ -10,6 +10,8 @@ from .lexical import build_lexical
 
 
 def build(request: BuildRequest) -> BuildResult:
+    """Run the selected general-purpose repository-map engine."""
+
     root = request.repo_root.resolve()
     revision = request.revision or git_revision(root)
     dirty = is_dirty(root)

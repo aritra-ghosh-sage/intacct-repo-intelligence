@@ -50,6 +50,8 @@ class _AiderModel:
 
 
 def build_aider(request: BuildRequest) -> BuildResult:
+    """Run the optional Aider RepoMap adapter for a task-shaped request."""
+
     try:
         import aider.repomap as repomap_module
         import grep_ast as grep_ast_module
@@ -208,6 +210,8 @@ def _parse_ripwire_xml(root: Path, output: str, path_prefix: str = "") -> list[C
 
 
 def build_ripwire(request: BuildRequest) -> BuildResult:
+    """Run Ripwire for general task-shaped context within a safe scope."""
+
     source_root = (request.repo_root / "app/source").resolve()
     unsafe_scopes = []
     for raw_scope in request.scope:

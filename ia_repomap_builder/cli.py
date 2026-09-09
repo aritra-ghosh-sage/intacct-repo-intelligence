@@ -60,7 +60,12 @@ def main(
     stdout: TextIO | None = None,
     stderr: TextIO | None = None,
 ) -> int:
-    """Run the module interface and return a process exit code."""
+    """Run the local JSON module interface and return a process exit code.
+
+    ``pr-context`` treats the clean checkout ``HEAD`` as the PR head and
+    accepts an explicit local base ref; it does not accept or resolve a PR
+    number through GitHub.
+    """
 
     out = stdout if stdout is not None else sys.stdout
     _ = stderr if stderr is not None else sys.stderr

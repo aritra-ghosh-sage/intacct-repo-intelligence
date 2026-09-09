@@ -35,7 +35,12 @@ _HUNK_HEADER = re.compile(
 
 
 def build_pr_context(request: PrContextRequest) -> PrContextResult:
-    """Return changed-file and candidate-symbol seeds from a prepared index."""
+    """Return seeds for the checked-out PR head against an explicit base ref.
+
+    The exact clean checkout ``HEAD`` represents the PR head. A GitHub PR
+    number is not resolved here; callers must provide the checkout and base
+    reference directly, and a matching external index must already exist.
+    """
 
     if request.token_budget is not None and request.token_budget <= 0:
         return PrContextResult(status="error", diagnostics=["token_budget must be positive when provided"])

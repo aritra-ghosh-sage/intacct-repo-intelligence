@@ -15,6 +15,8 @@ _TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 def build_lexical(request: BuildRequest) -> BuildResult:
+    """Build the deterministic exact-token baseline for a repository scope."""
+
     root = request.repo_root.resolve()
     started = time.perf_counter()
     items: list[ContextItem] = []

@@ -117,7 +117,12 @@ Both commands emit one JSON result to stdout. `--output` is optional and, when
 provided, receives the same JSON outside the target checkout. `pr-context`
 checks readiness and never prepares an index implicitly. Exit code `0` means
 `ok`, `3` means `unavailable` with remediation, and `2` means invalid input or
-an execution error.
+an execution error. The checked-out clean `HEAD` is the PR head; provide its
+base as a local Git ref with `--base`. A GitHub PR number is not accepted or
+resolved by this local interface, so callers must create or select the desired
+PR checkout first. For example, a PR #50176 test must use a checkout of its
+exact head and the intended base commit; the number is descriptive metadata,
+not a command argument.
 
 For a participating Intacct repository, copy the small
 `templates/.ia-repomap.toml` declaration and the

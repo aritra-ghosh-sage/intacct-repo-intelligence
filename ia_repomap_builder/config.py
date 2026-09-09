@@ -51,6 +51,8 @@ class BuildRequest:
 
 @dataclass(frozen=True)
 class ContextItem:
+    """One ranked item returned by a general repository-map engine."""
+
     path: str
     symbol: str | None = None
     kind: str | None = None
@@ -109,7 +111,12 @@ class PrepareRepoMapRequest:
 
 @dataclass(frozen=True)
 class PrContextRequest:
-    """Request deterministic Ripwire PR-context seed evidence."""
+    """Request deterministic Ripwire PR-context seed evidence.
+
+    The checked-out clean ``HEAD`` is the PR head. ``base_ref`` is an explicit
+    local Git reference; this request deliberately accepts no GitHub PR number
+    and performs no remote PR lookup.
+    """
 
     repo_root: Path
     artifact_root: Path
@@ -122,6 +129,8 @@ class PrContextRequest:
 
 @dataclass(frozen=True)
 class PrSymbolCandidate:
+    """A candidate symbol attributed to a changed file or hunk."""
+
     path: str
     name: str
     line: int | None
@@ -131,6 +140,8 @@ class PrSymbolCandidate:
 
 @dataclass(frozen=True)
 class PrChangedFile:
+    """A Git-authoritative changed path with optional candidate symbols."""
+
     path: str
     change: str
     old_path: str | None = None
@@ -139,6 +150,8 @@ class PrChangedFile:
 
 @dataclass(frozen=True)
 class PrContextGap:
+    """An explicit limitation, omission, or uncertainty in PR evidence."""
+
     kind: str
     detail: str
     count: int | None = None
@@ -146,7 +159,7 @@ class PrContextGap:
 
 @dataclass
 class PrContextResult:
-    """PR-context evidence, normalized only as far as this initial slice needs."""
+    """PR-context evidence, including verbatim Ripwire XML and explicit gaps."""
 
     status: str
     changed_files: list[PrChangedFile] = field(default_factory=list)
