@@ -117,6 +117,7 @@ class PrContextRequest:
     token_budget: int | None = None
     limit: int = 20
     offset: int = 0
+    history_commits: int = 500
 
 
 @dataclass(frozen=True)

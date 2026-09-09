@@ -46,9 +46,10 @@ ENGINE = {
     "name": "ripwire",
     "binary": "/bin/ripwire",
     "version": "ripwire test-build",
-    "patch": "ripwire-v0.4.0-intacct-php-aliases.patch",
+    "patch": "ripwire-v0.4.0-intacct-repomap.patch",
     "patch_sha256": "patch-digest",
     "binary_sha256": "binary-digest",
+    "features": ["pr-history-commits"],
     "id": "engine-id",
 }
 
@@ -116,6 +117,8 @@ class PrContextTests(unittest.TestCase):
         real_run = subprocess.run
 
         def index_run(command, **_kwargs):
+            if "--help" in command:
+                return SimpleNamespace(returncode=0, stdout="--pr-history-commits=N", stderr="")
             if "--doctor" in command:
                 return SimpleNamespace(
                     returncode=doctor_returncode,
@@ -134,6 +137,7 @@ class PrContextTests(unittest.TestCase):
             patch("ia_repomap_builder.readiness._ripwire_binary", return_value="/bin/ripwire"),
             patch("ia_repomap_builder.readiness._engine_identity", return_value=ENGINE),
             patch("ia_repomap_builder.readiness._verify_ripwire_extensions", return_value=None),
+            patch("ia_repomap_builder.readiness._verify_ripwire_pr_history", return_value=None),
             patch("ia_repomap_builder.readiness.subprocess.run", side_effect=index_run),
         ):
             return prepare_repomap(PrepareRepoMapRequest(self.root, self.artifacts))
@@ -253,6 +257,7 @@ class PrContextTests(unittest.TestCase):
         with (
             patch("ia_repomap_builder.readiness._ripwire_binary", return_value="/bin/ripwire"),
             patch("ia_repomap_builder.readiness._engine_identity", return_value=ENGINE),
+            patch("ia_repomap_builder.readiness._verify_ripwire_pr_history", return_value=None),
             patch(
                 "ia_repomap_builder.readiness._validate_ripwire_lean_cache",
                 return_value=_CacheValidation("ok"),
@@ -266,6 +271,7 @@ class PrContextTests(unittest.TestCase):
         with (
             patch("ia_repomap_builder.readiness._ripwire_binary", return_value="/bin/ripwire"),
             patch("ia_repomap_builder.readiness._engine_identity", return_value=ENGINE),
+            patch("ia_repomap_builder.readiness._verify_ripwire_pr_history", return_value=None),
             patch(
                 "ia_repomap_builder.readiness._validate_ripwire_lean_cache",
                 return_value=_CacheValidation("ok"),
@@ -301,6 +307,7 @@ class PrContextTests(unittest.TestCase):
         with (
             patch("ia_repomap_builder.readiness._ripwire_binary", return_value="/bin/ripwire"),
             patch("ia_repomap_builder.readiness._engine_identity", return_value=changed_engine),
+            patch("ia_repomap_builder.readiness._verify_ripwire_pr_history", return_value=None),
         ):
             result = check_repomap_readiness(
                 PrContextRequest(self.root, self.artifacts, "HEAD~1")
@@ -313,6 +320,7 @@ class PrContextTests(unittest.TestCase):
         with (
             patch("ia_repomap_builder.readiness._ripwire_binary", return_value="/bin/ripwire"),
             patch("ia_repomap_builder.readiness._engine_identity", return_value=ENGINE),
+            patch("ia_repomap_builder.readiness._verify_ripwire_pr_history", return_value=None),
             patch(
                 "ia_repomap_builder.readiness._validate_ripwire_lean_cache",
                 return_value=_CacheValidation(
@@ -329,6 +337,7 @@ class PrContextTests(unittest.TestCase):
         with (
             patch("ia_repomap_builder.readiness._ripwire_binary", return_value="/bin/ripwire"),
             patch("ia_repomap_builder.readiness._engine_identity", return_value=ENGINE),
+            patch("ia_repomap_builder.readiness._verify_ripwire_pr_history", return_value=None),
             patch(
                 "ia_repomap_builder.readiness._validate_ripwire_lean_cache",
                 return_value=_CacheValidation("ok", "Ripwire doctor exited 1; named lean cache passed validation"),

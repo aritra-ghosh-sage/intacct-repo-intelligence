@@ -36,6 +36,8 @@ def build_pr_context(request: PrContextRequest) -> PrContextResult:
         return PrContextResult(status="error", diagnostics=["limit must be positive"])
     if request.offset < 0:
         return PrContextResult(status="error", diagnostics=["offset must not be negative"])
+    if request.history_commits <= 0:
+        return PrContextResult(status="error", diagnostics=["history_commits must be positive"])
 
     readiness = check_repomap_readiness(request)
     if readiness.status != "ok":
@@ -72,6 +74,7 @@ def build_pr_context(request: PrContextRequest) -> PrContextResult:
         f"--token-budget={budget}",
         f"--limit={request.limit}",
         f"--offset={request.offset}",
+        f"--pr-history-commits={request.history_commits}",
     ]
     started = time.perf_counter()
     try:
@@ -282,7 +285,10 @@ def _parse_pr_context_xml(
             )
         )
     metrics: dict[str, int | str] = {}
-    for name in ("files", "shown", "total", "capped", "next_offset", "budget_tokens", "est_tokens", "trim_level"):
+    for name in (
+        "files", "shown", "total", "capped", "next_offset", "budget_tokens",
+        "est_tokens", "trim_level", "history_scope", "history_commits",
+    ):
         value = root.attrib.get(name)
         if value is not None:
             metrics[name] = int(value) if value.isdigit() else value
@@ -311,6 +317,16 @@ def _symbol_line(value: str | None) -> int | None:
 
 def _root_gaps(root: ET.Element) -> list[PrContextGap]:
     gaps: list[PrContextGap] = []
+    history_scope = root.attrib.get("history_scope")
+    history_commits = _as_int(root.attrib.get("history_commits"))
+    if history_scope == "head-count" and history_commits is not None and history_commits > 0:
+        gaps.append(
+            PrContextGap(
+                "bounded_history",
+                f"Ripwire limited co-change and ownership history to the latest {history_commits} commits",
+                history_commits,
+            )
+        )
     truncated = root.attrib.get("truncated")
     if truncated and truncated not in {"none", "0", "false"}:
         gaps.append(PrContextGap("truncated", f"Ripwire truncated output at level: {truncated}"))

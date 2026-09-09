@@ -174,6 +174,9 @@ def prepare_repomap(request: PrepareRepoMapRequest) -> BuildResult:
             diagnostics=[extension_error],
             identity=identity,
         )
+    feature_error = _verify_ripwire_pr_history(engine["binary"])
+    if feature_error:
+        return BuildResult("ripwire", "unavailable", diagnostics=[feature_error], identity=identity)
 
     locations.directory.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=".ia-repomap-staging-", dir=locations.directory.parent))
@@ -283,6 +286,9 @@ def check_repomap_readiness(request: PrContextRequest) -> BuildResult:
             diagnostics=["prepared index manifest does not match the current repository identity"],
             identity=identity,
         )
+    feature_error = _verify_ripwire_pr_history(engine["binary"])
+    if feature_error:
+        return BuildResult("ripwire", "unavailable", diagnostics=[feature_error], identity=identity)
     cache_check = _validate_ripwire_lean_cache(
         engine["binary"], root / config.scope[0], locations.lean_cache
     )
@@ -373,7 +379,7 @@ def _engine_identity(binary: str) -> dict[str, str]:
     )
     if completed.returncode != 0 or not completed.stdout.strip():
         raise ValueError(completed.stderr.strip() or f"exit {completed.returncode}")
-    patch = Path(__file__).with_name("patches") / "ripwire-v0.4.0-intacct-php-aliases.patch"
+    patch = Path(__file__).with_name("patches") / "ripwire-v0.4.0-intacct-repomap.patch"
     patch_digest = file_digest(patch)
     binary_digest = file_digest(Path(binary).resolve())
     version = completed.stdout.strip()
@@ -387,6 +393,7 @@ def _engine_identity(binary: str) -> dict[str, str]:
         "patch": patch.name,
         "patch_sha256": patch_digest,
         "binary_sha256": binary_digest,
+        "features": ["pr-history-commits"],
         "id": engine_id,
     }
 
@@ -424,6 +431,27 @@ def _verify_ripwire_extensions(binary: str, extensions: tuple[str, ...]) -> str 
     missing = sorted(path for path in expected_paths if path not in observed)
     if missing:
         return f"Ripwire binary does not recognize configured Intacct extensions: {', '.join(missing)}"
+    return None
+
+
+def _verify_ripwire_pr_history(binary: str) -> str | None:
+    """Require bounded PR-history support before an index is consumed."""
+
+    try:
+        completed = subprocess.run(
+            [binary, "--help"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"Ripwire feature probe failed: {exc}"
+    help_text = f"{completed.stdout}\n{completed.stderr}"
+    if "--pr-history-commits=" not in help_text:
+        detail = completed.stderr.strip()[:500]
+        suffix = f": {detail}" if detail else ""
+        return f"Ripwire binary does not support --pr-history-commits{suffix}"
     return None
 
 
@@ -480,6 +508,7 @@ def _manifest(root: Path, config: RepoMapConfig, head: str, engine: dict[str, st
             "patch_sha256": engine["patch_sha256"],
             "binary_sha256": engine["binary_sha256"],
             "id": engine["id"],
+            "features": list(engine["features"]),
             "extensions": list(config.php_family_extensions),
         },
         "artifacts": {
@@ -520,6 +549,7 @@ def _manifest_matches(
             "patch_sha256": engine["patch_sha256"],
             "binary_sha256": engine["binary_sha256"],
             "id": engine["id"],
+            "features": list(engine["features"]),
             "extensions": list(config.php_family_extensions),
         }
         and manifest.get("artifacts")
