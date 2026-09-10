@@ -158,16 +158,18 @@ Revision-bound map preparation, exact-head readiness, and PR-context seed
 extraction are implemented. The adapter returns Git-authoritative changed-file
 records and `hunk-enclosing-v1` candidate symbols. Definition spans are inferred
 from ordered Ripwire start lines and intersected with positive-side Git hunks;
-the result remains candidate navigation evidence. Ripwire callers, impact,
-affected-test, co-change, and owner relationships remain canonical XML evidence
-and are not yet normalized as blast-radius conclusions.
+the result remains candidate navigation evidence. Direct caller rows attached to
+those selected symbols are now normalized as one-hop `candidate` relationships;
+aggregate impact, affected-test, co-change, and owner relationships remain
+canonical XML evidence and are not yet normalized as blast-radius conclusions.
 
 The research MVP is therefore at these boundaries:
 
 | Capability | Status | Current boundary |
 | --- | --- | --- |
 | Changed-file and candidate-symbol seeds | Partial | Implemented with hunk-to-enclosing-definition attribution, explicit identity, and gap checks. |
-| Callers, blast radius, and affected tests | Not implemented | Available only in retained Ripwire XML; no normalized result contract yet. |
+| Direct callers | Partial | `direct-callers-v1` normalizes callers for hunk-selected symbols with explicit cap and location gaps. |
+| Recursive blast radius and affected tests | Not implemented | Aggregate impact and test rows remain available only in retained Ripwire XML. |
 | Agent loop and test-index cross-reference | Not implemented | No task summarization, graph-query loop, or test-index routing exists. |
 | Evidence-bound blast-radius/test-suggestion JSON | Not implemented | The current normalized output is limited to PR-context seeds. |
 | Aider/Ripwire/lexical bakeoff | Not run | The acceptance dataset and comparative measurements remain outstanding. |
@@ -182,7 +184,8 @@ latest 500 commits anchored at `HEAD`, and discloses
 `history_scope="head-count"`, `history_commits`, and a `bounded_history` gap.
 An isolated local PR #50176 proof now retains successful XML and normalized
 evidence: hunk attribution reduced 14 file-wide definitions to the enclosing
-`buildTemplateFilters` candidate and resolved all four changed hunks. This is a
+`buildTemplateFilters` candidate and resolved all four changed hunks. The
+selected symbol retained one direct caller, `validateSingleRequest`. This is a
 local implementation proof, not evidence that onboarding is merged or broadly
 available.
 

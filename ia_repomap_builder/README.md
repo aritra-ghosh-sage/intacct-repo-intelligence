@@ -88,6 +88,12 @@ file-wide candidates with an explicit gap; deletion-only changes, unattributed
 hunks, and missing symbol lines are also disclosed rather than silently
 treated as complete evidence. Canonical Ripwire XML is retained verbatim.
 
+The adapter also exposes `direct-callers-v1` evidence for callers nested under
+hunk-selected symbols. These one-hop relationships remain `candidate` evidence;
+caller caps, malformed locations, and out-of-scope rows are reported as gaps.
+Aggregate impact, affected tests, owners, and co-change data remain in the raw
+XML and are not normalized as complete blast-radius results.
+
 The current implementation status is recorded in the canonical contract. A
 local `ia-app` onboarding commit prepares the marker and agent guidance, but it
 is not live until reviewed and merged. Hunk attribution has been validated on

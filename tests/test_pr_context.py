@@ -68,8 +68,12 @@ PR_XML = """\
  history_commits="500">
   <file p="gl/Added.ent" symbols="2">
     <changed-symbols count="2">
-      <s t="cls" n="Added" p="gl/Added.ent:2"/>
-      <s t="method" n="run" p="gl/Added.ent:3"/>
+      <s t="cls" n="Added" p="gl/Added.ent:2" callers="1" shown="1" capped="0">
+        <caller t="method" n="build" p="gl/Caller.cls:10"/>
+      </s>
+      <s t="method" n="run" p="gl/Added.ent:3" callers="1" shown="1" capped="0">
+        <caller t="method" n="invoke" p="gl/Invoker.cls:20"/>
+      </s>
     </changed-symbols>
   </file>
 </pr-context>
@@ -426,6 +430,8 @@ class PrContextTests(unittest.TestCase):
         )
         self.assertEqual(changed[0].symbols[0].name, "Added")
         self.assertEqual(changed[0].symbols[1].line, 3)
+        self.assertEqual(changed[0].symbols[0].callers[0].path, "app/source/gl/Caller.cls")
+        self.assertEqual(changed[0].symbols[1].callers[0].line, 20)
         self.assertEqual(changed[1].symbols, ())
         self.assertEqual(
             {gap.kind for gap in gaps},
@@ -526,11 +532,17 @@ not a hunk @@ -1 +2 @@
             hunk_ranges={"app/source/gl/Added.ent": ((3, 3),)},
         )
         self.assertEqual([symbol.name for symbol in changed[0].symbols], ["run"])
+        self.assertEqual([caller.name for caller in changed[0].symbols[0].callers], ["invoke"])
         self.assertEqual(metrics["symbol_selection"], "hunk-enclosing-v1")
         self.assertEqual(metrics["candidate_symbols_before"], 2)
         self.assertEqual(metrics["candidate_symbols_after"], 1)
         self.assertEqual(metrics["hunks_total"], 1)
         self.assertEqual(metrics["hunks_unresolved"], 0)
+        self.assertEqual(metrics["relationship_selection"], "direct-callers-v1")
+        self.assertEqual(metrics["direct_callers_before"], 2)
+        self.assertEqual(metrics["direct_callers_after"], 1)
+        self.assertEqual(metrics["direct_callers_unresolved"], 0)
+        self.assertEqual(metrics["direct_callers_capped"], 0)
         self.assertNotIn("hunk_symbol_unresolved", {gap.kind for gap in gaps})
 
         added, _, _ = _parse_pr_context_xml(
@@ -541,6 +553,10 @@ not a hunk @@ -1 +2 @@
             hunk_ranges={"app/source/gl/Added.ent": ((1, 3),)},
         )
         self.assertEqual([symbol.name for symbol in added[0].symbols], ["Added", "run"])
+        self.assertEqual(
+            [caller.name for symbol in added[0].symbols for caller in symbol.callers],
+            ["build", "invoke"],
+        )
 
         no_lines, no_line_gaps, no_line_metrics = _parse_pr_context_xml(
             self.root,
@@ -576,8 +592,8 @@ not a hunk @@ -1 +2 @@
 
     def test_parser_excludes_symbols_without_lines_with_gap(self) -> None:
         xml = PR_XML.replace(
-            '<s t="method" n="run" p="gl/Added.ent:3"/>',
-            '<s t="method" n="run" p="gl/Added.ent"/>',
+            'p="gl/Added.ent:3"',
+            'p="gl/Added.ent"',
         )
         changed, gaps, metrics = _parse_pr_context_xml(
             self.root,
@@ -590,6 +606,43 @@ not a hunk @@ -1 +2 @@
         self.assertIn("hunk_symbol_line_unavailable", {gap.kind for gap in gaps})
         self.assertEqual(metrics["candidate_symbols_before"], 2)
         self.assertEqual(metrics["candidate_symbols_after"], 1)
+
+    def test_direct_caller_gaps_dedupe_and_reject_absolute_paths(self) -> None:
+        xml = """\
+<pr-context schema="ripwire.pr-context/v1">
+  <file p="gl/Added.ent">
+    <changed-symbols>
+      <s t="method" n="run" p="gl/Added.ent:3" callers="4" shown="2" capped="1">
+        <caller t="method" n="invoke" p="gl/Invoker.cls:20"/>
+        <caller t="method" n="invoke" p="gl/Invoker.cls:20"/>
+        <caller t="method" n="" p="gl/MissingName.cls:21"/>
+        <caller t="method" n="outside" p="/outside/Caller.cls:22"/>
+      </s>
+    </changed-symbols>
+  </file>
+</pr-context>
+"""
+        changed, gaps, metrics = _parse_pr_context_xml(
+            self.root,
+            "app/source",
+            xml,
+            [_GitChange("app/source/gl/Added.ent", "M")],
+            hunk_ranges={"app/source/gl/Added.ent": ((3, 3),)},
+        )
+        symbol = changed[0].symbols[0]
+        self.assertEqual(
+            [(caller.path, caller.line) for caller in symbol.callers],
+            [("app/source/gl/Invoker.cls", 20)],
+        )
+        self.assertEqual(metrics["direct_callers_before"], 1)
+        self.assertEqual(metrics["direct_callers_after"], 1)
+        self.assertEqual(metrics["direct_callers_unresolved"], 2)
+        self.assertEqual(metrics["direct_callers_capped"], 2)
+        self.assertEqual(
+            {gap.kind for gap in gaps},
+            {"caller_location_unavailable", "caller_out_of_scope", "caller_truncated"},
+        )
+        self.assertTrue(all(not caller.path.startswith("/") for caller in symbol.callers))
 
     def test_scope_filtering_preserves_explicit_gaps(self) -> None:
         selected, gaps = _in_scope_changes(

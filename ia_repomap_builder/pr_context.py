@@ -12,6 +12,7 @@ from pathlib import Path
 
 from .config import (
     PrChangedFile,
+    PrCallerCandidate,
     PrContextGap,
     PrContextRequest,
     PrContextResult,
@@ -27,6 +28,15 @@ class _GitChange:
     path: str
     change: str
     old_path: str | None = None
+
+
+@dataclass(frozen=True)
+class _CallerEvidence:
+    unresolved: int = 0
+    out_of_scope: int = 0
+    declared: int | None = None
+    shown: int | None = None
+    capped: bool = False
 
 
 _HUNK_HEADER = re.compile(
@@ -303,6 +313,7 @@ def _parse_pr_context_xml(
         raise ValueError("Ripwire output is not a ripwire.pr-context/v1 XML document")
 
     symbols_by_path: dict[str, tuple[PrSymbolCandidate, ...]] = {}
+    caller_evidence: dict[tuple[str, str, int | None, str | None], _CallerEvidence] = {}
     xml_paths: set[str] = set()
     for file_node in root.findall("./file"):
         raw_path = file_node.attrib.get("p")
@@ -317,13 +328,17 @@ def _parse_pr_context_xml(
             name = symbol.attrib.get("n")
             if not name:
                 continue
+            callers, evidence = _parse_callers(repo_root, scope, symbol)
+            candidate = PrSymbolCandidate(
+                path=path,
+                name=name,
+                line=_symbol_line(symbol.attrib.get("p")),
+                kind=symbol.attrib.get("t"),
+                callers=callers,
+            )
+            caller_evidence[_symbol_key(candidate)] = evidence
             symbols.append(
-                PrSymbolCandidate(
-                    path=path,
-                    name=name,
-                    line=_symbol_line(symbol.attrib.get("p")),
-                    kind=symbol.attrib.get("t"),
-                )
+                candidate
             )
         symbols_by_path[path] = tuple(sorted(symbols, key=lambda item: (item.line or 0, item.name)))
 
@@ -334,9 +349,14 @@ def _parse_pr_context_xml(
     symbols_after = 0
     hunks_total = 0
     hunks_unresolved = 0
+    direct_callers_before = 0
+    direct_callers_after = 0
+    direct_callers_unresolved = 0
+    direct_callers_capped = 0
     for change in changes:
         symbols = symbols_by_path.get(change.path, ())
         symbols_before += len(symbols)
+        direct_callers_before += sum(len(symbol.callers) for symbol in symbols)
         if change.change != "D" and change.path not in xml_paths:
             missing += 1
         if change.change == "D":
@@ -378,6 +398,39 @@ def _parse_pr_context_xml(
                             count=unresolved,
                         )
                     )
+        for symbol in symbols:
+            direct_callers_after += len(symbol.callers)
+            evidence = caller_evidence.get(_symbol_key(symbol))
+            if evidence is None:
+                continue
+            if evidence.unresolved:
+                direct_callers_unresolved += evidence.unresolved
+                gaps.append(
+                    PrContextGap(
+                        kind="caller_location_unavailable",
+                        detail=f"Direct callers of {symbol.name} lacked a usable path and line",
+                        count=evidence.unresolved,
+                    )
+                )
+            if evidence.out_of_scope:
+                direct_callers_unresolved += evidence.out_of_scope
+                gaps.append(
+                    PrContextGap(
+                        kind="caller_out_of_scope",
+                        detail=f"Direct callers of {symbol.name} were outside configured scope",
+                        count=evidence.out_of_scope,
+                    )
+                )
+            omitted = _caller_omitted_count(evidence, len(symbol.callers))
+            if omitted:
+                direct_callers_capped += omitted
+                gaps.append(
+                    PrContextGap(
+                        kind="caller_truncated",
+                        detail=f"Ripwire did not expose all direct callers of {symbol.name}",
+                        count=omitted,
+                    )
+                )
         symbols_after += len(symbols)
         changed_files.append(
             PrChangedFile(
@@ -422,9 +475,89 @@ def _parse_pr_context_xml(
                 "candidate_symbols_after": symbols_after,
                 "hunks_total": hunks_total,
                 "hunks_unresolved": hunks_unresolved,
+                "relationship_selection": "direct-callers-v1",
+                "direct_callers_before": direct_callers_before,
+                "direct_callers_after": direct_callers_after,
+                "direct_callers_unresolved": direct_callers_unresolved,
+                "direct_callers_capped": direct_callers_capped,
             }
         )
     return changed_files, gaps, metrics
+
+
+def _parse_callers(
+    repo_root: Path,
+    scope: str,
+    symbol: ET.Element,
+) -> tuple[tuple[PrCallerCandidate, ...], _CallerEvidence]:
+    callers: list[PrCallerCandidate] = []
+    unresolved = 0
+    out_of_scope = 0
+    for caller in symbol.findall("./caller"):
+        name = caller.attrib.get("n")
+        raw_path, line = _split_location(caller.attrib.get("p"))
+        if not name or raw_path is None or line is None or line <= 0:
+            unresolved += 1
+            continue
+        if not Path(raw_path).is_absolute() and ".." in Path(raw_path).parts:
+            out_of_scope += 1
+            continue
+        path = _normalize_scope_path(repo_root, scope, raw_path)
+        if path is None or not _path_in_scope(path, scope):
+            out_of_scope += 1
+            continue
+        callers.append(
+            PrCallerCandidate(
+                path=path,
+                name=name,
+                line=line,
+                kind=caller.attrib.get("t"),
+            )
+        )
+    unique = {
+        (item.path, item.name, item.line, item.kind, item.confidence): item
+        for item in callers
+    }
+    ordered = tuple(
+        sorted(unique.values(), key=lambda item: (item.path, item.line, item.kind or "", item.name))
+    )
+    declared = _as_int(symbol.attrib.get("callers"))
+    shown = _as_int(symbol.attrib.get("shown"))
+    capped = symbol.attrib.get("capped") in {"1", "true"}
+    return ordered, _CallerEvidence(
+        unresolved=unresolved,
+        out_of_scope=out_of_scope,
+        declared=declared,
+        shown=shown,
+        capped=capped,
+    )
+
+
+def _split_location(value: str | None) -> tuple[str | None, int | None]:
+    if not value:
+        return None, None
+    path, separator, suffix = value.rpartition(":")
+    if not separator or not path or not suffix.isdigit():
+        return None, None
+    return path, int(suffix)
+
+
+def _path_in_scope(path: str, scope: str) -> bool:
+    prefix = scope.rstrip("/")
+    return path == prefix or path.startswith(f"{prefix}/")
+
+
+def _symbol_key(symbol: PrSymbolCandidate) -> tuple[str, str, int | None, str | None]:
+    return symbol.path, symbol.name, symbol.line, symbol.kind
+
+
+def _caller_omitted_count(evidence: _CallerEvidence, valid_count: int) -> int:
+    if evidence.declared is not None and evidence.shown is not None:
+        omitted = max(evidence.declared - evidence.shown, 0)
+        return max(omitted, 1) if evidence.capped else omitted
+    if evidence.capped:
+        return max((evidence.declared or 0) - valid_count, 1)
+    return 0
 
 
 def _select_hunk_symbols(

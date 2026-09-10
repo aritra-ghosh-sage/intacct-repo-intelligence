@@ -152,7 +152,16 @@ adapter may additionally expose normalized records in this shape:
         {
           "name": "save",
           "line": 123,
-          "confidence": "candidate"
+          "confidence": "candidate",
+          "callers": [
+            {
+              "name": "validateSingleRequest",
+              "path": "app/source/apar/CustomerPrintTemplateValidator.cls",
+              "line": 30,
+              "kind": "method",
+              "confidence": "candidate"
+            }
+          ]
         }
       ]
     }
@@ -231,6 +240,18 @@ produce `hunk_symbol_unresolved`; and Ripwire symbols without usable line
 numbers produce `hunk_symbol_line_unavailable`. Raw Ripwire XML remains
 verbatim canonical evidence in every successful result.
 
+The adapter uses `direct-callers-v1` to normalize only `<caller>` rows attached
+to hunk-selected symbols. Caller paths and positive line numbers are required;
+malformed, out-of-scope, unresolved, and capped rows remain explicit gaps.
+Direct callers are one-hop `candidate` navigation evidence, not confirmed
+blast-radius conclusions. Aggregate impact, affected tests, owners, and
+co-change rows remain available only in canonical XML.
+
+An absolute `root` attribute in retained Ripwire XML may reflect the worktree
+used when the external cache was prepared. Normalized paths are repository-
+relative and authoritative for this adapter; the XML absolute root is
+non-authoritative metadata until cache path portability is addressed.
+
 ## Execution status
 
 This record is append-only. Each completed slice adds a numbered row using the
@@ -250,6 +271,7 @@ mean that a target `ia-app` checkout has been onboarded.
 | 8 | `complete` | A clean local `ia-app` onboarding commit tracks the repository declaration and root agent guidance; review and merge remain pending. | The maintained declaration loads successfully, target files match their templates, and target commit `658face817ce6b474c481ad96bc42333ebf7dc05` is clean at its expected parent. |
 | 9 | `complete` | Hunk-to-enclosing-symbol attribution narrows file-wide Ripwire definitions while retaining explicit fallback gaps and canonical XML. | Focused tests cover hunk parsing, inferred spans, boundary cases, missing lines, deletion/rename behavior, and Git failures. An isolated PR #50176 rerun reduced 14 candidates to `buildTemplateFilters` at line 126 and attributed all four hunks. |
 | 10 | `complete` | A local module interface performs explicit index preparation and readiness-gated PR-context retrieval with JSON results and remediation. | CLI-focused tests cover command construction, status/exit mapping, output safety, raw JSON preservation, and the no-implicit-preparation boundary; the complete suite passes. |
+| 11 | `complete` | Direct caller rows are normalized only for hunk-selected symbols as `direct-callers-v1`, with explicit malformed, out-of-scope, and truncation gaps. | Focused and complete suites pass; two isolated PR #50176 runs returned `buildTemplateFilters` with `validateSingleRequest` at line 30, `4 → 1` caller filtering, byte-identical XML, and deterministic normalized output. |
 
 ## Acceptance criteria
 

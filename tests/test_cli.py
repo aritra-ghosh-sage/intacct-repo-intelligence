@@ -9,7 +9,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from ia_repomap_builder import BuildResult, PrContextResult
+from ia_repomap_builder import (
+    BuildResult,
+    PrCallerCandidate,
+    PrChangedFile,
+    PrContextResult,
+    PrSymbolCandidate,
+)
 from ia_repomap_builder.cli import COMMAND_SCHEMA, EXIT_ERROR, EXIT_UNAVAILABLE, main
 
 
@@ -95,7 +101,11 @@ class CliTests(unittest.TestCase):
         self.assertEqual(payload["result"]["identity"]["head"], "head")
 
     def test_optional_output_matches_stdout_and_is_external(self) -> None:
-        result = PrContextResult(status="ok", raw_xml='<pr-context schema="ripwire.pr-context/v1"/>')
+        result = PrContextResult(
+            status="ok",
+            raw_xml='<pr-context schema="ripwire.pr-context/v1"/>',
+            changed_files=[],
+        )
         output = Path(self.tempdir.name) / "result.json"
         with patch("ia_repomap_builder.cli.build_pr_context", return_value=result):
             stdout = io.StringIO()
@@ -117,6 +127,48 @@ class CliTests(unittest.TestCase):
         self.assertTrue(output.is_file())
         self.assertEqual(output.read_text(encoding="utf-8"), stdout.getvalue())
         self.assertEqual(json.loads(stdout.getvalue())["result"]["raw_xml"], result.raw_xml)
+
+    def test_nested_callers_are_json_serialized(self) -> None:
+        result = PrContextResult(
+            status="ok",
+            changed_files=[
+                PrChangedFile(
+                    path="app/source/gl/Changed.cls",
+                    change="M",
+                    symbols=(
+                        PrSymbolCandidate(
+                            "app/source/gl/Changed.cls",
+                            "changed",
+                            10,
+                            "method",
+                            callers=(
+                                PrCallerCandidate(
+                                    "app/source/gl/Caller.cls",
+                                    "caller",
+                                    20,
+                                    "method",
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ],
+        )
+        with patch("ia_repomap_builder.cli.build_pr_context", return_value=result):
+            code, payload, _ = self._run(
+                "pr-context",
+                "--repo",
+                str(self.root),
+                "--artifact-root",
+                str(self.artifacts),
+                "--base",
+                "origin/main",
+            )
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            payload["result"]["changed_files"][0]["symbols"][0]["callers"][0]["line"],
+            20,
+        )
 
     def test_output_inside_repository_is_rejected_before_execution(self) -> None:
         output = self.root / "result.json"

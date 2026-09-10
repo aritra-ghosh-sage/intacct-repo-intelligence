@@ -128,6 +128,17 @@ class PrContextRequest:
 
 
 @dataclass(frozen=True)
+class PrCallerCandidate:
+    """A candidate direct caller of a changed symbol."""
+
+    path: str
+    name: str
+    line: int
+    kind: str | None = None
+    confidence: str = "candidate"
+
+
+@dataclass(frozen=True)
 class PrSymbolCandidate:
     """A candidate symbol attributed to a changed file or hunk."""
 
@@ -136,6 +147,7 @@ class PrSymbolCandidate:
     line: int | None
     kind: str | None = None
     confidence: str = "candidate"
+    callers: tuple[PrCallerCandidate, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -177,7 +189,17 @@ class PrContextResult:
                     "path": changed.path,
                     "change": changed.change,
                     "old_path": changed.old_path,
-                    "symbols": [symbol.__dict__ for symbol in changed.symbols],
+                    "symbols": [
+                        {
+                            "path": symbol.path,
+                            "name": symbol.name,
+                            "line": symbol.line,
+                            "kind": symbol.kind,
+                            "confidence": symbol.confidence,
+                            "callers": [caller.__dict__ for caller in symbol.callers],
+                        }
+                        for symbol in changed.symbols
+                    ],
                 }
                 for changed in self.changed_files
             ],
