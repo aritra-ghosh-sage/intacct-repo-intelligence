@@ -224,3 +224,8 @@ for the isolated PR #50176 validation revision. A local JSON module interface
 makes caller-selected symbol-impact expansion locally agent-accessible alongside
 explicit preparation and PR-context retrieval; editor, MCP, and harness wiring
 remain deferred.
+
+The frozen, KISS-first Strands orchestration design is recorded in
+[`strands-pr-analysis-coordinator.md`](strands-pr-analysis-coordinator.md).
+It is an implementation contract, not a claim that the agentic coordinator or
+combined report has been built.
