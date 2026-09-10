@@ -5,6 +5,9 @@ When the active coding harness provides `ia_repomap` context, request it for
 the current exact revision and declared scope before broad repository search.
 If map context is missing or stale, report it as unavailable and continue with
 normal source discovery; do not build or reuse an unverified cache implicitly.
+When `pr-context` returns a hunk-selected candidate and the local module
+interface is available, use its `symbol-impact` command for an explicit,
+paginated lower-bound expansion; preserve its gaps and verify the cited source.
 
 Treat ranked symbols and relationships as navigation evidence, not proof.
 Open and verify referenced source before making changes. Generated maps,

@@ -1,4 +1,4 @@
-"""Small JSON interface for explicit ia_repomap preparation and PR context."""
+"""Small JSON interface for explicit ia_repomap preparation and evidence queries."""
 
 from __future__ import annotations
 
@@ -11,7 +11,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, TextIO
 
-from .config import PrContextRequest, PrepareRepoMapRequest
+from .config import PrContextRequest, PrImpactRequest, PrepareRepoMapRequest
+from .impact import build_symbol_impact
 from .pr_context import build_pr_context
 from .readiness import prepare_repomap
 
@@ -45,6 +46,15 @@ def _parser() -> argparse.ArgumentParser:
     context.add_argument("--limit", type=int, default=20)
     context.add_argument("--offset", type=int, default=0)
     context.add_argument("--history-commits", type=int, default=500)
+
+    impact = commands.add_parser(
+        "symbol-impact", help="expand one prepared symbol into lower-bound impact evidence"
+    )
+    _add_common_arguments(impact)
+    impact.add_argument("--symbol-path", dest="symbol_path", help="repository-relative symbol file path")
+    impact.add_argument("--symbol-name", dest="symbol_name", help="indexed symbol name")
+    impact.add_argument("--limit", type=int, default=20)
+    impact.add_argument("--offset", type=int, default=0)
     return parser
 
 
@@ -70,32 +80,41 @@ def main(
     out = stdout if stdout is not None else sys.stdout
     _ = stderr if stderr is not None else sys.stderr
     parser = _parser()
+    raw_args = list(argv) if argv is not None else sys.argv[1:]
     try:
-        args = parser.parse_args(list(argv) if argv is not None else None)
+        args = parser.parse_args(raw_args if argv is not None else None)
     except SystemExit as exc:
         # argparse uses SystemExit for --help. It has already rendered the
         # help text, so preserve that conventional behavior.
         return int(exc.code) if isinstance(exc.code, int) else EXIT_ERROR
     except ValueError as exc:
+        command = next(
+            (item for item in raw_args if item in {"prepare", "pr-context", "symbol-impact"}),
+            None,
+        )
         return _emit_failure(
             out,
-            command=None,
+            command=command,
             diagnostic=f"invalid command arguments: {exc}",
             remediation=["Run `python -m ia_repomap_builder --help` for valid arguments."],
         )
 
     command = args.command
-    if command not in {"prepare", "pr-context"}:
+    if command not in {"prepare", "pr-context", "symbol-impact"}:
         return _emit_failure(
             out,
             command=None,
-            diagnostic="a command is required: prepare or pr-context",
+            diagnostic="a command is required: prepare, pr-context, or symbol-impact",
             remediation=["Run `python -m ia_repomap_builder --help` for valid commands."],
         )
 
     missing = [name for name in ("repo_root", "artifact_root") if not getattr(args, name, None)]
     if command == "pr-context" and not getattr(args, "base_ref", None):
         missing.append("base")
+    if command == "symbol-impact":
+        for name in ("symbol_path", "symbol_name"):
+            if not getattr(args, name, None):
+                missing.append(name)
     if missing:
         return _emit_failure(
             out,
@@ -107,32 +126,43 @@ def main(
     repo_root = Path(args.repo_root).resolve()
     artifact_root = Path(args.artifact_root).resolve()
     output = Path(args.output).resolve() if args.output else None
+    request_payload: dict[str, Any] = {
+        "repo_root": str(repo_root),
+        "artifact_root": str(artifact_root),
+    }
+    if command == "pr-context":
+        request_payload.update(
+            {
+                "base_ref": args.base_ref,
+                "token_budget": args.token_budget,
+                "limit": args.limit,
+                "offset": args.offset,
+                "history_commits": args.history_commits,
+            }
+        )
+    elif command == "symbol-impact":
+        request_payload.update(
+            {
+                "symbol_path": args.symbol_path,
+                "symbol_name": args.symbol_name,
+                "limit": args.limit,
+                "offset": args.offset,
+            }
+        )
     output_error = _validate_output_path(repo_root, output)
     if output_error:
         return _emit_failure(
             out,
             command=command,
+            request=request_payload,
             diagnostic=output_error,
             remediation=["Choose a new output path outside the target repository."],
         )
 
-    request_payload: dict[str, Any] = {
-        "repo_root": str(repo_root),
-        "artifact_root": str(artifact_root),
-    }
     try:
         if command == "prepare":
             result = prepare_repomap(PrepareRepoMapRequest(repo_root, artifact_root))
-        else:
-            request_payload.update(
-                {
-                    "base_ref": args.base_ref,
-                    "token_budget": args.token_budget,
-                    "limit": args.limit,
-                    "offset": args.offset,
-                    "history_commits": args.history_commits,
-                }
-            )
+        elif command == "pr-context":
             result = build_pr_context(
                 PrContextRequest(
                     repo_root=repo_root,
@@ -142,6 +172,17 @@ def main(
                     limit=args.limit,
                     offset=args.offset,
                     history_commits=args.history_commits,
+                )
+            )
+        else:
+            result = build_symbol_impact(
+                PrImpactRequest(
+                    repo_root=repo_root,
+                    artifact_root=artifact_root,
+                    symbol_path=args.symbol_path,
+                    symbol_name=args.symbol_name,
+                    limit=args.limit,
+                    offset=args.offset,
                 )
             )
     except Exception as exc:  # pragma: no cover - defensive command boundary
@@ -194,12 +235,15 @@ def _emit_failure(
     result = {
         "status": "error",
         "diagnostics": [diagnostic],
-        "changed_files": [],
         "raw_xml": "",
         "gaps": [],
         "metrics": {},
         "identity": {},
     }
+    if command == "symbol-impact":
+        result["candidates"] = []
+    else:
+        result["changed_files"] = []
     payload = {
         "schema": COMMAND_SCHEMA,
         "command": command,
@@ -297,6 +341,11 @@ def _remediation(command: str, result: Any) -> list[str]:
         or "cannot be consumed by the current ripwire binary" in joined
     ):
         actions.append("Set RIPWIRE_BIN to a compatible patched Ripwire binary, then rerun.")
+    if any(
+        marker in joined
+        for marker in ("symbol not found", "symbol is ambiguous", "ambiguous symbol")
+    ):
+        actions.append("Use the exact symbol path and name returned by `pr-context`, then rerun.")
     if "base_ref cannot be resolved" in joined:
         actions.append("Provide a resolvable local base ref (for example origin/main), then rerun.")
     if not actions and result.status != "ok":

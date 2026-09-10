@@ -219,7 +219,8 @@ The implemented repository-map slice and its validation history are recorded in
 the contract's [execution status](ia-repomap-context-contract.md#execution-status).
 The local `ia-app` onboarding revision and a matching external prepared artifact
 are now present for the named revision, but they are not merged or generally
-available. Successful local PR-context evidence is retained for the isolated
-PR #50176 validation revision. A local Python module interface now supports
+available. Successful local PR-context and symbol-impact evidence is retained
+for the isolated PR #50176 validation revision. A local JSON module interface
+makes caller-selected symbol-impact expansion locally agent-accessible alongside
 explicit preparation and PR-context retrieval; editor, MCP, and harness wiring
 remain deferred.

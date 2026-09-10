@@ -184,9 +184,9 @@ gap. Confidence follows the research contract: `confirmed`,
 
 ### Local module interface
 
-The package exposes two explicit module commands. Preparation and analysis are
-separate so PR-context retrieval never builds or refreshes an index implicitly:
-run them from the builder repository root, or make this package available on
+The package exposes three explicit module commands. Preparation and analysis
+are separate so retrieval never builds or refreshes an index implicitly: run
+them from the builder repository root, or make this package available on
 `PYTHONPATH`.
 
 ```shell
@@ -199,6 +199,14 @@ run them from the builder repository root, or make this package available on
   --artifact-root /safe/external/ia-repomap-artifacts \
   --base origin/main \
   [--output /safe/external/pr-context.json]
+
+./.venv/bin/python -m ia_repomap_builder symbol-impact \
+  --repo /path/to/ia-app \
+  --artifact-root /safe/external/ia-repomap-artifacts \
+  --symbol-path app/source/apar/CustomerPrintTemplateValidator.cls \
+  --symbol-name buildTemplateFilters \
+  [--limit 20 --offset 0] \
+  [--output /safe/external/symbol-impact.json]
 ```
 
 Each command emits one JSON envelope with this shape:
@@ -214,8 +222,11 @@ Each command emits one JSON envelope with this shape:
 }
 ```
 
-`result` preserves the existing adapter result shape, including raw XML. An
-optional `--output` path receives the byte-identical JSON envelope and must be
+`result` preserves the existing adapter result shape, including raw XML. The
+`symbol-impact` result contains `candidates`, `gaps`, `metrics`, `identity`,
+and the verbatim impact XML; it does not infer a PR base because it is bound to
+the prepared checkout's exact clean `HEAD`. An optional `--output` path
+receives the byte-identical JSON envelope and must be
 outside the target checkout; an existing path is not overwritten. Exit code
 `0` represents `ok`, `3` represents `unavailable`, and `2` represents invalid
 input or an execution error. Unavailable results include actionable
@@ -296,6 +307,7 @@ mean that a target `ia-app` checkout has been onboarded.
 | 10 | `complete` | A local module interface performs explicit index preparation and readiness-gated PR-context retrieval with JSON results and remediation. | CLI-focused tests cover command construction, status/exit mapping, output safety, raw JSON preservation, and the no-implicit-preparation boundary; the complete suite passes. |
 | 11 | `complete` | Direct caller rows are normalized only for hunk-selected symbols as `direct-callers-v1`, with explicit malformed, out-of-scope, and truncation gaps. | Focused and complete suites pass; two isolated PR #50176 runs returned `buildTemplateFilters` with `validateSingleRequest` at line 30, `4 → 1` caller filtering, byte-identical XML, and deterministic normalized output. |
 | 12 | `complete` | On-demand `symbol-impact-v1` expands one hunk-selected symbol through Ripwire's symbol-scoped impact query while retaining lower-bound and graph uncertainty evidence. | Focused and complete suites pass; two isolated PR #50176 runs returned `validateSingleRequest` at line 30 for `buildTemplateFilters`, with `defs=1`, `reaches=1`, `radius_tested=0`, `radius_untested=1`, byte-identical XML, and deterministic normalized output. |
+| 13 | `complete` | The local JSON module interface exposes `symbol-impact` for agent-selected, on-demand impact expansion without implicit preparation. | CLI help, argument validation, status/remediation, serialization, and output-safety tests pass; two exact-revision PR #50176 command runs return `validateSingleRequest` at line 30 with byte-identical XML and deterministic envelopes. |
 
 ## Acceptance criteria
 

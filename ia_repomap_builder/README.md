@@ -94,23 +94,27 @@ caller caps, malformed locations, and out-of-scope rows are reported as gaps.
 The root aggregate impact, affected tests, owners, and co-change data remain in
 the PR-context raw XML and are not normalized as complete blast-radius results.
 
-For an explicit next hop, `build_symbol_impact(PrImpactRequest(...))` runs
-Ripwire's `--impact=file:symbol` query against the same prepared external
-index. It returns `symbol-impact-v1` candidate reachers with verbatim impact
-XML. Counts are static-analysis floors; caps, pagination, ambiguous edges,
-unresolved edges, importer rows, and malformed locations are reported as gaps.
-Impact expansion is on demand and is not automatically run for every PR
-symbol.
+For an explicit next hop, the `symbol-impact` module command (or
+`build_symbol_impact(PrImpactRequest(...))`) runs Ripwire's
+`--impact=file:symbol` query against the same prepared external index. It
+returns `symbol-impact-v1` candidate reachers with verbatim impact XML. Counts
+are static-analysis floors; caps, pagination, ambiguous edges, unresolved
+edges, importer rows, and malformed locations are reported as gaps. Impact
+expansion is on demand and is not automatically run for every PR symbol.
 
 The current implementation status is recorded in the canonical contract. A
 local `ia-app` onboarding commit prepares the marker and agent guidance, but it
 is not live until reviewed and merged. Hunk attribution has been validated on
 an isolated, exact-revision PR #50176 checkout with an external index; it is not
-generally available. A local Python module interface is available for explicit
-preparation and PR-context retrieval; MCP, editor, and harness integrations
-remain deferred.
+generally available. The local JSON module interface supports explicit
+preparation, PR-context retrieval, and on-demand symbol impact; MCP, editor,
+and harness integrations remain deferred.
 
 For a developer or coding harness, use the module interface:
+
+The agent workflow is deliberately three-stage: prepare an index only when
+authorized, request `pr-context` for the exact checkout, then expand a selected
+candidate on demand with `symbol-impact`.
 
 Run these commands from the builder repository root (or add this repository to
 `PYTHONPATH`); the project does not install a console entry point.
@@ -125,18 +129,28 @@ Run these commands from the builder repository root (or add this repository to
   --artifact-root /safe/external/ia-repomap-artifacts \
   --base origin/main \
   --output /safe/external/pr-context.json
+
+./.venv/bin/python -m ia_repomap_builder symbol-impact \
+  --repo /path/to/ia-app \
+  --artifact-root /safe/external/ia-repomap-artifacts \
+  --symbol-path app/source/apar/CustomerPrintTemplateValidator.cls \
+  --symbol-name buildTemplateFilters \
+  --limit 20 \
+  --offset 0 \
+  --output /safe/external/symbol-impact.json
 ```
 
-Both commands emit one JSON result to stdout. `--output` is optional and, when
-provided, receives the same JSON outside the target checkout. `pr-context`
-checks readiness and never prepares an index implicitly. Exit code `0` means
-`ok`, `3` means `unavailable` with remediation, and `2` means invalid input or
-an execution error. The checked-out clean `HEAD` is the PR head; provide its
-base as a local Git ref with `--base`. A GitHub PR number is not accepted or
-resolved by this local interface, so callers must create or select the desired
-PR checkout first. For example, a PR #50176 test must use a checkout of its
-exact head and the intended base commit; the number is descriptive metadata,
-not a command argument.
+All three commands emit one JSON result to stdout. `--output` is optional and,
+when provided, receives the same JSON outside the target checkout. `pr-context`
+checks readiness and never prepares an index implicitly. `symbol-impact` also
+requires a prepared exact-head index and never invokes `prepare` implicitly.
+Exit code `0` means `ok`, `3` means `unavailable` with remediation, and `2`
+means invalid input or an execution error. The checked-out clean `HEAD` is the
+PR head; provide its base as a local Git ref with `--base` for `pr-context`.
+A GitHub PR number is not accepted or resolved by this local interface, so
+callers must create or select the desired PR checkout first. For example, a PR
+#50176 test must use a checkout of its exact head and intended base commit; the
+number is descriptive metadata, not a command argument.
 
 For a participating Intacct repository, copy the small
 `templates/.ia-repomap.toml` declaration and the
