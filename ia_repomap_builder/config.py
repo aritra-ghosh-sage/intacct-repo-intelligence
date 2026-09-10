@@ -128,6 +128,18 @@ class PrContextRequest:
 
 
 @dataclass(frozen=True)
+class PrImpactRequest:
+    """Request an on-demand transitive impact expansion for one symbol."""
+
+    repo_root: Path
+    artifact_root: Path
+    symbol_path: str
+    symbol_name: str
+    limit: int = 20
+    offset: int = 0
+
+
+@dataclass(frozen=True)
 class PrCallerCandidate:
     """A candidate direct caller of a changed symbol."""
 
@@ -203,6 +215,41 @@ class PrContextResult:
                 }
                 for changed in self.changed_files
             ],
+            "raw_xml": self.raw_xml,
+            "gaps": [gap.__dict__ for gap in self.gaps],
+            "diagnostics": list(self.diagnostics),
+            "metrics": dict(self.metrics),
+            "identity": dict(self.identity),
+        }
+
+
+@dataclass(frozen=True)
+class PrImpactCandidate:
+    """A candidate symbol that reaches the requested symbol."""
+
+    path: str
+    name: str
+    line: int
+    kind: str | None = None
+    confidence: str = "candidate"
+
+
+@dataclass
+class PrImpactResult:
+    """Symbol-scoped impact evidence with its canonical Ripwire XML."""
+
+    status: str
+    candidates: list[PrImpactCandidate] = field(default_factory=list)
+    raw_xml: str = ""
+    gaps: list[PrContextGap] = field(default_factory=list)
+    diagnostics: list[str] = field(default_factory=list)
+    metrics: dict[str, Any] = field(default_factory=dict)
+    identity: dict[str, Any] = field(default_factory=dict)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "candidates": [candidate.__dict__ for candidate in self.candidates],
             "raw_xml": self.raw_xml,
             "gaps": [gap.__dict__ for gap in self.gaps],
             "diagnostics": list(self.diagnostics),

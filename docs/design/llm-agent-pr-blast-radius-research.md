@@ -160,8 +160,10 @@ records and `hunk-enclosing-v1` candidate symbols. Definition spans are inferred
 from ordered Ripwire start lines and intersected with positive-side Git hunks;
 the result remains candidate navigation evidence. Direct caller rows attached to
 those selected symbols are now normalized as one-hop `candidate` relationships;
-aggregate impact, affected-test, co-change, and owner relationships remain
-canonical XML evidence and are not yet normalized as blast-radius conclusions.
+an on-demand symbol-scoped impact query now normalizes transitive reachers as
+lower-bound `candidate` relationships. Aggregate affected-test, co-change, and
+owner relationships remain canonical XML evidence and are not yet normalized as
+blast-radius conclusions.
 
 The research MVP is therefore at these boundaries:
 
@@ -169,9 +171,10 @@ The research MVP is therefore at these boundaries:
 | --- | --- | --- |
 | Changed-file and candidate-symbol seeds | Partial | Implemented with hunk-to-enclosing-definition attribution, explicit identity, and gap checks. |
 | Direct callers | Partial | `direct-callers-v1` normalizes callers for hunk-selected symbols with explicit cap and location gaps. |
-| Recursive blast radius and affected tests | Not implemented | Aggregate impact and test rows remain available only in retained Ripwire XML. |
+| Symbol-scoped transitive impact | Partial | `symbol-impact-v1` expands one selected symbol on demand; counts and rows remain static-analysis floors with explicit graph gaps. |
+| Affected tests | Not implemented | Test rows remain available only in retained Ripwire XML. |
 | Agent loop and test-index cross-reference | Not implemented | No task summarization, graph-query loop, or test-index routing exists. |
-| Evidence-bound blast-radius/test-suggestion JSON | Not implemented | The current normalized output is limited to PR-context seeds. |
+| Evidence-bound blast-radius/test-suggestion JSON | Not implemented | The current normalized output contains PR-context seeds and on-demand symbol-impact candidates, not a combined report contract. |
 | Aider/Ripwire/lexical bakeoff | Not run | The acceptance dataset and comparative measurements remain outstanding. |
 
 ### Live retrieval finding
@@ -187,7 +190,9 @@ evidence: hunk attribution reduced 14 file-wide definitions to the enclosing
 `buildTemplateFilters` candidate and resolved all four changed hunks. The
 selected symbol retained one direct caller, `validateSingleRequest`. This is a
 local implementation proof, not evidence that onboarding is merged or broadly
-available.
+available. A follow-up symbol-scoped impact query returned the same caller with
+`defs=1`, `reaches=1`, `radius_tested=0`, and `radius_untested=1`; this remains
+lower-bound graph evidence rather than confirmed blast radius or test coverage.
 
 ## 11. Repository-map context contract
 

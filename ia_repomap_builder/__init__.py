@@ -18,12 +18,21 @@ from .config import (
     PrContextGap,
     PrContextRequest,
     PrContextResult,
+    PrImpactCandidate,
+    PrImpactRequest,
+    PrImpactResult,
     PrepareRepoMapRequest,
     PrSymbolCandidate,
     RepoMapConfig,
 )
 from .pr_context import build_pr_context
-from .readiness import check_repomap_readiness, load_repomap_config, prepare_repomap
+from .impact import build_symbol_impact
+from .readiness import (
+    check_prepared_repomap_readiness,
+    check_repomap_readiness,
+    load_repomap_config,
+    prepare_repomap,
+)
 
 __all__ = [
     "BuildRequest",
@@ -39,10 +48,15 @@ __all__ = [
     "PrChangedFile",
     "PrContextGap",
     "PrContextResult",
+    "PrImpactRequest",
+    "PrImpactCandidate",
+    "PrImpactResult",
     "load_repomap_config",
     "prepare_repomap",
     "check_repomap_readiness",
+    "check_prepared_repomap_readiness",
     "build_pr_context",
+    "build_symbol_impact",
     "EvaluationTask",
     "evaluate",
     "load_tasks",

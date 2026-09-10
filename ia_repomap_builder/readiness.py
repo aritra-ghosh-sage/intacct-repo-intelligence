@@ -245,10 +245,12 @@ def prepare_repomap(request: PrepareRepoMapRequest) -> BuildResult:
 def check_repomap_readiness(request: PrContextRequest) -> BuildResult:
     """Return whether a PR-context request may use an exact prepared index."""
 
-    setup = _prepare_inputs(request.repo_root, request.artifact_root)
-    if isinstance(setup, BuildResult):
-        return setup
-    root, artifact_root, config, head, engine = setup
+    prepared = check_prepared_repomap_readiness(
+        PrepareRepoMapRequest(request.repo_root, request.artifact_root)
+    )
+    if prepared.status != "ok":
+        return prepared
+    root = request.repo_root.resolve()
     if not request.base_ref.strip():
         return BuildResult("ripwire", "error", diagnostics=["base_ref must not be empty"])
     base_revision = git_ref_revision(root, request.base_ref)
@@ -259,11 +261,23 @@ def check_repomap_readiness(request: PrContextRequest) -> BuildResult:
             "unavailable",
             diagnostics=[f"base_ref cannot be resolved with HEAD: {request.base_ref}"],
         )
-    locations = artifact_locations(root, artifact_root, config, head, engine)
-    identity = _identity(root, config, head, engine, locations)
+    identity = dict(prepared.identity)
     identity.update(
         {"base_ref": request.base_ref, "base_revision": base_revision, "merge_base": merge_base}
     )
+    diagnostics = list(prepared.diagnostics)
+    return BuildResult("ripwire", "ok", diagnostics=diagnostics, identity=identity)
+
+
+def check_prepared_repomap_readiness(request: PrepareRepoMapRequest) -> BuildResult:
+    """Validate a clean checkout and its exact external index without a base ref."""
+
+    setup = _prepare_inputs(request.repo_root, request.artifact_root)
+    if isinstance(setup, BuildResult):
+        return setup
+    root, artifact_root, config, head, engine = setup
+    locations = artifact_locations(root, artifact_root, config, head, engine)
+    identity = _identity(root, config, head, engine, locations)
     if not locations.manifest.is_file():
         return BuildResult(
             "ripwire",

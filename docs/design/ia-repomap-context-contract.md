@@ -244,8 +244,31 @@ The adapter uses `direct-callers-v1` to normalize only `<caller>` rows attached
 to hunk-selected symbols. Caller paths and positive line numbers are required;
 malformed, out-of-scope, unresolved, and capped rows remain explicit gaps.
 Direct callers are one-hop `candidate` navigation evidence, not confirmed
-blast-radius conclusions. Aggregate impact, affected tests, owners, and
-co-change rows remain available only in canonical XML.
+blast-radius conclusions. The root aggregate impact, affected tests, owners,
+and co-change rows remain available only in canonical XML; symbol-scoped impact
+is the separate on-demand expansion described below.
+
+The on-demand `symbol-impact-v1` API accepts one hunk-selected symbol and runs
+Ripwire's `--impact=file:symbol` query against the exact prepared index. Its
+candidate reachers are normalized only when they have an in-scope path and a
+positive line; the verbatim impact XML remains the canonical evidence. Ripwire
+impact counts and rows are graph floors, not exhaustive totals or confirmed
+runtime relationships. Caps, pagination, ambiguous and unresolved edges,
+importer rows, and malformed locations remain explicit gaps. This expansion is
+caller-selected; PR-context retrieval does not issue an impact query for every
+candidate automatically.
+
+Its request and result are separate from PR-context pagination:
+
+```text
+PrImpactRequest(repo_root, artifact_root, symbol_path, symbol_name, limit, offset)
+PrImpactResult(status, candidates, raw_xml, gaps, diagnostics, metrics, identity)
+```
+
+The result identity binds the query to the exact clean `HEAD` and prepared
+engine/cache artifact. A candidate contains `path`, `name`, positive `line`,
+optional `kind`, and `confidence="candidate"`. A missing or stale index is
+`unavailable`; malformed input, XML, or invocation failures are `error`.
 
 An absolute `root` attribute in retained Ripwire XML may reflect the worktree
 used when the external cache was prepared. Normalized paths are repository-
@@ -272,6 +295,7 @@ mean that a target `ia-app` checkout has been onboarded.
 | 9 | `complete` | Hunk-to-enclosing-symbol attribution narrows file-wide Ripwire definitions while retaining explicit fallback gaps and canonical XML. | Focused tests cover hunk parsing, inferred spans, boundary cases, missing lines, deletion/rename behavior, and Git failures. An isolated PR #50176 rerun reduced 14 candidates to `buildTemplateFilters` at line 126 and attributed all four hunks. |
 | 10 | `complete` | A local module interface performs explicit index preparation and readiness-gated PR-context retrieval with JSON results and remediation. | CLI-focused tests cover command construction, status/exit mapping, output safety, raw JSON preservation, and the no-implicit-preparation boundary; the complete suite passes. |
 | 11 | `complete` | Direct caller rows are normalized only for hunk-selected symbols as `direct-callers-v1`, with explicit malformed, out-of-scope, and truncation gaps. | Focused and complete suites pass; two isolated PR #50176 runs returned `buildTemplateFilters` with `validateSingleRequest` at line 30, `4 → 1` caller filtering, byte-identical XML, and deterministic normalized output. |
+| 12 | `complete` | On-demand `symbol-impact-v1` expands one hunk-selected symbol through Ripwire's symbol-scoped impact query while retaining lower-bound and graph uncertainty evidence. | Focused and complete suites pass; two isolated PR #50176 runs returned `validateSingleRequest` at line 30 for `buildTemplateFilters`, with `defs=1`, `reaches=1`, `radius_tested=0`, `radius_untested=1`, byte-identical XML, and deterministic normalized output. |
 
 ## Acceptance criteria
 

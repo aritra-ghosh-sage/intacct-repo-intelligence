@@ -91,8 +91,16 @@ treated as complete evidence. Canonical Ripwire XML is retained verbatim.
 The adapter also exposes `direct-callers-v1` evidence for callers nested under
 hunk-selected symbols. These one-hop relationships remain `candidate` evidence;
 caller caps, malformed locations, and out-of-scope rows are reported as gaps.
-Aggregate impact, affected tests, owners, and co-change data remain in the raw
-XML and are not normalized as complete blast-radius results.
+The root aggregate impact, affected tests, owners, and co-change data remain in
+the PR-context raw XML and are not normalized as complete blast-radius results.
+
+For an explicit next hop, `build_symbol_impact(PrImpactRequest(...))` runs
+Ripwire's `--impact=file:symbol` query against the same prepared external
+index. It returns `symbol-impact-v1` candidate reachers with verbatim impact
+XML. Counts are static-analysis floors; caps, pagination, ambiguous edges,
+unresolved edges, importer rows, and malformed locations are reported as gaps.
+Impact expansion is on demand and is not automatically run for every PR
+symbol.
 
 The current implementation status is recorded in the canonical contract. A
 local `ia-app` onboarding commit prepares the marker and agent guidance, but it
