@@ -213,6 +213,14 @@ class PRAnalysisReportTests(unittest.TestCase):
         context = PrContextResult(
             status="ok",
             raw_xml="<pr-context/>",
+            identity={
+                "repository_id": "test-repository",
+                "head": "b" * 40,
+                "base_revision": "a" * 40,
+                "merge_base": "a" * 40,
+                "configuration_digest": "c" * 64,
+                "engine": {"id": "test-engine"},
+            },
             changed_files=[PrChangedFile(
                 path="app/source/example/Example.cls", change="M",
                 symbols=(PrSymbolCandidate(path="app/source/example/Example.cls", name="changed", line=1),),
@@ -228,10 +236,7 @@ class PRAnalysisReportTests(unittest.TestCase):
 
             def __call__(self, _: str) -> dict[str, object]:
                 self.tool(symbol_path=request.symbol_path, symbol_name=request.symbol_name)  # type: ignore[operator]
-                return {**self_payload, "evidence": [
-                    {"evidence_id": "pr-context-001", "kind": "pr_context_xml", "relative_path": "evidence/pr-context.xml", "sha256": "a" * 64},
-                    {"evidence_id": "symbol-impact-001", "kind": "symbol_impact_xml", "relative_path": "evidence/symbol-impact-001.xml", "sha256": "b" * 64},
-                ]}
+                return {"summary": self_payload["summary"], "blast_radius": [], "test_areas": []}
 
         self_payload = self.valid_payload()
         self_payload["changed_files"] = [{"path": request.symbol_path, "change": "M", "symbols": [{"path": request.symbol_path, "name": "changed", "line": 1, "confidence": "candidate"}], "evidence_ids": ["pr-context-001"]}]

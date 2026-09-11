@@ -137,6 +137,14 @@ class PRAnalysisReportV1(StrictModel):
     agent: Agent
 
 
+class AgentAnalysisDraftV1(StrictModel):
+    """Model-owned analysis only; provenance and metrics stay host-owned."""
+
+    summary: Summary
+    blast_radius: list[BlastRadiusRow] = Field(max_length=1000)
+    test_areas: list[TestArea] = Field(max_length=500)
+
+
 @dataclass(frozen=True)
 class PreAgenticSeed:
     """Minimal host-owned result before any model is constructed."""
@@ -272,12 +280,56 @@ def run_coordinator(
     prompt = "Analyze this PR context and use symbol_impact at most once. Return only the requested structured report.\n" + json.dumps(seed.context.as_dict(), default=str)
     result = agent(prompt)
     structured = getattr(result, "structured_output", result)
-    report = structured if isinstance(structured, PRAnalysisReportV1) else PRAnalysisReportV1.model_validate(structured)
-    for row in report.blast_radius:
+    draft = structured if isinstance(structured, AgentAnalysisDraftV1) else AgentAnalysisDraftV1.model_validate(structured)
+    for row in draft.blast_radius:
         session.require_evidence(row.evidence_ids)
-    for area in report.test_areas:
+    for area in draft.test_areas:
         session.require_evidence(area.evidence_ids)
-    report.metrics["impact_calls"] = session.impact_calls
+    records = [
+        Evidence(
+            evidence_id=item.evidence_id,
+            kind=item.kind,  # type: ignore[arg-type]
+            relative_path=f"evidence/{item.evidence_id}.xml",
+            sha256=item.sha256 or "0" * 64,
+        )
+        for item in session._records.values()
+        if item.sha256
+    ]
+    identity = seed.context.identity
+    report = PRAnalysisReportV1(
+        schema="ia-repomap.pr-analysis/v1",
+        status="ok",
+        phase="analysis",
+        request={"repository": identity.get("repository_id", str(impact_request.repo_root)), "base": identity.get("base_revision", ""), "analysis_schema": "ia-repomap.pr-analysis/v1"},
+        identity={"repository": identity.get("repository_id", str(impact_request.repo_root)), "head": identity["head"], "base": identity.get("base_revision", identity["head"]), "merge_base": identity.get("merge_base", identity["head"]), "configuration_digest": identity.get("configuration_digest", "0" * 64), "engine_identity": identity.get("engine", {}).get("id", "unknown")},
+        summary=draft.summary,
+        changed_files=[
+            {
+                "path": changed.path,
+                "change": changed.change,
+                "symbols": [
+                    {
+                        "path": symbol.path,
+                        "name": symbol.name,
+                        "line": symbol.line,
+                        "kind": symbol.kind,
+                        "confidence": symbol.confidence,
+                    }
+                    for symbol in changed.symbols
+                ],
+                "evidence_ids": ["pr-context-001"],
+            }
+            for changed in seed.context.changed_files
+        ],
+        blast_radius=draft.blast_radius,
+        test_areas=draft.test_areas,
+        gaps=[gap.__dict__ for gap in seed.context.gaps],
+        evidence=records,
+        diagnostics=list(seed.context.diagnostics),
+        remediation=[],
+        metrics={"impact_calls": session.impact_calls},
+        agent={"model_id": settings.model_id, "region": settings.region, "prompt_version": "pr-analysis-prompt-v1", "tool_contract_version": "ia-repomap.agent-tools/v1", "coordinator_version": "pr-analysis-implementation-v1"},
+    )
     return report
 
 
@@ -312,7 +364,7 @@ def build_bedrock_agent(settings: BedrockSettings, *, tools: list[Any] | None = 
     return Agent(
         model=model,
         tools=tools or [],
-        structured_output_model=PRAnalysisReportV1,
+        structured_output_model=AgentAnalysisDraftV1,
         system_prompt="Produce only an evidence-bound lower-bound PR analysis report.",
     )
 
@@ -344,6 +396,7 @@ def prepare_pre_agentic_seed(
 
 
 __all__ = [
+    "AgentAnalysisDraftV1",
     "BedrockSettings",
     "EvidenceRecord",
     "EvidenceSession",
