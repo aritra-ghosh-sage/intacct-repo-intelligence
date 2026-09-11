@@ -207,6 +207,37 @@ Git-authoritative changed files, hunk attribution, budget checks, and exact
 revision validation. Making the agent call a separate readiness tool adds a
 turn without adding information.
 
+### Deterministic pre-agentic returns
+
+The host decides whether an agent invocation is permitted before constructing
+Strands. These returns are deterministic and are not delegated to prompt
+instructions:
+
+1. Invalid request input returns `status="error"` with
+   `phase="request_validation"`, diagnostics, and remediation. No repository
+   map or model call is made.
+2. A missing, stale, dirty, or mismatched checkout or artifact returns
+   `status="unavailable"` with `phase="readiness"`, identity when available,
+   gaps, diagnostics, and remediation. Strands is not constructed.
+3. A failed PR-context invocation returns its `error` or `unavailable` status,
+   with `phase="pr_context"`, diagnostics, gaps, and retained evidence
+   metadata when available. Strands is not invoked.
+4. A successful PR-context result with no hunk-selected candidate symbols
+   produces a valid deterministic lower-bound report. This is not evidence of
+   no impact, and Strands is not invoked.
+5. Only a successful result containing candidate symbols creates the agent.
+
+The agent seed contains only the exact identity, changed files, candidate
+symbols, allowed `(symbol_path, symbol_name)` pairs, evidence identifiers, and
+fixed tool limits. The model cannot choose repository or artifact roots, the
+base, cache, preparation, arbitrary paths or symbols, shell commands, tests,
+writes, or publication.
+
+The seed and every deterministic early return use the versioned command/report
+envelope. The host records the phase and preserves the distinction between
+`error`, `unavailable`, an empty candidate set, and a successful candidate
+set with gaps. Prompt text cannot change this branch decision.
+
 V1 constructs the request with the existing defaults:
 
 ```text
@@ -374,6 +405,12 @@ The machine report schema is:
 ia-repomap.pr-analysis/v1
 ```
 
+The checked-in interoperability schema is
+[`schemas/ia-repomap.pr-analysis-v1.schema.json`](../../schemas/ia-repomap.pr-analysis-v1.schema.json).
+The future Python Pydantic models in `ia_repomap_builder/pr_analysis.py` are
+the executable runtime contract and must export a schema matching this file;
+the design document is explanatory only.
+
 Its top-level fields are:
 
 ```text
@@ -411,8 +448,28 @@ paths
 reason
 confidence          candidate | unresolved | unavailable
 evidence_ids
-execution_status    not_run
+    execution_status    not_run
 ```
+
+The host validates the complete report before persistence. The schema string
+must be exactly `ia-repomap.pr-analysis/v1`; `status` is limited to `ok`,
+`unavailable`, or `error`; and `phase` is host-controlled. Every blast-radius
+and test-area row requires at least one evidence identifier and a reason.
+Relationship confidence is limited to `candidate`, `unresolved`, or
+`unavailable`; `confirmed` is reserved for Git change and exact identity
+evidence. `graph_distance` is `1` only for a direct caller and is `null` for
+transitive reachers and source references. Every test-area row must carry
+`execution_status="not_run"`.
+
+Evidence identifiers must exist in the current invocation's evidence session.
+Unknown fields, invented evidence identifiers, invalid enum values, missing
+required fields, or collection limits exceeded by the model response produce
+`status="error"`; they never produce a partially usable report. Deterministic
+early returns use this same report schema: `unavailable` for missing or stale
+prerequisites, `error` for validation or integrity failures, and `ok` with
+explicit gaps when no candidate symbols are available. V1 deliberately does
+not include severity, merge recommendation, ownership, executed coverage, or
+publication state.
 
 The report does not use `confirmed` for static call relationships in v1.
 `confirmed` is reserved for exact Git change and revision identity evidence.

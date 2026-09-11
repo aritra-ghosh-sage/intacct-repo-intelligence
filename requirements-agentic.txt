@@ -1,0 +1,2 @@
+# Optional dependencies for the read-only PR-analysis coordinator.
+pydantic>=2,<3

@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ia-repomap.pr-analysis/v1",
+  "title": "ia-repomap PR Analysis Report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "status", "phase", "request", "identity", "summary",
+    "changed_files", "blast_radius", "test_areas", "gaps", "evidence",
+    "diagnostics", "remediation", "metrics", "agent"
+  ],
+  "properties": {
+    "schema": { "const": "ia-repomap.pr-analysis/v1" },
+    "status": { "enum": ["ok", "unavailable", "error"] },
+    "phase": {
+      "enum": ["request_validation", "readiness", "pr_context", "analysis", "persistence"]
+    },
+    "request": { "$ref": "#/$defs/Request" },
+    "identity": { "$ref": "#/$defs/Identity" },
+    "summary": { "$ref": "#/$defs/Summary" },
+    "changed_files": { "type": "array", "items": { "$ref": "#/$defs/ChangedFile" }, "maxItems": 1000 },
+    "blast_radius": { "type": "array", "items": { "$ref": "#/$defs/BlastRadiusRow" }, "maxItems": 1000 },
+    "test_areas": { "type": "array", "items": { "$ref": "#/$defs/TestArea" }, "maxItems": 500 },
+    "gaps": { "type": "array", "items": { "$ref": "#/$defs/Gap" }, "maxItems": 1000 },
+    "evidence": { "type": "array", "items": { "$ref": "#/$defs/Evidence" }, "maxItems": 1000 },
+    "diagnostics": { "type": "array", "items": { "type": "string" }, "maxItems": 100 },
+    "remediation": { "type": "array", "items": { "type": "string" }, "maxItems": 100 },
+    "metrics": { "type": "object", "additionalProperties": { "type": ["integer", "number", "string", "boolean"] } },
+    "agent": { "$ref": "#/$defs/Agent" }
+  },
+  "$defs": {
+    "Request": {
+      "type": "object", "additionalProperties": false,
+      "required": ["repository", "base", "analysis_schema"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "base": { "type": "string", "minLength": 1 },
+        "analysis_schema": { "const": "ia-repomap.pr-analysis/v1" }
+      }
+    },
+    "Identity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["repository", "head", "base", "merge_base", "configuration_digest", "engine_identity"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "head": { "$ref": "#/$defs/Sha" },
+        "base": { "$ref": "#/$defs/Sha" },
+        "merge_base": { "$ref": "#/$defs/Sha" },
+        "configuration_digest": { "$ref": "#/$defs/Digest" },
+        "engine_identity": { "type": "string", "minLength": 1 }
+      }
+    },
+    "Summary": {
+      "type": "object", "additionalProperties": false,
+      "required": ["purpose", "behavioral_change", "confidence"],
+      "properties": {
+        "purpose": { "type": "string" },
+        "behavioral_change": { "type": "string" },
+        "confidence": { "$ref": "#/$defs/Confidence" }
+      }
+    },
+    "ChangedFile": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "change", "symbols", "evidence_ids"],
+      "properties": {
+        "path": { "$ref": "#/$defs/RepoPath" },
+        "change": { "enum": ["A", "M", "D", "R", "C"] },
+        "symbols": { "type": "array", "items": { "$ref": "#/$defs/Symbol" }, "maxItems": 100 },
+        "evidence_ids": { "$ref": "#/$defs/EvidenceIds" }
+      }
+    },
+    "Symbol": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "name", "confidence"],
+      "properties": {
+        "path": { "$ref": "#/$defs/RepoPath" },
+        "name": { "type": "string", "minLength": 1 },
+        "line": { "type": ["integer", "null"], "minimum": 1 },
+        "kind": { "type": ["string", "null"] },
+        "confidence": { "$ref": "#/$defs/Confidence" }
+      }
+    },
+    "BlastRadiusRow": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_path", "source_symbol", "target_path", "target_symbol", "relationship", "graph_distance", "confidence", "evidence_ids", "reason"],
+      "properties": {
+        "source_path": { "$ref": "#/$defs/RepoPath" },
+        "source_symbol": { "type": "string", "minLength": 1 },
+        "target_path": { "$ref": "#/$defs/RepoPath" },
+        "target_symbol": { "type": "string", "minLength": 1 },
+        "relationship": { "enum": ["direct_caller", "transitive_reacher", "source_reference"] },
+        "graph_distance": { "type": ["integer", "null"], "minimum": 1 },
+        "confidence": { "$ref": "#/$defs/Confidence" },
+        "evidence_ids": { "$ref": "#/$defs/EvidenceIds" },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    },
+    "TestArea": {
+      "type": "object", "additionalProperties": false,
+      "required": ["area", "paths", "reason", "confidence", "evidence_ids", "execution_status"],
+      "properties": {
+        "area": { "type": "string", "minLength": 1 },
+        "paths": { "type": "array", "items": { "$ref": "#/$defs/RepoPath" }, "maxItems": 100 },
+        "reason": { "type": "string", "minLength": 1 },
+        "confidence": { "$ref": "#/$defs/Confidence" },
+        "evidence_ids": { "$ref": "#/$defs/EvidenceIds" },
+        "execution_status": { "const": "not_run" }
+      }
+    },
+    "Gap": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "detail"],
+      "properties": { "kind": { "type": "string", "minLength": 1 }, "detail": { "type": "string", "minLength": 1 }, "count": { "type": ["integer", "null"], "minimum": 0 } }
+    },
+    "Evidence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["evidence_id", "kind", "relative_path", "sha256"],
+      "properties": {
+        "evidence_id": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["pr_context_xml", "symbol_impact_xml", "inspection"] },
+        "relative_path": { "type": "string", "pattern": "^[^/].*" },
+        "sha256": { "$ref": "#/$defs/Digest" }
+      }
+    },
+    "Agent": {
+      "type": "object", "additionalProperties": false,
+      "required": ["model_id", "region", "prompt_version", "tool_contract_version", "coordinator_version"],
+      "properties": {
+        "model_id": { "type": "string", "minLength": 1 },
+        "region": { "type": "string", "minLength": 1 },
+        "prompt_version": { "type": "string", "minLength": 1 },
+        "tool_contract_version": { "type": "string", "minLength": 1 },
+        "coordinator_version": { "type": "string", "minLength": 1 }
+      }
+    },
+    "Confidence": { "enum": ["candidate", "unresolved", "unavailable"] },
+    "EvidenceIds": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1, "maxItems": 20, "uniqueItems": true },
+    "RepoPath": { "type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+" },
+    "Sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "Digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}
