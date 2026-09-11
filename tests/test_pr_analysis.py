@@ -14,6 +14,7 @@ from ia_repomap_builder.config import (
     PrContextRequest,
     PrContextResult,
     PrImpactRequest,
+    PrImpactResult,
     PrSymbolCandidate,
 )
 from ia_repomap_builder.pr_analysis import (
@@ -24,6 +25,7 @@ from ia_repomap_builder.pr_analysis import (
     build_bedrock_agent,
     load_bedrock_settings,
     prepare_pre_agentic_seed,
+    run_coordinator,
     run_symbol_impact_once,
 )
 
@@ -206,6 +208,38 @@ class PRAnalysisReportTests(unittest.TestCase):
         request = PrImpactRequest(Path("/repo"), Path("/artifacts"), "app/source/example/Example.cls", "unknown")
         with self.assertRaises(ValueError):
             run_symbol_impact_once(session, request, impact_builder=lambda _: PrContextResult("ok"))
+
+    def test_coordinator_fake_agent_runs_tool_and_validates_report(self) -> None:
+        context = PrContextResult(
+            status="ok",
+            raw_xml="<pr-context/>",
+            changed_files=[PrChangedFile(
+                path="app/source/example/Example.cls", change="M",
+                symbols=(PrSymbolCandidate(path="app/source/example/Example.cls", name="changed", line=1),),
+            )],
+        )
+        seed = prepare_pre_agentic_seed(self.context_request(), context_builder=lambda _: context)
+        impact = PrImpactResult(status="ok", raw_xml="<impact/>")
+        request = PrImpactRequest(Path("/repo"), Path("/artifacts"), "app/source/example/Example.cls", "changed")
+
+        class FakeAgent:
+            def __init__(self, tool: object) -> None:
+                self.tool = tool
+
+            def __call__(self, _: str) -> dict[str, object]:
+                self.tool(symbol_path=request.symbol_path, symbol_name=request.symbol_name)  # type: ignore[operator]
+                return {**self_payload, "evidence": [
+                    {"evidence_id": "pr-context-001", "kind": "pr_context_xml", "relative_path": "evidence/pr-context.xml", "sha256": "a" * 64},
+                    {"evidence_id": "symbol-impact-001", "kind": "symbol_impact_xml", "relative_path": "evidence/symbol-impact-001.xml", "sha256": "b" * 64},
+                ]}
+
+        self_payload = self.valid_payload()
+        self_payload["changed_files"] = [{"path": request.symbol_path, "change": "M", "symbols": [{"path": request.symbol_path, "name": "changed", "line": 1, "confidence": "candidate"}], "evidence_ids": ["pr-context-001"]}]
+        self_payload["blast_radius"] = []
+        self_payload["agent"] = {"model_id": "fake", "region": "test", "prompt_version": "v1", "tool_contract_version": "v1", "coordinator_version": "v1"}
+        report = run_coordinator(seed, request, BedrockSettings(region="test", model_id="fake"), agent_factory=lambda _, tools: FakeAgent(tools[0]), impact_builder=lambda _: impact)
+        self.assertEqual(report.schema_, "ia-repomap.pr-analysis/v1")
+        self.assertEqual(report.metrics["impact_calls"], 1)
 
 
 if __name__ == "__main__":

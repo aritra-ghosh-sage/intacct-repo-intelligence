@@ -277,6 +277,7 @@ def run_coordinator(
         session.require_evidence(row.evidence_ids)
     for area in report.test_areas:
         session.require_evidence(area.evidence_ids)
+    report.metrics["impact_calls"] = session.impact_calls
     return report
 
 

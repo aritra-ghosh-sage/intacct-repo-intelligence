@@ -68,7 +68,8 @@ def load_repomap_config(repo_root: Path) -> RepoMapConfig:
     """Load and strictly validate a repository-local ``.ia-repomap.toml``."""
 
     root = repo_root.resolve()
-    marker = root / REPOMAP_CONFIG_FILENAME
+    configured_marker = os.environ.get("IA_REPOMAP_CONFIG")
+    marker = Path(configured_marker).resolve() if configured_marker else root / REPOMAP_CONFIG_FILENAME
     if not marker.is_file():
         raise FileNotFoundError(f"repository marker is missing: {marker}")
     try:
