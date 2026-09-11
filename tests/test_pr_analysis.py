@@ -3,13 +3,29 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import unittest
 from pathlib import Path
 
 from pydantic import ValidationError
 
-from ia_repomap_builder.config import PrChangedFile, PrContextRequest, PrContextResult, PrSymbolCandidate
-from ia_repomap_builder.pr_analysis import PRAnalysisReportV1, prepare_pre_agentic_seed
+from ia_repomap_builder.config import (
+    PrChangedFile,
+    PrContextRequest,
+    PrContextResult,
+    PrImpactRequest,
+    PrSymbolCandidate,
+)
+from ia_repomap_builder.pr_analysis import (
+    BedrockSettings,
+    EvidenceRecord,
+    EvidenceSession,
+    PRAnalysisReportV1,
+    build_bedrock_agent,
+    load_bedrock_settings,
+    prepare_pre_agentic_seed,
+    run_symbol_impact_once,
+)
 
 
 class PRAnalysisReportTests(unittest.TestCase):
@@ -128,6 +144,68 @@ class PRAnalysisReportTests(unittest.TestCase):
         seed = prepare_pre_agentic_seed(request, context_builder=builder)
         self.assertEqual((seed.status, seed.phase), ("error", "request_validation"))
         self.assertEqual(calls, 0)
+
+    def test_evidence_session_requires_current_unique_ids(self) -> None:
+        seed = prepare_pre_agentic_seed(self.context_request(), context_builder=lambda _: PrContextResult("ok"))
+        session = EvidenceSession(seed)
+        session.register(EvidenceRecord("pr-context-001", "pr_context_xml", "ok"))
+        session.require_evidence(["pr-context-001"])
+        with self.assertRaises(ValueError):
+            session.require_evidence(["impact-001"])
+        with self.assertRaises(ValueError):
+            session.register(EvidenceRecord("pr-context-001", "pr_context_xml", "ok"))
+
+    def test_evidence_session_authorizes_only_seed_symbols(self) -> None:
+        result = PrContextResult(status="ok", changed_files=[PrChangedFile(
+            path="app/source/example/Example.cls", change="M",
+            symbols=(PrSymbolCandidate(path="app/source/example/Example.cls", name="changed", line=1),),
+        )])
+        seed = prepare_pre_agentic_seed(self.context_request(), context_builder=lambda _: result)
+        session = EvidenceSession(seed)
+        session.authorize_impact("app/source/example/Example.cls", "changed")
+        with self.assertRaises(ValueError):
+            session.authorize_impact("app/source/example/Example.cls", "not_changed")
+
+    def test_bedrock_settings_load_non_secret_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / ".env.local"
+            path.write_text("AWS_REGION=us-east-1\nAWS_PROFILE=dev\nBEDROCK_MODEL_ID=test-model\n", encoding="utf-8")
+            settings = load_bedrock_settings(str(path))
+        self.assertEqual(settings.region, "us-east-1")
+        self.assertEqual(settings.model_id, "test-model")
+        self.assertEqual(settings.profile, "dev")
+
+    def test_bedrock_settings_require_region_and_model(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / ".env.local"
+            path.write_text("AWS_REGION=us-east-1\n", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                load_bedrock_settings(str(path))
+
+    def test_bedrock_agent_construction_does_not_call_aws(self) -> None:
+        agent = build_bedrock_agent(BedrockSettings(region="us-east-1", model_id="test-model"))
+        self.assertIsNotNone(agent)
+
+    def test_symbol_impact_adapter_authorizes_once_and_registers_xml(self) -> None:
+        context = PrContextResult(status="ok", changed_files=[PrChangedFile(
+            path="app/source/example/Example.cls", change="M",
+            symbols=(PrSymbolCandidate(path="app/source/example/Example.cls", name="changed", line=1),),
+        )])
+        seed = prepare_pre_agentic_seed(self.context_request(), context_builder=lambda _: context)
+        session = EvidenceSession(seed)
+        request = PrImpactRequest(Path("/repo"), Path("/artifacts"), "app/source/example/Example.cls", "changed")
+        result = run_symbol_impact_once(session, request, impact_builder=lambda _: PrContextResult("ok", raw_xml="<impact/>") )
+        self.assertEqual(result.status, "ok")
+        session.require_evidence(["symbol-impact-001"])
+        with self.assertRaises(ValueError):
+            run_symbol_impact_once(session, request, impact_builder=lambda _: result)
+
+    def test_symbol_impact_adapter_rejects_unauthorized_symbol(self) -> None:
+        seed = prepare_pre_agentic_seed(self.context_request(), context_builder=lambda _: PrContextResult("ok"))
+        session = EvidenceSession(seed)
+        request = PrImpactRequest(Path("/repo"), Path("/artifacts"), "app/source/example/Example.cls", "unknown")
+        with self.assertRaises(ValueError):
+            run_symbol_impact_once(session, request, impact_builder=lambda _: PrContextResult("ok"))
 
 
 if __name__ == "__main__":
