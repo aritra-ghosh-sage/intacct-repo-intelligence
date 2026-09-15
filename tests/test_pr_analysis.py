@@ -172,6 +172,74 @@ class PRAnalysisReportTests(unittest.TestCase):
             PRAnalysisReportV1.model_validate(report.model_dump(by_alias=True))
             self.assert_checked_in_schema(report)
 
+    def test_run_pr_analysis_degraded_context_produces_file_action(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            context = PrContextResult(
+                status="ok",
+                raw_xml="<pr-context truncated=\"trim\"/>",
+                identity=self.context_identity(),
+                changed_files=[PrChangedFile(path="app/source/example/Example.cls", change="M")],
+                gaps=[PrContextGap("truncated", "Ripwire output was structurally truncated")],
+            )
+
+            def factory(_settings: object, tools: list[object]) -> object:
+                self.assertEqual(tools, [])
+                return lambda _prompt: {
+                    "summary": {
+                        "purpose": "changed example behavior",
+                        "behavioral_change": "unresolved",
+                        "confidence": "unresolved",
+                    },
+                    "blast_radius": [],
+                    "test_areas": [],
+                }
+
+            report = run_pr_analysis(
+                self.coordinator_request(directory),
+                settings=BedrockSettings("test", "model"),
+                context_builder=lambda _: context,
+                agent_factory=factory,
+                revision_checker=lambda _: context.identity["head"],
+                dirty_checker=lambda _: False,
+            )
+            self.assertEqual((report.status, report.phase), ("ok", "analysis"))
+            self.assertTrue(report.agent.invoked)
+            self.assertEqual(report.blast_radius, [])
+            self.assertEqual(len(report.test_areas), 1)
+            self.assertEqual(report.test_areas[0].paths, ["app/source/example/Example.cls"])
+            self.assertEqual(report.metrics["impact_calls"], 0)
+            self.assertIn("truncated", {gap.kind for gap in report.gaps})
+            self.assert_checked_in_schema(report)
+
+    def test_run_pr_analysis_degraded_rejects_repository_change(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            context = PrContextResult(
+                status="ok",
+                raw_xml="<pr-context/>",
+                identity=self.context_identity(),
+                changed_files=[PrChangedFile(path="app/source/example/Example.cls", change="M")],
+            )
+            report = run_pr_analysis(
+                self.coordinator_request(directory),
+                settings=BedrockSettings("test", "model"),
+                context_builder=lambda _: context,
+                agent_factory=lambda _settings, _tools: lambda _prompt: {
+                    "summary": {
+                        "purpose": "changed behavior",
+                        "behavioral_change": "unresolved",
+                        "confidence": "unresolved",
+                    },
+                    "blast_radius": [],
+                    "test_areas": [],
+                },
+                revision_checker=lambda _: "d" * 40,
+                dirty_checker=lambda _: False,
+            )
+            self.assertEqual((report.status, report.phase), ("error", "analysis"))
+            self.assertEqual(report.blast_radius, [])
+            self.assertEqual(report.test_areas, [])
+            self.assertIn("repository_changed_during_analysis", {gap.kind for gap in report.gaps})
+
     def test_run_pr_analysis_sanitizes_prompt_and_persists_after_exact_head_guard(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             request = self.coordinator_request(directory)
@@ -657,6 +725,56 @@ class PRAnalysisReportTests(unittest.TestCase):
         report = run_coordinator(seed, request, BedrockSettings(region="test", model_id="fake"), agent_factory=lambda _, tools: FakeAgent(tools[0]), impact_builder=lambda _: impact)
         self.assertEqual(report.schema_, "ia-repomap.pr-analysis/v1")
         self.assertEqual(report.metrics["impact_calls"], 1)
+
+    def test_degraded_coordinator_returns_file_action_without_symbol_impact_tool(self) -> None:
+        context = PrContextResult(
+            status="ok",
+            raw_xml="<pr-context truncated=\"trim\"/>",
+            identity={
+                "repository_id": "test-repository",
+                "head": "b" * 40,
+                "base_revision": "a" * 40,
+                "merge_base": "a" * 40,
+                "configuration_digest": "c" * 64,
+                "engine": {"id": "test-engine"},
+                "dirty": False,
+            },
+            changed_files=[PrChangedFile(path="app/source/example/Example.cls", change="M")],
+            gaps=[PrContextGap("truncated", "Ripwire output was structurally truncated")],
+        )
+        seed = prepare_pre_agentic_seed(self.context_request(), context_builder=lambda _: context)
+        prompts: list[str] = []
+
+        def factory(_settings: object, tools: list[object]) -> object:
+            self.assertEqual(tools, [])
+
+            def agent(prompt: str) -> dict[str, object]:
+                prompts.append(prompt)
+                return {
+                    "summary": {
+                        "purpose": "changed example behavior",
+                        "behavioral_change": "unresolved",
+                        "confidence": "unresolved",
+                    },
+                    "blast_radius": [],
+                    "test_areas": [],
+                }
+
+            return agent
+
+        report = run_coordinator(
+            seed,
+            None,
+            BedrockSettings(region="test", model_id="fake"),
+            agent_factory=factory,
+        )
+        self.assertEqual(report.status, "ok")
+        self.assertEqual(report.blast_radius, [])
+        self.assertEqual(len(report.test_areas), 1)
+        self.assertEqual(report.test_areas[0].paths, ["app/source/example/Example.cls"])
+        self.assertEqual(report.test_areas[0].execution_status, "not_run")
+        self.assertIn("degraded_file_diff", prompts[0])
+        self.assertIn("truncated", {gap.kind for gap in report.gaps})
 
     def test_coordinator_preserves_tool_gaps_and_diagnostics(self) -> None:
         context = PrContextResult(

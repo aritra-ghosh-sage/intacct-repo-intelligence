@@ -281,15 +281,17 @@ class EvidenceSession:
     """Invocation-local evidence registry and candidate-target guard."""
 
     def __init__(self, seed: PreAgenticSeed) -> None:
-        self._allowed_symbols = frozenset(seed.allowed_symbols)
+        self._allowed_symbols = set(seed.allowed_symbols)
         self._allowed_paths = {path for path, _ in seed.allowed_symbols}
         for changed in seed.context.changed_files:
             self._allowed_paths.add(changed.path)
             if changed.old_path:
                 self._allowed_paths.add(changed.old_path)
             for symbol in changed.symbols:
+                self._allowed_symbols.add((symbol.path, symbol.name))
                 self._allowed_paths.add(symbol.path)
                 for caller in symbol.callers:
+                    self._allowed_symbols.add((caller.path, caller.name))
                     self._allowed_paths.add(caller.path)
         self._records: dict[str, EvidenceRecord] = {}
         self._impact_calls = 0
@@ -405,6 +407,7 @@ class EvidenceSession:
     def authorize_inspection_keys(self, paths: Any) -> None:
         """Extend inspection discovery to paths and names returned by impact."""
         for path, name in paths:
+            self._allowed_symbols.add((path, name))
             self._allowed_paths.add(path)
             self._inspection_paths = self._inspection_paths | {path}
             self._inspection_terms = self._inspection_terms | {path, name}
@@ -424,18 +427,27 @@ class EvidenceSession:
                 self._inspection_paths = self._inspection_paths | {path}
 
     def validate_model_paths(self, draft: AgentAnalysisDraftV1) -> None:
-        """Reject structured rows that name paths absent from host evidence."""
+        """Reject structured rows that name paths or symbols absent from evidence."""
         unknown: set[str] = set()
+        unknown_symbols: set[tuple[str, str]] = set()
         for row in draft.blast_radius:
             for path in (row.source_path, row.target_path):
                 if path not in self._allowed_paths:
                     unknown.add(path)
+            for symbol in ((row.source_path, row.source_symbol), (row.target_path, row.target_symbol)):
+                if symbol not in self._allowed_symbols:
+                    unknown_symbols.add(symbol)
         for area in draft.test_areas:
             unknown.update(path for path in area.paths if path not in self._allowed_paths)
         if unknown:
             raise ValueError(
                 "model referenced paths outside host evidence: "
                 + ", ".join(sorted(unknown))
+            )
+        if unknown_symbols:
+            raise ValueError(
+                "model referenced symbols outside host evidence: "
+                + ", ".join(f"{path}:{name}" for path, name in sorted(unknown_symbols))
             )
 
 
@@ -602,7 +614,7 @@ def make_symbol_impact_tool(
 
 def run_coordinator(
     seed: PreAgenticSeed,
-    impact_request: PrImpactRequest,
+    impact_request: PrImpactRequest | None,
     settings: BedrockSettings,
     *,
     agent_factory: Callable[..., Any] | None = None,
@@ -613,8 +625,11 @@ def run_coordinator(
 ) -> PRAnalysisReportV1:
     """Run one bounded coordinator invocation and validate its report."""
 
-    if seed.status != "ok" or not seed.allowed_symbols:
-        raise ValueError("coordinator requires an ok seed with candidate symbols")
+    if seed.status != "ok":
+        raise ValueError("coordinator requires an ok seed")
+    degraded = not seed.allowed_symbols
+    if degraded and not seed.context.changed_files:
+        raise ValueError("degraded coordinator requires changed files")
     if not isinstance(seed.context.identity, Mapping):
         raise ValueError("successful PR context identity must be a mapping")
     _require_complete_context_identity(seed.context.identity)
@@ -632,14 +647,15 @@ def run_coordinator(
         ))
         if evidence_payloads is not None:
             evidence_payloads.append(("pr-context-001", context_bytes))
-    tool = make_symbol_impact_tool(
-        session,
-        impact_request,
-        impact_builder=impact_builder,
-        evidence_payloads=evidence_payloads,
-    )
-    tools = [tool]
-    if allow_source_inspection:
+    tools = []
+    if impact_request is not None:
+        tools.append(make_symbol_impact_tool(
+            session,
+            impact_request,
+            impact_builder=impact_builder,
+            evidence_payloads=evidence_payloads,
+        ))
+    if allow_source_inspection and impact_request is not None:
         from .pr_analysis_inspection import make_repository_inspection_tool
 
         tools.append(make_repository_inspection_tool(
@@ -677,7 +693,8 @@ def run_coordinator(
             }
         ],
         "allowed_symbols": list(seed.allowed_symbols),
-        "limits": {"impact_calls": 5, "inspection_calls": 2, "impact_rows": 20},
+        "analysis_mode": "degraded_file_diff" if degraded else "symbol_seeded",
+        "limits": {"impact_calls": 0 if degraded else 5, "inspection_calls": 2, "impact_rows": 20},
     }
     prompt = (
         "Analyze this PR context as a lower-bound, evidence-bound report. "
@@ -690,13 +707,35 @@ def run_coordinator(
         "Inspect source before consequential claims, distinguish candidate "
         "test areas from executed coverage, keep test execution_status as "
         "not_run, and do not claim exhaustive impact. "
-        "Return only the requested structured report; do not include hidden "
+        + (
+            "This is degraded file/diff analysis: do not produce symbol-level "
+            "blast-radius rows; provide at least one evidence-backed test or "
+            "review action tied to a changed file. "
+            if degraded
+            else ""
+        )
+        + "Return only the requested structured report; do not include hidden "
         "reasoning.\n"
         + json.dumps(prompt_context, default=str, sort_keys=True)
     )
     result = agent(prompt)
     structured = getattr(result, "structured_output", result)
     draft = structured if isinstance(structured, AgentAnalysisDraftV1) else AgentAnalysisDraftV1.model_validate(structured)
+    if degraded and draft.blast_radius:
+        raise ValueError("degraded analysis cannot produce symbol-level blast-radius rows")
+    if degraded and not draft.test_areas:
+        draft = AgentAnalysisDraftV1(
+            summary=draft.summary,
+            blast_radius=[],
+            test_areas=[TestArea(
+                area="Review changed file behavior",
+                paths=[changed.path for changed in seed.context.changed_files],
+                reason="Review the changed hunks and validate the affected behavior; symbol-level impact remains unresolved.",
+                confidence="unresolved",
+                evidence_ids=["pr-context-001"],
+                execution_status="not_run",
+            )],
+        )
     session.validate_model_paths(draft)
     for row in draft.blast_radius:
         session.require_evidence(row.evidence_ids)
@@ -922,6 +961,56 @@ def run_pr_analysis(
         for symbol in changed.symbols
     )
     if not allowed:
+        if context.changed_files and settings is not None:
+            seed = PreAgenticSeed("ok", "analysis", context, ())
+            payloads: list[tuple[str, bytes]] = []
+            sessions: list[EvidenceSession] = []
+            agent_created = False
+
+            def tracked_agent_factory(*args: Any, **kwargs: Any) -> Any:
+                nonlocal agent_created
+                factory = agent_factory or build_bedrock_agent
+                agent = factory(*args, **kwargs)
+                agent_created = True
+                return agent
+
+            try:
+                report = run_coordinator(
+                    seed,
+                    None,
+                    settings,
+                    agent_factory=tracked_agent_factory,
+                    allow_source_inspection=False,
+                    evidence_payloads=payloads,
+                    session_sink=sessions,
+                )
+            except Exception as exc:
+                report = _report_from_context(
+                    parsed,
+                    context,
+                    status="error",
+                    phase="analysis",
+                    diagnostic=f"degraded analysis failed: {exc}",
+                )
+                if agent_created:
+                    report = _with_agent_provenance(report, settings)
+                payloads = _merge_payloads(context_payloads(context), payloads)
+                if sessions:
+                    report = _with_tool_observations(report, sessions[0])
+                report = _with_payload_evidence(report, payloads)
+            try:
+                final_head = revision_checker(parsed.repo_root)
+                final_dirty = dirty_checker(parsed.repo_root)
+            except Exception as exc:
+                report = _analysis_error_report(
+                    report,
+                    f"repository state check failed: {exc}",
+                    gap_kind="repository_state_check_failed",
+                )
+            else:
+                if final_head != context.identity.get("head") or final_dirty is not False:
+                    report = _analysis_error_report(report, "repository changed during analysis")
+            return _persist_report(parsed, report, payloads)
         report = _report_from_context(parsed, context, status="ok", phase="pr_context")
         return _persist_report(parsed, report, context_payloads(context))
     if settings is None:
