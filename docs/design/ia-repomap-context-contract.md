@@ -181,6 +181,20 @@ Every truncation, unresolved relationship, ambiguous resolution, missing
 prerequisite, and unavailable capability is represented as a diagnostic or
 gap. Confidence follows the research contract: `confirmed`,
 `strong_candidate`, `candidate`, `unresolved`, or `unavailable`.
+The coordinator's PR-analysis report deliberately narrows model-authored
+relationships to `candidate`, `unresolved`, or `unavailable`; `confirmed` is
+reserved for host-owned Git and revision identity evidence.
+
+The local Strands coordinator builds on this adapter through the versioned
+`PRAnalysisRequestV1` model and `run_pr_analysis()` entry point. It runs
+PR-context once, returns schema-valid invalid/unavailable/error/no-seed reports
+without constructing an agent, and otherwise gives one agent only the
+candidate-scoped impact tool. A host may explicitly opt in to a second bounded
+literal inspection tool. The coordinator rechecks exact `HEAD` and clean-tree
+state after the agent, retains raw XML outside the prompt, and atomically writes
+an external `pr-analysis.json`, deterministic `pr-analysis.md`, and sanitized
+inspection evidence. Static relationships remain candidate lower-bound
+evidence and test areas remain `execution_status="not_run"`.
 
 ### Local module interface
 
@@ -281,6 +295,16 @@ engine/cache artifact. A candidate contains `path`, `name`, positive `line`,
 optional `kind`, and `confidence="candidate"`. A missing or stale index is
 `unavailable`; malformed input, XML, or invocation failures are `error`.
 
+The coordinator report uses schema `ia-repomap.pr-analysis/v1`. Its request
+contains absolute `repo_root`, `base_ref`, `artifact_root`, and external
+`output_dir`; its report contains host-controlled status and phase, exact
+identity, changed-file seeds, candidate blast-radius/test rows, explicit gaps,
+evidence digests, and agent provenance. The model cannot choose paths, refs,
+cache preparation, or tools. Source inspection is disabled unless the host
+passes `allow_source_inspection=True`; inspection excerpts are in-memory only
+and are not written to the report bundle. Model-authored narrative is retained
+as candidate analysis, not as a source excerpt or authoritative source.
+
 An absolute `root` attribute in retained Ripwire XML may reflect the worktree
 used when the external cache was prepared. Normalized paths are repository-
 relative and authoritative for this adapter; the XML absolute root is
@@ -308,6 +332,7 @@ mean that a target `ia-app` checkout has been onboarded.
 | 11 | `complete` | Direct caller rows are normalized only for hunk-selected symbols as `direct-callers-v1`, with explicit malformed, out-of-scope, and truncation gaps. | Focused and complete suites pass; two isolated PR #50176 runs returned `buildTemplateFilters` with `validateSingleRequest` at line 30, `4 → 1` caller filtering, byte-identical XML, and deterministic normalized output. |
 | 12 | `complete` | On-demand `symbol-impact-v1` expands one hunk-selected symbol through Ripwire's symbol-scoped impact query while retaining lower-bound and graph uncertainty evidence. | Focused and complete suites pass; two isolated PR #50176 runs returned `validateSingleRequest` at line 30 for `buildTemplateFilters`, with `defs=1`, `reaches=1`, `radius_tested=0`, `radius_untested=1`, byte-identical XML, and deterministic normalized output. |
 | 13 | `complete` | The local JSON module interface exposes `symbol-impact` for agent-selected, on-demand impact expansion without implicit preparation. | CLI help, argument validation, status/remediation, serialization, and output-safety tests pass; two exact-revision PR #50176 command runs return `validateSingleRequest` at line 30 with byte-identical XML and deterministic envelopes. |
+| 14 | `complete` | A local Strands coordinator validates requests, enforces bounded impact and opt-in inspection, checks the post-run revision, and publishes an atomic external report bundle. | Fake-agent, inspection, output, and JSON-schema provenance tests pass with the complete suite (128 tests, 3 environment-gated skips); `git diff --check` passes. Live Bedrock and hosted integration remain deferred. |
 
 ## Acceptance criteria
 

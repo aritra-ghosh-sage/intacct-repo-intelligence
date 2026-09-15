@@ -102,13 +102,54 @@ are static-analysis floors; caps, pagination, ambiguous edges, unresolved
 edges, importer rows, and malformed locations are reported as gaps. Impact
 expansion is on demand and is not automatically run for every PR symbol.
 
-The current implementation status is recorded in the canonical contract. A
-local `ia-app` onboarding commit prepares the marker and agent guidance, but it
-is not live until reviewed and merged. Hunk attribution has been validated on
-an isolated, exact-revision PR #50176 checkout with an external index; it is not
-generally available. The local JSON module interface supports explicit
-preparation, PR-context retrieval, and on-demand symbol impact; MCP, editor,
-and harness integrations remain deferred.
+## Strands PR-analysis coordinator
+
+The local coordinator is available through the Python interface, not a public
+CLI:
+
+```python
+from ia_repomap_builder import PRAnalysisRequestV1, run_pr_analysis
+
+report = run_pr_analysis(PRAnalysisRequestV1.model_validate({
+    "schema": "ia-repomap.pr-analysis-request/v1",
+    "repo_root": "/path/to/ia-app",
+    "base_ref": "origin/main",
+    "artifact_root": "/safe/external/ia-repomap-artifacts",
+    "output_dir": "/safe/external/ia-repomap-reports/run-001",
+}))
+```
+
+The host validates the request, runs `build_pr_context()` once, and returns a
+schema-valid `error`, `unavailable`, or no-seed `ok` report without
+constructing an agent when appropriate. With candidate symbols and explicit
+Bedrock settings, one Strands agent may request up to five candidate-scoped
+symbol-impact calls. Bounded repository inspection is a separate, read-only
+tool and is available only when the host passes
+`allow_source_inspection=True`; it permits at most two calls and retains only
+sanitized citations in the external bundle.
+Inspection reports disclose no-match results and omitted matching files or
+matches as explicit gaps; literals visible in bounded excerpts may authorize a
+single subsequent inspection query.
+
+Reports are written atomically to the external `output_dir` as deterministic
+`pr-analysis.json` and `pr-analysis.md`, with raw Ripwire XML retained under
+`evidence/`. Inspection evidence stores citations and match metadata, not the
+in-memory excerpts shown to the model. The writer refuses target-repository
+paths, non-empty destinations, and prepared Ripwire cache directories. It
+never prepares an index implicitly;
+the caller must provide an exact clean checkout and matching external artifact.
+Raw XML is canonical evidence, while all static relationships remain
+candidate lower-bound evidence and test areas are `not_run`.
+
+The current implementation status is recorded in the canonical contract and
+the [coordinator design](../docs/design/strands-pr-analysis-coordinator.md).
+A local `ia-app` onboarding commit prepares the marker and agent guidance, but
+it is not live until reviewed and merged. Hunk attribution has been validated
+on an isolated, exact-revision PR #50176 checkout with an external index; it is
+not generally available. The local module interfaces support explicit
+preparation, readiness-gated PR-context retrieval, on-demand symbol impact,
+and the bounded coordinator described above. MCP, editor, harness, hosted-PR,
+and public CLI integrations remain deferred.
 
 For a developer or coding harness, use the module interface:
 

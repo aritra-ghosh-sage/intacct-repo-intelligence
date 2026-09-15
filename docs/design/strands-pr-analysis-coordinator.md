@@ -1,7 +1,7 @@
 # Strands PR-analysis coordinator
 
 Date: 2026-09-10  
-Status: **Frozen v1**  
+Status: **Frozen v1; implemented locally**
 Scope: local, read-only PR analysis and lower-bound blast-radius reporting for
 an exact repository checkout.
 
@@ -43,6 +43,7 @@ research rationale remains
 | PR seed generation | Existing `build_pr_context()` API |
 | Impact expansion | Existing `build_symbol_impact()` API, on demand |
 | Repository verification | One bounded, read-only source/test inspection tool |
+| Source-inspection authorization | Host opt-in only; disabled by default |
 | Test handling | Suggest candidate areas; do not run tests |
 | Machine output | Versioned JSON report |
 | Human output | Markdown rendered deterministically from the JSON report |
@@ -171,11 +172,11 @@ Strands uses boto3 for its Bedrock provider and accepts an explicit model ID or
 `BedrockModel` configuration. See the
 [Strands Bedrock provider documentation](https://strandsagents.com/docs/user-guide/concepts/model-providers/amazon-bedrock/).
 
-The current development environment uses Python 3.14 and does not yet contain
-Strands. Current Strands package metadata advertises Python 3.14 support, but
-implementation must still prove one pinned release in the local environment.
-If that proof fails, use a dedicated supported Python environment; do not
-change the repository-map runtime speculatively.
+The development environment uses Python 3.14 with the pinned
+`strands-agents==1.55.1` release declared in `requirements-agentic.txt`.
+Default tests use fake agents and do not contact Bedrock. A live Bedrock smoke
+remains optional and requires separately approved credentials, model access,
+network, and cost.
 
 ## Architecture
 
@@ -231,7 +232,9 @@ The agent seed contains only the exact identity, changed files, candidate
 symbols, allowed `(symbol_path, symbol_name)` pairs, evidence identifiers, and
 fixed tool limits. The model cannot choose repository or artifact roots, the
 base, cache, preparation, arbitrary paths or symbols, shell commands, tests,
-writes, or publication.
+writes, or publication. The symbol-impact tool is always available after a
+successful seed; the repository inspection tool is added only when the host
+explicitly opts in to bounded source inspection.
 
 The seed and every deterministic early return use the versioned command/report
 envelope. The host records the phase and preserves the distinction between
@@ -266,7 +269,8 @@ The host enforces this sequence. Prompt text is not the sequencing control.
    - the allowed `(symbol_path, symbol_name)` candidate set;
    - counters for tool calls and impact expansions;
    - retained raw XML and its SHA-256 digest.
-6. Invoke one Strands agent with the normalized PR-context seed and two tools.
+6. Invoke one Strands agent with the normalized PR-context seed and the
+   symbol-impact tool; add bounded repository inspection only with host opt-in.
 7. Let the agent request bounded impact or repository evidence.
 8. Require a Pydantic `PRAnalysisReportV1` response.
 9. Validate every report evidence reference against the session.
@@ -332,7 +336,11 @@ and two inspection calls. Calls rejected by a guard still consume the relevant
 budget so the model cannot retry around a limit.
 
 Tool results provide path, line, match type, and a bounded in-memory excerpt for
-reasoning. Reports persist citations and match types, not proprietary excerpts.
+reasoning. Persisted inspection evidence contains citations and match types,
+not those excerpts; model-authored narrative remains candidate evidence rather
+than source authority. A no-match query emits `inspection_no_match`, and files
+omitted by the ten-file cap emit `inspection_truncated`; literals visible in a
+returned excerpt may be used as terms for the next bounded inspection call.
 
 ## Blast-radius decision flow
 
@@ -376,7 +384,7 @@ source-verified candidates. If not inspected, the report records the gap.
 
 ## Agent instructions
 
-The frozen system prompt must tell the single coordinator agent to:
+The implemented fixed system prompt tells the single coordinator agent to:
 
 - treat Git changed files as confirmed and all Ripwire symbols/relationships
   as candidate evidence;
@@ -407,9 +415,10 @@ ia-repomap.pr-analysis/v1
 
 The checked-in interoperability schema is
 [`schemas/ia-repomap.pr-analysis-v1.schema.json`](../../schemas/ia-repomap.pr-analysis-v1.schema.json).
-The future Python Pydantic models in `ia_repomap_builder/pr_analysis.py` are
-the executable runtime contract and must export a schema matching this file;
-the design document is explanatory only.
+The Pydantic models in `ia_repomap_builder/pr_analysis.py` are the executable
+runtime contract, and `PRAnalysisRequestV1`, `PRAnalysisReportV1`, and
+`run_pr_analysis` are exported from the package. The design document is
+explanatory; the checked-in JSON schema is the interoperability surface.
 
 Its top-level fields are:
 
@@ -423,7 +432,7 @@ blast_radius    evidence-bound candidate relationships
 test_areas      candidate tests or behaviors; no execution claims
 gaps            all known uncertainty, truncation and unavailable evidence
 evidence        raw-evidence identifiers, digests and citations
-agent           model ID, region, prompt version and tool-contract version
+agent           invocation flag, model ID, region, prompt and tool provenance
 ```
 
 Each blast-radius row contains:
@@ -486,10 +495,12 @@ output_dir/
     pr-context.xml
     symbol-impact-001.xml
     symbol-impact-002.xml
+    inspection-001.json
 ```
 
-Only impact files actually requested are written. Evidence identifiers in the
-report map to these relative paths and include SHA-256 digests.
+Only impact or inspection evidence files actually requested are written.
+Evidence identifiers in the report map to these relative paths and include
+SHA-256 digests.
 
 The Markdown renderer is deterministic code over the validated JSON report.
 The LLM does not generate a second independent Markdown narrative. The renderer
@@ -532,25 +543,30 @@ silently.
 - AWS credentials use the standard boto3 credential chain and are never placed
   in prompts, request objects, outputs, or logs.
 - Raw XML is canonical evidence and remains external.
-- Persisted reports contain citations and digests, not source excerpts or
-  credentials.
+- Persisted inspection evidence contains citations and digests, not source
+  excerpts or credentials. Model-authored narrative remains untrusted
+  candidate text and must be verified against source.
 - Every output is keyed to the exact analyzed revision and refuses overwrite.
 
-## Implementation boundary
+## Implementation status and boundary
 
-The first implementation slice should add only:
+The coordinator implementation is present in:
 
 ```text
 ia_repomap_builder/pr_analysis.py
+ia_repomap_builder/pr_analysis_inspection.py
+ia_repomap_builder/pr_analysis_output.py
+schemas/ia-repomap.pr-analysis-v1.schema.json
 tests/test_pr_analysis.py
-requirements-agentic.txt
-docs/design/strands-pr-analysis-coordinator.md
+tests/test_pr_analysis_inspection.py
+tests/test_pr_analysis_output.py
 ```
 
 `pr_analysis.py` owns the request/report models, invocation-scoped tool guards,
-Bedrock-backed Strands invocation, evidence validation, deterministic Markdown
-rendering, and atomic external output. Split it only if the module becomes hard
-to review.
+Bedrock-backed Strands invocation, and evidence validation. The inspection and
+output modules keep bounded source search and atomic external persistence
+independently testable. `requirements-agentic.txt` pins the optional runtime
+dependency.
 
 Because this repository has no tracked dependency declaration,
 `requirements-agentic.txt` pins the single Strands release proven against the
@@ -559,7 +575,8 @@ ignored local `pyproject.toml` or `uv.lock` as though they were portable project
 metadata.
 
 The slice does not change Ripwire, repository-map caches, the target
-repository, existing request/result contracts, or the public module CLI.
+repository, existing request/result contracts, or add a public command-line,
+MCP, editor, GitHub, publication, test-execution, or multi-agent integration.
 
 ## Lightweight validation
 
@@ -621,6 +638,7 @@ The first implementation is accepted when:
 | Draft 0 | Multiple specialized agents for readiness, context, impact, verification, and synthesis. Rejected as unnecessary orchestration and state duplication. |
 | Draft 1 | One Strands agent with readiness, PR-context, impact, and inspection tools. Simplified because readiness and PR-context are mandatory deterministic prerequisites. |
 | Frozen v1 | Host calls PR context once; one Strands agent receives the seeds and has only bounded symbol-impact and repository-inspection tools; host validates and renders the result. |
+| Implemented v1 | The local Python coordinator now implements the frozen request, early-return, bounded-tool, post-run guard, and atomic-output boundaries. |
 
 This is the frozen v1 coordinator contract. Future repo-discovery, test
 execution, hosted PR acquisition, publication, or multi-agent work belongs in

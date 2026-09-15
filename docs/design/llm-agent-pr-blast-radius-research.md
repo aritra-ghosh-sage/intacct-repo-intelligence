@@ -165,6 +165,14 @@ lower-bound `candidate` relationships. Aggregate affected-test, co-change, and
 owner relationships remain canonical XML evidence and are not yet normalized as
 blast-radius conclusions.
 
+The local Strands coordinator is now implemented around those APIs. It validates
+the request and deterministic early-return states before constructing one
+agent, enforces bounded symbol-impact and optional source-inspection tools,
+checks the exact clean `HEAD` after analysis, and writes an atomic external
+JSON/Markdown bundle with raw XML evidence. This is a local, fake-tested
+coordinator surface; it is not a hosted agent loop or a claim of live Bedrock
+availability.
+
 The research MVP is therefore at these boundaries:
 
 | Capability | Status | Current boundary |
@@ -173,8 +181,9 @@ The research MVP is therefore at these boundaries:
 | Direct callers | Partial | `direct-callers-v1` normalizes callers for hunk-selected symbols with explicit cap and location gaps. |
 | Symbol-scoped transitive impact | Partial | `symbol-impact-v1` expands one selected symbol on demand; counts and rows remain static-analysis floors with explicit graph gaps. |
 | Affected tests | Not implemented | Test rows remain available only in retained Ripwire XML. |
-| Agent loop and test-index cross-reference | Not implemented | No task summarization, graph-query loop, or test-index routing exists. |
-| Evidence-bound blast-radius/test-suggestion JSON | Not implemented | The current normalized output contains PR-context seeds and on-demand symbol-impact candidates, not a combined report contract. |
+| Bounded coordinator agent loop | Partial | A local Strands coordinator consumes the seed, may request bounded impact and opt-in inspection, and emits a schema-validated report; no hosted or GitHub loop exists. |
+| Test-index cross-reference | Not implemented | No test-to-source index or coverage lookup is wired into the coordinator. |
+| Evidence-bound blast-radius/test-suggestion JSON | Partial | The coordinator writes an external `PRAnalysisReportV1` bundle, but affected-test normalization and a complete combined blast-radius contract remain deferred. |
 | Aider/Ripwire/lexical bakeoff | Not run | The acceptance dataset and comparative measurements remain outstanding. |
 
 ### Live retrieval finding
@@ -215,8 +224,10 @@ source, tests, build configuration, and CI. The bakeoff acceptance criteria in
 that contract are measured on Intacct examples; Ripwire's published comparison
 does not substitute for that evaluation.
 
-The implemented repository-map slice and its validation history are recorded in
-the contract's [execution status](ia-repomap-context-contract.md#execution-status).
+The implemented repository-map and local coordinator slices, and their
+validation history, are recorded in the contract's
+[execution status](ia-repomap-context-contract.md#execution-status) and the
+[coordinator design](strands-pr-analysis-coordinator.md).
 The local `ia-app` onboarding revision and a matching external prepared artifact
 are now present for the named revision, but they are not merged or generally
 available. Successful local PR-context and symbol-impact evidence is retained
@@ -226,6 +237,7 @@ explicit preparation and PR-context retrieval; editor, MCP, and harness wiring
 remain deferred.
 
 The frozen, KISS-first Strands orchestration design is recorded in
-[`strands-pr-analysis-coordinator.md`](strands-pr-analysis-coordinator.md).
-It is an implementation contract, not a claim that the agentic coordinator or
-combined report has been built.
+[`strands-pr-analysis-coordinator.md`](strands-pr-analysis-coordinator.md). Its
+bounded local implementation is available for fake-tested runs; the full
+research MVP still lacks affected-test mapping, hosted acquisition, and a
+combined production blast-radius/test-suggestion workflow.

@@ -27,6 +27,7 @@ from .config import (
 )
 from .pr_context import build_pr_context
 from .impact import build_symbol_impact
+from .pr_analysis import PRAnalysisReportV1, PRAnalysisRequestV1, run_pr_analysis
 from .readiness import (
     check_prepared_repomap_readiness,
     check_repomap_readiness,
@@ -57,6 +58,9 @@ __all__ = [
     "check_prepared_repomap_readiness",
     "build_pr_context",
     "build_symbol_impact",
+    "PRAnalysisRequestV1",
+    "PRAnalysisReportV1",
+    "run_pr_analysis",
     "EvaluationTask",
     "evaluate",
     "load_tasks",

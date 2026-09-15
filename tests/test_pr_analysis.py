@@ -7,10 +7,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import jsonschema
 from pydantic import ValidationError
 
 from ia_repomap_builder.config import (
     PrChangedFile,
+    PrContextGap,
     PrContextRequest,
     PrContextResult,
     PrImpactRequest,
@@ -22,15 +24,286 @@ from ia_repomap_builder.pr_analysis import (
     EvidenceRecord,
     EvidenceSession,
     PRAnalysisReportV1,
+    PRAnalysisRequestV1,
     build_bedrock_agent,
     load_bedrock_settings,
     prepare_pre_agentic_seed,
     run_coordinator,
+    run_pr_analysis,
     run_symbol_impact_once,
 )
 
 
 class PRAnalysisReportTests(unittest.TestCase):
+    def coordinator_request(self, directory: str) -> dict[str, object]:
+        root = Path(directory)
+        return {
+            "schema": "ia-repomap.pr-analysis-request/v1",
+            "repo_root": str(root / "repo"),
+            "base_ref": "a" * 40,
+            "artifact_root": str(root / "artifacts"),
+            "output_dir": str(root / "reports"),
+        }
+
+    def context_identity(self) -> dict[str, object]:
+        return {
+            "repository_id": "intacct/ia-app",
+            "head": "b" * 40,
+            "base_revision": "a" * 40,
+            "merge_base": "a" * 40,
+            "configuration_digest": "c" * 64,
+            "engine": {"id": "ripwire-test"},
+            "dirty": False,
+        }
+
+    def test_coordinator_request_is_versioned_and_rejects_unknown_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            request = PRAnalysisRequestV1.model_validate(self.coordinator_request(directory))
+            self.assertEqual(request.base_ref, "a" * 40)
+            self.assertTrue(request.repo_root.is_absolute())
+            invalid = self.coordinator_request(directory)
+            invalid["unexpected"] = True
+            with self.assertRaises(ValidationError):
+                PRAnalysisRequestV1.model_validate(invalid)
+
+    def test_coordinator_request_rejects_internal_or_nonempty_output(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            invalid = self.coordinator_request(directory)
+            invalid["output_dir"] = str(root / "repo" / "reports")
+            with self.assertRaises(ValidationError):
+                PRAnalysisRequestV1.model_validate(invalid)
+            output = root / "reports"
+            output.mkdir()
+            (output / "existing.json").write_text("x", encoding="utf-8")
+            invalid = self.coordinator_request(directory)
+            with self.assertRaises(ValidationError):
+                PRAnalysisRequestV1.model_validate(invalid)
+            (output / "existing.json").unlink()
+            output.rmdir()
+            output.write_text("not a directory", encoding="utf-8")
+            invalid = self.coordinator_request(directory)
+            with self.assertRaises(ValidationError):
+                PRAnalysisRequestV1.model_validate(invalid)
+
+    def test_run_pr_analysis_invalid_request_is_schema_valid_without_context(self) -> None:
+        calls = 0
+        def builder(_: PrContextRequest) -> PrContextResult:
+            nonlocal calls
+            calls += 1
+            return PrContextResult("ok")
+        report = run_pr_analysis({"schema": "wrong"}, context_builder=builder)
+        self.assertEqual((report.status, report.phase, report.agent.invoked), ("error", "request_validation", False))
+        self.assertEqual(calls, 0)
+        self.assertTrue(report.remediation)
+        PRAnalysisReportV1.model_validate(report.model_dump(by_alias=True))
+
+    def test_run_pr_analysis_unavailable_and_error_do_not_construct_agent(self) -> None:
+        for status, expected_phase in (("unavailable", "readiness"), ("error", "pr_context")):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as directory:
+                context = PrContextResult(status=status, identity=self.context_identity(), diagnostics=["fixture"])
+                agent_calls = 0
+                def factory(*_: object, **__: object) -> object:
+                    nonlocal agent_calls
+                    agent_calls += 1
+                    raise AssertionError("agent must not be constructed")
+                report = run_pr_analysis(
+                    self.coordinator_request(directory),
+                    settings=BedrockSettings("test", "model"),
+                    context_builder=lambda _: context,
+                    agent_factory=factory,
+                )
+                self.assertEqual((report.status, report.phase), (status, expected_phase))
+                self.assertFalse(report.agent.invoked)
+                self.assertEqual(agent_calls, 0)
+                PRAnalysisReportV1.model_validate(report.model_dump(by_alias=True))
+
+    def test_run_pr_analysis_invalid_context_result_is_schema_valid_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            report = run_pr_analysis(
+                self.coordinator_request(directory),
+                context_builder=lambda _: None,  # type: ignore[return-value]
+            )
+            self.assertEqual((report.status, report.phase), ("error", "pr_context"))
+            self.assertIn("invalid result", " ".join(report.diagnostics))
+            PRAnalysisReportV1.model_validate(report.model_dump(by_alias=True))
+
+    def test_run_pr_analysis_no_seed_is_schema_valid_and_does_not_construct_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            context = PrContextResult(status="ok", identity=self.context_identity())
+            requests: list[PrContextRequest] = []
+            report = run_pr_analysis(
+                self.coordinator_request(directory),
+                context_builder=lambda request: (requests.append(request), context)[1],
+                agent_factory=lambda *_args, **_kwargs: self.fail("agent must not be constructed"),
+            )
+            self.assertEqual((report.status, report.phase), ("ok", "pr_context"))
+            self.assertFalse(report.agent.invoked)
+            self.assertIn("no_candidate_symbols", {gap.kind for gap in report.gaps})
+            self.assertEqual((requests[0].limit, requests[0].offset, requests[0].history_commits), (20, 0, 500))
+            PRAnalysisReportV1.model_validate(report.model_dump(by_alias=True))
+
+    def test_run_pr_analysis_sanitizes_prompt_and_persists_after_exact_head_guard(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            request = self.coordinator_request(directory)
+            raw_xml = "<pr-context><secret>source</secret></pr-context>"
+            context = PrContextResult(
+                status="ok",
+                raw_xml=raw_xml,
+                identity={
+                    **self.context_identity(),
+                    "artifact_dir": "/artifacts/repo/head",
+                    "manifest": "/artifacts/repo/head/manifest.json",
+                    "lean_cache": "/artifacts/repo/head/index.lean.ripwirecache",
+                    "rich_cache": "/artifacts/repo/head/index.rich.ripwirecache",
+                },
+                changed_files=[PrChangedFile(
+                    path="app/source/example/Example.cls",
+                    change="M",
+                    symbols=(PrSymbolCandidate(
+                        path="app/source/example/Example.cls",
+                        name="changed",
+                        line=1,
+                    ),),
+                )],
+            )
+            prompts: list[str] = []
+
+            class FakeAgent:
+                def __call__(self, prompt: str) -> dict[str, object]:
+                    prompts.append(prompt)
+                    return {
+                        "summary": {
+                            "purpose": "test",
+                            "behavioral_change": "candidate",
+                            "confidence": "candidate",
+                        },
+                        "blast_radius": [],
+                        "test_areas": [],
+                    }
+
+            report = run_pr_analysis(
+                request,
+                settings=BedrockSettings("test", "model"),
+                context_builder=lambda _: context,
+                agent_factory=lambda *_args, **_kwargs: FakeAgent(),
+                revision_checker=lambda _: "b" * 40,
+                dirty_checker=lambda _: False,
+            )
+            self.assertEqual(report.status, "ok")
+            self.assertTrue(report.agent.invoked)
+            self.assertEqual(len(prompts), 1)
+            self.assertNotIn(raw_xml, prompts[0])
+            self.assertIn("pr-context-001", prompts[0])
+            self.assertNotIn("/artifacts", prompts[0])
+            self.assertNotIn("lean_cache", prompts[0])
+            output = Path(directory) / "reports"
+            self.assertEqual((output / "evidence/pr-context.xml").read_text(), raw_xml)
+
+    def test_run_pr_analysis_rejects_post_run_head_change(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            context = PrContextResult(status="ok", identity=self.context_identity(), raw_xml="<pr-context/>", changed_files=[PrChangedFile(
+                path="app/source/example/Example.cls", change="M",
+                symbols=(PrSymbolCandidate("app/source/example/Example.cls", "changed", 1),),
+            )])
+            agent_calls = 0
+
+            def factory(*_args: object, **_kwargs: object) -> object:
+                nonlocal agent_calls
+                agent_calls += 1
+                return lambda _prompt: {"summary": {"purpose": "x", "behavioral_change": "x", "confidence": "candidate"}, "blast_radius": [], "test_areas": []}
+
+            report = run_pr_analysis(
+                self.coordinator_request(directory),
+                settings=BedrockSettings("test", "model"),
+                context_builder=lambda _: context,
+                agent_factory=factory,
+                revision_checker=lambda _: "c" * 40,
+                dirty_checker=lambda _: False,
+            )
+            self.assertEqual((report.status, report.phase), ("error", "analysis"))
+            self.assertIn("repository changed during analysis", " ".join(report.diagnostics))
+            self.assertEqual(agent_calls, 1)
+            self.assertEqual(report.summary.confidence, "unavailable")
+
+    def test_run_pr_analysis_checks_repository_after_agent_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            context = PrContextResult(
+                status="ok",
+                identity=self.context_identity(),
+                raw_xml="<pr-context/>",
+                changed_files=[PrChangedFile(
+                    path="app/source/example/Example.cls",
+                    change="M",
+                    symbols=(PrSymbolCandidate("app/source/example/Example.cls", "changed", 1),),
+                )],
+            )
+
+            def factory(*_args: object, **_kwargs: object) -> object:
+                return lambda _prompt: (_ for _ in ()).throw(RuntimeError("model failed"))
+
+            report = run_pr_analysis(
+                self.coordinator_request(directory),
+                settings=BedrockSettings("test", "model"),
+                context_builder=lambda _: context,
+                agent_factory=factory,
+                revision_checker=lambda _: "c" * 40,
+                dirty_checker=lambda _: False,
+            )
+            self.assertEqual((report.status, report.phase), ("error", "analysis"))
+            self.assertTrue(report.agent.invoked)
+            self.assertEqual(report.agent.model_id, "model")
+            self.assertIn("repository changed during analysis", " ".join(report.diagnostics))
+            self.assertIn("repository_changed_during_analysis", {gap.kind for gap in report.gaps})
+            self.assertEqual(report.summary.confidence, "unavailable")
+            PRAnalysisReportV1.model_validate(report.model_dump(by_alias=True))
+
+    def test_run_pr_analysis_retains_tool_evidence_after_agent_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            context = PrContextResult(
+                status="ok",
+                raw_xml="<pr-context/>",
+                identity=self.context_identity(),
+                changed_files=[PrChangedFile(
+                    path="app/source/example/Example.cls",
+                    change="M",
+                    symbols=(PrSymbolCandidate(
+                        "app/source/example/Example.cls", "changed", 1
+                    ),),
+                )],
+            )
+            impact = PrImpactResult(status="ok", raw_xml="<impact/>\n")
+
+            class FailingAgent:
+                def __init__(self, tool: object) -> None:
+                    self.tool = tool
+
+                def __call__(self, _prompt: str) -> object:
+                    self.tool(  # type: ignore[operator]
+                        symbol_path="app/source/example/Example.cls",
+                        symbol_name="changed",
+                    )
+                    raise RuntimeError("structured output failed")
+
+            report = run_pr_analysis(
+                self.coordinator_request(directory),
+                settings=BedrockSettings("test", "model"),
+                context_builder=lambda _: context,
+                impact_builder=lambda _: impact,
+                agent_factory=lambda _settings, tools: FailingAgent(tools[0]),
+                revision_checker=lambda _: "b" * 40,
+                dirty_checker=lambda _: False,
+            )
+            self.assertEqual(report.status, "error")
+            self.assertEqual(
+                [item.evidence_id for item in report.evidence],
+                ["pr-context-001", "symbol-impact-001"],
+            )
+            output = Path(directory) / "reports"
+            self.assertEqual(
+                (output / "evidence/symbol-impact-001.xml").read_text(),
+                "<impact/>\n",
+            )
     def valid_payload(self) -> dict[str, object]:
         return {
             "schema": "ia-repomap.pr-analysis/v1",
@@ -63,6 +336,7 @@ class PRAnalysisReportTests(unittest.TestCase):
             "remediation": [],
             "metrics": {"impact_calls": 0, "truncated": False},
             "agent": {
+                "invoked": False,
                 "model_id": "test-model",
                 "region": "test-region",
                 "prompt_version": "prompt-v1",
@@ -114,6 +388,64 @@ class PRAnalysisReportTests(unittest.TestCase):
         self.assertEqual(set(schema["properties"]), set(generated["properties"]))
         self.assertEqual(schema["properties"]["status"]["enum"], ["ok", "unavailable", "error"])
         self.assertEqual(schema["properties"]["schema"]["const"], "ia-repomap.pr-analysis/v1")
+
+    def test_checked_in_schema_enforces_success_and_agent_provenance(self) -> None:
+        path = Path(__file__).parents[1] / "schemas" / "ia-repomap.pr-analysis-v1.schema.json"
+        schema = json.loads(path.read_text(encoding="utf-8"))
+        jsonschema.validate(self.valid_payload(), schema)
+        invalid_identity = self.valid_payload()
+        invalid_identity["identity"]["head"] = None  # type: ignore[index]
+        with self.assertRaises(jsonschema.ValidationError):
+            jsonschema.validate(invalid_identity, schema)
+        invalid_agent = self.valid_payload()
+        invalid_agent["agent"] = {  # type: ignore[assignment]
+            **invalid_agent["agent"],  # type: ignore[index]
+            "invoked": True,
+            "model_id": None,
+            "region": None,
+        }
+        with self.assertRaises(jsonschema.ValidationError):
+            jsonschema.validate(invalid_agent, schema)
+
+    def test_report_rejects_duplicate_evidence_ids_on_analysis_rows(self) -> None:
+        for field, row in (
+            (
+                "blast_radius",
+                {
+                    "source_path": "app/source/example.cls",
+                    "source_symbol": "source",
+                    "target_path": "app/source/example.cls",
+                    "target_symbol": "target",
+                    "relationship": "direct_caller",
+                    "graph_distance": 1,
+                    "confidence": "candidate",
+                    "evidence_ids": ["e1", "e1"],
+                    "reason": "candidate",
+                },
+            ),
+            (
+                "test_areas",
+                {
+                    "area": "example",
+                    "paths": ["app/source/example.cls"],
+                    "reason": "candidate",
+                    "confidence": "candidate",
+                    "evidence_ids": ["e1", "e1"],
+                    "execution_status": "not_run",
+                },
+            ),
+        ):
+            with self.subTest(field=field):
+                payload = self.valid_payload()
+                payload["evidence"] = [{
+                    "evidence_id": "e1",
+                    "kind": "pr_context_xml",
+                    "relative_path": "evidence/pr.xml",
+                    "sha256": "d" * 64,
+                }]
+                payload[field] = [row]
+                with self.assertRaises(ValidationError):
+                    PRAnalysisReportV1.model_validate(payload)
 
     def context_request(self) -> PrContextRequest:
         return PrContextRequest(Path("/repo"), Path("/artifacts"), "origin/main")
@@ -188,6 +520,12 @@ class PRAnalysisReportTests(unittest.TestCase):
         agent = build_bedrock_agent(BedrockSettings(region="us-east-1", model_id="test-model"))
         self.assertIsNotNone(agent)
 
+    def test_bedrock_agent_uses_deterministic_generation_limits(self) -> None:
+        agent = build_bedrock_agent(BedrockSettings(region="us-east-1", model_id="test-model"))
+        self.assertEqual(agent.model.config["temperature"], 0)
+        self.assertEqual(agent.model.config["max_tokens"], 4096)
+        self.assertEqual(type(agent.tool_executor).__name__, "SequentialToolExecutor")
+
     def test_symbol_impact_adapter_authorizes_once_and_registers_xml(self) -> None:
         context = PrContextResult(status="ok", changed_files=[PrChangedFile(
             path="app/source/example/Example.cls", change="M",
@@ -199,6 +537,8 @@ class PRAnalysisReportTests(unittest.TestCase):
         result = run_symbol_impact_once(session, request, impact_builder=lambda _: PrContextResult("ok", raw_xml="<impact/>") )
         self.assertEqual(result.status, "ok")
         session.require_evidence(["symbol-impact-001"])
+        for _ in range(4):
+            run_symbol_impact_once(session, request, impact_builder=lambda _: result)
         with self.assertRaises(ValueError):
             run_symbol_impact_once(session, request, impact_builder=lambda _: result)
 
@@ -208,6 +548,7 @@ class PRAnalysisReportTests(unittest.TestCase):
         request = PrImpactRequest(Path("/repo"), Path("/artifacts"), "app/source/example/Example.cls", "unknown")
         with self.assertRaises(ValueError):
             run_symbol_impact_once(session, request, impact_builder=lambda _: PrContextResult("ok"))
+        self.assertEqual(session.impact_calls, 1)
 
     def test_coordinator_fake_agent_runs_tool_and_validates_report(self) -> None:
         context = PrContextResult(
@@ -220,6 +561,7 @@ class PRAnalysisReportTests(unittest.TestCase):
                 "merge_base": "a" * 40,
                 "configuration_digest": "c" * 64,
                 "engine": {"id": "test-engine"},
+                "dirty": False,
             },
             changed_files=[PrChangedFile(
                 path="app/source/example/Example.cls", change="M",
@@ -241,10 +583,165 @@ class PRAnalysisReportTests(unittest.TestCase):
         self_payload = self.valid_payload()
         self_payload["changed_files"] = [{"path": request.symbol_path, "change": "M", "symbols": [{"path": request.symbol_path, "name": "changed", "line": 1, "confidence": "candidate"}], "evidence_ids": ["pr-context-001"]}]
         self_payload["blast_radius"] = []
-        self_payload["agent"] = {"model_id": "fake", "region": "test", "prompt_version": "v1", "tool_contract_version": "v1", "coordinator_version": "v1"}
+        self_payload["agent"] = {"invoked": True, "model_id": "fake", "region": "test", "prompt_version": "v1", "tool_contract_version": "v1", "coordinator_version": "v1"}
         report = run_coordinator(seed, request, BedrockSettings(region="test", model_id="fake"), agent_factory=lambda _, tools: FakeAgent(tools[0]), impact_builder=lambda _: impact)
         self.assertEqual(report.schema_, "ia-repomap.pr-analysis/v1")
         self.assertEqual(report.metrics["impact_calls"], 1)
+
+    def test_coordinator_preserves_tool_gaps_and_diagnostics(self) -> None:
+        context = PrContextResult(
+            status="ok",
+            raw_xml="<pr-context/>",
+            identity={
+                "repository_id": "test-repository",
+                "head": "b" * 40,
+                "base_revision": "a" * 40,
+                "merge_base": "a" * 40,
+                "configuration_digest": "c" * 64,
+                "engine": {"id": "test-engine"},
+                "dirty": False,
+            },
+            changed_files=[PrChangedFile(
+                path="app/source/example/Example.cls", change="M",
+                symbols=(PrSymbolCandidate(
+                    path="app/source/example/Example.cls", name="changed", line=1
+                ),),
+            )],
+        )
+        seed = prepare_pre_agentic_seed(
+            self.context_request(), context_builder=lambda _: context
+        )
+        impact = PrImpactResult(
+            status="ok",
+            raw_xml="<impact/>",
+            gaps=[PrContextGap("impact_ambiguous", "resolution is ambiguous", 2)],
+            diagnostics=["impact warning"],
+        )
+        request = PrImpactRequest(
+            Path("/repo"), Path("/artifacts"),
+            "app/source/example/Example.cls", "changed",
+        )
+
+        class FakeAgent:
+            def __init__(self, tool: object) -> None:
+                self.tool = tool
+
+            def __call__(self, _prompt: str) -> dict[str, object]:
+                self.tool(  # type: ignore[operator]
+                    symbol_path=request.symbol_path,
+                    symbol_name=request.symbol_name,
+                )
+                return {
+                    "summary": {
+                        "purpose": "test",
+                        "behavioral_change": "candidate",
+                        "confidence": "candidate",
+                    },
+                    "blast_radius": [],
+                    "test_areas": [],
+                }
+
+        report = run_coordinator(
+            seed,
+            request,
+            BedrockSettings(region="test", model_id="fake"),
+            agent_factory=lambda _settings, tools: FakeAgent(tools[0]),
+            impact_builder=lambda _: impact,
+        )
+        self.assertIn("impact_ambiguous", {gap.kind for gap in report.gaps})
+        self.assertIn("impact warning", report.diagnostics)
+
+    def test_coordinator_rejects_incomplete_identity_before_agent(self) -> None:
+        context = PrContextResult(
+            status="ok",
+            raw_xml="<pr-context/>",
+            identity={
+                "repository_id": "test-repository",
+                "head": "b" * 40,
+                "base_revision": "a" * 40,
+                "configuration_digest": "c" * 64,
+                "engine": {"id": "test-engine"},
+                "dirty": False,
+            },
+            changed_files=[PrChangedFile(
+                path="app/source/example/Example.cls", change="M",
+                symbols=(PrSymbolCandidate(
+                    path="app/source/example/Example.cls", name="changed", line=1
+                ),),
+            )],
+        )
+        seed = prepare_pre_agentic_seed(
+            self.context_request(), context_builder=lambda _: context
+        )
+        request = PrImpactRequest(
+            Path("/repo"), Path("/artifacts"),
+            "app/source/example/Example.cls", "changed",
+        )
+        with self.assertRaisesRegex(ValueError, "incomplete identity"):
+            run_coordinator(
+                seed,
+                request,
+                BedrockSettings(region="test", model_id="fake"),
+                agent_factory=lambda *_args, **_kwargs: self.fail("agent must not be constructed"),
+            )
+
+    def test_coordinator_rejects_model_paths_not_seen_in_host_evidence(self) -> None:
+        context = PrContextResult(
+            status="ok",
+            raw_xml="<pr-context/>",
+            identity={
+                "repository_id": "test-repository",
+                "head": "b" * 40,
+                "base_revision": "a" * 40,
+                "merge_base": "a" * 40,
+                "configuration_digest": "c" * 64,
+                "engine": {"id": "test-engine"},
+                "dirty": False,
+            },
+            changed_files=[PrChangedFile(
+                path="app/source/example/Example.cls",
+                change="M",
+                symbols=(PrSymbolCandidate(
+                    "app/source/example/Example.cls", "changed", 1
+                ),),
+            )],
+        )
+        seed = prepare_pre_agentic_seed(
+            self.context_request(), context_builder=lambda _: context
+        )
+        impact_request = PrImpactRequest(
+            Path("/repo"), Path("/artifacts"),
+            "app/source/example/Example.cls", "changed"
+        )
+
+        def fake_agent(*_args: object, **_kwargs: object) -> object:
+            return lambda _prompt: {
+                "summary": {
+                    "purpose": "test",
+                    "behavioral_change": "candidate",
+                    "confidence": "candidate",
+                },
+                "blast_radius": [{
+                    "source_path": "app/source/unknown/Unknown.cls",
+                    "source_symbol": "unknown",
+                    "target_path": "app/source/unknown/Unknown.cls",
+                    "target_symbol": "unknown",
+                    "relationship": "direct_caller",
+                    "graph_distance": 1,
+                    "confidence": "candidate",
+                    "evidence_ids": ["pr-context-001"],
+                    "reason": "untrusted",
+                }],
+                "test_areas": [],
+            }
+
+        with self.assertRaises(ValueError):
+            run_coordinator(
+                seed,
+                impact_request,
+                BedrockSettings(region="test", model_id="fake"),
+                agent_factory=fake_agent,
+            )
 
 
 if __name__ == "__main__":

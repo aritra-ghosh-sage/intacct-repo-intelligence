@@ -28,13 +28,62 @@
     "metrics": { "type": "object", "additionalProperties": { "type": ["integer", "number", "string", "boolean"] } },
     "agent": { "$ref": "#/$defs/Agent" }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "status": { "const": "ok" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "request": {
+            "properties": {
+              "repository": { "type": "string", "minLength": 1 },
+              "base": { "type": "string", "minLength": 1 }
+            }
+          },
+          "identity": {
+            "properties": {
+              "repository": { "type": "string", "minLength": 1 },
+              "head": { "$ref": "#/$defs/Sha" },
+              "base": { "$ref": "#/$defs/Sha" },
+              "merge_base": { "$ref": "#/$defs/Sha" },
+              "configuration_digest": { "$ref": "#/$defs/Digest" },
+              "engine_identity": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "agent": {
+            "properties": { "invoked": { "const": true } },
+            "required": ["invoked"]
+          }
+        },
+        "required": ["agent"]
+      },
+      "then": {
+        "properties": {
+          "agent": {
+            "properties": {
+              "model_id": { "type": "string", "minLength": 1 },
+              "region": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "Request": {
       "type": "object", "additionalProperties": false,
       "required": ["repository", "base", "analysis_schema"],
       "properties": {
-        "repository": { "type": "string", "minLength": 1 },
-        "base": { "type": "string", "minLength": 1 },
+        "repository": { "type": ["string", "null"], "minLength": 1 },
+        "base": { "type": ["string", "null"], "minLength": 1 },
         "analysis_schema": { "const": "ia-repomap.pr-analysis/v1" }
       }
     },
@@ -42,12 +91,12 @@
       "type": "object", "additionalProperties": false,
       "required": ["repository", "head", "base", "merge_base", "configuration_digest", "engine_identity"],
       "properties": {
-        "repository": { "type": "string", "minLength": 1 },
-        "head": { "$ref": "#/$defs/Sha" },
-        "base": { "$ref": "#/$defs/Sha" },
-        "merge_base": { "$ref": "#/$defs/Sha" },
-        "configuration_digest": { "$ref": "#/$defs/Digest" },
-        "engine_identity": { "type": "string", "minLength": 1 }
+        "repository": { "type": ["string", "null"], "minLength": 1 },
+        "head": { "anyOf": [{ "$ref": "#/$defs/Sha" }, { "type": "null" }] },
+        "base": { "anyOf": [{ "$ref": "#/$defs/Sha" }, { "type": "null" }] },
+        "merge_base": { "anyOf": [{ "$ref": "#/$defs/Sha" }, { "type": "null" }] },
+        "configuration_digest": { "anyOf": [{ "$ref": "#/$defs/Digest" }, { "type": "null" }] },
+        "engine_identity": { "type": ["string", "null"], "minLength": 1 }
       }
     },
     "Summary": {
@@ -124,10 +173,11 @@
     },
     "Agent": {
       "type": "object", "additionalProperties": false,
-      "required": ["model_id", "region", "prompt_version", "tool_contract_version", "coordinator_version"],
+      "required": ["invoked", "model_id", "region", "prompt_version", "tool_contract_version", "coordinator_version"],
       "properties": {
-        "model_id": { "type": "string", "minLength": 1 },
-        "region": { "type": "string", "minLength": 1 },
+        "invoked": { "type": "boolean" },
+        "model_id": { "type": ["string", "null"], "minLength": 1 },
+        "region": { "type": ["string", "null"], "minLength": 1 },
         "prompt_version": { "type": "string", "minLength": 1 },
         "tool_contract_version": { "type": "string", "minLength": 1 },
         "coordinator_version": { "type": "string", "minLength": 1 }
