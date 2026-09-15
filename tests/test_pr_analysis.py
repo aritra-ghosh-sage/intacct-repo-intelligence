@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -32,6 +34,24 @@ from ia_repomap_builder.pr_analysis import (
     run_pr_analysis,
     run_symbol_impact_once,
 )
+from ia_repomap_builder.identity import git_revision, is_dirty
+
+
+_LIVE_COORDINATOR_ENV = (
+    "IA_REPOMAP_RUN_LIVE_BEDROCK",
+    "IA_APP_REPO",
+    "IA_REPOMAP_ARTIFACT_ROOT",
+    "IA_APP_BASE_REF",
+    "IA_REPOMAP_EXPECTED_HEAD",
+    "IA_REPOMAP_LIVE_OUTPUT_DIR",
+    "RIPWIRE_BIN",
+)
+
+
+def _live_coordinator_enabled() -> bool:
+    return os.environ.get("IA_REPOMAP_RUN_LIVE_BEDROCK") == "1" and all(
+        os.environ.get(name) for name in _LIVE_COORDINATOR_ENV[1:]
+    )
 
 
 class PRAnalysisReportTests(unittest.TestCase):
@@ -44,6 +64,11 @@ class PRAnalysisReportTests(unittest.TestCase):
             "artifact_root": str(root / "artifacts"),
             "output_dir": str(root / "reports"),
         }
+
+    def assert_checked_in_schema(self, report: PRAnalysisReportV1) -> None:
+        schema_path = Path(__file__).parents[1] / "schemas" / "ia-repomap.pr-analysis-v1.schema.json"
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        jsonschema.validate(report.model_dump(mode="json", by_alias=True), schema)
 
     def context_identity(self) -> dict[str, object]:
         return {
@@ -97,6 +122,7 @@ class PRAnalysisReportTests(unittest.TestCase):
         self.assertEqual(calls, 0)
         self.assertTrue(report.remediation)
         PRAnalysisReportV1.model_validate(report.model_dump(by_alias=True))
+        self.assert_checked_in_schema(report)
 
     def test_run_pr_analysis_unavailable_and_error_do_not_construct_agent(self) -> None:
         for status, expected_phase in (("unavailable", "readiness"), ("error", "pr_context")):
@@ -117,6 +143,7 @@ class PRAnalysisReportTests(unittest.TestCase):
                 self.assertFalse(report.agent.invoked)
                 self.assertEqual(agent_calls, 0)
                 PRAnalysisReportV1.model_validate(report.model_dump(by_alias=True))
+                self.assert_checked_in_schema(report)
 
     def test_run_pr_analysis_invalid_context_result_is_schema_valid_error(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -127,6 +154,7 @@ class PRAnalysisReportTests(unittest.TestCase):
             self.assertEqual((report.status, report.phase), ("error", "pr_context"))
             self.assertIn("invalid result", " ".join(report.diagnostics))
             PRAnalysisReportV1.model_validate(report.model_dump(by_alias=True))
+            self.assert_checked_in_schema(report)
 
     def test_run_pr_analysis_no_seed_is_schema_valid_and_does_not_construct_agent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -142,6 +170,7 @@ class PRAnalysisReportTests(unittest.TestCase):
             self.assertIn("no_candidate_symbols", {gap.kind for gap in report.gaps})
             self.assertEqual((requests[0].limit, requests[0].offset, requests[0].history_commits), (20, 0, 500))
             PRAnalysisReportV1.model_validate(report.model_dump(by_alias=True))
+            self.assert_checked_in_schema(report)
 
     def test_run_pr_analysis_sanitizes_prompt_and_persists_after_exact_head_guard(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -525,6 +554,47 @@ class PRAnalysisReportTests(unittest.TestCase):
         self.assertEqual(agent.model.config["temperature"], 0)
         self.assertEqual(agent.model.config["max_tokens"], 4096)
         self.assertEqual(type(agent.tool_executor).__name__, "SequentialToolExecutor")
+
+    @unittest.skipUnless(
+        _live_coordinator_enabled(),
+        "set IA_REPOMAP_RUN_LIVE_BEDROCK=1 and all coordinator smoke inputs",
+    )
+    def test_live_ia_app_coordinator_smoke(self) -> None:
+        repo = Path(os.environ["IA_APP_REPO"]).resolve()
+        artifact_root = Path(os.environ["IA_REPOMAP_ARTIFACT_ROOT"]).resolve()
+        output_dir = Path(os.environ["IA_REPOMAP_LIVE_OUTPUT_DIR"]).resolve()
+        expected_head = os.environ["IA_REPOMAP_EXPECTED_HEAD"]
+        self.assertEqual(git_revision(repo), expected_head)
+        self.assertFalse(is_dirty(repo))
+
+        report = run_pr_analysis(
+            PRAnalysisRequestV1.model_validate({
+                "schema": "ia-repomap.pr-analysis-request/v1",
+                "repo_root": str(repo),
+                "base_ref": os.environ["IA_APP_BASE_REF"],
+                "artifact_root": str(artifact_root),
+                "output_dir": str(output_dir),
+            }),
+            settings=load_bedrock_settings(),
+            allow_source_inspection=False,
+        )
+        self.assertEqual((report.status, report.phase), ("ok", "analysis"))
+        self.assertTrue(report.agent.invoked)
+        self.assertEqual(report.identity.head, expected_head)
+        self.assertFalse(is_dirty(repo))
+        self.assertEqual(git_revision(repo), expected_head)
+        self.assertLessEqual(report.metrics.get("impact_calls", 0), 5)
+        self.assertEqual(report.metrics.get("inspection_calls", 0), 0)
+
+        report_json = output_dir / "pr-analysis.json"
+        report_markdown = output_dir / "pr-analysis.md"
+        raw_xml = output_dir / "evidence" / "pr-context.xml"
+        self.assertTrue(report_json.is_file())
+        self.assertTrue(report_markdown.is_file())
+        self.assertTrue(raw_xml.is_file())
+        payload = json.loads(report_json.read_text(encoding="utf-8"))
+        evidence = next(item for item in payload["evidence"] if item["evidence_id"] == "pr-context-001")
+        self.assertEqual(hashlib.sha256(raw_xml.read_bytes()).hexdigest(), evidence["sha256"])
 
     def test_symbol_impact_adapter_authorizes_once_and_registers_xml(self) -> None:
         context = PrContextResult(status="ok", changed_files=[PrChangedFile(
