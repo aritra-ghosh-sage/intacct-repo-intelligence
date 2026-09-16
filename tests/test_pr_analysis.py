@@ -13,12 +13,14 @@ import jsonschema
 from pydantic import ValidationError
 
 from ia_repomap_builder.config import (
+    PrAffectedTestCandidate,
     PrChangedFile,
     PrContextGap,
     PrContextRequest,
     PrContextResult,
     PrImpactRequest,
     PrImpactResult,
+    PrImpactedFileCandidate,
     PrSymbolCandidate,
 )
 from ia_repomap_builder.pr_analysis import (
@@ -838,6 +840,111 @@ class PRAnalysisReportTests(unittest.TestCase):
         )
         self.assertIn("impact_ambiguous", {gap.kind for gap in report.gaps})
         self.assertIn("impact warning", report.diagnostics)
+
+    def test_coordinator_adds_host_affected_tests_without_authorizing_symbols(self) -> None:
+        changed_path = "app/source/example/Example.cls"
+        impacted_path = "app/source/service/Caller.cls"
+        test_path = "app/source/tests/ExampleTest.cls"
+        context = PrContextResult(
+            status="ok",
+            raw_xml="<pr-context/>",
+            identity=self.context_identity(),
+            changed_files=[PrChangedFile(
+                path=changed_path,
+                change="M",
+                symbols=(PrSymbolCandidate(changed_path, "changed", 1),),
+                impact_files=(PrImpactedFileCandidate(impacted_path, 2),),
+                affected_tests=(PrAffectedTestCandidate(test_path, "run ExampleTest"),),
+            )],
+        )
+        seed = prepare_pre_agentic_seed(
+            self.context_request(), context_builder=lambda _: context
+        )
+        session = EvidenceSession(seed)
+        self.assertIn(impacted_path, session.allowed_paths)
+        self.assertIn(test_path, session.allowed_paths)
+
+        impact_request = PrImpactRequest(
+            Path("/repo"), Path("/artifacts"), changed_path, "changed"
+        )
+        report = run_coordinator(
+            seed,
+            impact_request,
+            BedrockSettings(region="test", model_id="fake"),
+            agent_factory=lambda _settings, tools: lambda _prompt: {
+                "summary": {
+                    "purpose": "test",
+                    "behavioral_change": "candidate",
+                    "confidence": "candidate",
+                },
+                "blast_radius": [],
+                "test_areas": [],
+            },
+        )
+        self.assertEqual(len(report.test_areas), 1)
+        self.assertEqual(report.test_areas[0].paths, [test_path])
+        self.assertEqual(report.test_areas[0].confidence, "candidate")
+        self.assertEqual(report.test_areas[0].execution_status, "not_run")
+        self.assertIn("run ExampleTest", report.test_areas[0].reason)
+
+        invented_symbol_agent = lambda _settings, tools: lambda _prompt: {
+            "summary": {
+                "purpose": "test",
+                "behavioral_change": "candidate",
+                "confidence": "candidate",
+            },
+            "blast_radius": [{
+                "source_path": changed_path,
+                "source_symbol": "changed",
+                "target_path": impacted_path,
+                "target_symbol": "invented",
+                "relationship": "transitive_reacher",
+                "graph_distance": None,
+                "confidence": "candidate",
+                "evidence_ids": ["pr-context-001"],
+                "reason": "file-only evidence has no target symbol",
+            }],
+            "test_areas": [],
+        }
+        with self.assertRaisesRegex(ValueError, "symbols outside host evidence"):
+            run_coordinator(
+                seed,
+                impact_request,
+                BedrockSettings(region="test", model_id="fake"),
+                agent_factory=invented_symbol_agent,
+            )
+
+    def test_no_seed_report_retains_affected_tests_and_cap_gaps(self) -> None:
+        changed_path = "app/source/example/Example.cls"
+        test_path = "app/source/tests/ExampleTest.cls"
+        context = PrContextResult(
+            status="ok",
+            raw_xml="<pr-context/>",
+            identity=self.context_identity(),
+            changed_files=[PrChangedFile(
+                path=changed_path,
+                change="M",
+                affected_tests=(PrAffectedTestCandidate(test_path),),
+            )],
+            gaps=[
+                PrContextGap("impact_truncated", "impact files capped", 2),
+                PrContextGap("affected_tests_truncated", "tests capped", 1),
+            ],
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            request = PRAnalysisRequestV1.model_validate(
+                self.coordinator_request(directory)
+            )
+            report = run_pr_analysis(request, context_builder=lambda _: context)
+        self.assertEqual((report.status, report.phase), ("ok", "pr_context"))
+        self.assertFalse(report.agent.invoked)
+        self.assertEqual(report.test_areas[0].paths, [test_path])
+        self.assertEqual(report.test_areas[0].execution_status, "not_run")
+        self.assertEqual(
+            {gap.kind for gap in report.gaps},
+            {"impact_truncated", "affected_tests_truncated", "no_candidate_symbols"},
+        )
+        self.assert_checked_in_schema(report)
 
     def test_coordinator_rejects_incomplete_identity_before_agent(self) -> None:
         context = PrContextResult(

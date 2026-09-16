@@ -11,11 +11,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import (
-    PrChangedFile,
+    PrAffectedTestCandidate,
     PrCallerCandidate,
+    PrChangedFile,
     PrContextGap,
     PrContextRequest,
     PrContextResult,
+    PrImpactedFileCandidate,
     PrSymbolCandidate,
 )
 from .engines import _ripwire_binary
@@ -313,6 +315,9 @@ def _parse_pr_context_xml(
         raise ValueError("Ripwire output is not a ripwire.pr-context/v1 XML document")
 
     symbols_by_path: dict[str, tuple[PrSymbolCandidate, ...]] = {}
+    impact_by_path: dict[str, tuple[PrImpactedFileCandidate, ...]] = {}
+    tests_by_path: dict[str, tuple[PrAffectedTestCandidate, ...]] = {}
+    file_evidence_gaps: list[PrContextGap] = []
     caller_evidence: dict[tuple[str, str, int | None, str | None], _CallerEvidence] = {}
     xml_paths: set[str] = set()
     for file_node in root.findall("./file"):
@@ -323,6 +328,13 @@ def _parse_pr_context_xml(
         if path is None:
             continue
         xml_paths.add(path)
+        impact_by_path[path], impact_gaps = _parse_impacted_files(
+            repo_root, scope, file_node, path
+        )
+        tests_by_path[path], test_gaps = _parse_affected_tests(
+            repo_root, scope, file_node, path
+        )
+        file_evidence_gaps.extend((*impact_gaps, *test_gaps))
         symbols: list[PrSymbolCandidate] = []
         for symbol in file_node.findall("./changed-symbols/s"):
             name = symbol.attrib.get("n")
@@ -343,7 +355,7 @@ def _parse_pr_context_xml(
         symbols_by_path[path] = tuple(sorted(symbols, key=lambda item: (item.line or 0, item.name)))
 
     changed_files: list[PrChangedFile] = []
-    gaps = _root_gaps(root)
+    gaps = [*_root_gaps(root), *file_evidence_gaps]
     missing = 0
     symbols_before = 0
     symbols_after = 0
@@ -438,6 +450,8 @@ def _parse_pr_context_xml(
                 change=change.change,
                 old_path=change.old_path,
                 symbols=symbols,
+                impact_files=impact_by_path.get(change.path, ()),
+                affected_tests=tests_by_path.get(change.path, ()),
             )
         )
 
@@ -483,6 +497,105 @@ def _parse_pr_context_xml(
             }
         )
     return changed_files, gaps, metrics
+
+
+def _parse_impacted_files(
+    repo_root: Path,
+    scope: str,
+    file_node: ET.Element,
+    changed_path: str,
+) -> tuple[tuple[PrImpactedFileCandidate, ...], list[PrContextGap]]:
+    impact = file_node.find("./impact")
+    if impact is None:
+        return (), []
+    candidates: dict[str, PrImpactedFileCandidate] = {}
+    invalid = 0
+    for row in impact.findall("./f"):
+        path = _normalized_evidence_path(repo_root, scope, row.attrib.get("p"))
+        dependent_symbols = _as_int(row.attrib.get("deps"))
+        if path is None or dependent_symbols is None:
+            invalid += 1
+            continue
+        existing = candidates.get(path)
+        if existing is None or dependent_symbols > existing.dependent_symbols:
+            candidates[path] = PrImpactedFileCandidate(path, dependent_symbols)
+    gaps: list[PrContextGap] = []
+    if invalid:
+        gaps.append(PrContextGap(
+            "impact_file_unavailable",
+            f"Ripwire impact-file rows for {changed_path} were malformed or outside configured scope",
+            invalid,
+        ))
+    omitted = _omitted_rows(impact, len(candidates))
+    if omitted:
+        gaps.append(PrContextGap(
+            "impact_truncated",
+            f"Ripwire did not expose all impacted files for {changed_path}",
+            omitted,
+        ))
+    return tuple(candidates[path] for path in sorted(candidates)), gaps
+
+
+def _parse_affected_tests(
+    repo_root: Path,
+    scope: str,
+    file_node: ET.Element,
+    changed_path: str,
+) -> tuple[tuple[PrAffectedTestCandidate, ...], list[PrContextGap]]:
+    tests = file_node.find("./tests")
+    if tests is None:
+        return (), []
+    candidates: dict[str, PrAffectedTestCandidate] = {}
+    invalid = 0
+    for row in tests.findall("./test"):
+        path = _normalized_evidence_path(repo_root, scope, row.attrib.get("p"))
+        if path is None:
+            invalid += 1
+            continue
+        runner = row.attrib.get("run") or None
+        candidates[path] = PrAffectedTestCandidate(path, runner)
+    gaps: list[PrContextGap] = []
+    if invalid:
+        gaps.append(PrContextGap(
+            "affected_test_unavailable",
+            f"Ripwire affected-test rows for {changed_path} were malformed or outside configured scope",
+            invalid,
+        ))
+    omitted = _omitted_rows(tests, len(candidates), total_attribute="count")
+    if omitted:
+        gaps.append(PrContextGap(
+            "affected_tests_truncated",
+            f"Ripwire did not expose all affected tests for {changed_path}",
+            omitted,
+        ))
+    return tuple(candidates[path] for path in sorted(candidates)), gaps
+
+
+def _normalized_evidence_path(repo_root: Path, scope: str, value: str | None) -> str | None:
+    if not value:
+        return None
+    raw = Path(value)
+    if not raw.is_absolute() and ".." in raw.parts:
+        return None
+    path = _normalize_scope_path(repo_root, scope, value)
+    if path is None or not _path_in_scope(path, scope):
+        return None
+    return path
+
+
+def _omitted_rows(
+    node: ET.Element,
+    normalized_count: int,
+    *,
+    total_attribute: str = "files_other",
+) -> int:
+    total = _as_int(node.attrib.get(total_attribute))
+    shown = _as_int(node.attrib.get("shown"))
+    capped = node.attrib.get("capped") in {"1", "true"}
+    if total is not None:
+        omitted = max(total - (shown if shown is not None else normalized_count), 0)
+        return max(omitted, 1) if capped else omitted
+    return 1 if capped else 0
 
 
 def _parse_callers(

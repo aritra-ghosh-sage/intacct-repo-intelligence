@@ -269,9 +269,11 @@ The adapter uses `direct-callers-v1` to normalize only `<caller>` rows attached
 to hunk-selected symbols. Caller paths and positive line numbers are required;
 malformed, out-of-scope, unresolved, and capped rows remain explicit gaps.
 Direct callers are one-hop `candidate` navigation evidence, not confirmed
-blast-radius conclusions. The root aggregate impact, affected tests, owners,
-and co-change rows remain available only in canonical XML; symbol-scoped impact
-is the separate on-demand expansion described below.
+blast-radius conclusions. Per-file aggregate impact and affected-test paths are
+normalized as candidate context with explicit cap and path gaps. Affected tests
+become `not_run` report test areas; file-only impact cannot create symbol-level
+blast-radius rows. Owners and co-change rows remain available only in canonical
+XML; symbol-scoped impact is the separate on-demand expansion described below.
 
 The on-demand `symbol-impact-v1` API accepts one hunk-selected symbol and runs
 Ripwire's `--impact=file:symbol` query against the exact prepared index. Its
@@ -333,6 +335,7 @@ mean that a target `ia-app` checkout has been onboarded.
 | 12 | `complete` | On-demand `symbol-impact-v1` expands one hunk-selected symbol through Ripwire's symbol-scoped impact query while retaining lower-bound and graph uncertainty evidence. | Focused and complete suites pass; two isolated PR #50176 runs returned `validateSingleRequest` at line 30 for `buildTemplateFilters`, with `defs=1`, `reaches=1`, `radius_tested=0`, `radius_untested=1`, byte-identical XML, and deterministic normalized output. |
 | 13 | `complete` | The local JSON module interface exposes `symbol-impact` for agent-selected, on-demand impact expansion without implicit preparation. | CLI help, argument validation, status/remediation, serialization, and output-safety tests pass; two exact-revision PR #50176 command runs return `validateSingleRequest` at line 30 with byte-identical XML and deterministic envelopes. |
 | 14 | `complete` | A local Strands coordinator validates requests, enforces bounded impact and opt-in inspection, checks the post-run revision, and publishes an atomic external report bundle. | Fake-agent, inspection, output, and JSON-schema provenance tests pass with the complete suite (128 tests, 3 environment-gated skips); `git diff --check` passes. Live Bedrock and hosted integration remain deferred. |
+| 15 | `complete` | Ripwire per-file impact and affected-test rows are normalized into bounded candidate context; affected tests become deterministic `not_run` report areas without authorizing file-only evidence as symbols. | Focused PR-context and coordinator suites pass; the complete suite passes with 136 tests (4 environment-gated skips), editor diagnostics are clean, and `git diff --check` passes. |
 
 ## Acceptance criteria
 

@@ -163,6 +163,24 @@ class PrSymbolCandidate:
 
 
 @dataclass(frozen=True)
+class PrImpactedFileCandidate:
+    """A candidate impacted file summarized by Ripwire PR context."""
+
+    path: str
+    dependent_symbols: int
+    confidence: str = "candidate"
+
+
+@dataclass(frozen=True)
+class PrAffectedTestCandidate:
+    """A candidate affected test returned by Ripwire PR context."""
+
+    path: str
+    runner: str | None = None
+    confidence: str = "candidate"
+
+
+@dataclass(frozen=True)
 class PrChangedFile:
     """A Git-authoritative changed path with optional candidate symbols."""
 
@@ -170,6 +188,8 @@ class PrChangedFile:
     change: str
     old_path: str | None = None
     symbols: tuple[PrSymbolCandidate, ...] = ()
+    impact_files: tuple[PrImpactedFileCandidate, ...] = ()
+    affected_tests: tuple[PrAffectedTestCandidate, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -212,6 +232,8 @@ class PrContextResult:
                         }
                         for symbol in changed.symbols
                     ],
+                    "impact_files": [item.__dict__ for item in changed.impact_files],
+                    "affected_tests": [item.__dict__ for item in changed.affected_tests],
                 }
                 for changed in self.changed_files
             ],

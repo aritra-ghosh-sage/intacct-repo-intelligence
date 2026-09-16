@@ -15,6 +15,7 @@ from ia_repomap_builder import (
     PHP_FAMILY_EXTENSIONS,
     PrepareRepoMapRequest,
     PrContextRequest,
+    PrContextResult,
     PrSymbolCandidate,
     RepoMapConfig,
     build_pr_context,
@@ -67,6 +68,13 @@ PR_XML = """\
  graph_unresolved="2" counts_floor="1" history_scope="head-count"
  history_commits="500">
   <file p="gl/Added.ent" symbols="2">
+        <impact dependents="4" files="3" files_other="2" shown="2" capped="0">
+            <f p="gl/Caller.cls" deps="3"/>
+            <f p="gl/Invoker.cls" deps="1"/>
+        </impact>
+        <tests count="1" shown="1" capped="0">
+            <test p="gl/tests/AddedTest.cls" run="php test.php AddedTest"/>
+        </tests>
     <changed-symbols count="2">
       <s t="cls" n="Added" p="gl/Added.ent:2" callers="1" shown="1" capped="0">
         <caller t="method" n="build" p="gl/Caller.cls:10"/>
@@ -544,6 +552,17 @@ not a hunk @@ -1 +2 @@
         self.assertEqual(metrics["direct_callers_unresolved"], 0)
         self.assertEqual(metrics["direct_callers_capped"], 0)
         self.assertNotIn("hunk_symbol_unresolved", {gap.kind for gap in gaps})
+        self.assertEqual(
+            [(item.path, item.dependent_symbols) for item in changed[0].impact_files],
+            [
+                ("app/source/gl/Caller.cls", 3),
+                ("app/source/gl/Invoker.cls", 1),
+            ],
+        )
+        self.assertEqual(
+            [(item.path, item.runner) for item in changed[0].affected_tests],
+            [("app/source/gl/tests/AddedTest.cls", "php test.php AddedTest")],
+        )
 
         added, _, _ = _parse_pr_context_xml(
             self.root,
@@ -643,6 +662,57 @@ not a hunk @@ -1 +2 @@
             {"caller_location_unavailable", "caller_out_of_scope", "caller_truncated"},
         )
         self.assertTrue(all(not caller.path.startswith("/") for caller in symbol.callers))
+
+    def test_file_evidence_dedupes_and_discloses_invalid_and_capped_rows(self) -> None:
+        xml = """\
+<pr-context schema="ripwire.pr-context/v1">
+  <file p="gl/Added.ent">
+    <impact files_other="4" shown="3" capped="1">
+      <f p="gl/Caller.cls" deps="1"/>
+      <f p="gl/Caller.cls" deps="3"/>
+      <f p="../outside.cls" deps="2"/>
+    </impact>
+    <tests count="3" shown="2" capped="1">
+      <test p="gl/tests/AddedTest.cls" run="php test.php AddedTest"/>
+      <test p="/outside/Test.cls"/>
+    </tests>
+    <changed-symbols count="0"/>
+  </file>
+</pr-context>
+"""
+        changed, gaps, _ = _parse_pr_context_xml(
+            self.root,
+            "app/source",
+            xml,
+            [_GitChange("app/source/gl/Added.ent", "M")],
+            hunk_ranges={"app/source/gl/Added.ent": ((1, 1),)},
+        )
+        self.assertEqual(
+            [(item.path, item.dependent_symbols) for item in changed[0].impact_files],
+            [("app/source/gl/Caller.cls", 3)],
+        )
+        self.assertEqual(
+            [(item.path, item.runner) for item in changed[0].affected_tests],
+            [("app/source/gl/tests/AddedTest.cls", "php test.php AddedTest")],
+        )
+        gaps_by_kind = {gap.kind: gap.count for gap in gaps}
+        self.assertEqual(gaps_by_kind["impact_file_unavailable"], 1)
+        self.assertEqual(gaps_by_kind["impact_truncated"], 1)
+        self.assertEqual(gaps_by_kind["affected_test_unavailable"], 1)
+        self.assertEqual(gaps_by_kind["affected_tests_truncated"], 1)
+
+    def test_pr_context_serialization_includes_file_evidence(self) -> None:
+        changed, _, _ = _parse_pr_context_xml(
+            self.root,
+            "app/source",
+            PR_XML,
+            [_GitChange("app/source/gl/Added.ent", "M")],
+            hunk_ranges={"app/source/gl/Added.ent": ((3, 3),)},
+        )
+        payload = PrContextResult(status="ok", changed_files=changed).as_dict()
+        changed_payload = payload["changed_files"][0]
+        self.assertEqual(changed_payload["impact_files"][0]["confidence"], "candidate")
+        self.assertEqual(changed_payload["affected_tests"][0]["confidence"], "candidate")
 
     def test_scope_filtering_preserves_explicit_gaps(self) -> None:
         selected, gaps = _in_scope_changes(

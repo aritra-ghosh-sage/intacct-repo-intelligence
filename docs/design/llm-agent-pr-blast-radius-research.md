@@ -161,9 +161,10 @@ from ordered Ripwire start lines and intersected with positive-side Git hunks;
 the result remains candidate navigation evidence. Direct caller rows attached to
 those selected symbols are now normalized as one-hop `candidate` relationships;
 an on-demand symbol-scoped impact query now normalizes transitive reachers as
-lower-bound `candidate` relationships. Aggregate affected-test, co-change, and
-owner relationships remain canonical XML evidence and are not yet normalized as
-blast-radius conclusions.
+lower-bound `candidate` relationships. Per-file aggregate impact and
+affected-test paths are normalized as candidate context with explicit path and
+cap gaps. Affected tests become deterministic `not_run` report areas; co-change
+and owner relationships remain canonical XML evidence only.
 
 The local Strands coordinator is now implemented around those APIs. It validates
 the request and deterministic early-return states before constructing one
@@ -180,10 +181,10 @@ The research MVP is therefore at these boundaries:
 | Changed-file and candidate-symbol seeds | Partial | Implemented with hunk-to-enclosing-definition attribution, explicit identity, and gap checks. |
 | Direct callers | Partial | `direct-callers-v1` normalizes callers for hunk-selected symbols with explicit cap and location gaps. |
 | Symbol-scoped transitive impact | Partial | `symbol-impact-v1` expands one selected symbol on demand; counts and rows remain static-analysis floors with explicit graph gaps. |
-| Affected tests | Not implemented | Test rows remain available only in retained Ripwire XML. |
+| Affected tests | Partial | Ripwire PR-context test paths are normalized into deterministic candidate `test_areas` with `execution_status="not_run"`; this is not executed coverage. |
 | Bounded coordinator agent loop | Partial | A local Strands coordinator consumes the seed, may request bounded impact and opt-in inspection, and emits a schema-validated report; no hosted or GitHub loop exists. |
 | Test-index cross-reference | Not implemented | No test-to-source index or coverage lookup is wired into the coordinator. |
-| Evidence-bound blast-radius/test-suggestion JSON | Partial | The coordinator writes an external `PRAnalysisReportV1` bundle, but affected-test normalization and a complete combined blast-radius contract remain deferred. |
+| Evidence-bound blast-radius/test-suggestion JSON | Partial | The coordinator writes an external `PRAnalysisReportV1` bundle with normalized affected-test areas; complete dynamic blast radius and coverage remain deferred. |
 | Aider/Ripwire/lexical bakeoff | Not run | The acceptance dataset and comparative measurements remain outstanding. |
 
 ### Live retrieval finding

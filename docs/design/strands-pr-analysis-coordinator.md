@@ -377,10 +377,13 @@ flowchart TD
     Tests --> Report[Evidence-bound lower-bound report]
 ```
 
-Downstream callees, dynamic manager lookups, configuration wiring, owners,
-co-change relationships, and affected tests are not silently promoted into
-confirmed graph impact. If found through source inspection, they remain
-source-verified candidates. If not inspected, the report records the gap.
+Downstream callees, dynamic manager lookups, configuration wiring, owners, and
+co-change relationships are not silently promoted into confirmed graph impact.
+Ripwire per-file impact and affected-test paths are normalized as candidate
+context; affected tests become deterministic `not_run` test areas, while
+file-only impact cannot create symbol-level blast-radius rows. Source-inspected
+relationships remain candidates, and unavailable or capped evidence remains an
+explicit gap.
 
 ## Agent instructions
 

@@ -91,8 +91,11 @@ treated as complete evidence. Canonical Ripwire XML is retained verbatim.
 The adapter also exposes `direct-callers-v1` evidence for callers nested under
 hunk-selected symbols. These one-hop relationships remain `candidate` evidence;
 caller caps, malformed locations, and out-of-scope rows are reported as gaps.
-The root aggregate impact, affected tests, owners, and co-change data remain in
-the PR-context raw XML and are not normalized as complete blast-radius results.
+Per-file aggregate impact paths and affected-test paths are normalized as
+`candidate` context with explicit malformed, out-of-scope, and cap gaps.
+Affected tests become deterministic report `test_areas` with
+`execution_status="not_run"`; file-only impact does not mint symbol-level blast
+radius rows. Owners and co-change data remain only in the canonical raw XML.
 
 For an explicit next hop, the `symbol-impact` module command (or
 `build_symbol_impact(PrImpactRequest(...))`) runs Ripwire's

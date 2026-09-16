@@ -287,6 +287,10 @@ class EvidenceSession:
             self._allowed_paths.add(changed.path)
             if changed.old_path:
                 self._allowed_paths.add(changed.old_path)
+            for impacted in changed.impact_files:
+                self._allowed_paths.add(impacted.path)
+            for affected_test in changed.affected_tests:
+                self._allowed_paths.add(affected_test.path)
             for symbol in changed.symbols:
                 self._allowed_symbols.add((symbol.path, symbol.name))
                 self._allowed_paths.add(symbol.path)
@@ -531,6 +535,47 @@ def _merge_payloads(
     return merged
 
 
+def _affected_test_areas(context: PrContextResult) -> list[TestArea]:
+    """Convert host-normalized Ripwire test evidence into report rows."""
+
+    areas: list[TestArea] = []
+    for changed in sorted(context.changed_files, key=lambda item: item.path):
+        if not changed.affected_tests:
+            continue
+        tests = sorted(changed.affected_tests, key=lambda item: item.path)
+        runners = sorted({item.runner for item in tests if item.runner})
+        reason = f"Ripwire identified these tests in the lower-bound impact of {changed.path}."
+        if runners:
+            reason += " Disclosed runners: " + "; ".join(runners)
+        areas.append(TestArea(
+            area=f"Affected tests for {changed.path}",
+            paths=[item.path for item in tests],
+            reason=reason,
+            confidence="candidate",
+            evidence_ids=["pr-context-001"],
+            execution_status="not_run",
+        ))
+    return areas
+
+
+def _merge_test_areas(*collections: list[TestArea]) -> list[TestArea]:
+    unique: dict[tuple[Any, ...], TestArea] = {}
+    for area in (item for collection in collections for item in collection):
+        key = (
+            area.area,
+            tuple(area.paths),
+            area.reason,
+            area.confidence,
+            tuple(area.evidence_ids),
+            area.execution_status,
+        )
+        unique[key] = area
+    return sorted(
+        unique.values(),
+        key=lambda item: (item.area, tuple(item.paths), item.reason),
+    )
+
+
 def run_symbol_impact_once(
     session: EvidenceSession,
     request: PrImpactRequest,
@@ -736,6 +781,7 @@ def run_coordinator(
                 execution_status="not_run",
             )],
         )
+    test_areas = _merge_test_areas(_affected_test_areas(seed.context), draft.test_areas)
     session.validate_model_paths(draft)
     for row in draft.blast_radius:
         session.require_evidence(row.evidence_ids)
@@ -782,7 +828,7 @@ def run_coordinator(
             for changed in seed.context.changed_files
         ],
         blast_radius=draft.blast_radius,
-        test_areas=draft.test_areas,
+        test_areas=test_areas,
         gaps=[
             *(
                 {
@@ -879,6 +925,7 @@ def _report_from_context(
         remediation = ["Review the diagnostics and retry only after the reported failure is resolved"]
     else:
         remediation = []
+    test_areas = _affected_test_areas(context) if effective_status == "ok" else []
     return PRAnalysisReportV1(
         schema="ia-repomap.pr-analysis/v1",
         status=effective_status,
@@ -892,7 +939,7 @@ def _report_from_context(
         },
         changed_files=changed_files,
         blast_radius=[],
-        test_areas=[],
+        test_areas=test_areas,
         gaps=gaps,
         evidence=evidence,
         diagnostics=diagnostics,
