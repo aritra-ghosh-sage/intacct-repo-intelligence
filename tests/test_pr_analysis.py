@@ -14,15 +14,17 @@ from pydantic import ValidationError
 
 from ia_repomap_builder.config import (
     PrAffectedTestCandidate,
+    PrCallerCandidate,
     PrChangedFile,
     PrContextGap,
     PrContextRequest,
     PrContextResult,
+    PrImpactedFileCandidate,
     PrImpactRequest,
     PrImpactResult,
-    PrImpactedFileCandidate,
     PrSymbolCandidate,
 )
+from ia_repomap_builder.identity import git_revision, is_dirty
 from ia_repomap_builder.pr_analysis import (
     BedrockSettings,
     EvidenceRecord,
@@ -36,8 +38,6 @@ from ia_repomap_builder.pr_analysis import (
     run_pr_analysis,
     run_symbol_impact_once,
 )
-from ia_repomap_builder.identity import git_revision, is_dirty
-
 
 _LIVE_COORDINATOR_ENV = (
     "IA_REPOMAP_RUN_LIVE_BEDROCK",
@@ -622,7 +622,7 @@ class PRAnalysisReportTests(unittest.TestCase):
     def test_bedrock_agent_uses_deterministic_generation_limits(self) -> None:
         agent = build_bedrock_agent(BedrockSettings(region="us-east-1", model_id="test-model"))
         self.assertEqual(agent.model.config["temperature"], 0)
-        self.assertEqual(agent.model.config["max_tokens"], 4096)
+        self.assertEqual(agent.model.config["max_tokens"], 1024)
         self.assertEqual(type(agent.tool_executor).__name__, "SequentialToolExecutor")
 
     @unittest.skipUnless(
@@ -663,6 +663,8 @@ class PRAnalysisReportTests(unittest.TestCase):
         self.assertTrue(report_markdown.is_file())
         self.assertTrue(raw_xml.is_file())
         payload = json.loads(report_json.read_text(encoding="utf-8"))
+        schema_path = Path(__file__).parents[1] / "schemas" / "ia-repomap.pr-analysis-v1.schema.json"
+        jsonschema.validate(payload, json.loads(schema_path.read_text(encoding="utf-8")))
         evidence = next(item for item in payload["evidence"] if item["evidence_id"] == "pr-context-001")
         self.assertEqual(hashlib.sha256(raw_xml.read_bytes()).hexdigest(), evidence["sha256"])
 
@@ -689,6 +691,56 @@ class PRAnalysisReportTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             run_symbol_impact_once(session, request, impact_builder=lambda _: PrContextResult("ok"))
         self.assertEqual(session.impact_calls, 1)
+
+    def test_symbol_impact_tool_exposes_bounded_next_page(self) -> None:
+        context = PrContextResult(status="ok", changed_files=[PrChangedFile(
+            path="app/source/example/Example.cls", change="M",
+            symbols=(PrSymbolCandidate(path="app/source/example/Example.cls", name="changed", line=1),),
+        )])
+        seed = prepare_pre_agentic_seed(self.context_request(), context_builder=lambda _: context)
+        session = EvidenceSession(seed)
+        requests: list[PrImpactRequest] = []
+        result = PrImpactResult(
+            status="ok",
+            raw_xml="<impact schema=\"ripwire.impact/v1\"/>",
+            metrics={"offset": 20, "limit": 20, "has_more": 1, "next_offset": 40},
+        )
+
+        from ia_repomap_builder.pr_analysis import make_symbol_impact_tool
+
+        tool = make_symbol_impact_tool(
+            session,
+            PrImpactRequest(Path("/repo"), Path("/artifacts"), "app/source/example/Example.cls", "changed"),
+            impact_builder=lambda request: (requests.append(request), result)[1],
+        )
+        payload = tool("app/source/example/Example.cls", "changed", offset=20)
+        self.assertEqual(requests[0].offset, 20)
+        self.assertEqual(payload["pagination"], {"offset": 20, "limit": 20, "has_more": 1, "next_offset": 40})
+        self.assertEqual(payload["relationship"], "transitive_reacher")
+
+    def test_coordinator_discloses_missing_coverage_source(self) -> None:
+        context = PrContextResult(
+            status="ok",
+            raw_xml="<pr-context/>",
+            identity=self.context_identity(),
+            changed_files=[PrChangedFile(
+                path="app/source/example/Example.cls",
+                change="M",
+                symbols=(PrSymbolCandidate("app/source/example/Example.cls", "changed", 1),),
+            )],
+        )
+        report = run_coordinator(
+            prepare_pre_agentic_seed(self.context_request(), context_builder=lambda _: context),
+            PrImpactRequest(Path("/repo"), Path("/artifacts"), "app/source/example/Example.cls", "changed"),
+            BedrockSettings(region="test", model_id="fake"),
+            agent_factory=lambda _settings, tools: lambda _prompt: {
+                "summary": {"purpose": "test", "behavioral_change": "candidate", "confidence": "candidate"},
+                "blast_radius": [],
+                "test_areas": [],
+            },
+            impact_builder=lambda _: PrImpactResult(status="ok", raw_xml="<impact/>") ,
+        )
+        self.assertIn("coverage_unavailable", {gap.kind for gap in report.gaps})
 
     def test_coordinator_fake_agent_runs_tool_and_validates_report(self) -> None:
         context = PrContextResult(
@@ -727,6 +779,65 @@ class PRAnalysisReportTests(unittest.TestCase):
         report = run_coordinator(seed, request, BedrockSettings(region="test", model_id="fake"), agent_factory=lambda _, tools: FakeAgent(tools[0]), impact_builder=lambda _: impact)
         self.assertEqual(report.schema_, "ia-repomap.pr-analysis/v1")
         self.assertEqual(report.metrics["impact_calls"], 1)
+
+    def test_coordinator_retries_only_max_token_failures(self) -> None:
+        context = PrContextResult(
+            status="ok",
+            raw_xml="<pr-context/>",
+            identity=self.context_identity(),
+            changed_files=[PrChangedFile(
+                path="app/source/example/Example.cls", change="M",
+                symbols=(PrSymbolCandidate("app/source/example/Example.cls", "changed", 1),),
+            )],
+        )
+        calls: list[str] = []
+
+        def agent(_prompt: str) -> object:
+            calls.append(_prompt)
+            if len(calls) == 1:
+                raise RuntimeError("MaxTokensReachedException: maximum token limit")
+            return {
+                "summary": {"purpose": "test", "behavioral_change": "candidate", "confidence": "candidate"},
+                "blast_radius": [],
+                "test_areas": [],
+            }
+
+        report = run_coordinator(
+            prepare_pre_agentic_seed(self.context_request(), context_builder=lambda _: context),
+            PrImpactRequest(Path("/repo"), Path("/artifacts"), "app/source/example/Example.cls", "changed"),
+            BedrockSettings(region="test", model_id="fake"),
+            agent_factory=lambda _settings, tools: agent,
+            impact_builder=lambda _: PrImpactResult(status="ok", raw_xml="<impact/>") ,
+        )
+        self.assertEqual(report.status, "ok")
+        self.assertEqual(len(calls), 2)
+        self.assertIn("Do not call tools", calls[1])
+
+    def test_coordinator_uses_evidence_fallback_after_two_max_token_failures(self) -> None:
+        context = PrContextResult(
+            status="ok",
+            raw_xml="<pr-context/>",
+            identity=self.context_identity(),
+            changed_files=[PrChangedFile(
+                path="app/source/example/Example.cls", change="M",
+                symbols=(PrSymbolCandidate(
+                    "app/source/example/Example.cls", "changed", 1,
+                    callers=(PrCallerCandidate("app/source/example/Caller.cls", "caller", 2),),
+                ),),
+            )],
+        )
+        def agent(_prompt: str) -> object:
+            raise RuntimeError("MaxTokensReachedException: maximum token limit")
+
+        report = run_coordinator(
+            prepare_pre_agentic_seed(self.context_request(), context_builder=lambda _: context),
+            PrImpactRequest(Path("/repo"), Path("/artifacts"), "app/source/example/Example.cls", "changed"),
+            BedrockSettings(region="test", model_id="fake"),
+            agent_factory=lambda _settings, tools: agent,
+        )
+        self.assertEqual(report.status, "ok")
+        self.assertEqual(report.blast_radius[0].target_symbol, "caller")
+        self.assertIn("model_output_truncated", {gap.kind for gap in report.gaps})
 
     def test_degraded_coordinator_returns_file_action_without_symbol_impact_tool(self) -> None:
         context = PrContextResult(

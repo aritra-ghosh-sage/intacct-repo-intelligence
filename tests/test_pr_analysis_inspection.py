@@ -7,11 +7,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from ia_repomap_builder.config import PrContextResult
+from ia_repomap_builder.config import PrChangedFile, PrContextResult, PrSymbolCandidate
 from ia_repomap_builder.pr_analysis import EvidenceSession, PreAgenticSeed
 from ia_repomap_builder.pr_analysis_inspection import (
-    make_repository_inspection_tool,
     inspect_repository,
+    make_repository_inspection_tool,
 )
 
 
@@ -214,6 +214,35 @@ class InspectionTests(unittest.TestCase):
             second = tool(["Example"])
             self.assertEqual(second["status"], "ok")
             self.assertTrue(second["matches"])
+        finally:
+            handle.cleanup()
+
+    def test_pr_context_paths_and_symbols_are_authorized(self) -> None:
+        handle, root = self.repo()
+        try:
+            seed = PreAgenticSeed(
+                "ok",
+                "analysis",
+                context=PrContextResult(
+                    "ok",
+                    changed_files=[PrChangedFile(
+                        path="src/example.cls",
+                        change="M",
+                        symbols=(PrSymbolCandidate("src/example.cls", "changed", 2),),
+                    )],
+                ),
+                allowed_symbols=(("src/example.cls", "changed"),),
+            )
+            session = EvidenceSession(seed)
+            result = inspect_repository(
+                root,
+                ["src/example.cls", "changed"],
+                paths=["src/example.cls"],
+                authorized_terms=session.authorized_inspection_terms,
+                authorized_paths=session.authorized_inspection_paths,
+            )
+            self.assertEqual(result["status"], "ok")
+            self.assertTrue(result["matches"])
         finally:
             handle.cleanup()
 

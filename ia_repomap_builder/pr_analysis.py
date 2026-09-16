@@ -10,18 +10,26 @@ from pathlib import Path
 from typing import Any, Literal
 
 from dotenv import dotenv_values
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from .config import PrContextRequest, PrContextResult, PrImpactRequest
+from .identity import git_revision, is_dirty
 from .impact import build_symbol_impact
 from .pr_context import build_pr_context
-from .identity import git_revision, is_dirty
 
 Confidence = Literal["candidate", "unresolved", "unavailable"]
 Status = Literal["ok", "unavailable", "error"]
 Phase = Literal["request_validation", "readiness", "pr_context", "analysis", "persistence"]
 Relationship = Literal["direct_caller", "transitive_reacher", "source_reference"]
 Change = Literal["A", "M", "D", "R", "C"]
+MAX_AGENT_RESPONSE_TOKENS = 1024
 
 
 class StrictModel(BaseModel):
@@ -101,7 +109,7 @@ class BlastRadiusRow(StrictModel):
         return _unique_evidence_ids(value)
 
     @model_validator(mode="after")
-    def validate_graph_distance(self) -> "BlastRadiusRow":
+    def validate_graph_distance(self) -> BlastRadiusRow:
         if self.relationship == "direct_caller" and self.graph_distance != 1:
             raise ValueError("direct_caller rows require graph_distance=1")
         if self.relationship != "direct_caller" and self.graph_distance is not None:
@@ -165,7 +173,7 @@ class PRAnalysisReportV1(StrictModel):
     agent: Agent
 
     @model_validator(mode="after")
-    def validate_outcome_provenance(self) -> "PRAnalysisReportV1":
+    def validate_outcome_provenance(self) -> PRAnalysisReportV1:
         if self.status == "ok":
             request_complete = self.request.repository is not None and self.request.base is not None
             identity_complete = all(
@@ -233,7 +241,7 @@ class PRAnalysisRequestV1(StrictModel):
         return value
 
     @model_validator(mode="after")
-    def validate_paths(self) -> "PRAnalysisRequestV1":
+    def validate_paths(self) -> PRAnalysisRequestV1:
         repo = self.repo_root.resolve()
         artifact = self.artifact_root.resolve()
         output = self.output_dir.resolve()
@@ -302,10 +310,14 @@ class EvidenceSession:
         self._inspection_calls = 0
         self._tool_gaps: list[dict[str, Any]] = []
         self._tool_diagnostics: list[str] = []
-        self._inspection_paths = frozenset(path for path, _ in seed.allowed_symbols)
-        self._inspection_terms = frozenset(
-            term for path, name in seed.allowed_symbols for term in (path, name)
-        )
+        self._inspection_paths = frozenset(self._allowed_paths)
+        inspection_terms = set(self._allowed_paths)
+        inspection_terms.update(name for _, name in self._allowed_symbols)
+        for path in self._allowed_paths:
+            filename = Path(path).name
+            inspection_terms.add(filename)
+            inspection_terms.add(Path(filename).stem)
+        self._inspection_terms = frozenset(inspection_terms)
 
     def register(self, record: EvidenceRecord) -> None:
         if not record.evidence_id or record.evidence_id in self._records:
@@ -357,6 +369,10 @@ class EvidenceSession:
 
     def record_tool_failure(self, kind: str, diagnostic: str) -> None:
         self._record_gap({"kind": kind, "detail": diagnostic})
+        if diagnostic:
+            self._tool_diagnostics.append(diagnostic)
+
+    def record_tool_diagnostic(self, diagnostic: str) -> None:
         if diagnostic:
             self._tool_diagnostics.append(diagnostic)
 
@@ -414,7 +430,13 @@ class EvidenceSession:
             self._allowed_symbols.add((path, name))
             self._allowed_paths.add(path)
             self._inspection_paths = self._inspection_paths | {path}
-            self._inspection_terms = self._inspection_terms | {path, name}
+            relative = Path(path)
+            self._inspection_terms = self._inspection_terms | {
+                path,
+                name,
+                relative.name,
+                *relative.parts,
+            }
 
     def authorize_inspection_terms(self, terms: Any) -> None:
         """Allow literals surfaced by a prior bounded inspection result."""
@@ -521,6 +543,42 @@ def _with_payload_evidence(
     return PRAnalysisReportV1.model_validate(payload)
 
 
+def _is_max_tokens_failure(error: Exception) -> bool:
+    """Identify the pinned Strands max-output failure without coupling to its class."""
+
+    detail = str(error).lower()
+    return "maximum token" in detail or "maxtokensreached" in detail or "max_tokens" in detail
+
+
+def _fallback_draft(context: PrContextResult) -> AgentAnalysisDraftV1:
+    """Build only host-evidenced rows when the model cannot finish its draft."""
+
+    rows: list[BlastRadiusRow] = []
+    for changed in context.changed_files:
+        for symbol in changed.symbols:
+            for caller in symbol.callers:
+                rows.append(BlastRadiusRow(
+                    source_path=symbol.path,
+                    source_symbol=symbol.name,
+                    target_path=caller.path,
+                    target_symbol=caller.name,
+                    relationship="direct_caller",
+                    graph_distance=1,
+                    confidence="candidate",
+                    evidence_ids=["pr-context-001"],
+                    reason="Direct caller supplied by PR-context static analysis; model output was truncated.",
+                ))
+    return AgentAnalysisDraftV1(
+        summary=Summary(
+            purpose="Evidence-bound PR context analysis",
+            behavioral_change="Model output was truncated; review the changed symbols and candidate callers.",
+            confidence="unresolved",
+        ),
+        blast_radius=rows,
+        test_areas=_affected_test_areas(context),
+    )
+
+
 def _merge_payloads(
     first: list[tuple[str, bytes]],
     second: list[tuple[str, bytes]],
@@ -556,6 +614,17 @@ def _affected_test_areas(context: PrContextResult) -> list[TestArea]:
             execution_status="not_run",
         ))
     return areas
+
+
+def _coverage_gaps(context: PrContextResult) -> list[dict[str, Any]]:
+    """Disclose when no executed coverage or test index is available."""
+
+    if context.changed_files and all(not changed.affected_tests for changed in context.changed_files):
+        return [{
+            "kind": "coverage_unavailable",
+            "detail": "No test index or executed coverage source was available; candidate test areas remain not_run",
+        }]
+    return []
 
 
 def _merge_test_areas(*collections: list[TestArea]) -> list[TestArea]:
@@ -630,7 +699,7 @@ def make_symbol_impact_tool(
         raise RuntimeError("strands-agents is required for the impact tool") from exc
 
     @tool
-    def symbol_impact(symbol_path: str, symbol_name: str) -> dict[str, Any]:
+    def symbol_impact(symbol_path: str, symbol_name: str, offset: int = 0) -> dict[str, Any]:
         """Expand one PR-context candidate symbol through Ripwire."""
 
         selected = PrImpactRequest(
@@ -639,7 +708,7 @@ def make_symbol_impact_tool(
             symbol_path,
             symbol_name,
             limit=request.limit,
-            offset=request.offset,
+            offset=offset,
         )
         result = run_symbol_impact_once(
             session, selected, impact_builder=impact_builder,
@@ -651,6 +720,13 @@ def make_symbol_impact_tool(
             "gaps": [gap.__dict__ for gap in result.gaps],
             "diagnostics": list(result.diagnostics),
             "metrics": dict(result.metrics),
+            "pagination": {
+                "offset": result.metrics.get("offset", offset),
+                "limit": result.metrics.get("limit", request.limit),
+                "has_more": result.metrics.get("has_more", 0),
+                "next_offset": result.metrics.get("next_offset"),
+            },
+            "relationship": "transitive_reacher",
             "evidence_id": f"symbol-impact-{session.impact_calls:03d}" if result.raw_xml else None,
         }
 
@@ -676,7 +752,7 @@ def run_coordinator(
     if degraded and not seed.context.changed_files:
         raise ValueError("degraded coordinator requires changed files")
     if not isinstance(seed.context.identity, Mapping):
-        raise ValueError("successful PR context identity must be a mapping")
+        raise TypeError("successful PR context identity must be a mapping")
     _require_complete_context_identity(seed.context.identity)
     session = EvidenceSession(seed)
     if session_sink is not None:
@@ -710,27 +786,40 @@ def run_coordinator(
         ))
     factory = agent_factory or build_bedrock_agent
     agent = factory(settings, tools=tools)
-    normalized_context = seed.context.as_dict()
-    normalized_context.pop("raw_xml", None)
-    identity = normalized_context.get("identity")
-    if isinstance(identity, dict):
-        normalized_context["identity"] = {
-            key: identity[key]
-            for key in (
-                "repository_id",
-                "head",
-                "dirty",
-                "scope",
-                "configuration_digest",
-                "base_ref",
-                "base_revision",
-                "merge_base",
-                "engine",
-            )
-            if key in identity
+    identity = seed.context.identity
+    changed_files = [
+        {
+            "path": changed.path,
+            "change": changed.change,
+            "symbols": [
+                {
+                    "path": symbol.path,
+                    "name": symbol.name,
+                    "line": symbol.line,
+                    "kind": symbol.kind,
+                    "callers": [
+                        {"path": caller.path, "name": caller.name, "line": caller.line}
+                        for caller in symbol.callers
+                    ],
+                }
+                for symbol in changed.symbols
+            ],
+            "impact_files": [item.path for item in changed.impact_files],
+            "affected_tests": [item.path for item in changed.affected_tests],
         }
+        for changed in seed.context.changed_files
+    ]
     prompt_context = {
-        **normalized_context,
+        "identity": {
+            key: identity[key]
+            for key in ("repository_id", "head", "base_revision", "merge_base", "configuration_digest", "engine")
+            if key in identity
+        },
+        "changed_files": changed_files,
+        "gaps": [
+            {"kind": gap.kind, "count": gap.count}
+            for gap in seed.context.gaps
+        ],
         "evidence": [
             {
                 "evidence_id": "pr-context-001",
@@ -748,10 +837,13 @@ def run_coordinator(
         "Use only supplied candidate path/name pairs for impact expansion, "
         "cite registered evidence IDs, and report ambiguity, truncation, "
         "unresolved, out-of-scope, and unavailable gaps explicitly. "
-        "Use at most five impact calls and two inspection calls. "
+        "Use at most five impact calls and two inspection calls; request a next "
+        "impact page only when has_more is true and next_offset is supplied. "
         "Inspect source before consequential claims, distinguish candidate "
         "test areas from executed coverage, keep test execution_status as "
-        "not_run, and do not claim exhaustive impact. "
+        "not_run, and do not claim exhaustive impact. Keep the final report "
+        "concise: one short sentence per summary field, at most 10 blast-radius "
+        "rows, and at most 5 test areas. "
         + (
             "This is degraded file/diff analysis: do not produce symbol-level "
             "blast-radius rows; provide at least one evidence-backed test or "
@@ -760,12 +852,36 @@ def run_coordinator(
             else ""
         )
         + "Return only the requested structured report; do not include hidden "
-        "reasoning.\n"
+        "reasoning or prose outside the JSON object. Keep purpose and "
+        "behavioral_change under 160 characters, reason under 200 characters, "
+        "and return at most 20 blast-radius rows and 10 test areas.\n"
         + json.dumps(prompt_context, default=str, sort_keys=True)
     )
-    result = agent(prompt)
-    structured = getattr(result, "structured_output", result)
-    draft = structured if isinstance(structured, AgentAnalysisDraftV1) else AgentAnalysisDraftV1.model_validate(structured)
+    fallback_used = False
+    try:
+        result = agent(prompt)
+    except Exception as exc:
+        if not _is_max_tokens_failure(exc):
+            raise
+        try:
+            result = agent(
+                "Return the final AgentAnalysisDraftV1 JSON object now. Do not call tools. "
+                "Use only evidence already collected in this conversation. Keep every "
+                "string concise, blast_radius at most 5 rows, and test_areas at most 3 rows. "
+                "Output JSON only, with no explanation."
+            )
+        except Exception as retry_error:
+            if not _is_max_tokens_failure(retry_error):
+                raise
+            fallback_used = True
+            session.record_tool_diagnostic("model output remained truncated after one compact continuation")
+            draft = _fallback_draft(seed.context)
+        else:
+            structured = getattr(result, "structured_output", result)
+            draft = structured if isinstance(structured, AgentAnalysisDraftV1) else AgentAnalysisDraftV1.model_validate(structured)
+    else:
+        structured = getattr(result, "structured_output", result)
+        draft = structured if isinstance(structured, AgentAnalysisDraftV1) else AgentAnalysisDraftV1.model_validate(structured)
     if degraded and draft.blast_radius:
         raise ValueError("degraded analysis cannot produce symbol-level blast-radius rows")
     if degraded and not draft.test_areas:
@@ -838,7 +954,9 @@ def run_coordinator(
                 }
                 for gap in seed.context.gaps
             ),
+            *_coverage_gaps(seed.context),
             *session.tool_gaps,
+            *([{"kind": "model_output_truncated", "detail": "Host fallback used after bounded model continuation failed"}] if fallback_used else []),
         ],
         evidence=records,
         diagnostics=[*seed.context.diagnostics, *session.tool_diagnostics],
@@ -1232,7 +1350,7 @@ def build_bedrock_agent(settings: BedrockSettings, *, tools: list[Any] | None = 
         model_id=settings.model_id,
         region_name=settings.region,
         temperature=0,
-        max_tokens=4096,
+        max_tokens=MAX_AGENT_RESPONSE_TOKENS,
     )
     from strands.tools.executors import SequentialToolExecutor
 
