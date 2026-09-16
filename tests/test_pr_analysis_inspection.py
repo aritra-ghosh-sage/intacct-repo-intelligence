@@ -198,6 +198,23 @@ class InspectionTests(unittest.TestCase):
         finally:
             handle.cleanup()
 
+    def test_tool_response_bounds_excerpts_and_match_count(self) -> None:
+        handle, root = self.repo()
+        try:
+            path = root / "src" / "many.cls"
+            path.write_text("".join(f"changed value {index}\n" for index in range(20)), encoding="utf-8")
+            git(root, "add", ".")
+            git(root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "many lines")
+            seed = PreAgenticSeed("ok", "analysis", PrContextResult("ok"), (("src/many.cls", "changed"),))
+            session = EvidenceSession(seed)
+            tool = make_repository_inspection_tool(session, repo_root=root)
+            result = tool(["changed"])
+            self.assertLessEqual(len(result["matches"]), 10)
+            self.assertLessEqual(max(len(match["excerpt"]) for match in result["matches"]), 300)
+            self.assertTrue(any(gap["kind"] == "inspection_model_truncated" for gap in result["gaps"]))
+        finally:
+            handle.cleanup()
+
     def test_second_inspection_can_use_literal_from_first_excerpt(self) -> None:
         handle, root = self.repo()
         try:

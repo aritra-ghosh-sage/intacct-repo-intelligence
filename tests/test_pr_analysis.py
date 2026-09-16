@@ -622,7 +622,7 @@ class PRAnalysisReportTests(unittest.TestCase):
     def test_bedrock_agent_uses_deterministic_generation_limits(self) -> None:
         agent = build_bedrock_agent(BedrockSettings(region="us-east-1", model_id="test-model"))
         self.assertEqual(agent.model.config["temperature"], 0)
-        self.assertEqual(agent.model.config["max_tokens"], 1024)
+        self.assertEqual(agent.model.config["max_tokens"], 2048)
         self.assertEqual(type(agent.tool_executor).__name__, "SequentialToolExecutor")
 
     @unittest.skipUnless(
@@ -838,6 +838,36 @@ class PRAnalysisReportTests(unittest.TestCase):
         self.assertEqual(report.status, "ok")
         self.assertEqual(report.blast_radius[0].target_symbol, "caller")
         self.assertIn("model_output_truncated", {gap.kind for gap in report.gaps})
+        self.assertFalse(report.metrics["agent_output_complete"])
+        self.assertEqual(report.metrics["fallback_mode"], "evidence_only")
+
+    def test_prompt_does_not_offer_file_only_impact_as_symbol_evidence(self) -> None:
+        changed_path = "app/source/example/Example.cls"
+        impacted_path = "app/source/service/Caller.cls"
+        context = PrContextResult(
+            status="ok",
+            raw_xml="<pr-context/>",
+            identity=self.context_identity(),
+            changed_files=[PrChangedFile(
+                path=changed_path,
+                change="M",
+                symbols=(PrSymbolCandidate(changed_path, "changed", 1),),
+                impact_files=(PrImpactedFileCandidate(impacted_path, 2),),
+            )],
+        )
+        prompts: list[str] = []
+        report = run_coordinator(
+            prepare_pre_agentic_seed(self.context_request(), context_builder=lambda _: context),
+            None,
+            BedrockSettings(region="test", model_id="fake"),
+            agent_factory=lambda _settings, tools: lambda prompt: (
+                prompts.append(prompt),
+                {"summary": {"purpose": "test", "behavioral_change": "test", "confidence": "candidate"}, "blast_radius": [], "test_areas": []},
+            )[1],
+        )
+        self.assertEqual(report.status, "ok")
+        self.assertNotIn(impacted_path, prompts[0])
+        self.assertIn("file-only context", prompts[0])
 
     def test_degraded_coordinator_returns_file_action_without_symbol_impact_tool(self) -> None:
         context = PrContextResult(
@@ -1017,13 +1047,15 @@ class PRAnalysisReportTests(unittest.TestCase):
             }],
             "test_areas": [],
         }
-        with self.assertRaisesRegex(ValueError, "symbols outside host evidence"):
-            run_coordinator(
-                seed,
-                impact_request,
-                BedrockSettings(region="test", model_id="fake"),
-                agent_factory=invented_symbol_agent,
-            )
+        report = run_coordinator(
+            seed,
+            impact_request,
+            BedrockSettings(region="test", model_id="fake"),
+            agent_factory=invented_symbol_agent,
+        )
+        self.assertEqual(report.status, "ok")
+        self.assertEqual(report.blast_radius, [])
+        self.assertIn("model_rows_discarded", {gap.kind for gap in report.gaps})
 
     def test_no_seed_report_retains_affected_tests_and_cap_gaps(self) -> None:
         changed_path = "app/source/example/Example.cls"
@@ -1141,13 +1173,15 @@ class PRAnalysisReportTests(unittest.TestCase):
                 "test_areas": [],
             }
 
-        with self.assertRaises(ValueError):
-            run_coordinator(
-                seed,
-                impact_request,
-                BedrockSettings(region="test", model_id="fake"),
-                agent_factory=fake_agent,
-            )
+        report = run_coordinator(
+            seed,
+            impact_request,
+            BedrockSettings(region="test", model_id="fake"),
+            agent_factory=fake_agent,
+        )
+        self.assertEqual(report.status, "ok")
+        self.assertEqual(report.blast_radius, [])
+        self.assertIn("model_rows_discarded", {gap.kind for gap in report.gaps})
 
 
 if __name__ == "__main__":

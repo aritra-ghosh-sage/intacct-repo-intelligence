@@ -29,7 +29,7 @@ Status = Literal["ok", "unavailable", "error"]
 Phase = Literal["request_validation", "readiness", "pr_context", "analysis", "persistence"]
 Relationship = Literal["direct_caller", "transitive_reacher", "source_reference"]
 Change = Literal["A", "M", "D", "R", "C"]
-MAX_AGENT_RESPONSE_TOKENS = 1024
+MAX_AGENT_RESPONSE_TOKENS = 2048
 
 
 class StrictModel(BaseModel):
@@ -67,8 +67,8 @@ class Identity(StrictModel):
 
 
 class Summary(StrictModel):
-    purpose: str
-    behavioral_change: str
+    purpose: str = Field(max_length=160)
+    behavioral_change: str = Field(max_length=160)
     confidence: Confidence
 
 
@@ -101,7 +101,7 @@ class BlastRadiusRow(StrictModel):
     graph_distance: int | None = Field(default=None, ge=1)
     confidence: Confidence
     evidence_ids: list[str] = Field(min_length=1, max_length=20)
-    reason: str = Field(min_length=1)
+    reason: str = Field(min_length=1, max_length=200)
 
     @field_validator("evidence_ids")
     @classmethod
@@ -118,9 +118,9 @@ class BlastRadiusRow(StrictModel):
 
 
 class TestArea(StrictModel):
-    area: str = Field(min_length=1)
+    area: str = Field(min_length=1, max_length=120)
     paths: list[str] = Field(max_length=100)
-    reason: str = Field(min_length=1)
+    reason: str = Field(min_length=1, max_length=200)
     confidence: Confidence
     evidence_ids: list[str] = Field(min_length=1, max_length=20)
     execution_status: Literal["not_run"]
@@ -262,8 +262,8 @@ class AgentAnalysisDraftV1(StrictModel):
     """Model-owned analysis only; provenance and metrics stay host-owned."""
 
     summary: Summary
-    blast_radius: list[BlastRadiusRow] = Field(max_length=1000)
-    test_areas: list[TestArea] = Field(max_length=500)
+    blast_radius: list[BlastRadiusRow] = Field(max_length=10)
+    test_areas: list[TestArea] = Field(max_length=5)
 
 
 @dataclass(frozen=True)
@@ -579,6 +579,36 @@ def _fallback_draft(context: PrContextResult) -> AgentAnalysisDraftV1:
     )
 
 
+def _sanitize_model_draft(
+    session: EvidenceSession,
+    draft: AgentAnalysisDraftV1,
+) -> tuple[AgentAnalysisDraftV1, int]:
+    """Discard model rows that exceed host-authorized evidence boundaries."""
+
+    valid_radius = [
+        row
+        for row in draft.blast_radius
+        if row.source_path in session.allowed_paths
+        and row.target_path in session.allowed_paths
+        and (row.source_path, row.source_symbol) in session._allowed_symbols
+        and (row.target_path, row.target_symbol) in session._allowed_symbols
+    ]
+    valid_areas: list[TestArea] = []
+    discarded = len(draft.blast_radius) - len(valid_radius)
+    for area in draft.test_areas:
+        paths = [path for path in area.paths if path in session.allowed_paths]
+        discarded += len(area.paths) - len(paths)
+        if paths:
+            valid_areas.append(area.model_copy(update={"paths": paths}))
+        else:
+            discarded += 1
+    return AgentAnalysisDraftV1(
+        summary=draft.summary,
+        blast_radius=valid_radius,
+        test_areas=valid_areas,
+    ), discarded
+
+
 def _merge_payloads(
     first: list[tuple[str, bytes]],
     second: list[tuple[str, bytes]],
@@ -714,12 +744,23 @@ def make_symbol_impact_tool(
             session, selected, impact_builder=impact_builder,
             evidence_payloads=evidence_payloads,
         )
+        compact_metrics = {
+            key: result.metrics[key]
+            for key in (
+                "offset", "limit", "has_more", "next_offset", "shown",
+                "total", "radius_tested", "radius_untested",
+            )
+            if key in result.metrics
+        }
         return {
             "status": result.status,
             "candidates": [candidate.__dict__ for candidate in result.candidates],
-            "gaps": [gap.__dict__ for gap in result.gaps],
-            "diagnostics": list(result.diagnostics),
-            "metrics": dict(result.metrics),
+            "gaps": [
+                {"kind": gap.kind, **({"count": gap.count} if gap.count is not None else {})}
+                for gap in result.gaps
+            ],
+            "diagnostics": [diagnostic for diagnostic in result.diagnostics if diagnostic],
+            "metrics": compact_metrics,
             "pagination": {
                 "offset": result.metrics.get("offset", offset),
                 "limit": result.metrics.get("limit", request.limit),
@@ -804,7 +845,6 @@ def run_coordinator(
                 }
                 for symbol in changed.symbols
             ],
-            "impact_files": [item.path for item in changed.impact_files],
             "affected_tests": [item.path for item in changed.affected_tests],
         }
         for changed in seed.context.changed_files
@@ -835,6 +875,9 @@ def run_coordinator(
         "Treat Git changed files and exact revision identity as confirmed; "
         "treat Ripwire symbols and relationships as candidate evidence. "
         "Use only supplied candidate path/name pairs for impact expansion, "
+        "and use symbol-level blast-radius rows only for symbols returned by "
+        "PR context or symbol_impact; impact_files are file-only context and "
+        "must never be given invented target symbols. "
         "cite registered evidence IDs, and report ambiguity, truncation, "
         "unresolved, out-of-scope, and unavailable gaps explicitly. "
         "Use at most five impact calls and two inspection calls; request a next "
@@ -882,6 +925,7 @@ def run_coordinator(
     else:
         structured = getattr(result, "structured_output", result)
         draft = structured if isinstance(structured, AgentAnalysisDraftV1) else AgentAnalysisDraftV1.model_validate(structured)
+    draft, discarded_model_rows = _sanitize_model_draft(session, draft)
     if degraded and draft.blast_radius:
         raise ValueError("degraded analysis cannot produce symbol-level blast-radius rows")
     if degraded and not draft.test_areas:
@@ -956,12 +1000,22 @@ def run_coordinator(
             ),
             *_coverage_gaps(seed.context),
             *session.tool_gaps,
+            *([{
+                "kind": "model_rows_discarded",
+                "detail": "Host discarded model rows or paths outside registered evidence",
+                "count": discarded_model_rows,
+            }] if discarded_model_rows else []),
             *([{"kind": "model_output_truncated", "detail": "Host fallback used after bounded model continuation failed"}] if fallback_used else []),
         ],
         evidence=records,
         diagnostics=[*seed.context.diagnostics, *session.tool_diagnostics],
         remediation=[],
-        metrics={"impact_calls": session.impact_calls, "inspection_calls": session.inspection_calls},
+        metrics={
+            "impact_calls": session.impact_calls,
+            "inspection_calls": session.inspection_calls,
+            "agent_output_complete": not fallback_used,
+            **({"fallback_mode": "evidence_only"} if fallback_used else {}),
+        },
         agent={"invoked": True, "model_id": settings.model_id, "region": settings.region, "prompt_version": "pr-analysis-prompt-v1", "tool_contract_version": "ia-repomap.agent-tools/v1", "coordinator_version": "pr-analysis-implementation-v1"},
     )
     return report

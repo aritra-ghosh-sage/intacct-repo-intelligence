@@ -263,8 +263,36 @@ def make_repository_inspection_tool(
         session.register_inspection_evidence(evidence_id, content)
         if evidence_payloads is not None:
             evidence_payloads.append((evidence_id, content))
-        result["evidence_id"] = evidence_id
-        return result
+        model_matches = [
+            {
+                "path": match["path"],
+                "line": match["line"],
+                "term": match["term"],
+                "match_type": match["match_type"],
+                "excerpt": match.get("excerpt", "")[:300],
+            }
+            for match in result["matches"][:10]
+        ]
+        model_result = {
+            "status": result["status"],
+            "matches": model_matches,
+            "gaps": [
+                {"kind": gap["kind"], **({"count": gap["count"]} if "count" in gap else {})}
+                for gap in result["gaps"]
+            ],
+            "metrics": {
+                key: result["metrics"][key]
+                for key in ("terms", "files", "matches", "files_omitted")
+                if key in result["metrics"]
+            },
+            "evidence_id": evidence_id,
+        }
+        if len(result["matches"]) > len(model_matches):
+            model_result["gaps"].append({
+                "kind": "inspection_model_truncated",
+                "count": len(result["matches"]) - len(model_matches),
+            })
+        return model_result
 
     return inspect_repository_evidence
 
