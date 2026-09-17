@@ -30,6 +30,7 @@ from .config import (
 from .pr_context import build_pr_context
 from .impact import build_symbol_impact
 from .pr_analysis import PRAnalysisReportV1, PRAnalysisRequestV1, run_pr_analysis
+from .pr_analysis_skills import RipwireSkillPolicy, agent_skills_supported
 from .readiness import (
     check_prepared_repomap_readiness,
     check_repomap_readiness,
@@ -64,7 +65,9 @@ __all__ = [
     "build_symbol_impact",
     "PRAnalysisRequestV1",
     "PRAnalysisReportV1",
+    "RipwireSkillPolicy",
     "run_pr_analysis",
+    "agent_skills_supported",
     "EvaluationTask",
     "evaluate",
     "load_tasks",

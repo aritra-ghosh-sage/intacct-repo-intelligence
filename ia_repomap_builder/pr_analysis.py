@@ -23,6 +23,11 @@ from .config import PrContextRequest, PrContextResult, PrImpactRequest
 from .identity import git_revision, is_dirty
 from .impact import build_symbol_impact
 from .pr_context import build_pr_context
+from .pr_analysis_skills import (
+    RipwireSkillPolicy,
+    render_ripwire_skill_guidance,
+    select_ripwire_skill_profiles,
+)
 
 Confidence = Literal["candidate", "unresolved", "unavailable"]
 Status = Literal["ok", "unavailable", "error"]
@@ -782,6 +787,7 @@ def run_coordinator(
     agent_factory: Callable[..., Any] | None = None,
     impact_builder: Callable[[PrImpactRequest], Any] = build_symbol_impact,
     allow_source_inspection: bool = False,
+    ripwire_skill_policy: RipwireSkillPolicy | None = None,
     evidence_payloads: list[tuple[str, bytes]] | None = None,
     session_sink: list[EvidenceSession] | None = None,
 ) -> PRAnalysisReportV1:
@@ -825,6 +831,8 @@ def run_coordinator(
             repo_root=impact_request.repo_root,
             evidence_payloads=evidence_payloads,
         ))
+    skill_profiles = select_ripwire_skill_profiles(seed, ripwire_skill_policy)
+    skill_guidance = render_ripwire_skill_guidance(skill_profiles)
     factory = agent_factory or build_bedrock_agent
     agent = factory(settings, tools=tools)
     identity = seed.context.identity
@@ -898,6 +906,7 @@ def run_coordinator(
         "reasoning or prose outside the JSON object. Keep purpose and "
         "behavioral_change under 160 characters, reason under 200 characters, "
         "and return at most 20 blast-radius rows and 10 test areas.\n"
+        + (skill_guidance + "\n" if skill_guidance else "")
         + json.dumps(prompt_context, default=str, sort_keys=True)
     )
     fallback_used = False
@@ -1014,6 +1023,7 @@ def run_coordinator(
             "impact_calls": session.impact_calls,
             "inspection_calls": session.inspection_calls,
             "agent_output_complete": not fallback_used,
+            **({"ripwire_skill_profiles": ",".join(profile.name for profile in skill_profiles)} if skill_profiles else {}),
             **({"fallback_mode": "evidence_only"} if fallback_used else {}),
         },
         agent={"invoked": True, "model_id": settings.model_id, "region": settings.region, "prompt_version": "pr-analysis-prompt-v1", "tool_contract_version": "ia-repomap.agent-tools/v1", "coordinator_version": "pr-analysis-implementation-v1"},
@@ -1133,6 +1143,7 @@ def run_pr_analysis(
     settings: BedrockSettings | None = None,
     *,
     allow_source_inspection: bool = False,
+    ripwire_skill_policy: RipwireSkillPolicy | None = None,
     context_builder: Callable[[PrContextRequest], PrContextResult] = build_pr_context,
     agent_factory: Callable[..., Any] | None = None,
     impact_builder: Callable[[PrImpactRequest], Any] = build_symbol_impact,
@@ -1200,6 +1211,7 @@ def run_pr_analysis(
                     settings,
                     agent_factory=tracked_agent_factory,
                     allow_source_inspection=False,
+                    ripwire_skill_policy=ripwire_skill_policy,
                     evidence_payloads=payloads,
                     session_sink=sessions,
                 )
@@ -1263,6 +1275,7 @@ def run_pr_analysis(
             agent_factory=tracked_agent_factory,
             impact_builder=impact_builder,
             allow_source_inspection=allow_source_inspection,
+            ripwire_skill_policy=ripwire_skill_policy,
             evidence_payloads=payloads,
             session_sink=sessions,
         )
@@ -1451,6 +1464,7 @@ __all__ = [
     "PRAnalysisReportV1",
     "PRAnalysisRequestV1",
     "PreAgenticSeed",
+    "RipwireSkillPolicy",
     "build_bedrock_agent",
     "load_bedrock_settings",
     "make_symbol_impact_tool",

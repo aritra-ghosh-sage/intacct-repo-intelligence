@@ -38,6 +38,7 @@ from ia_repomap_builder.pr_analysis import (
     run_pr_analysis,
     run_symbol_impact_once,
 )
+from ia_repomap_builder.pr_analysis_skills import RipwireSkillPolicy
 
 _LIVE_COORDINATOR_ENV = (
     "IA_REPOMAP_RUN_LIVE_BEDROCK",
@@ -717,6 +718,64 @@ class PRAnalysisReportTests(unittest.TestCase):
         self.assertEqual(requests[0].offset, 20)
         self.assertEqual(payload["pagination"], {"offset": 20, "limit": 20, "has_more": 1, "next_offset": 40})
         self.assertEqual(payload["relationship"], "transitive_reacher")
+
+    def test_coordinator_does_not_load_ripwire_skill_profiles_by_default(self) -> None:
+        context = PrContextResult(
+            status="ok",
+            raw_xml="<pr-context/>",
+            identity=self.context_identity(),
+            changed_files=[PrChangedFile(
+                path="app/source/example/Example.cls",
+                change="M",
+                symbols=(PrSymbolCandidate("app/source/example/Example.cls", "changed", 1),),
+            )],
+        )
+        prompts: list[str] = []
+        report = run_coordinator(
+            prepare_pre_agentic_seed(self.context_request(), context_builder=lambda _: context),
+            PrImpactRequest(Path("/repo"), Path("/artifacts"), "app/source/example/Example.cls", "changed"),
+            BedrockSettings(region="test", model_id="fake"),
+            agent_factory=lambda _settings, tools: lambda prompt: (
+                prompts.append(prompt),
+                {"summary": {"purpose": "test", "behavioral_change": "test", "confidence": "candidate"}, "blast_radius": [], "test_areas": []},
+            )[1],
+        )
+        self.assertEqual(report.status, "ok")
+        self.assertNotIn("Curated Ripwire skill profiles", prompts[0])
+        self.assertNotIn("ripwire_skill_profiles", report.metrics)
+
+    def test_coordinator_adds_curated_skill_guidance_when_enabled(self) -> None:
+        context = PrContextResult(
+            status="ok",
+            raw_xml="<pr-context/>",
+            identity=self.context_identity(),
+            changed_files=[PrChangedFile(
+                path="app/source/example/Example.cls",
+                change="M",
+                symbols=(PrSymbolCandidate("app/source/example/Example.cls", "changed", 1),),
+            )],
+        )
+        prompts: list[str] = []
+        tool_counts: list[int] = []
+        report = run_coordinator(
+            prepare_pre_agentic_seed(self.context_request(), context_builder=lambda _: context),
+            PrImpactRequest(Path("/repo"), Path("/artifacts"), "app/source/example/Example.cls", "changed"),
+            BedrockSettings(region="test", model_id="fake"),
+            agent_factory=lambda _settings, tools: lambda prompt: (
+                tool_counts.append(len(tools)),
+                prompts.append(prompt),
+                {"summary": {"purpose": "test", "behavioral_change": "test", "confidence": "candidate"}, "blast_radius": [], "test_areas": []},
+            )[2],
+            ripwire_skill_policy=RipwireSkillPolicy(enabled=True, workflow_hints=("regression",)),
+        )
+        self.assertEqual(report.status, "ok")
+        self.assertEqual(tool_counts, [1])
+        self.assertIn("Curated Ripwire skill profiles", prompts[0])
+        self.assertIn("ripwire-change-check", prompts[0])
+        self.assertIn("ripwire-find-bug", prompts[0])
+        self.assertIn("ripwire-write-tests", prompts[0])
+        self.assertIn("arbitrary shell", prompts[0])
+        self.assertEqual(report.metrics["ripwire_skill_profiles"], "change_check,find_bug,write_tests")
 
     def test_coordinator_discloses_missing_coverage_source(self) -> None:
         context = PrContextResult(

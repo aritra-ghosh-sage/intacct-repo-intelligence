@@ -84,7 +84,7 @@ graph, cache, agent framework, retry system, or policy engine.
 
 The adjacent Ripwire checkout contains 18 Agent Skills-compatible `SKILL.md`
 files, and the pinned Strands release can load them with `AgentSkills`.
-However, the coordinator must not load those skills at runtime in this slice.
+However, the coordinator must not load those skills wholesale at runtime.
 
 The skills target a general shell-capable coding agent. Most assume `Bash` and
 `Read`, some describe mutation or test execution, and their `allowed-tools`
@@ -102,8 +102,9 @@ input:
 - describe graph results as a lower bound.
 
 Do not expose Bash, a generic Ripwire command tool, or the Ripwire MCP server.
-A curated, versioned coordinator-specific skill is a later experiment only if
-evaluation finds a behavior gap that the fixed prompt cannot address.
+Curated coordinator-specific skill profiles may be host-enabled as compact
+guidance, but they do not grant tools or permissions and must remain
+deterministically selected from workflow state.
 
 ## Public interface
 

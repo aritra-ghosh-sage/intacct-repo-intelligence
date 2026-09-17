@@ -539,10 +539,15 @@ silently.
 ## Security and operational boundaries
 
 - Agent tools are read-only and scoped to the resolved checkout root.
+- Curated Ripwire skill profiles may be enabled by the host as compact
+  workflow guidance only. They do not add tools or permissions.
 - The model cannot choose repository root, artifact root, output directory,
   base ref, binary, cache, or model configuration.
 - The model cannot invoke `prepare`, Git network operations, arbitrary shell,
   tests, package managers, GitHub writes, or filesystem writes.
+- The upstream Ripwire `skills/` directory is not loaded wholesale at runtime;
+  profiles cite those skills as design provenance while host code keeps the
+  bounded tool surface fixed.
 - AWS credentials use the standard boto3 credential chain and are never placed
   in prompts, request objects, outputs, or logs.
 - Raw XML is canonical evidence and remains external.
@@ -557,10 +562,12 @@ The coordinator implementation is present in:
 
 ```text
 ia_repomap_builder/pr_analysis.py
+ia_repomap_builder/pr_analysis_skills.py
 ia_repomap_builder/pr_analysis_inspection.py
 ia_repomap_builder/pr_analysis_output.py
 schemas/ia-repomap.pr-analysis-v1.schema.json
 tests/test_pr_analysis.py
+tests/test_pr_analysis_skills.py
 tests/test_pr_analysis_inspection.py
 tests/test_pr_analysis_output.py
 ```
