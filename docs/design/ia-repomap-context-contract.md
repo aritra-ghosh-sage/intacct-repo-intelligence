@@ -201,7 +201,9 @@ evidence and test areas remain `execution_status="not_run"`.
 The package exposes three explicit module commands. Preparation and analysis
 are separate so retrieval never builds or refreshes an index implicitly: run
 them from the builder repository root, or make this package available on
-`PYTHONPATH`.
+`PYTHONPATH`. The practical operator runbook is maintained in
+[`ia_repomap_builder/README.md`](../../ia_repomap_builder/README.md#running-pr-context-impact-and-analysis);
+this section defines the command contract.
 
 ```shell
 ./.venv/bin/python -m ia_repomap_builder prepare \
@@ -250,6 +252,8 @@ the interface does not accept a GitHub PR number or perform remote PR lookup.
 Callers must select or create the desired PR checkout before invoking it. A
 PR number such as `50176` is descriptive metadata only: a test for that PR must
 use its exact checked-out head and intended base commit as the command inputs.
+For reproducible automation, pass the exact target-branch SHA as `--base`
+rather than a moving branch name such as `origin/main`.
 
 The adapter uses `hunk-enclosing-v1` to narrow Ripwire's file-wide definitions
 to candidates whose inferred definition span overlaps a positive-side Git

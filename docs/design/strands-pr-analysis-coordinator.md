@@ -79,7 +79,9 @@ All four paths or refs are supplied by the caller. Unknown keys, a different
 schema, relative paths, and an existing non-empty output directory are errors.
 
 No PR number or remote URL is accepted in v1. Resolving a hosted PR into a
-checkout is an upstream responsibility.
+checkout is an upstream responsibility. The step-by-step local runbook lives in
+[`ia_repomap_builder/README.md`](../../ia_repomap_builder/README.md#running-pr-context-impact-and-analysis);
+this document freezes the coordinator behavior and boundaries.
 
 ### `repo_root`
 
@@ -109,6 +111,9 @@ repeats the revision and clean-tree checks before and after analysis.
 `HEAD`. A full 40-character commit SHA is recommended for repeatable runs.
 A local branch or remote-tracking ref is accepted, but the report records its
 resolved commit and merge base rather than trusting its mutable name.
+In CI or review automation, prefer the target-branch SHA supplied by the PR
+event payload. Use `origin/main` only when a moving local development base is
+acceptable.
 
 Verify it before invocation:
 
