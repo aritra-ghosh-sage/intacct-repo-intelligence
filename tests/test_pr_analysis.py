@@ -8,6 +8,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import jsonschema
 from pydantic import ValidationError
@@ -214,6 +215,73 @@ class PRAnalysisReportTests(unittest.TestCase):
             self.assertIn("truncated", {gap.kind for gap in report.gaps})
             self.assert_checked_in_schema(report)
 
+    def test_run_pr_analysis_degraded_inspection_follows_public_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            context = PrContextResult(
+                status="ok",
+                raw_xml="<pr-context/>\n",
+                identity=self.context_identity(),
+                changed_files=[PrChangedFile(path="app/source/example/Example.cls", change="M")],
+            )
+            inspection_tool = object()
+
+            def factory(_settings: object, tools: list[object]) -> object:
+                self.assertEqual(tools, [inspection_tool])
+                return lambda _prompt: {
+                    "summary": {
+                        "purpose": "changed example behavior",
+                        "behavioral_change": "unresolved",
+                        "confidence": "unresolved",
+                    },
+                    "blast_radius": [],
+                    "test_areas": [],
+                }
+
+            with patch(
+                "ia_repomap_builder.pr_analysis_inspection.make_repository_inspection_tool",
+                return_value=inspection_tool,
+            ) as make_inspection_tool:
+                report = run_pr_analysis(
+                    self.coordinator_request(directory),
+                    settings=BedrockSettings("test", "model"),
+                    allow_source_inspection=True,
+                    context_builder=lambda _: context,
+                    agent_factory=factory,
+                    revision_checker=lambda _: context.identity["head"],
+                    dirty_checker=lambda _: False,
+                )
+            self.assertEqual(report.status, "ok")
+            make_inspection_tool.assert_called_once()
+
+            with self.subTest(inspection=False):
+                no_inspection_tools: list[object] = []
+
+                def no_inspection_factory(_settings: object, tools: list[object]) -> object:
+                    no_inspection_tools.extend(tools)
+                    return lambda _prompt: {
+                        "summary": {
+                            "purpose": "changed example behavior",
+                            "behavioral_change": "unresolved",
+                            "confidence": "unresolved",
+                        },
+                        "blast_radius": [],
+                        "test_areas": [],
+                    }
+
+                no_inspection_request = self.coordinator_request(directory)
+                no_inspection_request["output_dir"] = str(Path(directory) / "reports-no-inspection")
+                report = run_pr_analysis(
+                    no_inspection_request,
+                    settings=BedrockSettings("test", "model"),
+                    allow_source_inspection=False,
+                    context_builder=lambda _: context,
+                    agent_factory=no_inspection_factory,
+                    revision_checker=lambda _: context.identity["head"],
+                    dirty_checker=lambda _: False,
+                )
+                self.assertEqual(report.status, "ok")
+                self.assertEqual(no_inspection_tools, [])
+
     def test_run_pr_analysis_degraded_rejects_repository_change(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             context = PrContextResult(
@@ -408,6 +476,7 @@ class PRAnalysisReportTests(unittest.TestCase):
         return {
             "schema": "ia-repomap.pr-analysis/v1",
             "status": "ok",
+            "assessment": "complete",
             "phase": "analysis",
             "request": {
                 "repository": "intacct/ia-app",
@@ -428,6 +497,7 @@ class PRAnalysisReportTests(unittest.TestCase):
                 "confidence": "candidate",
             },
             "changed_files": [],
+            "impacted_files": [],
             "blast_radius": [],
             "test_areas": [],
             "gaps": [{"kind": "impact_lower_bound", "detail": "Not exhaustive"}],
@@ -461,6 +531,42 @@ class PRAnalysisReportTests(unittest.TestCase):
         payload["status"] = "complete"
         with self.assertRaises(ValidationError):
             PRAnalysisReportV1.model_validate(payload)
+
+    def test_assessment_is_derived_from_status_and_material_gaps(self) -> None:
+        payload = self.valid_payload()
+        self.assertEqual(PRAnalysisReportV1.model_validate(payload).assessment, "complete")
+
+        material_gap_kinds = (
+            "coverage_unavailable",
+            "model_rows_discarded",
+            "no_candidate_symbols",
+            "graph_ambiguous",
+            "graph_unresolved",
+            "impact_truncated",
+            "out_of_scope_changes",
+            "impact_out_of_scope",
+            "inspection_unavailable",
+        )
+        for kind in material_gap_kinds:
+            with self.subTest(kind=kind):
+                partial_payload = self.valid_payload()
+                partial_payload["assessment"] = "partial"
+                partial_payload["gaps"] = [{"kind": kind, "detail": "evidence is incomplete"}]
+                self.assertEqual(
+                    PRAnalysisReportV1.model_validate(partial_payload).assessment,
+                    "partial",
+                )
+
+        invalid_partial = self.valid_payload()
+        invalid_partial["gaps"] = [{"kind": "graph_unresolved", "detail": "edge unresolved"}]
+        with self.assertRaisesRegex(ValidationError, "assessment must be 'partial'"):
+            PRAnalysisReportV1.model_validate(invalid_partial)
+
+        for status, assessment in (("unavailable", "unavailable"), ("error", "error")):
+            status_payload = self.valid_payload()
+            status_payload["status"] = status
+            status_payload["assessment"] = assessment
+            self.assertEqual(PRAnalysisReportV1.model_validate(status_payload).assessment, assessment)
         payload = self.valid_payload()
         payload["identity"]["head"] = "not-a-sha"  # type: ignore[index]
         with self.assertRaises(ValidationError):
@@ -487,6 +593,10 @@ class PRAnalysisReportTests(unittest.TestCase):
         self.assertEqual(set(schema["required"]), set(generated["required"]))
         self.assertEqual(set(schema["properties"]), set(generated["properties"]))
         self.assertEqual(schema["properties"]["status"]["enum"], ["ok", "unavailable", "error"])
+        self.assertEqual(
+            schema["properties"]["assessment"]["enum"],
+            ["complete", "partial", "unavailable", "error"],
+        )
         self.assertEqual(schema["properties"]["schema"]["const"], "ia-repomap.pr-analysis/v1")
 
     def test_checked_in_schema_enforces_success_and_agent_provenance(self) -> None:
@@ -506,6 +616,97 @@ class PRAnalysisReportTests(unittest.TestCase):
         }
         with self.assertRaises(jsonschema.ValidationError):
             jsonschema.validate(invalid_agent, schema)
+
+    def test_checked_in_schema_enforces_status_assessment_consistency(self) -> None:
+        path = Path(__file__).parents[1] / "schemas" / "ia-repomap.pr-analysis-v1.schema.json"
+        schema = json.loads(path.read_text(encoding="utf-8"))
+
+        for status, assessment in (("ok", "complete"), ("unavailable", "unavailable"), ("error", "error")):
+            payload = self.valid_payload()
+            payload["status"] = status
+            payload["assessment"] = assessment
+            jsonschema.validate(payload, schema)
+
+        partial_payload = self.valid_payload()
+        partial_payload["assessment"] = "partial"
+        partial_payload["gaps"] = [{"kind": "graph_unresolved", "detail": "edge unresolved"}]
+        jsonschema.validate(partial_payload, schema)
+
+        inconsistent_payloads = (
+            ("ok", "partial", [{"kind": "impact_lower_bound", "detail": "not exhaustive"}]),
+            ("ok", "complete", [{"kind": "graph_unresolved", "detail": "edge unresolved"}]),
+            ("ok", "error", []),
+            ("unavailable", "complete", []),
+            ("error", "partial", []),
+        )
+        for status, assessment, gaps in inconsistent_payloads:
+            with self.subTest(status=status, assessment=assessment, gaps=gaps):
+                payload = self.valid_payload()
+                payload["status"] = status
+                payload["assessment"] = assessment
+                payload["gaps"] = gaps
+                with self.assertRaises(jsonschema.ValidationError):
+                    jsonschema.validate(payload, schema)
+
+    def test_host_projects_impacted_files_into_deterministic_and_coordinator_reports(self) -> None:
+        changed_path = "app/source/example/Example.cls"
+        impacted_files = (
+            PrImpactedFileCandidate("app/source/service/Caller.cls", 2),
+            PrImpactedFileCandidate("app/source/service/OtherCaller.cls", 5),
+        )
+        context = PrContextResult(
+            status="ok",
+            raw_xml="<pr-context/>\n",
+            identity=self.context_identity(),
+            changed_files=[PrChangedFile(
+                path=changed_path,
+                change="M",
+                symbols=(PrSymbolCandidate(changed_path, "changed", 1),),
+                impact_files=impacted_files,
+            )],
+        )
+
+        def agent_factory(_settings: object, tools: list[object]) -> object:
+            return lambda _prompt: {
+                "summary": {
+                    "purpose": "test",
+                    "behavioral_change": "test",
+                    "confidence": "candidate",
+                },
+                "blast_radius": [],
+                "test_areas": [],
+            }
+
+        with tempfile.TemporaryDirectory() as directory:
+            deterministic = run_pr_analysis(
+                self.coordinator_request(directory),
+                context_builder=lambda _: context,
+                revision_checker=lambda _: context.identity["head"],
+                dirty_checker=lambda _: False,
+            )
+            self.assertEqual(
+                [(item.changed_path, item.path, item.dependent_symbols, item.evidence_ids)
+                 for item in deterministic.impacted_files],
+                [
+                    (changed_path, "app/source/service/Caller.cls", 2, ["pr-context-001"]),
+                    (changed_path, "app/source/service/OtherCaller.cls", 5, ["pr-context-001"]),
+                ],
+            )
+
+            seed = prepare_pre_agentic_seed(
+                self.context_request(), context_builder=lambda _: context
+            )
+            coordinator = run_coordinator(
+                seed,
+                None,
+                BedrockSettings(region="test", model_id="fake"),
+                agent_factory=agent_factory,
+            )
+            self.assertEqual(
+                [item.path for item in coordinator.impacted_files],
+                ["app/source/service/Caller.cls", "app/source/service/OtherCaller.cls"],
+            )
+            self.assertEqual(coordinator.blast_radius, [])
 
     def test_report_rejects_duplicate_evidence_ids_on_analysis_rows(self) -> None:
         for field, row in (
@@ -601,7 +802,11 @@ class PRAnalysisReportTests(unittest.TestCase):
             session.authorize_impact("app/source/example/Example.cls", "not_changed")
 
     def test_bedrock_settings_load_non_secret_configuration(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        empty_settings = {
+            name: ""
+            for name in ("AWS_REGION", "AWS_DEFAULT_REGION", "BEDROCK_MODEL_ID", "AWS_PROFILE")
+        }
+        with patch.dict(os.environ, empty_settings), tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / ".env.local"
             path.write_text("AWS_REGION=us-east-1\nAWS_PROFILE=dev\nBEDROCK_MODEL_ID=test-model\n", encoding="utf-8")
             settings = load_bedrock_settings(str(path))
@@ -610,7 +815,11 @@ class PRAnalysisReportTests(unittest.TestCase):
         self.assertEqual(settings.profile, "dev")
 
     def test_bedrock_settings_require_region_and_model(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        empty_settings = {
+            name: ""
+            for name in ("AWS_REGION", "AWS_DEFAULT_REGION", "BEDROCK_MODEL_ID", "AWS_PROFILE")
+        }
+        with patch.dict(os.environ, empty_settings), tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / ".env.local"
             path.write_text("AWS_REGION=us-east-1\n", encoding="utf-8")
             with self.assertRaises(ValueError):
@@ -800,6 +1009,7 @@ class PRAnalysisReportTests(unittest.TestCase):
             impact_builder=lambda _: PrImpactResult(status="ok", raw_xml="<impact/>") ,
         )
         self.assertIn("coverage_unavailable", {gap.kind for gap in report.gaps})
+        self.assertEqual(report.assessment, "partial")
 
     def test_coordinator_fake_agent_runs_tool_and_validates_report(self) -> None:
         context = PrContextResult(
@@ -900,7 +1110,7 @@ class PRAnalysisReportTests(unittest.TestCase):
         self.assertFalse(report.metrics["agent_output_complete"])
         self.assertEqual(report.metrics["fallback_mode"], "evidence_only")
 
-    def test_prompt_does_not_offer_file_only_impact_as_symbol_evidence(self) -> None:
+    def test_prompt_exposes_allowlisted_paths_without_promoting_file_impact_to_symbols(self) -> None:
         changed_path = "app/source/example/Example.cls"
         impacted_path = "app/source/service/Caller.cls"
         context = PrContextResult(
@@ -910,8 +1120,14 @@ class PRAnalysisReportTests(unittest.TestCase):
             changed_files=[PrChangedFile(
                 path=changed_path,
                 change="M",
-                symbols=(PrSymbolCandidate(changed_path, "changed", 1),),
+                symbols=(PrSymbolCandidate(
+                    changed_path,
+                    "changed",
+                    1,
+                    callers=(PrCallerCandidate("app/source/service/Caller.cls", "caller", 2),),
+                ),),
                 impact_files=(PrImpactedFileCandidate(impacted_path, 2),),
+                affected_tests=(PrAffectedTestCandidate("app/source/tests/ExampleTest.cls"),),
             )],
         )
         prompts: list[str] = []
@@ -925,8 +1141,13 @@ class PRAnalysisReportTests(unittest.TestCase):
             )[1],
         )
         self.assertEqual(report.status, "ok")
-        self.assertNotIn(impacted_path, prompts[0])
-        self.assertIn("file-only context", prompts[0])
+        self.assertIn(impacted_path, prompts[0])
+        self.assertIn("app/source/service/Caller.cls", prompts[0])
+        self.assertIn("app/source/tests/ExampleTest.cls", prompts[0])
+        self.assertIn('"allowed_paths"', prompts[0])
+        self.assertIn("File-only", prompts[0])
+        self.assertIn("must use only allowlisted path/name pairs", prompts[0])
+        self.assertIn("Test-area paths must come from allowed_paths", prompts[0])
 
     def test_degraded_coordinator_returns_file_action_without_symbol_impact_tool(self) -> None:
         context = PrContextResult(
@@ -1040,6 +1261,7 @@ class PRAnalysisReportTests(unittest.TestCase):
         )
         self.assertIn("impact_ambiguous", {gap.kind for gap in report.gaps})
         self.assertIn("impact warning", report.diagnostics)
+        self.assertEqual(report.assessment, "partial")
 
     def test_coordinator_adds_host_affected_tests_without_authorizing_symbols(self) -> None:
         changed_path = "app/source/example/Example.cls"
@@ -1146,6 +1368,7 @@ class PRAnalysisReportTests(unittest.TestCase):
             {gap.kind for gap in report.gaps},
             {"impact_truncated", "affected_tests_truncated", "no_candidate_symbols"},
         )
+        self.assertEqual(report.assessment, "partial")
         self.assert_checked_in_schema(report)
 
     def test_coordinator_rejects_incomplete_identity_before_agent(self) -> None:

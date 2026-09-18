@@ -12,11 +12,11 @@ import json
 import os
 import shutil
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
 
-from .pr_analysis import PRAnalysisReportV1
+from .pr_analysis import PRAnalysisReportV1, assessment_gap_kinds
 
 
 @dataclass(frozen=True)
@@ -102,6 +102,8 @@ def _markdown(report: PRAnalysisReportV1) -> str:
         "# PR analysis",
         "",
         f"- status: `{data['status']}`",
+        f"- assessment: `{data['assessment']}`",
+        f"- assessment gaps: {', '.join(f'`{kind}`' for kind in assessment_gap_kinds(data['gaps'])) or 'None'}",
         f"- phase: `{data['phase']}`",
         f"- repository: `{data['identity']['repository']}`",
         f"- head: `{data['identity']['head']}`",
@@ -126,6 +128,23 @@ def _markdown(report: PRAnalysisReportV1) -> str:
             lines.append(line)
     if not data["changed_files"]:
         lines.append("- None")
+    lines.extend(["", "## Candidate impacted files", ""])
+    for impacted in data["impacted_files"]:
+        lines.append(
+            f"- `{impacted['path']}` (`{impacted['confidence']}`, "
+            f"dependent symbols: {impacted['dependent_symbols']}; "
+            f"changed path: `{impacted['changed_path']}`)"
+        )
+    if not data["impacted_files"]:
+        lines.append("- None")
+    impact_truncation_gaps = [
+        gap for gap in data["gaps"] if gap["kind"] == "impact_truncated"
+    ]
+    if impact_truncation_gaps:
+        lines.extend(["", "Impact truncation", ""])
+        for gap in impact_truncation_gaps:
+            suffix = f" (count: {gap['count']})" if gap.get("count") is not None else ""
+            lines.append(f"- `{gap['kind']}`: {gap['detail']}{suffix}")
     lines.extend(["", "## Lower-bound blast radius", ""])
     for row in data["blast_radius"]:
         lines.append(

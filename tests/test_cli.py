@@ -4,24 +4,29 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from ia_repomap_builder import (
     BuildResult,
     PrCallerCandidate,
     PrChangedFile,
-    PrContextResult,
     PrContextGap,
+    PrContextResult,
     PrImpactCandidate,
     PrImpactResult,
     PrSymbolCandidate,
 )
 from ia_repomap_builder.cli import COMMAND_SCHEMA, EXIT_ERROR, EXIT_UNAVAILABLE, main
+from ia_repomap_builder.pr_analysis import BedrockSettings, load_bedrock_settings
+from ia_repomap_builder.review import PRMetadata, ReviewCheckout, ReviewSetupError
 
 
 class CliTests(unittest.TestCase):
@@ -46,6 +51,219 @@ class CliTests(unittest.TestCase):
         self.assertEqual(payload["schema"], COMMAND_SCHEMA)
         self.assertEqual(payload["status"], "error")
         self.assertIn("command is required", payload["result"]["diagnostics"][0])
+
+    def test_review_requires_repo_without_internal_arguments(self) -> None:
+        code, payload, _ = self._run(
+            "review", "https://github.com/intacct/ia-app/pull/50176"
+        )
+        self.assertEqual(code, EXIT_ERROR)
+        self.assertEqual(payload["command"], "review")
+        self.assertIn("--repo", payload["result"]["diagnostics"][0])
+
+    def test_review_forwards_exact_identity_and_inspect_and_writes_report_envelope(self) -> None:
+        workspace = Path(self.tempdir.name) / "workspace"
+        worktree = workspace / "checkouts" / "worktree"
+        base_sha = "a" * 40
+        head_sha = "b" * 40
+        metadata = PRMetadata(
+            "https://github.com/intacct/ia-app/pull/50176",
+            50176,
+            base_sha,
+            head_sha,
+            "intacct/ia-app",
+        )
+        checkout = ReviewCheckout(metadata, workspace, self.root, worktree, base_sha, False)
+        prepared = BuildResult(engine="ripwire", status="ok")
+        captured: dict[str, object] = {}
+
+        def fake_analysis(request, *, settings, allow_source_inspection):
+            captured["request"] = request
+            captured["settings"] = settings
+            captured["inspect"] = allow_source_inspection
+            request.output_dir.mkdir(parents=True)
+            (request.output_dir / "pr-analysis.json").write_text("{}\n", encoding="utf-8")
+            (request.output_dir / "pr-analysis.md").write_text("# report\n", encoding="utf-8")
+            return SimpleNamespace(status="ok", assessment="partial", diagnostics=[])
+
+        with (
+            patch("ia_repomap_builder.cli.resolve_pr", return_value=metadata),
+            patch("ia_repomap_builder.cli.acquire_review_checkout", return_value=checkout) as acquire,
+            patch("ia_repomap_builder.cli.marker_env", return_value=nullcontext()),
+            patch("ia_repomap_builder.cli.prepare_repomap", return_value=prepared),
+            patch(
+                "ia_repomap_builder.cli.load_bedrock_settings",
+                return_value=BedrockSettings("region", "model"),
+            ),
+            patch("ia_repomap_builder.cli.run_pr_analysis", side_effect=fake_analysis),
+            patch("ia_repomap_builder.cli.uuid.uuid4", return_value=SimpleNamespace(hex="run-50176")),
+        ):
+            code, payload, _ = self._run(
+                "review",
+                metadata.url,
+                "--repo",
+                str(self.root),
+                "--workspace",
+                str(workspace),
+                "--inspect",
+            )
+
+        self.assertEqual(code, 0)
+        request = captured["request"]
+        acquire.assert_called_once_with(
+            metadata,
+            repo=self.root,
+            workspace=workspace.resolve(),
+        )
+        self.assertEqual(request.repo_root, worktree)
+        self.assertEqual(request.base_ref, base_sha)
+        self.assertEqual(request.artifact_root, workspace / "artifacts")
+        self.assertEqual(captured["inspect"], True)
+        expected = workspace / "reports" / "intacct-ia-app" / head_sha / base_sha / "run-50176"
+        self.assertEqual(payload["report_directory"], str(expected))
+        self.assertEqual(payload["base_sha"], base_sha)
+        self.assertEqual(payload["head_sha"], head_sha)
+        self.assertEqual(payload["assessment"], "partial")
+        self.assertEqual(payload["report"]["status"], "ok")
+        self.assertEqual(payload["report"]["assessment"], "partial")
+        self.assertEqual(payload["report"]["files"], ["pr-analysis.json", "pr-analysis.md"])
+        self.assertNotIn("artifact-root", payload["request"])
+
+    def test_review_unavailable_prepare_does_not_run_analysis(self) -> None:
+        workspace = Path(self.tempdir.name) / "workspace"
+        metadata = PRMetadata(
+            "https://github.com/intacct/ia-app/pull/50176",
+            50176,
+            "a" * 40,
+            "b" * 40,
+            "intacct/ia-app",
+        )
+        checkout = ReviewCheckout(metadata, workspace, self.root, workspace / "worktree", "c" * 40, False)
+        with (
+            patch("ia_repomap_builder.cli.resolve_pr", return_value=metadata),
+            patch("ia_repomap_builder.cli.acquire_review_checkout", return_value=checkout),
+            patch("ia_repomap_builder.cli.marker_env", return_value=nullcontext()),
+            patch(
+                "ia_repomap_builder.cli.prepare_repomap",
+                return_value=BuildResult(engine="ripwire", status="unavailable", diagnostics=["Ripwire unavailable"]),
+            ),
+            patch("ia_repomap_builder.cli.load_bedrock_settings") as settings,
+            patch("ia_repomap_builder.cli.run_pr_analysis") as analysis,
+        ):
+            code, payload, _ = self._run(
+                "review",
+                metadata.url,
+                "--repo",
+                str(self.root),
+                "--workspace",
+                str(workspace),
+            )
+        self.assertEqual(code, EXIT_UNAVAILABLE)
+        self.assertEqual(payload["status"], "unavailable")
+        self.assertEqual(payload["assessment"], "unavailable")
+        settings.assert_not_called()
+        analysis.assert_not_called()
+
+    def test_review_setup_error_is_json_error(self) -> None:
+        with patch(
+            "ia_repomap_builder.cli.resolve_pr",
+            side_effect=ReviewSetupError("PR URL must be a canonical GitHub URL"),
+        ):
+            code, payload, _ = self._run(
+                "review",
+                "https://github.com/intacct/ia-app/pull/50176",
+                "--repo",
+                str(self.root),
+            )
+        self.assertEqual(code, EXIT_ERROR)
+        self.assertEqual(payload["status"], "error")
+        self.assertEqual(payload["assessment"], "error")
+        self.assertIn("canonical GitHub URL", payload["remediation"][0])
+
+    def test_review_gh_authentication_failure_is_unavailable(self) -> None:
+        with patch(
+            "ia_repomap_builder.cli.resolve_pr",
+            side_effect=ReviewSetupError(
+                "command failed: gh pr view https://github.com/intacct/ia-app/pull/50176: "
+                "not logged into any GitHub hosts"
+            ),
+        ):
+            code, payload, _ = self._run(
+                "review",
+                "https://github.com/intacct/ia-app/pull/50176",
+                "--repo",
+                str(self.root),
+            )
+        self.assertEqual(code, EXIT_UNAVAILABLE)
+        self.assertEqual(payload["status"], "unavailable")
+        self.assertEqual(payload["assessment"], "unavailable")
+        self.assertIn("gh auth status", payload["remediation"][0])
+
+    def test_review_missing_bedrock_settings_is_unavailable(self) -> None:
+        workspace = Path(self.tempdir.name) / "workspace"
+        metadata = PRMetadata(
+            "https://github.com/intacct/ia-app/pull/50176",
+            50176,
+            "a" * 40,
+            "b" * 40,
+            "intacct/ia-app",
+        )
+        checkout = ReviewCheckout(metadata, workspace, self.root, workspace / "worktree", "c" * 40, False)
+        with (
+            patch("ia_repomap_builder.cli.resolve_pr", return_value=metadata),
+            patch("ia_repomap_builder.cli.acquire_review_checkout", return_value=checkout),
+            patch("ia_repomap_builder.cli.marker_env", return_value=nullcontext()),
+            patch("ia_repomap_builder.cli.prepare_repomap", return_value=BuildResult(engine="ripwire", status="ok")),
+            patch(
+                "ia_repomap_builder.cli.load_bedrock_settings",
+                side_effect=ValueError("BEDROCK_MODEL_ID is required"),
+            ),
+            patch("ia_repomap_builder.cli.run_pr_analysis") as analysis,
+        ):
+            code, payload, _ = self._run(
+                "review",
+                metadata.url,
+                "--repo",
+                str(self.root),
+                "--workspace",
+                str(workspace),
+            )
+        self.assertEqual(code, EXIT_UNAVAILABLE)
+        self.assertEqual(payload["status"], "unavailable")
+        self.assertIn("environment or .env.local", payload["remediation"][0])
+        analysis.assert_not_called()
+
+    def test_review_help_does_not_expose_internal_paths(self) -> None:
+        completed = subprocess.run(
+            [sys.executable, "-m", "ia_repomap_builder", "review", "--help"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertIn("--repo", completed.stdout)
+        self.assertIn("--workspace", completed.stdout)
+        self.assertIn("--inspect", completed.stdout)
+        self.assertNotIn("--artifact-root", completed.stdout)
+        self.assertNotIn("--output", completed.stdout)
+        self.assertNotIn("--base", completed.stdout)
+
+    def test_process_environment_overrides_dotenv_bedrock_settings(self) -> None:
+        env_file = Path(self.tempdir.name) / ".env.local"
+        env_file.write_text(
+            "AWS_REGION=file-region\nBEDROCK_MODEL_ID=file-model\nAWS_PROFILE=file-profile\n",
+            encoding="utf-8",
+        )
+        with patch.dict(
+            os.environ,
+            {
+                "AWS_REGION": "env-region",
+                "AWS_DEFAULT_REGION": "env-default-region",
+                "BEDROCK_MODEL_ID": "env-model",
+                "AWS_PROFILE": "env-profile",
+            },
+            clear=False,
+        ):
+            settings = load_bedrock_settings(str(env_file))
+        self.assertEqual(settings, BedrockSettings("env-region", "env-model", "env-profile"))
 
     def test_missing_repository_has_actionable_remediation(self) -> None:
         code, payload, _ = self._run(

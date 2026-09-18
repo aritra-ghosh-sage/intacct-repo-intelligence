@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from hashlib import sha256
@@ -22,15 +23,16 @@ from pydantic import (
 from .config import PrContextRequest, PrContextResult, PrImpactRequest
 from .identity import git_revision, is_dirty
 from .impact import build_symbol_impact
-from .pr_context import build_pr_context
 from .pr_analysis_skills import (
     RipwireSkillPolicy,
     render_ripwire_skill_guidance,
     select_ripwire_skill_profiles,
 )
+from .pr_context import build_pr_context
 
 Confidence = Literal["candidate", "unresolved", "unavailable"]
 Status = Literal["ok", "unavailable", "error"]
+Assessment = Literal["complete", "partial", "unavailable", "error"]
 Phase = Literal["request_validation", "readiness", "pr_context", "analysis", "persistence"]
 Relationship = Literal["direct_caller", "transitive_reacher", "source_reference"]
 Change = Literal["A", "M", "D", "R", "C"]
@@ -40,7 +42,10 @@ MAX_AGENT_RESPONSE_TOKENS = 2048
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    @field_validator("path", "source_path", "target_path", mode="before", check_fields=False)
+    @field_validator(
+        "path", "changed_path", "source_path", "target_path",
+        mode="before", check_fields=False,
+    )
     @classmethod
     def repository_path(cls, value: str) -> str:
         if not isinstance(value, str) or not value or value.startswith("/"):
@@ -97,6 +102,21 @@ class ChangedFile(StrictModel):
         return _unique_evidence_ids(value)
 
 
+class ImpactedFile(StrictModel):
+    """A host-owned file-level impact candidate from PR context."""
+
+    changed_path: str
+    path: str
+    dependent_symbols: int = Field(ge=0)
+    confidence: Confidence
+    evidence_ids: list[str] = Field(min_length=1, max_length=20)
+
+    @field_validator("evidence_ids")
+    @classmethod
+    def unique_evidence_ids(cls, value: list[str]) -> list[str]:
+        return _unique_evidence_ids(value)
+
+
 class BlastRadiusRow(StrictModel):
     source_path: str
     source_symbol: str = Field(min_length=1)
@@ -142,6 +162,41 @@ class Gap(StrictModel):
     count: int | None = Field(default=None, ge=0)
 
 
+_MATERIAL_GAP_KINDS = frozenset({
+    "coverage_unavailable",
+    "model_rows_discarded",
+    "no_candidate_symbols",
+})
+
+
+def assessment_gap_kinds(gaps: list[Mapping[str, Any]] | list[Gap]) -> tuple[str, ...]:
+    """Return deterministic gap kinds that make an otherwise valid report partial."""
+
+    kinds: set[str] = set()
+    for gap in gaps:
+        kind = gap.get("kind") if isinstance(gap, Mapping) else gap.kind
+        if not isinstance(kind, str) or not kind:
+            continue
+        if (
+            kind in _MATERIAL_GAP_KINDS
+            or "ambiguous" in kind
+            or "out_of_scope" in kind
+            or "truncated" in kind
+            or "unresolved" in kind
+            or kind.endswith("_unavailable")
+        ):
+            kinds.add(kind)
+    return tuple(sorted(kinds))
+
+
+def _assessment_for(status: str, gaps: list[Mapping[str, Any]] | list[Gap]) -> Assessment:
+    if status == "unavailable":
+        return "unavailable"
+    if status == "error":
+        return "error"
+    return "partial" if assessment_gap_kinds(gaps) else "complete"
+
+
 class Evidence(StrictModel):
     evidence_id: str = Field(min_length=1)
     kind: Literal["pr_context_xml", "symbol_impact_xml", "inspection"]
@@ -163,11 +218,13 @@ class PRAnalysisReportV1(StrictModel):
 
     schema_: Literal["ia-repomap.pr-analysis/v1"] = Field(alias="schema")
     status: Status
+    assessment: Assessment
     phase: Phase
     request: Request
     identity: Identity
     summary: Summary
     changed_files: list[ChangedFile] = Field(max_length=1000)
+    impacted_files: list[ImpactedFile] = Field(max_length=1000)
     blast_radius: list[BlastRadiusRow] = Field(max_length=1000)
     test_areas: list[TestArea] = Field(max_length=500)
     gaps: list[Gap] = Field(max_length=1000)
@@ -179,6 +236,11 @@ class PRAnalysisReportV1(StrictModel):
 
     @model_validator(mode="after")
     def validate_outcome_provenance(self) -> PRAnalysisReportV1:
+        expected_assessment = _assessment_for(self.status, self.gaps)
+        if self.assessment != expected_assessment:
+            raise ValueError(
+                f"assessment must be {expected_assessment!r} for status and report gaps"
+            )
         if self.status == "ok":
             request_complete = self.request.repository is not None and self.request.base is not None
             identity_complete = all(
@@ -204,6 +266,10 @@ class PRAnalysisReportV1(StrictModel):
             reference
             for changed in self.changed_files
             for reference in changed.evidence_ids
+        ] + [
+            reference
+            for impacted in self.impacted_files
+            for reference in impacted.evidence_ids
         ] + [
             reference
             for row in self.blast_radius
@@ -417,6 +483,10 @@ class EvidenceSession:
         return tuple(sorted(self._allowed_paths))
 
     @property
+    def allowed_symbols(self) -> tuple[tuple[str, str], ...]:
+        return tuple(sorted(self._allowed_symbols))
+
+    @property
     def authorized_inspection_terms(self) -> tuple[str, ...]:
         return tuple(sorted(self._inspection_terms))
 
@@ -514,6 +584,7 @@ def _with_tool_observations(
 
     payload = report.model_dump(mode="python", by_alias=True)
     payload["gaps"] = [*payload["gaps"], *session.tool_gaps]
+    payload["assessment"] = _assessment_for(payload["status"], payload["gaps"])
     payload["diagnostics"] = [*payload["diagnostics"], *session.tool_diagnostics]
     return PRAnalysisReportV1.model_validate(payload)
 
@@ -582,6 +653,22 @@ def _fallback_draft(context: PrContextResult) -> AgentAnalysisDraftV1:
         blast_radius=rows,
         test_areas=_affected_test_areas(context),
     )
+
+
+def _project_impacted_files(context: PrContextResult) -> list[ImpactedFile]:
+    """Project host-surfaced file impacts without inventing symbol edges."""
+
+    return [
+        ImpactedFile(
+            changed_path=changed.path,
+            path=impacted.path,
+            dependent_symbols=impacted.dependent_symbols,
+            confidence=impacted.confidence,
+            evidence_ids=["pr-context-001"],
+        )
+        for changed in context.changed_files
+        for impacted in changed.impact_files
+    ]
 
 
 def _sanitize_model_draft(
@@ -787,6 +874,7 @@ def run_coordinator(
     agent_factory: Callable[..., Any] | None = None,
     impact_builder: Callable[[PrImpactRequest], Any] = build_symbol_impact,
     allow_source_inspection: bool = False,
+    inspection_repo_root: Path | None = None,
     ripwire_skill_policy: RipwireSkillPolicy | None = None,
     evidence_payloads: list[tuple[str, bytes]] | None = None,
     session_sink: list[EvidenceSession] | None = None,
@@ -823,12 +911,15 @@ def run_coordinator(
             impact_builder=impact_builder,
             evidence_payloads=evidence_payloads,
         ))
-    if allow_source_inspection and impact_request is not None:
+    inspection_root = inspection_repo_root or (
+        impact_request.repo_root if impact_request is not None else None
+    )
+    if allow_source_inspection and inspection_root is not None:
         from .pr_analysis_inspection import make_repository_inspection_tool
 
         tools.append(make_repository_inspection_tool(
             session,
-            repo_root=impact_request.repo_root,
+            repo_root=inspection_root,
             evidence_payloads=evidence_payloads,
         ))
     skill_profiles = select_ripwire_skill_profiles(seed, ripwire_skill_policy)
@@ -853,6 +944,14 @@ def run_coordinator(
                 }
                 for symbol in changed.symbols
             ],
+            "impact_files": [
+                {
+                    "path": item.path,
+                    "dependent_symbols": item.dependent_symbols,
+                    "confidence": item.confidence,
+                }
+                for item in changed.impact_files
+            ],
             "affected_tests": [item.path for item in changed.affected_tests],
         }
         for changed in seed.context.changed_files
@@ -874,7 +973,8 @@ def run_coordinator(
                 "sha256": sha256(seed.context.raw_xml.encode("utf-8")).hexdigest(),
             }
         ],
-        "allowed_symbols": list(seed.allowed_symbols),
+        "allowed_symbols": list(session.allowed_symbols),
+        "allowed_paths": list(session.allowed_paths),
         "analysis_mode": "degraded_file_diff" if degraded else "symbol_seeded",
         "limits": {"impact_calls": 0 if degraded else 5, "inspection_calls": 2, "impact_rows": 20},
     }
@@ -882,10 +982,13 @@ def run_coordinator(
         "Analyze this PR context as a lower-bound, evidence-bound report. "
         "Treat Git changed files and exact revision identity as confirmed; "
         "treat Ripwire symbols and relationships as candidate evidence. "
-        "Use only supplied candidate path/name pairs for impact expansion, "
-        "and use symbol-level blast-radius rows only for symbols returned by "
-        "PR context or symbol_impact; impact_files are file-only context and "
-        "must never be given invented target symbols. "
+        "Use only supplied candidate path/name pairs for impact expansion. "
+        "Symbol-level blast-radius rows must use only allowlisted path/name "
+        "pairs from allowed_symbols for both endpoints, and only symbols "
+        "returned by PR context or symbol_impact. File-only impact_files stay "
+        "in the host-generated impacted_files section; never turn an impact "
+        "file path into an invented target symbol. Test-area paths must come "
+        "from allowed_paths. Do not invent unsupported paths or symbols. "
         "cite registered evidence IDs, and report ambiguity, truncation, "
         "unresolved, out-of-scope, and unavailable gaps explicitly. "
         "Use at most five impact calls and two inspection calls; request a next "
@@ -971,9 +1074,28 @@ def run_coordinator(
         if item.sha256
     ]
     identity = seed.context.identity
+    gaps = [
+        *(
+            {
+                "kind": gap.kind,
+                "detail": gap.detail,
+                **({"count": gap.count} if gap.count is not None else {}),
+            }
+            for gap in seed.context.gaps
+        ),
+        *_coverage_gaps(seed.context),
+        *session.tool_gaps,
+        *([{
+            "kind": "model_rows_discarded",
+            "detail": "Host discarded model rows or paths outside registered evidence",
+            "count": discarded_model_rows,
+        }] if discarded_model_rows else []),
+        *([{"kind": "model_output_truncated", "detail": "Host fallback used after bounded model continuation failed"}] if fallback_used else []),
+    ]
     report = PRAnalysisReportV1(
         schema="ia-repomap.pr-analysis/v1",
         status="ok",
+        assessment=_assessment_for("ok", gaps),
         phase="analysis",
         request={"repository": identity["repository_id"], "base": identity["base_revision"], "analysis_schema": "ia-repomap.pr-analysis/v1"},
         identity={"repository": identity["repository_id"], "head": identity["head"], "base": identity["base_revision"], "merge_base": identity["merge_base"], "configuration_digest": identity["configuration_digest"], "engine_identity": identity["engine"]["id"]},
@@ -996,26 +1118,10 @@ def run_coordinator(
             }
             for changed in seed.context.changed_files
         ],
+        impacted_files=_project_impacted_files(seed.context),
         blast_radius=draft.blast_radius,
         test_areas=test_areas,
-        gaps=[
-            *(
-                {
-                    "kind": gap.kind,
-                    "detail": gap.detail,
-                    **({"count": gap.count} if gap.count is not None else {}),
-                }
-                for gap in seed.context.gaps
-            ),
-            *_coverage_gaps(seed.context),
-            *session.tool_gaps,
-            *([{
-                "kind": "model_rows_discarded",
-                "detail": "Host discarded model rows or paths outside registered evidence",
-                "count": discarded_model_rows,
-            }] if discarded_model_rows else []),
-            *([{"kind": "model_output_truncated", "detail": "Host fallback used after bounded model continuation failed"}] if fallback_used else []),
-        ],
+        gaps=gaps,
         evidence=records,
         diagnostics=[*seed.context.diagnostics, *session.tool_diagnostics],
         remediation=[],
@@ -1111,6 +1217,7 @@ def _report_from_context(
     return PRAnalysisReportV1(
         schema="ia-repomap.pr-analysis/v1",
         status=effective_status,
+        assessment=_assessment_for(effective_status, gaps),
         phase=phase,
         request=request_data,
         identity=identity,
@@ -1120,6 +1227,7 @@ def _report_from_context(
             "confidence": "unavailable" if effective_status != "ok" else "candidate",
         },
         changed_files=changed_files,
+        impacted_files=_project_impacted_files(context),
         blast_radius=[],
         test_areas=test_areas,
         gaps=gaps,
@@ -1210,7 +1318,8 @@ def run_pr_analysis(
                     None,
                     settings,
                     agent_factory=tracked_agent_factory,
-                    allow_source_inspection=False,
+                    allow_source_inspection=allow_source_inspection,
+                    inspection_repo_root=parsed.repo_root,
                     ripwire_skill_policy=ripwire_skill_policy,
                     evidence_payloads=payloads,
                     session_sink=sessions,
@@ -1322,6 +1431,7 @@ def _analysis_error_report(
     payload.update(
         {
             "status": "error",
+            "assessment": "error",
             "phase": "analysis",
             "summary": {
                 "purpose": "Evidence-bound PR context analysis",
@@ -1375,7 +1485,7 @@ def _persist_report(
         return report
     except Exception as exc:
         payload = report.model_dump(mode="python", by_alias=True)
-        payload.update({"status": "error", "phase": "persistence"})
+        payload.update({"status": "error", "assessment": "error", "phase": "persistence"})
         payload["diagnostics"] = [*report.diagnostics, f"report persistence failed: {exc}"]
         return PRAnalysisReportV1.model_validate(payload)
 
@@ -1391,12 +1501,23 @@ def load_bedrock_settings(env_file: str = ".env.local") -> BedrockSettings:
     """Load non-secret Bedrock settings; credentials stay with boto3."""
 
     values = dotenv_values(env_file)
-    region = values.get("AWS_REGION") or values.get("AWS_DEFAULT_REGION")
-    model_id = values.get("BEDROCK_MODEL_ID")
-    if not region or not model_id:
-        raise ValueError(".env.local must define AWS_REGION and BEDROCK_MODEL_ID")
-    profile = values.get("AWS_PROFILE") or None
-    return BedrockSettings(region=region, model_id=model_id, profile=profile)
+    region = (
+        os.environ.get("AWS_REGION")
+        or os.environ.get("AWS_DEFAULT_REGION")
+        or values.get("AWS_REGION")
+        or values.get("AWS_DEFAULT_REGION")
+    )
+    model_id = os.environ.get("BEDROCK_MODEL_ID") or values.get("BEDROCK_MODEL_ID")
+    if not isinstance(region, str) or not region.strip():
+        raise ValueError(
+            "AWS_REGION or AWS_DEFAULT_REGION is required in the process environment or .env.local"
+        )
+    if not isinstance(model_id, str) or not model_id.strip():
+        raise ValueError(
+            "BEDROCK_MODEL_ID is required in the process environment or .env.local"
+        )
+    profile = os.environ.get("AWS_PROFILE") or values.get("AWS_PROFILE") or None
+    return BedrockSettings(region=region.strip(), model_id=model_id.strip(), profile=profile)
 
 
 def build_bedrock_agent(settings: BedrockSettings, *, tools: list[Any] | None = None) -> Any:
@@ -1461,6 +1582,7 @@ __all__ = [
     "BedrockSettings",
     "EvidenceRecord",
     "EvidenceSession",
+    "ImpactedFile",
     "PRAnalysisReportV1",
     "PRAnalysisRequestV1",
     "PreAgenticSeed",

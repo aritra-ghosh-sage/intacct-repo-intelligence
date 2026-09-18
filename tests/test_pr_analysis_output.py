@@ -11,21 +11,33 @@ from pathlib import Path
 from unittest.mock import patch
 
 from ia_repomap_builder.pr_analysis import PRAnalysisReportV1
-from ia_repomap_builder.pr_analysis_output import EvidencePayload, write_pr_analysis_bundle
+from ia_repomap_builder.pr_analysis_output import (
+    EvidencePayload,
+    write_pr_analysis_bundle,
+)
 
 
 class PRAnalysisOutputTests(unittest.TestCase):
-    def report(self, raw: bytes = b"<pr-context/>\n") -> PRAnalysisReportV1:
+    def report(
+        self,
+        raw: bytes = b"<pr-context/>\n",
+        impacted_files: list[dict[str, object]] | None = None,
+        assessment: str = "complete",
+        gaps: list[dict[str, object]] | None = None,
+    ) -> PRAnalysisReportV1:
         digest = hashlib.sha256(raw).hexdigest()
         return PRAnalysisReportV1.model_validate({
             "schema": "ia-repomap.pr-analysis/v1",
             "status": "ok",
+            "assessment": assessment,
             "phase": "analysis",
             "request": {"repository": "intacct/ia-app", "base": "a" * 40, "analysis_schema": "ia-repomap.pr-analysis/v1"},
             "identity": {"repository": "intacct/ia-app", "head": "b" * 40, "base": "a" * 40, "merge_base": "a" * 40, "configuration_digest": "c" * 64, "engine_identity": "ripwire-test"},
             "summary": {"purpose": "test", "behavioral_change": "candidate", "confidence": "candidate"},
             "changed_files": [{"path": "app/source/example.cls", "change": "M", "symbols": [], "evidence_ids": ["pr-context-001"]}],
-            "blast_radius": [], "test_areas": [], "gaps": [{"kind": "lower_bound", "detail": "not exhaustive"}],
+            "impacted_files": impacted_files or [],
+            "blast_radius": [], "test_areas": [],
+            "gaps": gaps or [{"kind": "lower_bound", "detail": "not exhaustive"}],
             "evidence": [{"evidence_id": "pr-context-001", "kind": "pr_context_xml", "relative_path": "evidence/pr-context.xml", "sha256": digest}],
             "diagnostics": [], "remediation": [], "metrics": {"impact_calls": 0},
             "agent": {"invoked": False, "model_id": "fake", "region": "test", "prompt_version": "v1", "tool_contract_version": "v1", "coordinator_version": "v1"},
@@ -47,6 +59,88 @@ class PRAnalysisOutputTests(unittest.TestCase):
             with self.assertRaises(FileExistsError):
                 write_pr_analysis_bundle(output, report, self.payload(report), repo_root=Path(root) / "repo")
             self.assertEqual(first, (output / "pr-analysis.json").read_bytes())
+
+    def test_markdown_lists_all_impacted_files_and_dependent_symbol_counts(self) -> None:
+        impacted_files = [
+            {
+                "changed_path": "app/source/example.cls",
+                "path": f"app/source/impact/{index}.cls",
+                "dependent_symbols": index,
+                "confidence": "candidate",
+                "evidence_ids": ["pr-context-001"],
+            }
+            for index in range(1, 9)
+        ]
+        with tempfile.TemporaryDirectory() as root:
+            output = Path(root) / "bundle"
+            report = self.report(impacted_files=impacted_files)
+            write_pr_analysis_bundle(
+                output,
+                report,
+                self.payload(report),
+                repo_root=Path(root) / "repo",
+            )
+            markdown = (output / "pr-analysis.md").read_text()
+            self.assertIn("## Candidate impacted files", markdown)
+            for index in range(1, 9):
+                self.assertIn(f"`app/source/impact/{index}.cls`", markdown)
+                self.assertIn(f"dependent symbols: {index}", markdown)
+
+    def test_markdown_renders_impact_truncation_next_to_impacted_files(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            output = Path(root) / "bundle"
+            report = self.report(
+                impacted_files=[{
+                    "changed_path": "app/source/example.cls",
+                    "path": "app/source/impact/one.cls",
+                    "dependent_symbols": 3,
+                    "confidence": "candidate",
+                    "evidence_ids": ["pr-context-001"],
+                }],
+                assessment="partial",
+                gaps=[{
+                    "kind": "impact_truncated",
+                    "detail": "impact files capped at the configured limit",
+                    "count": 165,
+                }],
+            )
+            write_pr_analysis_bundle(
+                output,
+                report,
+                self.payload(report),
+                repo_root=Path(root) / "repo",
+            )
+            markdown = (output / "pr-analysis.md").read_text()
+            impacted_index = markdown.index("## Candidate impacted files")
+            truncation_index = markdown.index("Impact truncation")
+            blast_radius_index = markdown.index("## Lower-bound blast radius")
+            self.assertLess(impacted_index, truncation_index)
+            self.assertLess(truncation_index, blast_radius_index)
+            self.assertIn(
+                "- `impact_truncated`: impact files capped at the configured limit (count: 165)",
+                markdown,
+            )
+
+    def test_markdown_renders_assessment_and_triggering_gap_kinds(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            output = Path(root) / "bundle"
+            report = self.report(
+                assessment="partial",
+                gaps=[
+                    {"kind": "graph_unresolved", "detail": "edge unresolved"},
+                    {"kind": "impact_lower_bound", "detail": "floor only"},
+                ],
+            )
+            write_pr_analysis_bundle(
+                output,
+                report,
+                self.payload(report),
+                repo_root=Path(root) / "repo",
+            )
+            markdown = (output / "pr-analysis.md").read_text()
+            self.assertIn("- assessment: `partial`", markdown)
+            self.assertIn("- assessment gaps: `graph_unresolved`", markdown)
+            self.assertNotIn("assessment gaps: `impact_lower_bound`", markdown)
 
     def test_existing_empty_directory_is_published(self) -> None:
         with tempfile.TemporaryDirectory() as root:

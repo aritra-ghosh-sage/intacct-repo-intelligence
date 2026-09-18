@@ -7,14 +7,23 @@ import json
 import os
 import sys
 import tempfile
+import uuid
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, TextIO
 
-from .config import PrContextRequest, PrImpactRequest, PrepareRepoMapRequest
+from .config import PrContextRequest, PrepareRepoMapRequest, PrImpactRequest
 from .impact import build_symbol_impact
+from .pr_analysis import PRAnalysisRequestV1, load_bedrock_settings, run_pr_analysis
 from .pr_context import build_pr_context
 from .readiness import prepare_repomap
+from .review import (
+    ReviewSetupError,
+    acquire_review_checkout,
+    marker_env,
+    resolve_pr,
+    workspace_root,
+)
 
 COMMAND_SCHEMA = "ia-repomap.command-result/v1"
 EXIT_OK = 0
@@ -55,6 +64,16 @@ def _parser() -> argparse.ArgumentParser:
     impact.add_argument("--symbol-name", dest="symbol_name", help="indexed symbol name")
     impact.add_argument("--limit", type=int, default=20)
     impact.add_argument("--offset", type=int, default=0)
+
+    review = commands.add_parser("review", help="run an exact GitHub PR analysis")
+    review.add_argument("pr_url", help="canonical GitHub pull-request URL")
+    review.add_argument("--repo", dest="repo_root", required=True, help="local repository checkout")
+    review.add_argument("--workspace", help="external retained state directory")
+    review.add_argument(
+        "--inspect",
+        action="store_true",
+        help="allow the coordinator to inspect source through its bounded tools",
+    )
     return parser
 
 
@@ -89,7 +108,7 @@ def main(
         return int(exc.code) if isinstance(exc.code, int) else EXIT_ERROR
     except ValueError as exc:
         command = next(
-            (item for item in raw_args if item in {"prepare", "pr-context", "symbol-impact"}),
+            (item for item in raw_args if item in {"prepare", "pr-context", "symbol-impact", "review"}),
             None,
         )
         return _emit_failure(
@@ -100,11 +119,13 @@ def main(
         )
 
     command = args.command
+    if command == "review":
+        return _run_review(args, out)
     if command not in {"prepare", "pr-context", "symbol-impact"}:
         return _emit_failure(
             out,
             command=None,
-            diagnostic="a command is required: prepare, pr-context, or symbol-impact",
+            diagnostic="a command is required: review, prepare, pr-context, or symbol-impact",
             remediation=["Run `python -m ia_repomap_builder --help` for valid commands."],
         )
 
@@ -224,6 +245,233 @@ def _envelope(command: str, request: dict[str, Any], result: Any) -> dict[str, A
     }
 
 
+def _safe_repository_name(repository: str) -> str:
+    value = "".join(character if character.isalnum() else "-" for character in repository)
+    return value.strip("-") or "repository"
+
+
+def _report_files(report_directory: Path) -> list[str]:
+    if not report_directory.is_dir():
+        return []
+    return sorted(
+        str(path.relative_to(report_directory))
+        for path in report_directory.rglob("*")
+        if path.is_file()
+    )
+
+
+_GH_UNAVAILABLE_MARKERS = (
+    "authentication",
+    "not logged into",
+    "bad credentials",
+    "rate limit",
+    "service unavailable",
+    "temporarily unavailable",
+    "connection refused",
+    "connection reset",
+    "timed out",
+    "timeout",
+    "http 502",
+    "http 503",
+    "http 504",
+    "no such file or directory",
+    "command not found",
+)
+
+
+def _is_gh_unavailable(error: ReviewSetupError) -> bool:
+    """Classify only gh PR lookup auth/service failures as unavailable."""
+
+    detail = str(error).lower()
+    return "gh pr view" in detail and any(marker in detail for marker in _GH_UNAVAILABLE_MARKERS)
+
+
+def _review_envelope(
+    *,
+    request: dict[str, Any],
+    status: str,
+    assessment: str,
+    base_sha: str | None,
+    head_sha: str | None,
+    report_directory: Path | None,
+    remediation: list[str],
+    report: Any | None = None,
+) -> dict[str, Any]:
+    directory = str(report_directory) if report_directory is not None else None
+    report_status = getattr(report, "status", None) if report is not None else None
+    report_assessment = getattr(report, "assessment", None) if report is not None else None
+    return {
+        "schema": COMMAND_SCHEMA,
+        "command": "review",
+        "request": request,
+        "status": status,
+        "assessment": assessment,
+        "base_sha": base_sha,
+        "head_sha": head_sha,
+        "report_directory": directory,
+        "report": {
+            "status": report_status,
+            "assessment": report_assessment,
+            "files": _report_files(report_directory) if report_directory is not None else [],
+        },
+        "remediation": remediation,
+    }
+
+
+def _run_review(args: argparse.Namespace, out: TextIO) -> int:
+    requested_workspace = workspace_root(args.workspace)
+    request = {
+        "pr_url": args.pr_url,
+        "repo": str(Path(args.repo_root).expanduser().resolve()),
+        "workspace": str(requested_workspace),
+        "inspect": bool(args.inspect),
+    }
+    metadata = None
+    report_directory: Path | None = None
+    try:
+        metadata = resolve_pr(args.pr_url)
+    except ReviewSetupError as exc:
+        unavailable = _is_gh_unavailable(exc)
+        diagnostic = (
+            f"GitHub CLI unavailable: {exc}. Check `gh auth status`, network access, "
+            "and GitHub service availability, then rerun."
+            if unavailable
+            else str(exc)
+        )
+        return _write_review_result(
+            out,
+            _review_envelope(
+                request=request,
+                status="unavailable" if unavailable else "error",
+                assessment="unavailable" if unavailable else "error",
+                base_sha=None,
+                head_sha=None,
+                report_directory=None,
+                remediation=[diagnostic, "Correct the PR URL or GitHub CLI environment, then rerun."],
+            ),
+        )
+
+    try:
+        checkout = acquire_review_checkout(
+            metadata,
+            repo=Path(args.repo_root),
+            workspace=requested_workspace,
+        )
+        workspace = checkout.workspace_root
+        artifact_root = workspace / "artifacts"
+        report_directory = (
+            workspace
+            / "reports"
+            / _safe_repository_name(metadata.repository)
+            / metadata.head_sha
+            / metadata.base_sha
+            / uuid.uuid4().hex
+        )
+        request.update(
+            {
+                "base_sha": metadata.base_sha,
+                "head_sha": metadata.head_sha,
+                "worktree": str(checkout.worktree),
+                "artifact_root": str(artifact_root),
+                "report_directory": str(report_directory),
+            }
+        )
+        with marker_env():
+            prepared = prepare_repomap(
+                PrepareRepoMapRequest(checkout.worktree, artifact_root)
+            )
+            if prepared.status != "ok":
+                status = prepared.status if prepared.status in {"unavailable", "error"} else "error"
+                assessment = status
+                return _write_review_result(
+                    out,
+                    _review_envelope(
+                        request=request,
+                        status=status,
+                        assessment=assessment,
+                        base_sha=metadata.base_sha,
+                        head_sha=metadata.head_sha,
+                        report_directory=report_directory,
+                        remediation=_remediation("review", prepared),
+                    ),
+                )
+            try:
+                settings = load_bedrock_settings()
+            except (OSError, TypeError, ValueError) as exc:
+                return _write_review_result(
+                    out,
+                    _review_envelope(
+                        request=request,
+                        status="unavailable",
+                        assessment="unavailable",
+                        base_sha=metadata.base_sha,
+                        head_sha=metadata.head_sha,
+                        report_directory=report_directory,
+                        remediation=[
+                            f"Bedrock settings unavailable: {exc}. Set AWS_REGION or "
+                            "AWS_DEFAULT_REGION and BEDROCK_MODEL_ID in the process "
+                            "environment or .env.local, then rerun."
+                        ],
+                    ),
+                )
+            report = run_pr_analysis(
+                PRAnalysisRequestV1(
+                    schema_="ia-repomap.pr-analysis-request/v1",
+                    repo_root=checkout.worktree,
+                    base_ref=metadata.base_sha,
+                    artifact_root=artifact_root,
+                    output_dir=report_directory,
+                ),
+                settings=settings,
+                allow_source_inspection=bool(args.inspect),
+            )
+        status = report.status if report.status in {"ok", "unavailable", "error"} else "error"
+        return _write_review_result(
+            out,
+            _review_envelope(
+                request=request,
+                status=status,
+                assessment=report.assessment,
+                base_sha=metadata.base_sha,
+                head_sha=metadata.head_sha,
+                report_directory=report_directory,
+                remediation=_remediation("review", report),
+                report=report,
+            ),
+        )
+    except ReviewSetupError as exc:
+        return _write_review_result(
+            out,
+            _review_envelope(
+                request=request,
+                status="error",
+                assessment="error",
+                base_sha=metadata.base_sha if metadata else None,
+                head_sha=metadata.head_sha if metadata else None,
+                report_directory=report_directory,
+                remediation=[str(exc), "Correct the local checkout or PR input, then rerun."],
+            ),
+        )
+    except Exception as exc:  # pragma: no cover - defensive public command boundary
+        return _write_review_result(
+            out,
+            _review_envelope(
+                request=request,
+                status="error",
+                assessment="error",
+                base_sha=metadata.base_sha if metadata else None,
+                head_sha=metadata.head_sha if metadata else None,
+                report_directory=report_directory,
+                remediation=[f"{type(exc).__name__}: {exc}", "Correct the setup or configuration, then rerun."],
+            ),
+        )
+
+
+def _write_review_result(out: TextIO, payload: dict[str, Any]) -> int:
+    _write_payload(out, payload)
+    return _exit_code(payload["status"])
+
+
 def _emit_failure(
     out: TextIO,
     *,
@@ -244,6 +492,22 @@ def _emit_failure(
         result["candidates"] = []
     else:
         result["changed_files"] = []
+    if command == "review":
+        payload = {
+            "schema": COMMAND_SCHEMA,
+            "command": "review",
+            "request": request or {},
+            "status": "error",
+            "assessment": "error",
+            "base_sha": None,
+            "head_sha": None,
+            "report_directory": None,
+            "report": {"status": None, "assessment": None, "files": []},
+            "result": result,
+            "remediation": remediation,
+        }
+        _write_payload(out, payload)
+        return EXIT_ERROR
     payload = {
         "schema": COMMAND_SCHEMA,
         "command": command,
