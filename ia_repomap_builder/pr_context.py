@@ -80,9 +80,17 @@ def build_pr_context(request: PrContextRequest) -> PrContextResult:
         return PrContextResult(status="error", diagnostics=[str(exc)], identity=readiness.identity)
 
     in_scope, gaps = _in_scope_changes(changes, config.scope)
+    inventory = tuple(_change_dict(change, config.scope) for change in changes)
     hunk_ranges: dict[str, tuple[tuple[int, int], ...]] = {}
     for change in in_scope:
-        if change.change not in {"A", "M", "R"}:
+        if change.change == "D":
+            gaps.append(PrContextGap(
+                kind="hunk_no_head_lines",
+                detail=f"Deleted file {change.path} has no positive-side lines for symbol attribution",
+                count=1,
+            ))
+            continue
+        if change.change not in {"A", "M", "R", "C"}:
             continue
         try:
             hunk_ranges[change.path] = _hunk_line_ranges(
@@ -103,8 +111,10 @@ def build_pr_context(request: PrContextRequest) -> PrContextResult:
         return PrContextResult(
             status="unavailable",
             diagnostics=["Ripwire binary became unavailable after readiness check"],
+            changed_files=_host_changed_files(changes, config.scope),
             gaps=gaps,
             identity=readiness.identity,
+            git_inventory=inventory,
         )
     budget = request.token_budget if request.token_budget is not None else config.token_budget
     command = [
@@ -130,19 +140,23 @@ def build_pr_context(request: PrContextRequest) -> PrContextResult:
     except (OSError, subprocess.SubprocessError) as exc:
         return PrContextResult(
             status="error",
+            changed_files=_host_changed_files(changes, config.scope),
             gaps=gaps,
             diagnostics=[f"Ripwire PR-context invocation failed: {exc}"],
             identity=readiness.identity,
+            git_inventory=inventory,
         )
     if completed.returncode != 0:
         return PrContextResult(
             status="error",
+            changed_files=_host_changed_files(changes, config.scope),
             gaps=gaps,
             diagnostics=[f"Ripwire PR-context exited {completed.returncode}: {completed.stderr.strip()[:500]}"],
             identity=readiness.identity,
+            git_inventory=inventory,
         )
     try:
-        changed_files, xml_gaps, xml_metrics = _parse_pr_context_xml(
+        parsed_files, xml_gaps, xml_metrics = _parse_pr_context_xml(
             root,
             config.scope[0],
             completed.stdout,
@@ -152,10 +166,25 @@ def build_pr_context(request: PrContextRequest) -> PrContextResult:
     except ValueError as exc:
         return PrContextResult(
             status="error",
+            changed_files=_host_changed_files(changes, config.scope),
             gaps=gaps,
             diagnostics=[str(exc)],
             identity=readiness.identity,
+            git_inventory=inventory,
         )
+
+    parsed_by_path = {item.path: item for item in parsed_files}
+    changed_files = []
+    for change in changes:
+        item = parsed_by_path.get(change.path)
+        if item is None:
+            item = PrChangedFile(
+                path=change.path,
+                change=change.change,
+                old_path=change.old_path,
+                scope="in_scope" if _path_in_scope(change.path, config.scope[0]) else "out_of_scope",
+            )
+        changed_files.append(item)
 
     post_head = git_revision(root)
     post_dirty = is_dirty(root)
@@ -166,6 +195,7 @@ def build_pr_context(request: PrContextRequest) -> PrContextResult:
             status="error",
             diagnostics=["repository checkout changed while PR context was being generated"],
             identity=identity,
+            git_inventory=inventory,
         )
 
     metrics = {
@@ -181,13 +211,35 @@ def build_pr_context(request: PrContextRequest) -> PrContextResult:
         gaps=[*gaps, *xml_gaps],
         metrics=metrics,
         identity=readiness.identity,
+        git_inventory=inventory,
     )
+
+
+def _change_dict(change: _GitChange, scope: tuple[str, ...]) -> dict[str, object]:
+    return {
+        "path": change.path,
+        "change": change.change,
+        "old_path": change.old_path,
+        "scope": "in_scope" if any(_path_in_scope(change.path, item) for item in scope) else "out_of_scope",
+    }
+
+
+def _host_changed_files(changes: Sequence[_GitChange], scope: tuple[str, ...]) -> list[PrChangedFile]:
+    return [
+        PrChangedFile(
+            path=change.path,
+            change=change.change,
+            old_path=change.old_path,
+            scope="in_scope" if any(_path_in_scope(change.path, item) for item in scope) else "out_of_scope",
+        )
+        for change in changes
+    ]
 
 
 def _git_changes(root: Path, merge_base: str) -> list[_GitChange]:
     try:
         completed = subprocess.run(
-            ["git", "-C", str(root), "diff", "--name-status", "-z", "--find-renames", merge_base, "HEAD"],
+            ["git", "-C", str(root), "diff", "--name-status", "-z", "--find-renames", "--find-copies", merge_base, "HEAD"],
             check=True,
             capture_output=True,
             text=True,
@@ -272,7 +324,7 @@ def _in_scope_changes(
     outside = 0
     unsupported = 0
     for change in changes:
-        if change.change not in {"A", "M", "D", "R"}:
+        if change.change not in {"A", "M", "D", "R", "C"}:
             unsupported += 1
             continue
         if any(change.path.startswith(prefix) for prefix in prefixes):
@@ -365,6 +417,7 @@ def _parse_pr_context_xml(
     direct_callers_after = 0
     direct_callers_unresolved = 0
     direct_callers_capped = 0
+    hunks_ambiguous = 0
     for change in changes:
         symbols = symbols_by_path.get(change.path, ())
         symbols_before += len(symbols)
@@ -390,6 +443,14 @@ def _parse_pr_context_xml(
                 )
             else:
                 symbols, missing_lines, unresolved = _select_hunk_symbols(symbols, ranges)
+                ambiguous = _ambiguous_hunk_groups(symbols, ranges)
+                hunks_ambiguous += ambiguous
+                if ambiguous:
+                    gaps.append(PrContextGap(
+                        kind="hunk_symbol_ambiguous",
+                        detail=f"Multiple candidate symbols share changed hunk lines in {change.path}",
+                        count=ambiguous,
+                    ))
                 hunks_unresolved += unresolved
                 if missing_lines:
                     gaps.append(
@@ -489,6 +550,7 @@ def _parse_pr_context_xml(
                 "candidate_symbols_after": symbols_after,
                 "hunks_total": hunks_total,
                 "hunks_unresolved": hunks_unresolved,
+                "hunks_ambiguous": hunks_ambiguous,
                 "relationship_selection": "direct-callers-v1",
                 "direct_callers_before": direct_callers_before,
                 "direct_callers_after": direct_callers_after,
@@ -707,6 +769,17 @@ def _select_hunk_symbols(
 
     selected.sort(key=lambda item: (item.line or 0, item.kind or "", item.name))
     return tuple(selected), missing_lines, len(ranges) - len(matched_hunks)
+
+
+def _ambiguous_hunk_groups(
+    symbols: Sequence[PrSymbolCandidate], ranges: Sequence[tuple[int, int]]
+) -> int:
+    lines = {symbol.line for symbol in symbols if symbol.line is not None}
+    return sum(
+        1 for line in lines
+        if sum(1 for symbol in symbols if symbol.line == line) > 1
+        and any(start <= line <= end for start, end in ranges)
+    )
 
 
 def _normalize_scope_path(repo_root: Path, scope: str, raw_path: str) -> str | None:

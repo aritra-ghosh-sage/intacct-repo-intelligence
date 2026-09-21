@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import tempfile
+import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -227,6 +228,7 @@ def write_pr_analysis_bundle(
     staging: Path | None = Path(
         tempfile.mkdtemp(prefix=f".{destination.name}.tmp-", dir=parent)
     )
+    backup: Path | None = None
     published = False
     try:
         report_json = json.dumps(
@@ -250,7 +252,8 @@ def write_pr_analysis_bundle(
         finally:
             os.close(fd)
         if existed:
-            output_dir.rmdir()
+            backup = parent / f".{destination.name}.old-{uuid.uuid4().hex}"
+            os.replace(output_dir, backup)
         os.replace(staging, destination)
         published = True
         staging = None
@@ -259,11 +262,16 @@ def write_pr_analysis_bundle(
             os.fsync(fd)
         finally:
             os.close(fd)
+        if backup is not None and backup.exists():
+            backup.rmdir()
+            backup = None
     except Exception:
         if staging is not None and staging.exists():
             shutil.rmtree(staging)
         if published and destination.exists() and not destination.is_symlink():
             shutil.rmtree(destination)
+        if backup is not None and backup.exists() and not destination.exists():
+            os.replace(backup, destination)
         raise
 
 

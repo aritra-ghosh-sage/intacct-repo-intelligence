@@ -723,8 +723,11 @@ not a hunk @@ -1 +2 @@
             ],
             ("app/source",),
         )
-        self.assertEqual([item.path for item in selected], ["app/source/gl/Added.ent"])
-        self.assertEqual({gap.kind for gap in gaps}, {"out_of_scope_changes", "unsupported_git_change"})
+        self.assertEqual(
+            [item.path for item in selected],
+            ["app/source/gl/Added.ent", "app/source/gl/Copy.cls"],
+        )
+        self.assertEqual({gap.kind for gap in gaps}, {"out_of_scope_changes"})
 
     def test_pr_context_command_uses_prepared_cache_and_preserves_raw_xml(self) -> None:
         ready = BuildResult(

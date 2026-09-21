@@ -609,6 +609,12 @@ def setup_review(
                 PrepareRepoMapRequest(checkout.worktree, artifact_root)
             )
         identity = _setup_identity(metadata, checkout)
+        if readiness.identity:
+            if readiness.identity.get("configuration_digest"):
+                identity["configuration_digest"] = readiness.identity["configuration_digest"]
+            engine = readiness.identity.get("engine")
+            if isinstance(engine, dict) and engine.get("id"):
+                identity["engine_identity"] = engine["id"]
         if readiness.status != "ok":
             status = readiness.status if readiness.status in {"unavailable", "error"} else "error"
             return ReviewSetupResult(

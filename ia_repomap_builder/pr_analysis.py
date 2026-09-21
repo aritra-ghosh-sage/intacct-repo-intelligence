@@ -102,6 +102,8 @@ class Symbol(StrictModel):
 class ChangedFile(StrictModel):
     path: str
     change: Change
+    old_path: str | None = None
+    scope: Literal["in_scope", "out_of_scope"] = "in_scope"
     symbols: list[Symbol] = Field(max_length=100)
     evidence_ids: list[str] = Field(min_length=1, max_length=20)
 
@@ -175,6 +177,7 @@ _MATERIAL_GAP_KINDS = frozenset({
     "coverage_unavailable",
     "model_rows_discarded",
     "no_candidate_symbols",
+    "hunk_no_head_lines",
 })
 
 
@@ -208,9 +211,16 @@ def _assessment_for(status: str, gaps: list[Mapping[str, Any]] | list[Gap]) -> A
 
 class Evidence(StrictModel):
     evidence_id: str = Field(min_length=1)
-    kind: Literal["pr_context_xml", "symbol_impact_xml", "inspection"]
-    relative_path: str = Field(pattern=r"^[^/].*")
+    kind: Literal["pr_context_xml", "symbol_impact_xml", "inspection", "git_inventory"]
+    relative_path: str = Field(pattern=r"^evidence/[^/].*")
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("relative_path")
+    @classmethod
+    def safe_relative_path(cls, value: str) -> str:
+        if ".." in value.split("/"):
+            raise ValueError("relative_path must not contain traversal")
+        return value
 
 
 class Agent(StrictModel):
@@ -601,6 +611,8 @@ def _with_tool_observations(
 def _payload_kind_and_path(evidence_id: str) -> tuple[str, str]:
     if evidence_id == "pr-context-001":
         return "pr_context_xml", "evidence/pr-context.xml"
+    if evidence_id == "git-inventory-001":
+        return "git_inventory", "evidence/git-inventory.json"
     if evidence_id.startswith("inspection-"):
         return "inspection", f"evidence/{evidence_id}.json"
     return "symbol_impact_xml", f"evidence/{evidence_id}.xml"
@@ -725,23 +737,41 @@ def _merge_payloads(
 
 
 def _affected_test_areas(context: PrContextResult) -> list[TestArea]:
-    """Convert host-normalized Ripwire test evidence into report rows."""
+    """Convert bounded test evidence and file-class candidates into not-run areas."""
 
     areas: list[TestArea] = []
     for changed in sorted(context.changed_files, key=lambda item: item.path):
-        if not changed.affected_tests:
-            continue
         tests = sorted(changed.affected_tests, key=lambda item: item.path)
         runners = sorted({item.runner for item in tests if item.runner})
-        reason = f"Ripwire identified these tests in the lower-bound impact of {changed.path}."
-        if runners:
-            reason += " Disclosed runners: " + "; ".join(runners)
+        if tests:
+            paths = [item.path for item in tests]
+            reason = f"Ripwire identified these tests in the lower-bound impact of {changed.path}."
+            if runners:
+                reason += " Disclosed runners: " + "; ".join(runners)
+            confidence = "candidate"
+            area = f"Affected tests for {changed.path}"
+        else:
+            lowered = changed.path.lower()
+            if any(token in lowered for token in ("migration", "backfill", "seed", ".sql")):
+                area = f"Migration/backfill validation for {changed.path}"
+            elif any(token in lowered for token in ("openapi", "schema", ".yaml", ".yml", ".json", "/api/")):
+                area = f"API/schema contract validation for {changed.path}"
+            elif changed.scope == "out_of_scope":
+                area = f"Test validation for {changed.path}"
+            else:
+                continue
+            paths = []
+            reason = (
+                f"No repository-linked test path was available for {changed.path}; "
+                "this is an unresolved candidate area and was not executed."
+            )
+            confidence = "unresolved"
         areas.append(TestArea(
-            area=f"Affected tests for {changed.path}",
-            paths=[item.path for item in tests],
+            area=area,
+            paths=paths,
             reason=reason,
-            confidence="candidate",
-            evidence_ids=["pr-context-001"],
+            confidence=confidence,
+            evidence_ids=["git-inventory-001"] if context.git_inventory else ["pr-context-001"],
             execution_status="not_run",
         ))
     return areas
@@ -750,7 +780,7 @@ def _affected_test_areas(context: PrContextResult) -> list[TestArea]:
 def _coverage_gaps(context: PrContextResult) -> list[dict[str, Any]]:
     """Disclose when no executed coverage or test index is available."""
 
-    if context.changed_files and all(not changed.affected_tests for changed in context.changed_files):
+    if context.changed_files:
         return [{
             "kind": "coverage_unavailable",
             "detail": "No test index or executed coverage source was available; candidate test areas remain not_run",
@@ -1191,6 +1221,14 @@ def _report_from_context(
         diagnostics.append("successful PR context did not include complete identity provenance")
 
     evidence: list[Evidence] = []
+    inventory_bytes = _git_inventory_bytes(context)
+    if context.git_inventory:
+        evidence.append(Evidence(
+            evidence_id="git-inventory-001",
+            kind="git_inventory",
+            relative_path="evidence/git-inventory.json",
+            sha256=sha256(inventory_bytes).hexdigest(),
+        ))
     if context.raw_xml or context.changed_files:
         context_bytes = context.raw_xml.encode("utf-8")
         evidence.append(Evidence(
@@ -1203,6 +1241,8 @@ def _report_from_context(
         {
             "path": changed.path,
             "change": changed.change,
+            "old_path": changed.old_path,
+            "scope": changed.scope,
             "symbols": [
                 {
                     "path": symbol.path,
@@ -1213,12 +1253,12 @@ def _report_from_context(
                 }
                 for symbol in changed.symbols
             ],
-            "evidence_ids": ["pr-context-001"],
+            "evidence_ids": (["git-inventory-001"] if context.git_inventory else []) + (["pr-context-001"] if context.raw_xml or context.changed_files else []),
         }
         for changed in context.changed_files
     ]
     gaps = [gap.__dict__ for gap in context.gaps]
-    if effective_status == "ok" and not any(file["symbols"] for file in changed_files):
+    if effective_status == "ok" and changed_files and not any(file["symbols"] for file in changed_files):
         gaps.append({"kind": "no_candidate_symbols", "detail": "No candidate symbols were returned by PR context"})
     if effective_status == "unavailable":
         remediation = [
@@ -1263,6 +1303,12 @@ def _report_from_context(
     )
 
 
+def _git_inventory_bytes(context: PrContextResult) -> bytes:
+    return json.dumps(
+        list(context.git_inventory), sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+
+
 def run_pr_analysis(
     request: PRAnalysisRequestV1 | Mapping[str, Any],
     settings: BedrockSettings | None = None,
@@ -1299,9 +1345,12 @@ def run_pr_analysis(
         context = PrContextResult("error", diagnostics=[f"PR context failed: {exc}"])
 
     def context_payloads(value: PrContextResult) -> list[tuple[str, bytes]]:
-        if not (value.raw_xml or value.changed_files):
-            return []
-        return [("pr-context-001", value.raw_xml.encode("utf-8"))]
+        payloads: list[tuple[str, bytes]] = []
+        if value.raw_xml or value.changed_files:
+            payloads.append(("pr-context-001", value.raw_xml.encode("utf-8")))
+        if value.git_inventory:
+            payloads.append(("git-inventory-001", _git_inventory_bytes(value)))
+        return payloads
 
     if context.status == "unavailable":
         report = _report_from_context(parsed, context, status="unavailable", phase="readiness")
@@ -1313,10 +1362,11 @@ def run_pr_analysis(
     allowed = tuple(
         (symbol.path, symbol.name)
         for changed in context.changed_files
+        if changed.scope == "in_scope"
         for symbol in changed.symbols
     )
     if not allowed:
-        if context.changed_files and settings is not None:
+        if any(changed.scope == "in_scope" for changed in context.changed_files) and settings is not None:
             seed = PreAgenticSeed("ok", "analysis", context, ())
             payloads: list[tuple[str, bytes]] = []
             sessions: list[EvidenceSession] = []

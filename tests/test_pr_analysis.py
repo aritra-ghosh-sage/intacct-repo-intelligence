@@ -171,7 +171,7 @@ class PRAnalysisReportTests(unittest.TestCase):
             )
             self.assertEqual((report.status, report.phase), ("ok", "pr_context"))
             self.assertFalse(report.agent.invoked)
-            self.assertIn("no_candidate_symbols", {gap.kind for gap in report.gaps})
+            self.assertNotIn("no_candidate_symbols", {gap.kind for gap in report.gaps})
             self.assertEqual((requests[0].limit, requests[0].offset, requests[0].history_commits), (20, 0, 500))
             PRAnalysisReportV1.model_validate(report.model_dump(by_alias=True))
             self.assert_checked_in_schema(report)

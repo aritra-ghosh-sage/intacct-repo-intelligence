@@ -190,6 +190,7 @@ class PrChangedFile:
     symbols: tuple[PrSymbolCandidate, ...] = ()
     impact_files: tuple[PrImpactedFileCandidate, ...] = ()
     affected_tests: tuple[PrAffectedTestCandidate, ...] = ()
+    scope: str = "in_scope"
 
 
 @dataclass(frozen=True)
@@ -212,6 +213,7 @@ class PrContextResult:
     diagnostics: list[str] = field(default_factory=list)
     metrics: dict[str, Any] = field(default_factory=dict)
     identity: dict[str, Any] = field(default_factory=dict)
+    git_inventory: tuple[dict[str, Any], ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -234,6 +236,7 @@ class PrContextResult:
                     ],
                     "impact_files": [item.__dict__ for item in changed.impact_files],
                     "affected_tests": [item.__dict__ for item in changed.affected_tests],
+                    "scope": changed.scope,
                 }
                 for changed in self.changed_files
             ],
@@ -242,6 +245,7 @@ class PrContextResult:
             "diagnostics": list(self.diagnostics),
             "metrics": dict(self.metrics),
             "identity": dict(self.identity),
+            "git_inventory": [dict(item) for item in self.git_inventory],
         }
 
 

@@ -72,7 +72,7 @@
                     "properties": {
                       "kind": {
                         "anyOf": [
-                          { "enum": ["model_rows_discarded", "no_candidate_symbols"] },
+                          { "enum": ["model_rows_discarded", "no_candidate_symbols", "hunk_no_head_lines"] },
                           { "pattern": "ambiguous|out_of_scope|truncated|unresolved|_unavailable$" }
                         ]
                       }
@@ -170,6 +170,8 @@
       "properties": {
         "path": { "$ref": "#/$defs/RepoPath" },
         "change": { "enum": ["A", "M", "D", "R", "C"] },
+        "old_path": { "anyOf": [{ "$ref": "#/$defs/RepoPath" }, { "type": "null" }] },
+        "scope": { "enum": ["in_scope", "out_of_scope"] },
         "symbols": { "type": "array", "items": { "$ref": "#/$defs/Symbol" }, "maxItems": 100 },
         "evidence_ids": { "$ref": "#/$defs/EvidenceIds" }
       }
@@ -233,8 +235,8 @@
       "required": ["evidence_id", "kind", "relative_path", "sha256"],
       "properties": {
         "evidence_id": { "type": "string", "minLength": 1 },
-        "kind": { "enum": ["pr_context_xml", "symbol_impact_xml", "inspection"] },
-        "relative_path": { "type": "string", "pattern": "^[^/].*" },
+        "kind": { "enum": ["pr_context_xml", "symbol_impact_xml", "inspection", "git_inventory"] },
+        "relative_path": { "type": "string", "pattern": "^evidence/[^/].*" },
         "sha256": { "$ref": "#/$defs/Digest" }
       }
     },
