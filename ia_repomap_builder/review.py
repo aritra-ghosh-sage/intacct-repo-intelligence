@@ -6,12 +6,27 @@ import json
 import os
 import re
 import subprocess
+import uuid
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+
+from .config import BuildResult, PrepareRepoMapRequest
+from .pr_analysis import (
+    PRAnalysisRequestV1,
+    load_bedrock_settings,
+    run_pr_analysis,
+)
+from .pr_analysis_skills import (
+    RIPWIRE_INITIAL_SKILL_PROFILES,
+    RipwireSkillPolicy,
+    SkillLoadError,
+    load_selected_ripwire_skills,
+)
+from .readiness import prepare_repomap
 
 
 class ReviewSetupError(RuntimeError):
@@ -20,6 +35,97 @@ class ReviewSetupError(RuntimeError):
 
 CommandRunner = Callable[..., subprocess.CompletedProcess[str]]
 _FULL_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
+REQUIRED_RIPWIRE_SKILLS = RIPWIRE_INITIAL_SKILL_PROFILES
+
+
+@dataclass(frozen=True)
+class ReviewRequest:
+    """Host-owned input for one self-hosted PR review."""
+
+    pr_url: str
+    repo_root: Path
+    workspace: Path | None = None
+    inspect: bool = False
+
+    def normalised(self) -> ReviewRequest:
+        return ReviewRequest(
+            pr_url=self.pr_url,
+            repo_root=Path(self.repo_root).expanduser().resolve(),
+            workspace=(
+                Path(self.workspace).expanduser().resolve()
+                if self.workspace is not None
+                else None
+            ),
+            inspect=bool(self.inspect),
+        )
+
+
+@dataclass(frozen=True)
+class ReviewSetupResult:
+    """Host-owned setup outcome and exact checkout identity."""
+
+    status: str
+    metadata: PRMetadata | None = None
+    checkout: ReviewCheckout | None = None
+    artifact_root: Path | None = None
+    report_directory: Path | None = None
+    readiness: BuildResult | None = None
+    identity: dict[str, Any] = field(default_factory=dict)
+    remediation: tuple[str, ...] = ()
+    skill_policy: RipwireSkillPolicy | None = field(default=None, repr=False, compare=False)
+
+    @property
+    def base_sha(self) -> str | None:
+        return self.metadata.base_sha if self.metadata else None
+
+    @property
+    def head_sha(self) -> str | None:
+        return self.metadata.head_sha if self.metadata else None
+
+    def as_dict(self) -> dict[str, Any]:
+        readiness = self.readiness.as_dict() if self.readiness is not None else None
+        return {
+            "status": self.status,
+            "base_sha": self.base_sha,
+            "head_sha": self.head_sha,
+            "artifact_root": str(self.artifact_root) if self.artifact_root else None,
+            "report_directory": str(self.report_directory) if self.report_directory else None,
+            "worktree": str(self.checkout.worktree) if self.checkout else None,
+            "identity": dict(self.identity),
+            "readiness": readiness,
+            "remediation": list(self.remediation),
+        }
+
+
+@dataclass(frozen=True)
+class ReviewRunResult:
+    """Host-owned public outcome for one review execution."""
+
+    status: str
+    assessment: str
+    base_sha: str | None = None
+    head_sha: str | None = None
+    report_directory: Path | None = None
+    report_status: str | None = None
+    report_assessment: str | None = None
+    report_files: tuple[str, ...] = ()
+    remediation: tuple[str, ...] = ()
+    setup: ReviewSetupResult | None = field(default=None, repr=False, compare=False)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "assessment": self.assessment,
+            "base_sha": self.base_sha,
+            "head_sha": self.head_sha,
+            "report_directory": str(self.report_directory) if self.report_directory else None,
+            "report": {
+                "status": self.report_status,
+                "assessment": self.report_assessment,
+                "files": list(self.report_files),
+            },
+            "remediation": list(self.remediation),
+        }
 
 
 @dataclass(frozen=True)
@@ -140,26 +246,13 @@ def _repository_matches(actual: str, metadata: PRMetadata) -> bool:
     return _normalised_location(actual) == _normalised_location(metadata.clone_url or "")
 
 
-def _metadata_repository(payload: Any) -> tuple[str, str]:
-    base_repository = payload.get("baseRepository")
-    if not isinstance(base_repository, dict):
-        raise ReviewSetupError("gh PR metadata does not contain baseRepository")
-    repository = base_repository.get("nameWithOwner")
-    clone_url = base_repository.get("cloneUrl") or base_repository.get("sshUrl")
-    if not isinstance(repository, str) or not repository.strip():
-        raise ReviewSetupError("gh PR metadata is missing baseRepository.nameWithOwner")
-    if not isinstance(clone_url, str) or not clone_url.strip():
-        clone_url = f"https://github.com/{repository}.git"
-    return repository.strip(), clone_url.strip()
-
-
 def resolve_pr(pr_url: str, *, runner: CommandRunner = _default_runner) -> PRMetadata:
     """Resolve immutable PR identity through authenticated ``gh``."""
 
     url_repository, url_number = _github_pr_url(pr_url)
     completed = _run(
         runner,
-        ["gh", "pr", "view", pr_url, "--json", "number,baseRefOid,headRefOid,baseRepository"],
+        ["gh", "pr", "view", pr_url, "--json", "number,baseRefOid,headRefOid"],
     )
     try:
         payload = json.loads(completed.stdout or "")
@@ -176,10 +269,14 @@ def resolve_pr(pr_url: str, *, runner: CommandRunner = _default_runner) -> PRMet
         raise ReviewSetupError("gh PR metadata is missing headRefOid")
     if not isinstance(number, int) or number != url_number:
         raise ReviewSetupError("gh PR metadata number does not match the PR URL")
-    repository, clone_url = _metadata_repository(payload)
-    if repository.lower() != url_repository.lower():
-        raise ReviewSetupError("gh baseRepository does not match the PR URL repository")
-    return PRMetadata(pr_url, number, base_sha.lower(), head_sha.lower(), repository, clone_url)
+    return PRMetadata(
+        pr_url,
+        number,
+        base_sha.lower(),
+        head_sha.lower(),
+        url_repository,
+        f"https://github.com/{url_repository}.git",
+    )
 
 
 resolve_pr_metadata = resolve_pr
@@ -377,3 +474,301 @@ def marker_env(config_path: Path | str | None = None) -> Iterator[Path]:
 
 
 repomap_config_context = marker_env
+
+
+def _skill_policy(loaded: Any) -> RipwireSkillPolicy:
+    """Adapt Slice 2 loader results to the current coordinator policy shape."""
+
+    if isinstance(loaded, RipwireSkillPolicy):
+        return loaded
+    policy = getattr(loaded, "policy", None)
+    if isinstance(policy, RipwireSkillPolicy):
+        return policy
+    if isinstance(loaded, dict) and isinstance(loaded.get("policy"), RipwireSkillPolicy):
+        return loaded["policy"]
+    if isinstance(loaded, (tuple, list)):
+        try:
+            return RipwireSkillPolicy(
+                enabled=True,
+                requested_profiles=("change_check", "write_tests", "orient"),
+                loaded_skills=tuple(loaded),
+            )
+        except TypeError:
+            pass
+    # A future compatible policy may be returned as loaded guidance/defaults.
+    guidance = getattr(loaded, "guidance", None)
+    if isinstance(loaded, dict):
+        guidance = loaded.get("guidance", guidance)
+    kwargs: dict[str, Any] = {
+        "enabled": True,
+        "requested_profiles": ("change_check", "write_tests", "orient"),
+    }
+    if guidance:
+        for field_name in ("loaded_guidance", "guidance"):
+            try:
+                return RipwireSkillPolicy(**kwargs, **{field_name: guidance})
+            except TypeError:
+                continue
+    return RipwireSkillPolicy(**kwargs)
+
+
+def _safe_repository_name(repository: str) -> str:
+    value = "".join(character if character.isalnum() else "-" for character in repository)
+    return value.strip("-") or "repository"
+
+
+def _report_files(report_directory: Path | None) -> tuple[str, ...]:
+    if report_directory is None or not report_directory.is_dir():
+        return ()
+    return tuple(
+        sorted(
+            str(path.relative_to(report_directory))
+            for path in report_directory.rglob("*")
+            if path.is_file()
+        )
+    )
+
+
+def _is_gh_unavailable(error: ReviewSetupError) -> bool:
+    detail = str(error).lower()
+    markers = (
+        "authentication", "not logged into", "bad credentials", "rate limit",
+        "service unavailable", "temporarily unavailable", "connection refused",
+        "connection reset", "timed out", "timeout", "http 502", "http 503",
+        "http 504", "no such file or directory", "command not found",
+    )
+    return "gh pr view" in detail and any(marker in detail for marker in markers)
+
+
+def _setup_remediation(error: Exception, *, unavailable: bool = False) -> tuple[str, ...]:
+    if isinstance(error, SkillLoadError):
+        return (
+            "Ripwire skill prerequisites are unavailable; configure RIPWIRE_SKILLS_DIR "
+            "with the three approved skills, then rerun.",
+        )
+    if unavailable:
+        return (
+            "GitHub CLI or its service is unavailable; check `gh auth status` and "
+            "network access, then rerun.",
+        )
+    return (str(error), "Correct the PR URL, origin, checkout, or setup prerequisite, then rerun.")
+
+
+def _setup_identity(metadata: PRMetadata, checkout: ReviewCheckout) -> dict[str, Any]:
+    return {
+        "repository": metadata.repository,
+        "number": metadata.number,
+        "base_sha": metadata.base_sha,
+        "head_sha": metadata.head_sha,
+        "merge_base": checkout.merge_base,
+        "worktree": str(checkout.worktree),
+        "reused": checkout.reused,
+    }
+
+
+def setup_review(
+    request: ReviewRequest,
+    *,
+    runner: CommandRunner = _default_runner,
+    skill_loader: Callable[[Path, Sequence[str]], Any] | None = None,
+) -> ReviewSetupResult:
+    """Resolve, acquire, prepare, and return one exact self-hosted review setup."""
+
+    request = request.normalised()
+    metadata: PRMetadata | None = None
+    checkout: ReviewCheckout | None = None
+    artifact_root: Path | None = None
+    report_directory: Path | None = None
+    try:
+        metadata = resolve_pr(request.pr_url, runner=runner)
+        checkout = acquire_review_checkout(
+            metadata,
+            repo=request.repo_root,
+            workspace=request.workspace,
+            runner=runner,
+        )
+        artifact_root = checkout.workspace_root / "artifacts"
+        report_directory = (
+            checkout.workspace_root
+            / "reports"
+            / _safe_repository_name(metadata.repository)
+            / metadata.head_sha
+            / metadata.base_sha
+            / uuid.uuid4().hex
+        )
+
+        skills_root = os.environ.get("RIPWIRE_SKILLS_DIR")
+        if not skills_root:
+            raise SkillLoadError("RIPWIRE_SKILLS_DIR is not configured")
+        loaded = (skill_loader or load_selected_ripwire_skills)(
+            Path(skills_root), REQUIRED_RIPWIRE_SKILLS
+        )
+        policy = _skill_policy(loaded)
+        with marker_env():
+            readiness = prepare_repomap(
+                PrepareRepoMapRequest(checkout.worktree, artifact_root)
+            )
+        identity = _setup_identity(metadata, checkout)
+        if readiness.status != "ok":
+            status = readiness.status if readiness.status in {"unavailable", "error"} else "error"
+            return ReviewSetupResult(
+                status=status,
+                metadata=metadata,
+                checkout=checkout,
+                artifact_root=artifact_root,
+                report_directory=report_directory,
+                readiness=readiness,
+                identity=identity,
+                remediation=tuple(readiness.diagnostics) or (
+                    "Review preparation did not complete; inspect readiness diagnostics and rerun.",
+                ),
+                skill_policy=policy,
+            )
+        return ReviewSetupResult(
+            status="ok",
+            metadata=metadata,
+            checkout=checkout,
+            artifact_root=artifact_root,
+            report_directory=report_directory,
+            readiness=readiness,
+            identity=identity,
+            skill_policy=policy,
+        )
+    except SkillLoadError as exc:
+        return ReviewSetupResult(
+            status="unavailable",
+            metadata=metadata,
+            checkout=checkout,
+            artifact_root=artifact_root,
+            report_directory=report_directory,
+            identity=_setup_identity(metadata, checkout) if metadata and checkout else {},
+            remediation=_setup_remediation(exc),
+        )
+    except ReviewSetupError as exc:
+        unavailable = _is_gh_unavailable(exc)
+        return ReviewSetupResult(
+            status="unavailable" if unavailable else "error",
+            metadata=metadata,
+            checkout=checkout,
+            artifact_root=artifact_root,
+            report_directory=report_directory,
+            identity=_setup_identity(metadata, checkout) if metadata and checkout else {},
+            remediation=_setup_remediation(exc, unavailable=unavailable),
+        )
+    except (OSError, TypeError, ValueError) as exc:
+        return ReviewSetupResult(
+            status="error",
+            metadata=metadata,
+            checkout=checkout,
+            artifact_root=artifact_root,
+            report_directory=report_directory,
+            identity=_setup_identity(metadata, checkout) if metadata and checkout else {},
+            remediation=_setup_remediation(exc),
+        )
+
+
+def run_review(
+    request: ReviewRequest,
+    *,
+    setup: Callable[..., ReviewSetupResult] | None = None,
+    settings_loader: Callable[[], Any] | None = None,
+    analysis_runner: Callable[..., Any] | None = None,
+) -> ReviewRunResult:
+    """Run the analysis only after a successful exact self-hosted setup."""
+
+    prepared = (setup or setup_review)(request)
+    if prepared.status != "ok" or prepared.metadata is None or prepared.checkout is None:
+        return ReviewRunResult(
+            status=prepared.status,
+            assessment=prepared.status,
+            base_sha=prepared.base_sha,
+            head_sha=prepared.head_sha,
+            report_directory=prepared.report_directory,
+            remediation=prepared.remediation,
+            setup=prepared,
+        )
+
+    try:
+        settings = (settings_loader or load_bedrock_settings)()
+    except (OSError, TypeError, ValueError) as exc:
+        return ReviewRunResult(
+            status="unavailable",
+            assessment="unavailable",
+            base_sha=prepared.base_sha,
+            head_sha=prepared.head_sha,
+            report_directory=prepared.report_directory,
+            remediation=(
+                f"Bedrock settings unavailable: {exc}. Set AWS_REGION or "
+                "AWS_DEFAULT_REGION and BEDROCK_MODEL_ID, then rerun.",
+            ),
+            setup=prepared,
+        )
+
+    try:
+        with marker_env():
+            report = (analysis_runner or run_pr_analysis)(
+                PRAnalysisRequestV1(
+                    schema_="ia-repomap.pr-analysis-request/v1",
+                    repo_root=prepared.checkout.worktree,
+                    base_ref=prepared.metadata.base_sha,
+                    artifact_root=prepared.artifact_root,
+                    output_dir=prepared.report_directory,
+                ),
+                settings=settings,
+                allow_source_inspection=request.inspect,
+                ripwire_skill_policy=prepared.skill_policy,
+            )
+        status = report.status if report.status in {"ok", "unavailable", "error"} else "error"
+        remediation = tuple(getattr(report, "remediation", ()) or ())
+        if not remediation and status != "ok":
+            remediation = tuple(getattr(report, "diagnostics", ()) or ())
+        return ReviewRunResult(
+            status=status,
+            assessment=report.assessment,
+            base_sha=prepared.base_sha,
+            head_sha=prepared.head_sha,
+            report_directory=prepared.report_directory,
+            report_status=report.status,
+            report_assessment=report.assessment,
+            report_files=_report_files(prepared.report_directory),
+            remediation=remediation,
+            setup=prepared,
+        )
+    except Exception as exc:  # pragma: no cover - public wrapper boundary
+        return ReviewRunResult(
+            status="error",
+            assessment="error",
+            base_sha=prepared.base_sha,
+            head_sha=prepared.head_sha,
+            report_directory=prepared.report_directory,
+            remediation=(f"{type(exc).__name__}: {exc}", "Correct the setup or execution prerequisite, then rerun."),
+            setup=prepared,
+        )
+
+
+def prepare_repomap_for_cli(repo_root: Path, artifact_root: Path) -> BuildResult:
+    """Keep the legacy prepare command's request construction out of the CLI."""
+
+    return prepare_repomap(PrepareRepoMapRequest(repo_root, artifact_root))
+
+
+__all__ = [
+    "PRMetadata",
+    "REQUIRED_RIPWIRE_SKILLS",
+    "ReviewCheckout",
+    "ReviewRequest",
+    "ReviewRunResult",
+    "ReviewSetupError",
+    "ReviewSetupResult",
+    "SkillLoadError",
+    "acquire_review_checkout",
+    "load_selected_ripwire_skills",
+    "marker_env",
+    "prepare_repomap_for_cli",
+    "repomap_config_context",
+    "resolve_pr",
+    "resolve_pr_metadata",
+    "run_review",
+    "setup_review",
+    "workspace_root",
+]

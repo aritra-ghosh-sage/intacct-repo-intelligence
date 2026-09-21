@@ -5,17 +5,24 @@ import os
 import subprocess
 import tempfile
 import unittest
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
+from ia_repomap_builder import BuildResult
 from ia_repomap_builder.review import (
     PRMetadata,
+    REQUIRED_RIPWIRE_SKILLS,
     ReviewSetupError,
+    ReviewRequest,
     _fetch_and_verify,
     acquire_review_checkout,
     marker_env,
     resolve_pr,
+    run_review,
+    setup_review,
     workspace_root,
 )
 
@@ -60,15 +67,29 @@ class ReviewTests(unittest.TestCase):
         if arguments[:3] == ["gh", "pr", "view"]:
             payload = {
                 "number": 7, "baseRefOid": self.base, "headRefOid": self.head,
-                "baseRepository": {"nameWithOwner": "acme/demo", "cloneUrl": str(self.remote)},
             }
             return subprocess.CompletedProcess(arguments, 0, json.dumps(payload), "")
         return subprocess.run(arguments, **kwargs)
 
     def test_resolve_pr_metadata_uses_mocked_gh_and_validates_identity(self) -> None:
-        metadata = resolve_pr("https://github.com/acme/demo/pull/7", runner=self._runner)
+        calls: list[list[str]] = []
+
+        def runner(arguments: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            calls.append(arguments)
+            return self._runner(arguments, **kwargs)
+
+        metadata = resolve_pr("https://github.com/acme/demo/pull/7", runner=runner)
         self.assertEqual((metadata.number, metadata.base_sha, metadata.head_sha), (7, self.base, self.head))
         self.assertEqual(metadata.head_ref, "refs/ia-repomap/pr/7/head")
+        self.assertEqual(metadata.repository, "acme/demo")
+        self.assertEqual(metadata.clone_url, "https://github.com/acme/demo.git")
+        self.assertEqual(
+            calls,
+            [[
+                "gh", "pr", "view", "https://github.com/acme/demo/pull/7",
+                "--json", "number,baseRefOid,headRefOid",
+            ]],
+        )
 
     def test_checkout_fetches_exact_refs_without_changing_caller_checkout(self) -> None:
         before = (
@@ -242,6 +263,112 @@ class ReviewTests(unittest.TestCase):
                 self.assertTrue(marker.is_file())
                 self.assertEqual(Path(os.environ["IA_REPOMAP_CONFIG"]), marker)
             self.assertNotIn("IA_REPOMAP_CONFIG", os.environ)
+
+    def test_setup_review_propagates_exact_identity_and_loads_fixed_skills(self) -> None:
+        checkout = acquire_review_checkout(
+            self.metadata, repo=self.source, workspace=self.workspace, runner=self._runner
+        )
+        observed: dict[str, object] = {}
+
+        @contextmanager
+        def marker() -> object:
+            observed["marker_before_prepare"] = os.environ.get("IA_REPOMAP_CONFIG")
+            os.environ["IA_REPOMAP_CONFIG"] = "fixture-marker"
+            try:
+                yield Path("fixture-marker")
+            finally:
+                observed["marker_after_prepare"] = os.environ.get("IA_REPOMAP_CONFIG")
+                os.environ.pop("IA_REPOMAP_CONFIG", None)
+
+        def prepare(request: object) -> BuildResult:
+            observed["prepare_request"] = request
+            observed["marker_during_prepare"] = os.environ.get("IA_REPOMAP_CONFIG")
+            return BuildResult(engine="ripwire", status="ok", identity={"head": self.head})
+
+        with (
+            patch("ia_repomap_builder.review.resolve_pr", return_value=self.metadata),
+            patch("ia_repomap_builder.review.acquire_review_checkout", return_value=checkout),
+            patch.dict(os.environ, {"RIPWIRE_SKILLS_DIR": str(self.root)}, clear=False),
+            patch("ia_repomap_builder.review.load_selected_ripwire_skills") as loader,
+            patch("ia_repomap_builder.review.marker_env", side_effect=marker),
+            patch("ia_repomap_builder.review.prepare_repomap", side_effect=prepare),
+            patch("ia_repomap_builder.review.uuid.uuid4", return_value=SimpleNamespace(hex="run")),
+        ):
+            result = setup_review(ReviewRequest(self.metadata.url, self.source, self.workspace))
+
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(result.base_sha, self.base)
+        self.assertEqual(result.head_sha, self.head)
+        self.assertEqual(result.identity["merge_base"], checkout.merge_base)
+        self.assertEqual(result.report_directory, (self.workspace / "reports" / "acme-demo" / self.head / self.base / "run").resolve())
+        self.assertEqual(result.artifact_root, (self.workspace / "artifacts").resolve())
+        self.assertEqual(loader.call_args.args[1], REQUIRED_RIPWIRE_SKILLS)
+        self.assertEqual(observed["marker_during_prepare"], "fixture-marker")
+        self.assertEqual(observed["marker_after_prepare"], "fixture-marker")
+
+    def test_setup_review_returns_unavailable_skill_prerequisite_without_exposing_path(self) -> None:
+        with (
+            patch("ia_repomap_builder.review.resolve_pr", return_value=self.metadata),
+            patch("ia_repomap_builder.review.acquire_review_checkout") as acquire,
+            patch.dict(os.environ, {}, clear=True),
+        ):
+            result = setup_review(ReviewRequest(self.metadata.url, self.source, self.workspace))
+        self.assertEqual(result.status, "unavailable")
+        self.assertTrue(result.remediation)
+        self.assertNotIn(str(self.root), " ".join(result.remediation))
+        acquire.assert_called_once()
+
+    def test_run_review_reuses_setup_and_does_not_analyse_failed_setup(self) -> None:
+        setup = SimpleNamespace(
+            status="unavailable", base_sha=self.base, head_sha=self.head,
+            report_directory=self.workspace / "report", remediation=("missing",),
+            metadata=None, checkout=None,
+        )
+        with patch("ia_repomap_builder.review.setup_review", return_value=setup), patch(
+            "ia_repomap_builder.review.run_pr_analysis"
+        ) as analysis:
+            result = run_review(ReviewRequest(self.metadata.url, self.source, self.workspace))
+        self.assertEqual(result.status, "unavailable")
+        analysis.assert_not_called()
+
+    def test_run_review_passes_exact_shas_and_returns_partial_report_success(self) -> None:
+        checkout = acquire_review_checkout(
+            self.metadata, repo=self.source, workspace=self.workspace, runner=self._runner
+        )
+        report_directory = self.workspace / "reports" / "run"
+        setup = SimpleNamespace(
+            status="ok", metadata=self.metadata, checkout=checkout,
+            artifact_root=self.workspace / "artifacts", report_directory=report_directory,
+            skill_policy=SimpleNamespace(name="loaded-policy"),
+            base_sha=self.base, head_sha=self.head, remediation=(),
+        )
+        observed: dict[str, object] = {}
+
+        def analysis(request: object, **kwargs: object) -> object:
+            observed["request"] = request
+            observed["policy"] = kwargs["ripwire_skill_policy"]
+            report_directory.mkdir(parents=True)
+            (report_directory / "report.json").write_text("{}\n", encoding="utf-8")
+            return SimpleNamespace(status="ok", assessment="partial", remediation=())
+
+        with (
+            patch("ia_repomap_builder.review.setup_review", return_value=setup),
+            patch("ia_repomap_builder.review.load_bedrock_settings", return_value=object()),
+            patch("ia_repomap_builder.review.marker_env", return_value=__import__("contextlib").nullcontext()),
+        ):
+            result = run_review(
+                ReviewRequest(self.metadata.url, self.source),
+                analysis_runner=analysis,
+            )
+
+        request = observed["request"]
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(result.assessment, "partial")
+        self.assertEqual(result.base_sha, self.base)
+        self.assertEqual(result.head_sha, self.head)
+        self.assertEqual(result.report_files, ("report.json",))
+        self.assertEqual(request.base_ref, self.base)
+        self.assertEqual(observed["policy"].name, "loaded-policy")
 
 
 if __name__ == "__main__":
