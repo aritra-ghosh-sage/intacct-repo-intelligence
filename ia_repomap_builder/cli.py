@@ -15,6 +15,7 @@ from .config import PrContextRequest, PrImpactRequest
 from .impact import build_symbol_impact
 from .pr_context import build_pr_context
 from .readiness import prepare_repomap
+from .test_inventory import build_test_inventory, persist_test_inventory
 from .review import (
     ReviewRequest,
     ReviewRunResult,
@@ -65,6 +66,11 @@ def _parser() -> argparse.ArgumentParser:
     impact.add_argument("--limit", type=int, default=20)
     impact.add_argument("--offset", type=int, default=0)
 
+    inventory = commands.add_parser(
+        "test-inventory", help="discover and persist deterministic test-suite inventory"
+    )
+    _add_common_arguments(inventory)
+
     setup = commands.add_parser("setup", help="prepare an exact GitHub PR review checkout")
     setup.add_argument("pr_url", help="canonical GitHub pull-request URL")
     setup.add_argument("--repo", dest="repo_root", required=True, help="local repository checkout")
@@ -78,6 +84,11 @@ def _parser() -> argparse.ArgumentParser:
         "--inspect",
         action="store_true",
         help="allow the coordinator to inspect source through its bounded tools",
+    )
+    review.add_argument(
+        "--test-inventory",
+        dest="test_inventory_path",
+        help="path to a persisted test-inventory.json artifact for coverage cross-reference",
     )
     return parser
 
@@ -113,7 +124,7 @@ def main(
         return int(exc.code) if isinstance(exc.code, int) else EXIT_ERROR
     except ValueError as exc:
         command = next(
-            (item for item in raw_args if item in {"prepare", "pr-context", "symbol-impact", "setup", "review"}),
+            (item for item in raw_args if item in {"prepare", "pr-context", "symbol-impact", "test-inventory", "setup", "review"}),
             None,
         )
         return _emit_failure(
@@ -128,11 +139,11 @@ def main(
         return _run_setup(args, out)
     if command == "review":
         return _run_review(args, out)
-    if command not in {"prepare", "pr-context", "symbol-impact"}:
+    if command not in {"prepare", "pr-context", "symbol-impact", "test-inventory"}:
         return _emit_failure(
             out,
             command=None,
-            diagnostic="a command is required: setup, review, prepare, pr-context, or symbol-impact",
+            diagnostic="a command is required: setup, review, prepare, pr-context, symbol-impact, or test-inventory",
             remediation=["Run `python -m ia_repomap_builder --help` for valid commands."],
         )
 
@@ -190,6 +201,19 @@ def main(
     try:
         if command == "prepare":
             result = prepare_repomap(repo_root, artifact_root)
+        elif command == "test-inventory":
+            inventory = build_test_inventory(repo_root)
+            if inventory.status != "ok":
+                result = inventory
+            else:
+                persisted = persist_test_inventory(inventory, artifact_root)
+                result = {
+                    **inventory.as_dict(),
+                    "artifact": {
+                        "inventory": str(persisted.inventory_path),
+                        "manifest": str(persisted.manifest_path),
+                    },
+                }
         elif command == "pr-context":
             result = build_pr_context(
                 PrContextRequest(
@@ -222,7 +246,17 @@ def main(
             remediation=["Inspect the diagnostic, correct the environment or input, and rerun."],
         )
 
-    payload = _envelope(command, request_payload, result)
+    if command == "test-inventory" and isinstance(result, dict):
+        payload = {
+            "schema": COMMAND_SCHEMA,
+            "command": command,
+            "request": request_payload,
+            "status": result.get("status", "error"),
+            "result": result,
+            "remediation": [],
+        }
+    else:
+        payload = _envelope(command, request_payload, result)
     remediation = _remediation(command, result)
     payload["remediation"] = remediation
     if output is not None:
@@ -237,7 +271,8 @@ def main(
                 remediation=["Choose a writable, new path outside the target repository."],
             )
     _write_payload(out, payload)
-    return _exit_code(result.status)
+    result_status = result.get("status", "error") if isinstance(result, dict) else result.status
+    return _exit_code(result_status)
 
 
 def _envelope(command: str, request: dict[str, Any], result: Any) -> dict[str, Any]:
@@ -269,11 +304,17 @@ def _report_files(report_directory: Path) -> list[str]:
 
 def _review_request(args: argparse.Namespace) -> tuple[ReviewRequest, dict[str, Any]]:
     requested_workspace = workspace_root(args.workspace)
+    test_inventory_path = getattr(args, "test_inventory_path", None)
     request = ReviewRequest(
         pr_url=args.pr_url,
         repo_root=Path(args.repo_root).expanduser().resolve(),
         workspace=requested_workspace,
         inspect=bool(getattr(args, "inspect", False)),
+        test_inventory_path=(
+            Path(test_inventory_path).expanduser().resolve()
+            if test_inventory_path
+            else None
+        ),
     )
     payload = {
         "pr_url": request.pr_url,
@@ -282,6 +323,8 @@ def _review_request(args: argparse.Namespace) -> tuple[ReviewRequest, dict[str, 
     }
     if hasattr(args, "inspect"):
         payload["inspect"] = request.inspect
+    if request.test_inventory_path is not None:
+        payload["test_inventory_path"] = str(request.test_inventory_path)
     return request, payload
 
 
@@ -406,6 +449,11 @@ def _failure_result(command: str | None, diagnostic: str, remediation: list[str]
     }
     if command == "symbol-impact":
         result["candidates"] = []
+    elif command == "test-inventory":
+        result["suites"] = []
+        result["gaps"] = []
+        result["metrics"] = {}
+        result["repository"] = {}
     else:
         result["changed_files"] = []
     return result
@@ -472,7 +520,8 @@ def _exit_code(status: str) -> int:
 
 
 def _remediation(command: str, result: Any) -> list[str]:
-    diagnostics = [str(item).lower() for item in result.diagnostics]
+    raw_diagnostics = result.get("diagnostics", []) if isinstance(result, dict) else result.diagnostics
+    diagnostics = [str(item).lower() for item in raw_diagnostics]
     actions: list[str] = []
     joined = " ".join(diagnostics)
     if "repository root is not a directory" in joined:
@@ -503,7 +552,8 @@ def _remediation(command: str, result: Any) -> list[str]:
         actions.append("Use the exact symbol path and name returned by `pr-context`, then rerun.")
     if "base_ref cannot be resolved" in joined:
         actions.append("Provide a resolvable local base ref (for example origin/main), then rerun.")
-    if not actions and result.status != "ok":
+    status = result.get("status", "error") if isinstance(result, dict) else result.status
+    if not actions and status != "ok":
         actions.append(f"Inspect the {command} diagnostics, correct the prerequisite, and rerun.")
     return actions
 

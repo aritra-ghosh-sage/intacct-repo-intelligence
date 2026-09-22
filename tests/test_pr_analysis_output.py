@@ -24,6 +24,7 @@ class PRAnalysisOutputTests(unittest.TestCase):
         impacted_files: list[dict[str, object]] | None = None,
         assessment: str = "complete",
         gaps: list[dict[str, object]] | None = None,
+        test_inventory_coverage: dict[str, object] | None = None,
     ) -> PRAnalysisReportV1:
         digest = hashlib.sha256(raw).hexdigest()
         return PRAnalysisReportV1.model_validate({
@@ -37,6 +38,7 @@ class PRAnalysisOutputTests(unittest.TestCase):
             "changed_files": [{"path": "app/source/example.cls", "change": "M", "symbols": [], "evidence_ids": ["pr-context-001"]}],
             "impacted_files": impacted_files or [],
             "blast_radius": [], "test_areas": [],
+            "test_inventory_coverage": test_inventory_coverage,
             "gaps": gaps or [{"kind": "lower_bound", "detail": "not exhaustive"}],
             "evidence": [{"evidence_id": "pr-context-001", "kind": "pr_context_xml", "relative_path": "evidence/pr-context.xml", "sha256": digest}],
             "diagnostics": [], "remediation": [], "metrics": {"impact_calls": 0},
@@ -223,6 +225,71 @@ class PRAnalysisOutputTests(unittest.TestCase):
                         repo_root=Path(root) / "repo",
                     )
             self.assertFalse(output.exists())
+
+    def test_markdown_renders_test_inventory_coverage_section(self) -> None:
+        coverage = {
+            "status": "ok",
+            "findings": [{
+                "changed_path": "app/source/example.cls",
+                "status": "gap",
+                "matched_suite_ids": [],
+                "match_basis": "none",
+                "reason": "No inventory suite matched",
+                "evidence_ids": ["test-inventory-001"],
+            }],
+            "gaps": [{
+                "changed_path": "app/source/example.cls",
+                "suggested_area": "Add test coverage for app/source/example.cls",
+                "suggested_tags": ["@example"],
+                "reason": "No inventory suite matched",
+                "evidence_ids": ["test-coverage-gap-001"],
+            }],
+            "suggested_artifacts": [{
+                "evidence_id": "test-coverage-gap-001",
+                "relative_path": "evidence/coverage/suggested/example.feature.suggested",
+                "description": "Suggested scaffold scenario for app/source/example.cls",
+            }],
+            "metrics": {"changed_paths": 1, "covered": 0, "partial": 0, "gap": 1},
+            "diagnostics": [],
+        }
+        with tempfile.TemporaryDirectory() as root:
+            output = Path(root) / "bundle"
+            raw = b"<pr-context/>\n"
+            inventory_bytes = b"{}"
+            stub_bytes = b"stub"
+            report = PRAnalysisReportV1.model_validate({
+                "schema": "ia-repomap.pr-analysis/v1",
+                "status": "ok",
+                "assessment": "complete",
+                "phase": "analysis",
+                "request": {"repository": "intacct/ia-app", "base": "a" * 40, "analysis_schema": "ia-repomap.pr-analysis/v1"},
+                "identity": {"repository": "intacct/ia-app", "head": "b" * 40, "base": "a" * 40, "merge_base": "a" * 40, "configuration_digest": "c" * 64, "engine_identity": "ripwire-test"},
+                "summary": {"purpose": "test", "behavioral_change": "candidate", "confidence": "candidate"},
+                "changed_files": [{"path": "app/source/example.cls", "change": "M", "symbols": [], "evidence_ids": ["pr-context-001"]}],
+                "impacted_files": [],
+                "blast_radius": [], "test_areas": [],
+                "test_inventory_coverage": coverage,
+                "gaps": [],
+                "evidence": [
+                    {"evidence_id": "pr-context-001", "kind": "pr_context_xml", "relative_path": "evidence/pr-context.xml", "sha256": hashlib.sha256(raw).hexdigest()},
+                    {"evidence_id": "test-inventory-001", "kind": "test_inventory", "relative_path": "evidence/test-inventory.json", "sha256": hashlib.sha256(inventory_bytes).hexdigest()},
+                    {"evidence_id": "test-coverage-gap-001", "kind": "suggested_test_stub", "relative_path": "evidence/coverage/suggested/example.feature.suggested", "sha256": hashlib.sha256(stub_bytes).hexdigest()},
+                ],
+                "diagnostics": [], "remediation": [], "metrics": {"impact_calls": 0},
+                "agent": {"invoked": False, "model_id": "fake", "region": "test", "prompt_version": "v1", "tool_contract_version": "v1", "coordinator_version": "v1"},
+            })
+            payload = [
+                EvidencePayload("pr-context-001", raw),
+                EvidencePayload("test-inventory-001", inventory_bytes),
+                EvidencePayload("test-coverage-gap-001", stub_bytes),
+            ]
+            write_pr_analysis_bundle(output, report, payload, repo_root=Path(root) / "repo")
+            markdown = (output / "pr-analysis.md").read_text()
+            self.assertIn("## Test inventory coverage", markdown)
+            self.assertIn("`gap` `app/source/example.cls`", markdown)
+            self.assertIn("Suggested corrective tests", markdown)
+            self.assertIn("Suggested test scaffolds", markdown)
+            self.assertTrue((output / "evidence/coverage/suggested/example.feature.suggested").is_file())
 
 
 if __name__ == "__main__":

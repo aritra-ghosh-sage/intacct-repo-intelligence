@@ -66,6 +66,37 @@ class CliTests(unittest.TestCase):
         self.assertEqual(payload["status"], "error")
         self.assertIn("command is required", payload["result"]["diagnostics"][0])
 
+    def test_test_inventory_persists_external_artifact(self) -> None:
+        inventory = SimpleNamespace(
+            status="ok",
+            as_dict=lambda: {
+                "schema": "ia-repomap.test-inventory/v1",
+                "status": "ok",
+                "repository": {"head": "a" * 40},
+                "suites": [],
+                "gaps": [],
+                "metrics": {},
+            },
+        )
+        persisted = SimpleNamespace(
+            inventory_path=self.artifacts / "inventory.json",
+            manifest_path=self.artifacts / "manifest.json",
+        )
+        with (
+            patch("ia_repomap_builder.cli.build_test_inventory", return_value=inventory) as build_inventory,
+            patch("ia_repomap_builder.cli.persist_test_inventory", return_value=persisted) as persist_inventory,
+        ):
+            code, payload, _ = self._run(
+                "test-inventory", "--repo", str(self.root), "--artifact-root", str(self.artifacts)
+            )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["command"], "test-inventory")
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["result"]["artifact"]["inventory"], str(persisted.inventory_path))
+        build_inventory.assert_called_once_with(self.root.resolve())
+        persist_inventory.assert_called_once_with(inventory, self.artifacts.resolve())
+
     def test_review_requires_repo_without_internal_arguments(self) -> None:
         code, payload, _ = self._run(
             "review", "https://github.com/intacct/ia-app/pull/50176"
@@ -114,6 +145,35 @@ class CliTests(unittest.TestCase):
         self.assertEqual(payload["report"]["files"], ["pr-analysis.json", "pr-analysis.md"])
         self.assertEqual(payload["result"]["report"], payload["report"])
         self.assertNotIn("artifact-root", payload["request"])
+
+    def test_review_forwards_test_inventory_path(self) -> None:
+        workspace = Path(self.tempdir.name) / "workspace"
+        inventory_path = Path(self.tempdir.name) / "test-inventory" / "inventory.json"
+        result = ReviewRunResult(status="ok", assessment="complete")
+        with patch("ia_repomap_builder.cli.run_review", return_value=result) as review:
+            code, payload, _ = self._run(
+                "review",
+                "https://github.com/intacct/ia-app/pull/50176",
+                "--repo",
+                str(self.root),
+                "--workspace",
+                str(workspace),
+                "--test-inventory",
+                str(inventory_path),
+            )
+
+        self.assertEqual(code, 0)
+        review.assert_called_once()
+        request = review.call_args.args[0]
+        self.assertEqual(request.test_inventory_path, inventory_path.resolve())
+        self.assertEqual(payload["request"]["test_inventory_path"], str(inventory_path.resolve()))
+
+    def test_review_without_test_inventory_flag_leaves_it_unset(self) -> None:
+        result = ReviewRunResult(status="ok", assessment="complete")
+        with patch("ia_repomap_builder.cli.run_review", return_value=result) as review:
+            self._run("review", "https://github.com/intacct/ia-app/pull/50176", "--repo", str(self.root))
+        request = review.call_args.args[0]
+        self.assertIsNone(request.test_inventory_path)
 
     def test_review_unavailable_prepare_does_not_run_analysis(self) -> None:
         result = ReviewRunResult(status="unavailable", assessment="unavailable", remediation=("Ripwire unavailable",))

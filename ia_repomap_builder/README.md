@@ -227,6 +227,23 @@ wanted:
   --inspect
 ```
 
+Add `--test-inventory` with the path to an already-persisted
+`inventory.json` (produced by `test_inventory.persist_test_inventory`) to
+cross-reference the PR's changed files against a deterministic external test
+suite index. This never invokes a model: it classifies each changed path as
+`covered`, `partial`, or `gap`, and for gaps it emits a suggested test area
+plus a scaffolded `.feature` stub under `evidence/coverage/suggested/` in the
+report bundle. A missing or unreadable path is a disclosed
+`test_inventory_unavailable` gap, not a command failure.
+
+```shell
+./.venv/bin/python -m ia_repomap_builder review \
+  https://github.com/owner/repository/pull/123 \
+  --repo /path/to/local/repository \
+  --workspace /safe/external/ia-repomap-review \
+  --test-inventory /safe/external/test-inventory/<repo-id>/<head>/<digest>/inventory.json
+```
+
 `--repo` is the caller-owned source repository used for Git metadata and
 retained worktrees; it is not replaced by the PR checkout. The command leaves
 source files, the index, the current branch, `HEAD`, and the working tree
@@ -442,6 +459,10 @@ output_dir/
     pr-context.xml
     symbol-impact-001.xml
     inspection-001.json
+    test-inventory.json
+    coverage/
+      suggested/
+        <slug>.feature.suggested
 ```
 
 `pr-analysis.json` is the authoritative `ia-repomap.pr-analysis/v1` report.
@@ -459,6 +480,9 @@ changed_files   Git-confirmed changed files and candidate symbols
 impacted_files  candidate impacted files and dependent-symbol counts
 blast_radius    candidate lower-bound relationships
 test_areas      suggested areas, always execution_status="not_run"
+test_inventory_coverage  present only when `--test-inventory` was supplied;
+                covered/partial/gap findings per changed path, plus
+                suggested corrective test areas and scaffolded stubs
 gaps            truncation, ambiguity, unresolved evidence, pagination, etc.
 evidence        retained XML and inspection evidence with SHA-256 digests
 diagnostics     host diagnostics

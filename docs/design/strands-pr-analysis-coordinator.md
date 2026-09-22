@@ -598,6 +598,32 @@ explicit gaps when no candidate symbols are available. V1 deliberately does
 not include severity, merge recommendation, ownership, executed coverage, or
 publication state.
 
+### Optional test-inventory coverage cross-reference (additive v1 extension)
+
+When the host supplies `test_inventory_path` (an absolute path to an
+already-persisted `inventory.json` produced by
+`test_inventory.persist_test_inventory`), the coordinator runs one additional
+deterministic, non-agentic step after the post-agent revision/clean-tree
+recheck and before persistence. It never invokes a model and never changes
+the underlying blast-radius or test-area analysis. It loads the inventory,
+classifies each `changed_files[].path` as `covered` (a directly matched
+executable suite), `partial` (a fixture-only suite or a module/API-object
+heuristic match with no direct test-path match), or `gap` (no match), and for
+`gap` rows emits a suggested test area plus a scaffolded Gherkin `.feature`
+stub persisted as evidence. The heuristic is conservative by construction: an
+ambiguous or unresolved match is a `gap`, never a false `covered`.
+
+This adds one optional, nullable report field, `test_inventory_coverage`, and
+two new `Evidence.kind` values, `test_inventory` and `suggested_test_stub`.
+The top-level schema string remains `ia-repomap.pr-analysis/v1`; this is
+treated as an additive, backward-compatible extension rather than a v2
+rewrite, because the field is optional and omitted entirely when no
+`test_inventory_path` is supplied. A missing, unreadable, or schema-mismatched
+inventory file is a disclosed `test_inventory_unavailable` gap with
+`test_inventory_coverage.status="unavailable"`, not a report failure. Reading
+the inventory artifact is the only supported input mode; this step does not
+build or persist a `TestInventory` itself.
+
 The report does not use `confirmed` for static call relationships in v1.
 `confirmed` is reserved for exact PR metadata, revision identity, and Git
 changed-file evidence. Ripwire symbols, callers, reachers, source references,

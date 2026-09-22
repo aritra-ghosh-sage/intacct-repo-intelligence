@@ -1746,5 +1746,139 @@ class PRAnalysisReportTests(unittest.TestCase):
         self.assertEqual(report.test_areas[0].execution_status, "not_run")
 
 
+def _write_test_inventory(path: Path, *, feature_files: tuple[str, ...] = ()) -> None:
+    payload = {
+        "schema": "ia-repomap.test-inventory/v1",
+        "status": "ok",
+        "repository": {
+            "root": "/tmp/test-repo",
+            "repository_id": "test-repo-001",
+            "head": "d" * 40,
+            "dirty": False,
+            "scanner_version": "v1",
+            "inventory_digest": "e" * 64,
+        },
+        "suites": [{
+            "suite_id": "features/example",
+            "module": "example",
+            "category": "executable",
+            "feature_files": list(feature_files),
+            "input_files": [],
+            "output_files": [],
+            "scenarios": [{"name": "Example scenario", "tags": [], "fixtures": [], "methods": []}],
+            "tags": [],
+            "api_objects": [],
+            "methods": [],
+        }],
+        "gaps": [],
+        "metrics": {},
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+class TestInventoryCoverageWiringTests(unittest.TestCase):
+    def coordinator_request(self, directory: str) -> dict[str, object]:
+        root = Path(directory)
+        return {
+            "schema": "ia-repomap.pr-analysis-request/v1",
+            "repo_root": str(root / "repo"),
+            "base_ref": "a" * 40,
+            "artifact_root": str(root / "artifacts"),
+            "output_dir": str(root / "reports"),
+        }
+
+    def context_identity(self) -> dict[str, object]:
+        return {
+            "repository_id": "intacct/ia-app",
+            "head": "b" * 40,
+            "base_revision": "a" * 40,
+            "merge_base": "a" * 40,
+            "configuration_digest": "c" * 64,
+            "engine": {"id": "ripwire-test"},
+            "dirty": False,
+        }
+
+    def assert_checked_in_schema(self, report: PRAnalysisReportV1) -> None:
+        schema_path = Path(__file__).parents[1] / "schemas" / "ia-repomap.pr-analysis-v1.schema.json"
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        jsonschema.validate(report.model_dump(mode="json", by_alias=True), schema)
+
+    def test_no_test_inventory_path_leaves_coverage_unset(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            context = PrContextResult(status="ok", identity=self.context_identity())
+            report = run_pr_analysis(
+                self.coordinator_request(directory),
+                context_builder=lambda _: context,
+            )
+            self.assertIsNone(report.test_inventory_coverage)
+            self.assert_checked_in_schema(report)
+
+    def test_supplied_test_inventory_path_populates_coverage_and_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            inventory_path = root / "test-inventory" / "inventory.json"
+            _write_test_inventory(inventory_path, feature_files=("features/example/example.feature",))
+            context = PrContextResult(
+                status="ok",
+                raw_xml="<pr-context/>",
+                identity=self.context_identity(),
+                changed_files=[PrChangedFile(
+                    path="app/source/example/Example.cls",
+                    change="M",
+                    affected_tests=[PrAffectedTestCandidate("features/example/example.feature")],
+                )],
+            )
+            request = self.coordinator_request(directory)
+            request["test_inventory_path"] = str(inventory_path)
+            report = run_pr_analysis(request, context_builder=lambda _: context)
+
+            self.assertIsNotNone(report.test_inventory_coverage)
+            coverage = report.test_inventory_coverage
+            self.assertEqual(coverage.status, "ok")
+            self.assertEqual(len(coverage.findings), 1)
+            self.assertEqual(coverage.findings[0].status, "covered")
+            self.assertIn("test-inventory-001", {item.evidence_id for item in report.evidence})
+            self.assert_checked_in_schema(report)
+
+    def test_supplied_test_inventory_path_gap_produces_suggested_stub_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            inventory_path = root / "test-inventory" / "inventory.json"
+            _write_test_inventory(inventory_path)
+            context = PrContextResult(
+                status="ok",
+                raw_xml="<pr-context/>",
+                identity=self.context_identity(),
+                changed_files=[PrChangedFile(path="app/source/other/Other.cls", change="M")],
+            )
+            request = self.coordinator_request(directory)
+            request["test_inventory_path"] = str(inventory_path)
+            report = run_pr_analysis(request, context_builder=lambda _: context)
+
+            coverage = report.test_inventory_coverage
+            self.assertEqual(coverage.findings[0].status, "gap")
+            self.assertEqual(len(coverage.gaps), 1)
+            self.assertEqual(len(coverage.suggested_artifacts), 1)
+            stub_evidence_id = coverage.suggested_artifacts[0].evidence_id
+            self.assertIn(stub_evidence_id, {item.evidence_id for item in report.evidence})
+            stub_bundle_path = root / "reports" / coverage.suggested_artifacts[0].relative_path
+            self.assertTrue(stub_bundle_path.is_file())
+            self.assertIn("@needs-review", stub_bundle_path.read_text(encoding="utf-8"))
+            self.assert_checked_in_schema(report)
+
+    def test_missing_test_inventory_path_is_a_disclosed_gap_not_a_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            context = PrContextResult(status="ok", identity=self.context_identity())
+            request = self.coordinator_request(directory)
+            request["test_inventory_path"] = str(Path(directory) / "missing-inventory.json")
+            report = run_pr_analysis(request, context_builder=lambda _: context)
+
+            self.assertEqual(report.status, "ok")
+            self.assertEqual(report.test_inventory_coverage.status, "unavailable")
+            self.assertIn("test_inventory_unavailable", {gap.kind for gap in report.gaps})
+            self.assert_checked_in_schema(report)
+
+
 if __name__ == "__main__":
     unittest.main()

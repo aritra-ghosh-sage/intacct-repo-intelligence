@@ -46,6 +46,7 @@ class ReviewRequest:
     repo_root: Path
     workspace: Path | None = None
     inspect: bool = False
+    test_inventory_path: Path | None = None
 
     def normalised(self) -> ReviewRequest:
         return ReviewRequest(
@@ -57,6 +58,11 @@ class ReviewRequest:
                 else None
             ),
             inspect=bool(self.inspect),
+            test_inventory_path=(
+                Path(self.test_inventory_path).expanduser().resolve()
+                if self.test_inventory_path is not None
+                else None
+            ),
         )
 
 
@@ -719,6 +725,7 @@ def run_review(
                     base_ref=prepared.metadata.base_sha,
                     artifact_root=prepared.artifact_root,
                     output_dir=prepared.report_directory,
+                    test_inventory_path=request.test_inventory_path,
                 ),
                 settings=settings,
                 allow_source_inspection=request.inspect,

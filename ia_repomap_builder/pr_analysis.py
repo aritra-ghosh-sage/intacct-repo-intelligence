@@ -29,6 +29,7 @@ from .pr_analysis_skills import (
     select_ripwire_skill_profiles,
 )
 from .pr_context import build_pr_context
+from .pr_test_coverage import TestInventoryCoverage
 
 Confidence = Literal["candidate", "unresolved", "unavailable"]
 Status = Literal["ok", "unavailable", "error"]
@@ -211,7 +212,10 @@ def _assessment_for(status: str, gaps: list[Mapping[str, Any]] | list[Gap]) -> A
 
 class Evidence(StrictModel):
     evidence_id: str = Field(min_length=1)
-    kind: Literal["pr_context_xml", "symbol_impact_xml", "inspection", "git_inventory"]
+    kind: Literal[
+        "pr_context_xml", "symbol_impact_xml", "inspection", "git_inventory",
+        "test_inventory", "suggested_test_stub",
+    ]
     relative_path: str = Field(pattern=r"^evidence/[^/].*")
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
@@ -246,6 +250,7 @@ class PRAnalysisReportV1(StrictModel):
     impacted_files: list[ImpactedFile] = Field(max_length=1000)
     blast_radius: list[BlastRadiusRow] = Field(max_length=1000)
     test_areas: list[TestArea] = Field(max_length=500)
+    test_inventory_coverage: TestInventoryCoverage | None = None
     gaps: list[Gap] = Field(max_length=1000)
     evidence: list[Evidence] = Field(max_length=1000)
     diagnostics: list[str] = Field(max_length=100)
@@ -297,6 +302,14 @@ class PRAnalysisReportV1(StrictModel):
             reference
             for area in self.test_areas
             for reference in area.evidence_ids
+        ] + [
+            reference
+            for gap in (self.test_inventory_coverage.gaps if self.test_inventory_coverage else [])
+            for reference in gap.evidence_ids
+        ] + [
+            reference
+            for finding in (self.test_inventory_coverage.findings if self.test_inventory_coverage else [])
+            for reference in finding.evidence_ids
         ]
         missing = sorted(set(references) - registered)
         if missing:
@@ -314,6 +327,7 @@ class PRAnalysisRequestV1(StrictModel):
     base_ref: str = Field(min_length=1)
     artifact_root: Path
     output_dir: Path
+    test_inventory_path: Path | None = None
 
     @field_validator("repo_root", "artifact_root", "output_dir")
     @classmethod
@@ -321,6 +335,16 @@ class PRAnalysisRequestV1(StrictModel):
         path = Path(value)
         if not path.is_absolute():
             raise ValueError("coordinator paths must be absolute")
+        return path
+
+    @field_validator("test_inventory_path")
+    @classmethod
+    def absolute_optional_path(cls, value: Path | None) -> Path | None:
+        if value is None:
+            return None
+        path = Path(value)
+        if not path.is_absolute():
+            raise ValueError("test_inventory_path must be absolute")
         return path
 
     @field_validator("base_ref")
@@ -1551,11 +1575,78 @@ def _with_agent_provenance(
     return PRAnalysisReportV1.model_validate(payload)
 
 
+def _apply_test_inventory_coverage(
+    report: PRAnalysisReportV1,
+    request: PRAnalysisRequestV1,
+) -> tuple[PRAnalysisReportV1, list[tuple[str, bytes]]]:
+    """Deterministically cross-reference a persisted TestInventory, when supplied.
+
+    This step never invokes a model. A missing or unreadable inventory is a
+    disclosed gap, not a report failure; the underlying analysis is unchanged.
+    """
+
+    if request.test_inventory_path is None or report.status != "ok":
+        return report, []
+
+    from .pr_test_coverage import evaluate_test_coverage, load_persisted_test_inventory, render_suggested_stub
+
+    payload = report.model_dump(mode="python", by_alias=True)
+    inventory_evidence_id = "test-inventory-001"
+    try:
+        raw_bytes = request.test_inventory_path.read_bytes()
+        inventory = load_persisted_test_inventory(request.test_inventory_path)
+    except Exception as exc:
+        payload["test_inventory_coverage"] = {
+            "status": "unavailable",
+            "diagnostics": [f"test inventory unavailable: {exc}"],
+        }
+        payload["gaps"] = [
+            *payload["gaps"],
+            {"kind": "test_inventory_unavailable", "detail": f"test inventory unavailable: {exc}"},
+        ]
+        payload["assessment"] = _assessment_for(payload["status"], payload["gaps"])
+        return PRAnalysisReportV1.model_validate(payload), []
+
+    coverage = evaluate_test_coverage(
+        [changed.path for changed in report.changed_files],
+        report.test_areas,
+        inventory,
+        inventory_evidence_id=inventory_evidence_id,
+    )
+    gap_by_evidence_id = {gap.evidence_ids[0]: gap for gap in coverage.gaps}
+    new_payloads: list[tuple[str, bytes]] = [(inventory_evidence_id, raw_bytes)]
+    new_evidence = [{
+        "evidence_id": inventory_evidence_id,
+        "kind": "test_inventory",
+        "relative_path": "evidence/test-inventory.json",
+        "sha256": sha256(raw_bytes).hexdigest(),
+    }]
+    for artifact in coverage.suggested_artifacts:
+        gap = gap_by_evidence_id[artifact.evidence_id]
+        stub_bytes = render_suggested_stub(gap).encode("utf-8")
+        new_payloads.append((artifact.evidence_id, stub_bytes))
+        new_evidence.append({
+            "evidence_id": artifact.evidence_id,
+            "kind": "suggested_test_stub",
+            "relative_path": artifact.relative_path,
+            "sha256": sha256(stub_bytes).hexdigest(),
+        })
+
+    payload["test_inventory_coverage"] = json.loads(coverage.model_dump_json())
+    payload["evidence"] = [*payload["evidence"], *new_evidence]
+    if coverage.diagnostics:
+        payload["diagnostics"] = [*payload["diagnostics"], *coverage.diagnostics]
+    payload["assessment"] = _assessment_for(payload["status"], payload["gaps"])
+    return PRAnalysisReportV1.model_validate(payload), new_payloads
+
+
 def _persist_report(
     request: PRAnalysisRequestV1,
     report: PRAnalysisReportV1,
     payloads: list[tuple[str, bytes]],
 ) -> PRAnalysisReportV1:
+    report, coverage_payloads = _apply_test_inventory_coverage(report, request)
+    payloads = [*payloads, *coverage_payloads]
     try:
         from .pr_analysis_output import EvidencePayload, write_pr_analysis_bundle
 

@@ -161,6 +161,29 @@ def _markdown(report: PRAnalysisReportV1) -> str:
         lines.append(f"- `{area['area']}`: {paths} — {area['reason']} (`{area['execution_status']}`)")
     if not data["test_areas"]:
         lines.append("- None")
+    coverage = data.get("test_inventory_coverage")
+    if coverage is not None:
+        lines.extend(["", "## Test inventory coverage", ""])
+        lines.append(f"- status: `{coverage['status']}`")
+        for finding in coverage["findings"]:
+            suites = ", ".join(f"`{item}`" for item in finding["matched_suite_ids"]) or "(no suites)"
+            lines.append(
+                f"- `{finding['status']}` `{finding['changed_path']}` "
+                f"(`{finding['match_basis']}`): {suites} — {finding['reason']}"
+            )
+        if not coverage["findings"]:
+            lines.append("- None")
+        if coverage["gaps"]:
+            lines.extend(["", "Suggested corrective tests", ""])
+            for gap in coverage["gaps"]:
+                tags = ", ".join(gap["suggested_tags"]) or "(no tags)"
+                lines.append(f"- `{gap['changed_path']}`: {gap['suggested_area']} ({tags}) — {gap['reason']}")
+        if coverage["suggested_artifacts"]:
+            lines.extend(["", "Suggested test scaffolds", ""])
+            for artifact in coverage["suggested_artifacts"]:
+                lines.append(f"- `{artifact['relative_path']}`: {artifact['description']}")
+        for diagnostic in coverage["diagnostics"]:
+            lines.append(f"- diagnostic: {diagnostic}")
     lines.extend(["", "## Gaps and diagnostics", ""])
     for gap in data["gaps"]:
         suffix = f" (count: {gap['count']})" if gap.get("count") is not None else ""
