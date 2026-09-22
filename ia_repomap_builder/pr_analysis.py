@@ -736,6 +736,14 @@ def _merge_payloads(
     return merged
 
 
+def _bounded_text(value: str, limit: int) -> str:
+    """Keep host-generated report text within the public contract limits."""
+
+    if len(value) <= limit:
+        return value
+    return value[: limit - 1].rstrip() + "…"
+
+
 def _affected_test_areas(context: PrContextResult) -> list[TestArea]:
     """Convert bounded test evidence and file-class candidates into not-run areas."""
 
@@ -767,9 +775,9 @@ def _affected_test_areas(context: PrContextResult) -> list[TestArea]:
             )
             confidence = "unresolved"
         areas.append(TestArea(
-            area=area,
+            area=_bounded_text(area, 120),
             paths=paths,
-            reason=reason,
+            reason=_bounded_text(reason, 200),
             confidence=confidence,
             evidence_ids=["git-inventory-001"] if context.git_inventory else ["pr-context-001"],
             execution_status="not_run",

@@ -32,6 +32,7 @@ from ia_repomap_builder.pr_analysis import (
     EvidenceSession,
     PRAnalysisReportV1,
     PRAnalysisRequestV1,
+    _affected_test_areas,
     build_bedrock_agent,
     load_bedrock_settings,
     prepare_pre_agentic_seed,
@@ -59,6 +60,31 @@ def _live_coordinator_enabled() -> bool:
 
 
 class PRAnalysisReportTests(unittest.TestCase):
+    def test_affected_test_area_text_is_bounded_for_long_migration_paths(self) -> None:
+        changed_path = (
+            "app/db/db_migration/db_migration_ddl/scripts/Nov26/"
+            "A2611.0.20260413.89546.001__glsetup_modulepref_refactor_phaseII.sql"
+        )
+        context = PrContextResult(
+            status="ok",
+            raw_xml="<pr-context/>",
+            identity=self.context_identity(),
+            changed_files=[PrChangedFile(
+                path=changed_path,
+                change="M",
+                symbols=[],
+                affected_tests=[],
+            )],
+        )
+
+        areas = _affected_test_areas(context)
+
+        self.assertEqual(len(areas), 1)
+        self.assertLessEqual(len(areas[0].area), 120)
+        self.assertLessEqual(len(areas[0].reason), 200)
+        self.assertTrue(areas[0].area.endswith("…"))
+        self.assertTrue(areas[0].reason.endswith("…"))
+
     def coordinator_request(self, directory: str) -> dict[str, object]:
         root = Path(directory)
         return {
