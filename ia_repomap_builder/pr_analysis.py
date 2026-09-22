@@ -990,6 +990,7 @@ def run_coordinator(
         {
             "path": changed.path,
             "change": changed.change,
+            "scope": changed.scope,
             "symbols": [
                 {
                     "path": symbol.path,
@@ -1123,11 +1124,7 @@ def run_coordinator(
         Evidence(
             evidence_id=item.evidence_id,
             kind=item.kind,  # type: ignore[arg-type]
-            relative_path=(
-                "evidence/pr-context.xml"
-                if item.evidence_id == "pr-context-001"
-                else (f"evidence/{item.evidence_id}.json" if item.kind == "inspection" else f"evidence/{item.evidence_id}.xml")
-            ),
+            relative_path=_payload_kind_and_path(item.evidence_id)[1],
             sha256=item.sha256 or "0" * 64,
         )
         for item in session._records.values()
@@ -1170,6 +1167,7 @@ def run_coordinator(
             {
                 "path": changed.path,
                 "change": changed.change,
+                "scope": changed.scope,
                 "symbols": [
                     {
                         "path": symbol.path,

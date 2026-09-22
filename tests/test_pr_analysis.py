@@ -247,19 +247,29 @@ class PRAnalysisReportTests(unittest.TestCase):
                 status="ok",
                 raw_xml="<pr-context/>\n",
                 identity=self.context_identity(),
-                changed_files=[PrChangedFile(
-                    path="app/source/example/Example.cls",
-                    change="M",
-                )],
+                changed_files=[
+                    PrChangedFile(
+                        path="app/source/example/Example.cls",
+                        change="M",
+                        scope="in_scope",
+                    ),
+                    PrChangedFile(
+                        path="app/db/db_migration/example.sql",
+                        change="M",
+                        scope="out_of_scope",
+                    ),
+                ],
                 git_inventory=(
-                    {"path": "app/source/example/Example.cls", "change": "M"},
+                    {"path": "app/source/example/Example.cls", "change": "M", "scope": "in_scope"},
+                    {"path": "app/db/db_migration/example.sql", "change": "M", "scope": "out_of_scope"},
                 ),
             )
             observed_tools: list[object] = []
+            prompts: list[str] = []
 
             def factory(_settings: object, tools: list[object]) -> object:
                 observed_tools.extend(tools)
-                return lambda _prompt: {
+                return lambda prompt: (prompts.append(prompt) or {
                     "summary": {
                         "purpose": "changed example behavior",
                         "behavioral_change": "unresolved",
@@ -267,7 +277,7 @@ class PRAnalysisReportTests(unittest.TestCase):
                     },
                     "blast_radius": [],
                     "test_areas": [],
-                }
+                })
 
             report = run_pr_analysis(
                 self.coordinator_request(directory),
@@ -286,8 +296,16 @@ class PRAnalysisReportTests(unittest.TestCase):
                 [item.evidence_id for item in report.evidence],
                 ["pr-context-001", "git-inventory-001"],
             )
+            self.assertEqual(
+                [changed.scope for changed in report.changed_files],
+                ["in_scope", "out_of_scope"],
+            )
+            self.assertIn('"scope": "out_of_scope"', prompts[0])
+            report_dir = Path(directory) / "reports"
+            self.assertTrue((report_dir / "evidence/git-inventory.json").is_file())
+            self.assertFalse((report_dir / "evidence/git-inventory-001.xml").exists())
             self.assertEqual(observed_tools, [])
-            self.assertTrue((Path(directory) / "reports" / "pr-analysis.json").is_file())
+            self.assertTrue((report_dir / "pr-analysis.json").is_file())
             self.assert_checked_in_schema(report)
 
     def test_run_pr_analysis_degraded_inspection_follows_public_flag(self) -> None:
