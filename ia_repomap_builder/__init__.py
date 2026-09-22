@@ -29,6 +29,7 @@ from .config import (
 )
 from .pr_context import build_pr_context
 from .impact import build_symbol_impact
+from .test_inventory import TestInventory, build_test_inventory, persist_test_inventory
 from .pr_analysis import PRAnalysisReportV1, PRAnalysisRequestV1, run_pr_analysis
 from .pr_analysis_skills import RipwireSkillPolicy, agent_skills_supported
 from .readiness import (
@@ -63,6 +64,9 @@ __all__ = [
     "check_prepared_repomap_readiness",
     "build_pr_context",
     "build_symbol_impact",
+    "TestInventory",
+    "build_test_inventory",
+    "persist_test_inventory",
     "PRAnalysisRequestV1",
     "PRAnalysisReportV1",
     "RipwireSkillPolicy",
