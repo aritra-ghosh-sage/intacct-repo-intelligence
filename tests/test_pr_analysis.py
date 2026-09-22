@@ -251,6 +251,9 @@ class PRAnalysisReportTests(unittest.TestCase):
                     path="app/source/example/Example.cls",
                     change="M",
                 )],
+                git_inventory=(
+                    {"path": "app/source/example/Example.cls", "change": "M"},
+                ),
             )
             observed_tools: list[object] = []
 
@@ -279,7 +282,10 @@ class PRAnalysisReportTests(unittest.TestCase):
             self.assertIn("no_candidate_symbols", {gap.kind for gap in report.gaps})
             self.assertEqual(report.test_areas[0].execution_status, "not_run")
             self.assertEqual(report.identity.head, context.identity["head"])
-            self.assertEqual([item.evidence_id for item in report.evidence], ["pr-context-001"])
+            self.assertEqual(
+                [item.evidence_id for item in report.evidence],
+                ["pr-context-001", "git-inventory-001"],
+            )
             self.assertEqual(observed_tools, [])
             self.assertTrue((Path(directory) / "reports" / "pr-analysis.json").is_file())
             self.assert_checked_in_schema(report)

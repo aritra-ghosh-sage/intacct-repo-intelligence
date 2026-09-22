@@ -951,6 +951,17 @@ def run_coordinator(
         ))
         if evidence_payloads is not None:
             evidence_payloads.append(("pr-context-001", context_bytes))
+    if seed.context.git_inventory:
+        inventory_bytes = _git_inventory_bytes(seed.context)
+        session.register(EvidenceRecord(
+            evidence_id="git-inventory-001",
+            kind="git_inventory",
+            status=seed.context.status,
+            sha256=sha256(inventory_bytes).hexdigest(),
+            content=inventory_bytes,
+        ))
+        if evidence_payloads is not None:
+            evidence_payloads.append(("git-inventory-001", inventory_bytes))
     tools = []
     if impact_request is not None:
         tools.append(make_symbol_impact_tool(
