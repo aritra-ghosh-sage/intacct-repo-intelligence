@@ -1,9 +1,9 @@
 # `ia_repomap`
 
-This folder contains the local implementation of the Intacct repository-context
-and self-hosted Ripwire PR-review contract. It compares a deterministic lexical
-baseline with optional Aider RepoMap and Ripwire engines. The optional engines
-are never silently substituted: an absent installation is returned as
+This folder is the smallest implementation of the Intacct repository-context
+evaluation contract. It compares a deterministic lexical baseline with
+optional Aider RepoMap and Ripwire engines. The optional engines are never
+silently substituted: an absent installation is returned as
 `status: unavailable`.
 
 The canonical repository-map contract, including configuration, artifact
@@ -32,12 +32,9 @@ The request is revision-aware and scope-relative. The result contains ranked
 items, rendered context, diagnostics, runtime metrics, and a cache identity.
 Generated context is intentionally not written into the repository.
 
-## Repository configuration and readiness
+## Repository declaration and readiness
 
-The Ripwire review uses the configured repository profile for the supported
-source scope. The profile is an input to readiness, not generated review
-output. The self-hosted review command supplies the approved profile; users do
-not need to copy internal setup files into the target repository.
+Participating repositories commit this root declaration:
 
 ```toml
 schema_version = 1
@@ -51,31 +48,16 @@ php_family_extensions = [
 map_php_scope = ["app/source"]
 ```
 
-The repository-map `token_budget` is a separate 4,000-token context budget.
-The Strands model response ceiling is 2,048 tokens.
-
-The self-hosted review has three operator prerequisites:
-
-- `gh auth status` must show usable authentication for the canonical PR URL.
-- `RIPWIRE_SKILLS_DIR` must point to an external directory containing the allowlisted files
-  `ripwire-change-check/SKILL.md`, `ripwire-write-tests/SKILL.md`, and
-  `ripwire-orient/SKILL.md`.
-- Bedrock must use the standard boto3 credential chain (or optional
-  `AWS_PROFILE`) plus `AWS_REGION` or `AWS_DEFAULT_REGION` and
-  `BEDROCK_MODEL_ID`, supplied in the process environment or `.env.local`.
-
-The three external skill files are an input allowlist, not the coordinator's
-profile format. The host converts them to compact internal profiles named
-`change_check`, `write_tests`, and `orient`; those profiles are prompt guidance
-only and do not grant tools or permissions. Do not copy these files, a marker,
-or an upstream skill directory into the target repository.
-
-Before PR-context analysis, a clean exact-head checkout must have usable
-external Ripwire state outside the repository. Missing or stale context is
-reported as `unavailable`; the adapter does not silently substitute a different
-revision or engine. The review command prepares this state automatically and
-reuses it when the retained checkout is still exact and clean. Lower-level
-module commands expose diagnostics for host-controlled use only.
+The declaration is only a discovery marker. Before PR-context analysis, a
+clean exact-head checkout must have a matching Ripwire index and manifest in a
+caller-provided artifact root outside the repository. Missing or stale map
+context is reported as `unavailable`; the adapter does not silently cold-build
+an index. Readiness uses Ripwire `--doctor` to reject a named lean cache that
+the current binary would replace with a cold parse. Readiness gates on the
+doctor report's named `index-cache` row (`source="cache-flag"` and
+`lean="ok"`); unrelated doctor failures remain visible as warnings rather
+than invalidating an otherwise consumable named cache. See the canonical
+contract for the manifest and normalized result formats.
 
 The Python-only readiness and PR-context APIs are:
 
@@ -94,10 +76,10 @@ prepare_repomap(PrepareRepoMapRequest(repo, artifacts))
 result = build_pr_context(PrContextRequest(repo, artifacts, base_ref="origin/main"))
 ```
 
-`prepare_repomap` requires the configured profile and a clean checkout. It
-writes only external artifacts. `build_pr_context` requires usable prepared
-state and returns `ok`, `unavailable`, or `error` without falling back to a
-different revision.
+`prepare_repomap` requires a valid root marker and a clean checkout. It writes
+only external artifacts. `build_pr_context` requires that exact prepared
+artifact and returns `ok`, `unavailable`, or `error` without falling back to a
+cold index build.
 
 Normalized changed-symbol seeds use `hunk-enclosing-v1`: Git's positive-side
 hunks are attributed to spans inferred from Ripwire definition start lines.
@@ -140,15 +122,12 @@ report = run_pr_analysis(PRAnalysisRequestV1.model_validate({
 }))
 ```
 
-The host validates the request and runs `build_pr_context()` once. If changed
-files exist but no candidate symbols were returned, explicit Bedrock settings
-permit one bounded Strands invocation in degraded file/diff mode; the report
-includes `no_candidate_symbols`, uses `assessment="partial"`, and cannot
-contain symbol-level blast-radius rows. If there are no changed files, there is
-no seed and Strands is not constructed or invoked. With candidate symbols and
-explicit Bedrock settings, one Strands agent may request up to five
-candidate-scoped symbol-impact calls. Bounded repository inspection is a
-separate, read-only tool and is available only when the host passes
+The host validates the request, runs `build_pr_context()` once, and returns a
+schema-valid `error`, `unavailable`, or no-seed `ok` report without
+constructing an agent when appropriate. With candidate symbols and explicit
+Bedrock settings, one Strands agent may request up to five candidate-scoped
+symbol-impact calls. Bounded repository inspection is a separate, read-only
+tool and is available only when the host passes
 `allow_source_inspection=True`; it permits at most two calls and retains only
 sanitized citations in the external bundle.
 Inspection reports disclose no-match results and omitted matching files or
@@ -165,137 +144,22 @@ the caller must provide an exact clean checkout and matching external artifact.
 Raw XML is canonical evidence, while all static relationships remain
 candidate lower-bound evidence and test areas are `not_run`.
 
-The coordinator loads only configured, allowlisted Ripwire skill profiles as
-compact prompt guidance. Profiles do not grant tools or permissions, and the
-upstream skill collection is not loaded wholesale. The current implementation
-status is recorded in the canonical contract and
+The current implementation status is recorded in the canonical contract and
 the [coordinator design](../docs/design/strands-pr-analysis-coordinator.md).
-The local module interfaces support explicit preparation, readiness-gated
-PR-context retrieval, on-demand symbol impact, and the bounded coordinator.
-MCP, editor, harness, and GitHub publication integrations remain deferred. The
-self-hosted `review` command is the supported local PR-review entry point
-described below. This documentation pass does not claim a live target-repo,
-GitHub, Ripwire, or Bedrock run.
+A local `ia-app` onboarding commit prepares the marker and agent guidance, but
+it is not live until reviewed and merged. Hunk attribution has been validated
+on an isolated, exact-revision PR #50176 checkout with an external index; it is
+not generally available. The local module interfaces support explicit
+preparation, readiness-gated PR-context retrieval, on-demand symbol impact,
+and the bounded coordinator described above. MCP, editor, harness, hosted-PR,
+and public CLI integrations remain deferred.
 
-## Running a self-hosted PR review
+## Running PR context, impact, and analysis
 
-The review command resolves the PR through the authenticated GitHub CLI,
-checks that `--repo` is the matching local repository, and creates or reuses a
-clean detached PR worktree under an external workspace. It does not check out,
-reset, merge, or edit files in the supplied `--repo` checkout. The detached
-worktree is retained for later review reruns and inspection.
-
-Authenticate before the first review:
-
-```shell
-gh auth status
-```
-
-To prepare or reuse the exact detached checkout and external Ripwire
-prerequisites without running the coordinator, use the public `setup` command:
-
-```shell
-./.venv/bin/python -m ia_repomap_builder setup \
-  https://github.com/owner/repository/pull/123 \
-  --repo /path/to/local/repository \
-  --workspace /safe/external/ia-repomap-review
-```
-
-`setup` resolves the PR revisions, prepares or reuses valid external state, and
-reports the paths needed by a later `review` invocation. `review` performs the
-same setup or reuse automatically before running the bounded coordinator.
-
-If authentication is unavailable, run `gh auth login` according to the
-organization's policy. Use a canonical GitHub pull-request URL and an existing
-local checkout whose `origin` points to that PR's repository:
-
-```shell
-./.venv/bin/python -m ia_repomap_builder review \
-  https://github.com/owner/repository/pull/123 \
-  --repo /path/to/local/repository \
-  --workspace /safe/external/ia-repomap-review
-```
-
-Add `--inspect` only when bounded, read-only source and test-area inspection is
-wanted:
-
-```shell
-./.venv/bin/python -m ia_repomap_builder review \
-  https://github.com/owner/repository/pull/123 \
-  --repo /path/to/local/repository \
-  --workspace /safe/external/ia-repomap-review \
-  --inspect
-```
-
-Add `--test-inventory` with the path to an already-persisted
-`inventory.json` (produced by `test_inventory.persist_test_inventory`) to
-cross-reference the PR's changed files against a deterministic external test
-suite index. This never invokes a model: it classifies each changed path as
-`covered`, `partial`, or `gap`, and for gaps it emits a suggested test area
-plus a scaffolded `.feature` stub under `evidence/coverage/suggested/` in the
-report bundle. A missing or unreadable path is a disclosed
-`test_inventory_unavailable` gap, not a command failure.
-
-```shell
-./.venv/bin/python -m ia_repomap_builder review \
-  https://github.com/owner/repository/pull/123 \
-  --repo /path/to/local/repository \
-  --workspace /safe/external/ia-repomap-review \
-  --test-inventory /safe/external/test-inventory/<repo-id>/<head>/<digest>/inventory.json
-```
-
-`--repo` is the caller-owned source repository used for Git metadata and
-retained worktrees; it is not replaced by the PR checkout. The command leaves
-source files, the index, the current branch, `HEAD`, and the working tree
-untouched. It does intentionally mutate Git metadata to fetch the required
-objects, update `FETCH_HEAD`, and maintain the private
-`refs/ia-repomap/pr/<number>/head` ref; it also registers the retained detached
-worktree under the external workspace. `--workspace` must be external to the
-supplied checkout and worktrees. If omitted, the command uses the local user
-cache directory. Setup prepares the external Ripwire artifacts and then runs
-the bounded coordinator automatically. A later invocation reuses the retained
-detached worktree and external state when they remain valid; it does not
-silently reuse dirty or mismatched state.
-
-The command prints one JSON envelope and returns `0` for `ok`, `3` for
-`unavailable`, and `2` for input or execution errors. The envelope includes
-the resolved PR revisions, assessment, report directory, report files, and a
-`remediation` list. Treat remediation as user-facing next actions rather than
-as model commentary.
-
-Typical remediation is to authenticate `gh`, correct the canonical PR URL,
-point `--repo` at the matching readable checkout, choose a writable external
-workspace, or repair the retained detached worktree named by the diagnostic.
-The command never tells the model to repair repository state.
-
-Each review writes outside the target repository:
-
-```text
-<workspace>/
-  checkouts/       retained detached PR worktrees
-  artifacts/       external Ripwire state
-  reports/         JSON, Markdown, and retained evidence
-```
-
-The report contains `pr-analysis.json`, deterministic `pr-analysis.md`, and
-external evidence files. Keep this workspace private when the source or
-evidence is private; do not commit it to the target repository.
-
-V1 does not execute tests, report executed coverage, modify the target
-repository, publish a GitHub review, or use MCP. Test paths and behaviors are
-candidate test areas with `execution_status="not_run"`; run and record tests
-separately if execution evidence is required.
-
-## Host-only PR-context diagnostics
-
-The public self-hosted commands are `setup` and `review` above. The lower-level
-`prepare`, `pr-context`, and `symbol-impact` commands below are diagnostic and
-host-only interfaces; they are not a second operator setup path. Run them from
-the builder repository root, or add this repository to `PYTHONPATH`. The host
-supplies the bundled process-local marker while invoking the self-hosted flow.
-Do not copy a marker or internal setup files into the target repository. The
-target checkout is never inferred from a PR number; the host must select the
-exact PR-head checkout and intended base ref or base SHA.
+Run these commands from the builder repository root, or add this repository to
+`PYTHONPATH`. The project does not install a console entry point. The target
+application checkout is never inferred from a PR number; the caller must select
+the exact PR-head checkout and the intended base ref or base SHA.
 
 ### 1. Verify the PR checkout
 
@@ -327,11 +191,10 @@ The run records both the resolved `base_revision` and the computed
 `HEAD`, so a moving `origin/main` should be avoided when reproducibility
 matters.
 
-### 3. Prepare the external map artifact (host-only)
+### 3. Prepare the external map artifact
 
-This diagnostic writes only under the caller-provided artifact root, outside
-the target repository. The self-hosted `review` command performs it internally
-with the bundled process-local marker.
+Preparation is explicit and writes only under the caller-provided artifact
+root, outside the target repository.
 
 ```shell
 ./.venv/bin/python -m ia_repomap_builder prepare \
@@ -339,11 +202,10 @@ with the bundled process-local marker.
   --artifact-root /safe/external/ia-repomap-artifacts
 ```
 
-This requires the configured profile, the configured scope, and a supported
-Ripwire binary. It is not a request to copy the profile or marker into the
-target checkout.
+This requires the target checkout to contain a valid `.ia-repomap.toml`, the
+configured scope, and a supported Ripwire binary.
 
-### 4. Run PR context (host-only)
+### 4. Run PR context
 
 ```shell
 ./.venv/bin/python -m ia_repomap_builder pr-context \
@@ -382,15 +244,11 @@ when you need the next changed-file window:
 ```
 
 If changed files are present but every `symbols` array is empty, the run found
-file-level changes but did not produce symbol seeds. The coordinator may still
-run bounded degraded file/diff analysis when Bedrock settings are supplied; it
-must report `no_candidate_symbols` and `assessment="partial"`, with no
-symbol-level blast-radius rows. Use the `hunk_symbol_unresolved`,
-`hunk_no_head_lines`, truncation, and pagination gaps to explain the missing
-seeds. With no changed files, the coordinator has no seed and does not invoke
-Strands.
+file-level changes but did not produce symbol seeds; use the
+`hunk_symbol_unresolved`, `hunk_no_head_lines`, truncation, and pagination gaps
+before expecting symbol-level blast-radius rows.
 
-### 5. Run symbol impact for one PR-context symbol (host-only)
+### 5. Run symbol impact for one PR-context symbol
 
 Use only the `path` and `name` from a symbol returned by `pr-context`. Impact
 is on demand and is not automatically run for every changed symbol.
@@ -413,10 +271,8 @@ unresolved edges, importer rows, malformed locations, and out-of-scope rows.
 ### 6. Run the full Strands PR-analysis coordinator
 
 The full coordinator is a Python API, not a public CLI. Bedrock settings are
-required when candidate symbols are present. Set `AWS_REGION` or
-`AWS_DEFAULT_REGION` and `BEDROCK_MODEL_ID` in the process environment or
-`.env.local`; credentials come from the standard boto3 chain or optional
-`AWS_PROFILE`, and are not request fields.
+required when candidate symbols are present. Credentials must come from the
+standard boto3 chain or the selected AWS profile; they are not request fields.
 
 ```python
 from ia_repomap_builder import PRAnalysisRequestV1, run_pr_analysis
@@ -439,10 +295,8 @@ report = run_pr_analysis(
 ```
 
 With candidate symbols and Bedrock settings, the host may invoke one Strands
-agent. With changed files but no candidate symbols, the same settings permit a
-bounded degraded file/diff invocation with no symbol-impact calls. The agent
-can request up to five candidate-scoped `symbol-impact` calls in symbol-seeded
-mode. If `allow_source_inspection=True`, it can also request up to two bounded,
+agent. The agent can request up to five candidate-scoped `symbol-impact` calls.
+If `allow_source_inspection=True`, it can also request up to two bounded,
 read-only inspection calls. The host controls request validation, readiness,
 tool limits, evidence validation, post-run repository checks, and persistence.
 
@@ -459,10 +313,6 @@ output_dir/
     pr-context.xml
     symbol-impact-001.xml
     inspection-001.json
-    test-inventory.json
-    coverage/
-      suggested/
-        <slug>.feature.suggested
 ```
 
 `pr-analysis.json` is the authoritative `ia-repomap.pr-analysis/v1` report.
@@ -471,22 +321,12 @@ fields are:
 
 ```text
 status          ok | unavailable | error
-assessment      complete | partial | unavailable | error
 phase           request_validation | readiness | pr_context | analysis | persistence
-request         repository, base, and analysis_schema
-identity        repository, head, base, merge_base, configuration_digest, engine_identity
-summary         purpose, behavioral_change, and confidence
 changed_files   Git-confirmed changed files and candidate symbols
-impacted_files  candidate impacted files and dependent-symbol counts
 blast_radius    candidate lower-bound relationships
 test_areas      suggested areas, always execution_status="not_run"
-test_inventory_coverage  present only when `--test-inventory` was supplied;
-                covered/partial/gap findings per changed path, plus
-                suggested corrective test areas and scaffolded stubs
 gaps            truncation, ambiguity, unresolved evidence, pagination, etc.
 evidence        retained XML and inspection evidence with SHA-256 digests
-diagnostics     host diagnostics
-remediation     user-facing next actions
 metrics         impact_calls, inspection_calls, and runtime details
 agent.invoked   whether the Strands agent actually ran
 ```
@@ -496,9 +336,11 @@ means invalid input or an execution error. `agent.invoked=false` means the
 host produced a deterministic report without Strands. `agent.invoked=true`
 means model and region provenance are recorded under `agent`.
 
-For a participating Intacct repository, use the approved repository profile
-through the self-hosted review setup. Generated maps and agent guidance stay
-outside the target checkout as part of review setup.
+For a participating Intacct repository, copy the small
+`templates/.ia-repomap.toml` declaration and the
+`templates/AGENTS.md.snippet` section. The declaration is a discoverable
+machine-readable marker; the Markdown is guidance for agents that honor
+repository instructions. Neither file is a generated map.
 
 ## Optional engines
 
