@@ -205,8 +205,18 @@ def render_suggested_stub(gap: CoverageGap) -> str:
 
 
 def _slug(value: str) -> str:
-    token = _TOKEN_RE.sub("-", value.lower()).strip("-")
+    token = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
     return re.sub(r"-{2,}", "-", token) or "gap"
+
+
+def _unique_stub_slug(base_slug: str, used: set[str]) -> str:
+    slug = base_slug
+    suffix = 2
+    while slug in used:
+        slug = f"{base_slug}-{suffix}"
+        suffix += 1
+    used.add(slug)
+    return slug
 
 
 def evaluate_test_coverage(
@@ -231,6 +241,7 @@ def evaluate_test_coverage(
     findings: list[CoverageFinding] = []
     gaps: list[CoverageGap] = []
     suggested: list[SuggestedTestArtifact] = []
+    used_stub_slugs: set[str] = set()
     truncated_stubs = 0
     truncated_match_findings = 0
     omitted_match_ids = 0
@@ -315,7 +326,7 @@ def evaluate_test_coverage(
             )
             gaps.append(gap)
             if stub_available:
-                stub_slug = _slug(changed_path)
+                stub_slug = _unique_stub_slug(_slug(changed_path), used_stub_slugs)
                 suggested.append(SuggestedTestArtifact(
                     evidence_id=gap_evidence_id,
                     relative_path=f"evidence/coverage/suggested/{stub_slug}.feature.suggested",

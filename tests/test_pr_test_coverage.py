@@ -328,6 +328,23 @@ class EvaluateTestCoverageTests(unittest.TestCase):
         self.assertIn("Feature:", stub)
         self.assertIn("Scenario: Cover changes in app/source/gl/GLSetupManager.cls", stub)
 
+    def test_suggested_stub_paths_are_unique_when_slugs_collide(self) -> None:
+        inventory = _inventory(())
+        result = evaluate_test_coverage(
+            [
+                "app/source/gl/GLSetupManager.cls",
+                "app/source/gl/gl-setup-manager.cls",
+            ],
+            [],
+            inventory,
+            inventory_evidence_id="test-inventory-001",
+        )
+
+        self.assertEqual(len(result.gaps), 2)
+        self.assertEqual(len(result.suggested_artifacts), 2)
+        relative_paths = [artifact.relative_path for artifact in result.suggested_artifacts]
+        self.assertEqual(len(relative_paths), len(set(relative_paths)))
+
     def test_suggested_stub_cap_is_enforced(self) -> None:
         inventory = _inventory(())
         changed_paths = [f"app/source/gl/File{i}.cls" for i in range(MAX_SUGGESTED_STUBS + 5)]
