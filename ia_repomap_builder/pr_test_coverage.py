@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from . import test_inventory as ti
 
+MAX_MATCHED_SUITE_IDS = 50
 MAX_SUGGESTED_STUBS = 20
 
 CoverageStatus = Literal["covered", "partial", "gap"]
@@ -33,7 +34,8 @@ class _CoverageStrictModel(BaseModel):
 class CoverageFinding(_CoverageStrictModel):
     changed_path: str = Field(min_length=1)
     status: CoverageStatus
-    matched_suite_ids: list[str] = Field(default_factory=list, max_length=50)
+    matched_suite_ids: list[str] = Field(default_factory=list, max_length=MAX_MATCHED_SUITE_IDS)
+    matched_suite_count: int = Field(ge=0)
     match_basis: MatchBasis
     reason: str = Field(min_length=1, max_length=200)
     evidence_ids: list[str] = Field(min_length=1, max_length=20)
@@ -229,11 +231,14 @@ def evaluate_test_coverage(
     findings: list[CoverageFinding] = []
     gaps: list[CoverageGap] = []
     suggested: list[SuggestedTestArtifact] = []
-    truncated = 0
+    truncated_stubs = 0
+    truncated_match_findings = 0
+    omitted_match_ids = 0
 
     for changed_path in sorted(dict.fromkeys(changed_paths)):
         known_paths = _known_test_paths_for(test_areas, changed_path)
         matched: set[str] = set()
+        module_only_match = False
         basis: MatchBasis = "none"
         for known_path in known_paths:
             suite_id = file_index.get(_normalize_path(known_path))
@@ -243,14 +248,19 @@ def evaluate_test_coverage(
             basis = "path"
         else:
             module = _module_token(changed_path)
-            candidates: set[str] = set()
+            module_candidates: set[str] = set()
+            object_candidates: set[str] = set()
             if module:
-                candidates |= module_index.get(module.lower(), set())
-                candidates |= object_index.get(module.lower(), set())
+                module_candidates |= module_index.get(module.lower(), set())
+                object_candidates |= object_index.get(module.lower(), set())
             for token in _tokenize(Path(changed_path).stem):
-                candidates |= object_index.get(token, set())
-            if candidates:
-                matched |= candidates
+                object_candidates |= object_index.get(token, set())
+            if object_candidates:
+                matched = object_candidates
+                basis = "module_api_object"
+            elif module_candidates:
+                matched = module_candidates
+                module_only_match = True
                 basis = "module_api_object"
 
         if matched and basis == "path":
@@ -259,6 +269,12 @@ def evaluate_test_coverage(
             reason = (
                 f"Ripwire-identified test path(s) for {changed_path} matched inventory "
                 f"suite(s): {', '.join(sorted(matched))}."
+            )
+        elif module_only_match and len(matched) > MAX_MATCHED_SUITE_IDS:
+            status = "gap"
+            reason = (
+                f"Module heuristic for {changed_path} matched {len(matched)} inventory suites; "
+                "the result is too broad to establish candidate coverage."
             )
         elif matched:
             status = "partial"
@@ -270,10 +286,16 @@ def evaluate_test_coverage(
             status = "gap"
             reason = f"No inventory suite matched {changed_path} by path or module/API-object heuristic."
 
+        matched_suite_ids = sorted(matched)[:MAX_MATCHED_SUITE_IDS]
+        omitted = len(matched) - len(matched_suite_ids)
+        if omitted:
+            truncated_match_findings += 1
+            omitted_match_ids += omitted
         findings.append(CoverageFinding(
             changed_path=changed_path,
             status=status,
-            matched_suite_ids=sorted(matched),
+            matched_suite_ids=matched_suite_ids,
+            matched_suite_count=len(matched),
             match_basis=basis,
             reason=reason[:200],
             evidence_ids=[inventory_evidence_id],
@@ -300,18 +322,25 @@ def evaluate_test_coverage(
                     description=f"Suggested scaffold scenario for {changed_path}",
                 ))
             else:
-                truncated += 1
+                truncated_stubs += 1
 
     metrics = {
         "changed_paths": len(changed_paths),
         "covered": sum(1 for f in findings if f.status == "covered"),
         "partial": sum(1 for f in findings if f.status == "partial"),
         "gap": sum(1 for f in findings if f.status == "gap"),
+        "truncated_match_findings": truncated_match_findings,
+        "omitted_match_ids": omitted_match_ids,
     }
     diagnostics = []
-    if truncated:
+    if truncated_match_findings:
         diagnostics.append(
-            f"{truncated} coverage gap(s) exceeded the {MAX_SUGGESTED_STUBS} suggested-stub cap"
+            f"{omitted_match_ids} matched suite id(s) omitted across "
+            f"{truncated_match_findings} finding(s) by the {MAX_MATCHED_SUITE_IDS}-id cap"
+        )
+    if truncated_stubs:
+        diagnostics.append(
+            f"{truncated_stubs} coverage gap(s) exceeded the {MAX_SUGGESTED_STUBS} suggested-stub cap"
         )
 
     return TestInventoryCoverage(

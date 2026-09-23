@@ -1879,6 +1879,27 @@ class TestInventoryCoverageWiringTests(unittest.TestCase):
             self.assertIn("test_inventory_unavailable", {gap.kind for gap in report.gaps})
             self.assert_checked_in_schema(report)
 
+    def test_test_inventory_evaluation_failure_is_a_disclosed_gap(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            inventory_path = root / "test-inventory" / "inventory.json"
+            _write_test_inventory(inventory_path)
+            context = PrContextResult(status="ok", identity=self.context_identity())
+            request = self.coordinator_request(directory)
+            request["test_inventory_path"] = str(inventory_path)
+
+            with patch(
+                "ia_repomap_builder.pr_test_coverage.evaluate_test_coverage",
+                side_effect=ValueError("invalid generated coverage"),
+            ):
+                report = run_pr_analysis(request, context_builder=lambda _: context)
+
+            self.assertEqual(report.status, "ok")
+            self.assertEqual(report.test_inventory_coverage.status, "unavailable")
+            self.assertIn("test_inventory_unavailable", {gap.kind for gap in report.gaps})
+            self.assertTrue(any("invalid generated coverage" in item for item in report.test_inventory_coverage.diagnostics))
+            self.assert_checked_in_schema(report)
+
 
 if __name__ == "__main__":
     unittest.main()

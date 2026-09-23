@@ -167,9 +167,12 @@ def _markdown(report: PRAnalysisReportV1) -> str:
         lines.append(f"- status: `{coverage['status']}`")
         for finding in coverage["findings"]:
             suites = ", ".join(f"`{item}`" for item in finding["matched_suite_ids"]) or "(no suites)"
+            matched_count = finding["matched_suite_count"]
+            shown_count = len(finding["matched_suite_ids"])
+            count_suffix = f" (showing {shown_count} of {matched_count})" if shown_count < matched_count else ""
             lines.append(
                 f"- `{finding['status']}` `{finding['changed_path']}` "
-                f"(`{finding['match_basis']}`): {suites} — {finding['reason']}"
+                f"(`{finding['match_basis']}`): {suites}{count_suffix} — {finding['reason']}"
             )
         if not coverage["findings"]:
             lines.append("- None")

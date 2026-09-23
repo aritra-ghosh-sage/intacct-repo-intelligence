@@ -613,6 +613,14 @@ heuristic match with no direct test-path match), or `gap` (no match), and for
 stub persisted as evidence. The heuristic is conservative by construction: an
 ambiguous or unresolved match is a `gap`, never a false `covered`.
 
+Heuristic selection uses deterministic evidence tiers rather than weighted
+scores. A direct test-path match is authoritative. Without one, API-object
+token matches take precedence over module-only matches; weaker tiers do not
+pad a stronger result. Findings retain at most 50 sorted suite identifiers
+and record the full `matched_suite_count`. More than 50 module-only matches is
+treated as an ambiguous `gap`, while a capped direct-path match retains its
+normal covered-or-partial classification.
+
 This adds one optional, nullable report field, `test_inventory_coverage`, and
 two new `Evidence.kind` values, `test_inventory` and `suggested_test_stub`.
 The top-level schema string remains `ia-repomap.pr-analysis/v1`; this is

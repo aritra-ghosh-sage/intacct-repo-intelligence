@@ -8,6 +8,7 @@ from pathlib import Path
 
 from ia_repomap_builder.pr_analysis import TestArea
 from ia_repomap_builder.pr_test_coverage import (
+    MAX_MATCHED_SUITE_IDS,
     MAX_SUGGESTED_STUBS,
     evaluate_test_coverage,
     load_persisted_test_inventory,
@@ -183,7 +184,116 @@ class EvaluateTestCoverageTests(unittest.TestCase):
         self.assertEqual(finding.status, "partial")
         self.assertEqual(finding.match_basis, "module_api_object")
         self.assertEqual(finding.matched_suite_ids, ["features/gl"])
+        self.assertEqual(finding.matched_suite_count, 1)
         self.assertEqual(result.gaps, [])
+
+    def test_broad_module_only_match_is_bounded_ambiguity_gap(self) -> None:
+        inventory = _inventory(tuple(
+            InventorySuite(
+                suite_id=f"features/gl/input/suite-{index:02d}",
+                module="gl",
+                category="fixture",
+            )
+            for index in range(MAX_MATCHED_SUITE_IDS + 16)
+        ))
+
+        result = evaluate_test_coverage(
+            ["app/source/gl/Foo.cls"],
+            [],
+            inventory,
+            inventory_evidence_id="test-inventory-001",
+        )
+
+        finding = result.findings[0]
+        self.assertEqual(finding.status, "gap")
+        self.assertEqual(finding.match_basis, "module_api_object")
+        self.assertEqual(len(finding.matched_suite_ids), MAX_MATCHED_SUITE_IDS)
+        self.assertEqual(finding.matched_suite_count, MAX_MATCHED_SUITE_IDS + 16)
+        self.assertEqual(
+            finding.matched_suite_ids,
+            sorted(suite.suite_id for suite in inventory.suites)[:MAX_MATCHED_SUITE_IDS],
+        )
+        self.assertIn("too broad", finding.reason)
+        self.assertEqual(result.metrics["truncated_match_findings"], 1)
+        self.assertEqual(result.metrics["omitted_match_ids"], 16)
+        self.assertTrue(any("50-id cap" in diagnostic for diagnostic in result.diagnostics))
+        self.assertEqual(len(result.gaps), 1)
+
+    def test_module_only_match_at_cap_remains_partial(self) -> None:
+        inventory = _inventory(tuple(
+            InventorySuite(
+                suite_id=f"features/gl/input/suite-{index:02d}",
+                module="gl",
+                category="fixture",
+            )
+            for index in range(MAX_MATCHED_SUITE_IDS)
+        ))
+
+        result = evaluate_test_coverage(
+            ["app/source/gl/Foo.cls"],
+            [],
+            inventory,
+            inventory_evidence_id="test-inventory-001",
+        )
+
+        finding = result.findings[0]
+        self.assertEqual(finding.status, "partial")
+        self.assertEqual(finding.matched_suite_count, MAX_MATCHED_SUITE_IDS)
+        self.assertEqual(result.metrics["omitted_match_ids"], 0)
+        self.assertEqual(result.gaps, [])
+
+    def test_direct_path_matches_over_cap_preserve_covered_status(self) -> None:
+        inventory = _inventory(tuple(
+            InventorySuite(
+                suite_id=f"features/gl/suite-{index:02d}",
+                module="gl",
+                category="executable",
+                feature_files=(f"features/gl/suite-{index:02d}.feature",),
+            )
+            for index in range(MAX_MATCHED_SUITE_IDS + 1)
+        ))
+        test_paths = [suite.feature_files[0] for suite in inventory.suites]
+
+        result = evaluate_test_coverage(
+            ["app/source/gl/Foo.cls"],
+            [_test_area("Affected tests for app/source/gl/Foo.cls", test_paths)],
+            inventory,
+            inventory_evidence_id="test-inventory-001",
+        )
+
+        finding = result.findings[0]
+        self.assertEqual(finding.status, "covered")
+        self.assertEqual(finding.match_basis, "path")
+        self.assertEqual(len(finding.matched_suite_ids), MAX_MATCHED_SUITE_IDS)
+        self.assertEqual(finding.matched_suite_count, MAX_MATCHED_SUITE_IDS + 1)
+        self.assertEqual(result.gaps, [])
+
+    def test_api_object_matches_take_priority_over_module_matches(self) -> None:
+        inventory = _inventory((
+            InventorySuite(
+                suite_id="features/gl/input/module-only",
+                module="gl",
+                category="fixture",
+            ),
+            InventorySuite(
+                suite_id="features/shared/input/foo",
+                module="shared",
+                category="fixture",
+                api_objects=("foo",),
+            ),
+        ))
+
+        result = evaluate_test_coverage(
+            ["app/source/gl/Foo.cls"],
+            [],
+            inventory,
+            inventory_evidence_id="test-inventory-001",
+        )
+
+        finding = result.findings[0]
+        self.assertEqual(finding.status, "partial")
+        self.assertEqual(finding.matched_suite_ids, ["features/shared/input/foo"])
+        self.assertEqual(finding.matched_suite_count, 1)
 
     def test_no_match_is_a_gap_with_suggested_stub(self) -> None:
         inventory = _inventory((

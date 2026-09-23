@@ -1595,6 +1595,12 @@ def _apply_test_inventory_coverage(
     try:
         raw_bytes = request.test_inventory_path.read_bytes()
         inventory = load_persisted_test_inventory(request.test_inventory_path)
+        coverage = evaluate_test_coverage(
+            [changed.path for changed in report.changed_files],
+            report.test_areas,
+            inventory,
+            inventory_evidence_id=inventory_evidence_id,
+        )
     except Exception as exc:
         payload["test_inventory_coverage"] = {
             "status": "unavailable",
@@ -1607,12 +1613,6 @@ def _apply_test_inventory_coverage(
         payload["assessment"] = _assessment_for(payload["status"], payload["gaps"])
         return PRAnalysisReportV1.model_validate(payload), []
 
-    coverage = evaluate_test_coverage(
-        [changed.path for changed in report.changed_files],
-        report.test_areas,
-        inventory,
-        inventory_evidence_id=inventory_evidence_id,
-    )
     gap_by_evidence_id = {gap.evidence_ids[0]: gap for gap in coverage.gaps}
     new_payloads: list[tuple[str, bytes]] = [(inventory_evidence_id, raw_bytes)]
     new_evidence = [{

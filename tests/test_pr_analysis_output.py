@@ -232,9 +232,10 @@ class PRAnalysisOutputTests(unittest.TestCase):
             "findings": [{
                 "changed_path": "app/source/example.cls",
                 "status": "gap",
-                "matched_suite_ids": [],
-                "match_basis": "none",
-                "reason": "No inventory suite matched",
+                "matched_suite_ids": ["features/example"],
+                "matched_suite_count": 2,
+                "match_basis": "module_api_object",
+                "reason": "Module match was ambiguous",
                 "evidence_ids": ["test-inventory-001"],
             }],
             "gaps": [{
@@ -287,6 +288,7 @@ class PRAnalysisOutputTests(unittest.TestCase):
             markdown = (output / "pr-analysis.md").read_text()
             self.assertIn("## Test inventory coverage", markdown)
             self.assertIn("`gap` `app/source/example.cls`", markdown)
+            self.assertIn("(showing 1 of 2)", markdown)
             self.assertIn("Suggested corrective tests", markdown)
             self.assertIn("Suggested test scaffolds", markdown)
             self.assertTrue((output / "evidence/coverage/suggested/example.feature.suggested").is_file())
