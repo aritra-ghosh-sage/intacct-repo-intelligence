@@ -593,6 +593,11 @@ The slice does not change Ripwire, repository-map caches, the target
 repository, existing request/result contracts, or add a public command-line,
 MCP, editor, GitHub, publication, test-execution, or multi-agent integration.
 
+An optional caller-supplied persisted `TestInventory` can be cross-referenced
+after analysis by deterministic host code. This adds evidence-bound covered,
+partial, or gap findings and suggested test scaffolds; it does not execute
+tests or turn candidate test areas into executed coverage.
+
 ## Lightweight validation
 
 Use fake evidence APIs and a fake Strands model for ordinary tests. No AWS call
@@ -614,6 +619,8 @@ Tests cover:
 - deterministic Markdown rendering from fixed JSON;
 - no overwrite and no target-repository writes;
 - credentials and source excerpts absent from persisted output.
+- optional test-inventory coverage findings remain deterministic and explicitly
+  distinguish unavailable inventory from executed coverage.
 
 An environment-gated Bedrock smoke test may verify one synthetic repository.
 It must not use proprietary source and must require explicit AWS and model

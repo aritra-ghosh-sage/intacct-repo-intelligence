@@ -33,7 +33,7 @@ shape:
 schema_version = 1
 engine = "ripwire"
 scope = ["app/source"]
-token_budget = 4000
+token_budget = 30000
 
 php_family_extensions = [
   ".php", ".phtml", ".cls", ".ent", ".inc", ".cqry", ".rpt",

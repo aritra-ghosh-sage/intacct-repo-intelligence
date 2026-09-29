@@ -183,8 +183,8 @@ The research MVP is therefore at these boundaries:
 | Symbol-scoped transitive impact | Partial | `symbol-impact-v1` expands one selected symbol on demand; counts and rows remain static-analysis floors with explicit graph gaps. |
 | Affected tests | Partial | Ripwire PR-context test paths are normalized into deterministic candidate `test_areas` with `execution_status="not_run"`; this is not executed coverage. |
 | Bounded coordinator agent loop | Partial | A local Strands coordinator consumes the seed, may request bounded impact and opt-in inspection, and emits a schema-validated report; no hosted or GitHub loop exists. |
-| Test-index cross-reference | Not implemented | No test-to-source index or coverage lookup is wired into the coordinator. |
-| Evidence-bound blast-radius/test-suggestion JSON | Partial | The coordinator writes an external `PRAnalysisReportV1` bundle with normalized affected-test areas; complete dynamic blast radius and coverage remain deferred. |
+| Test-index cross-reference | Partial | When the caller supplies a persisted `TestInventory`, the host performs a deterministic path/module/API-object cross-reference and records covered, partial, or gap findings; executed test coverage remains unavailable. |
+| Evidence-bound blast-radius/test-suggestion JSON | Partial | The coordinator writes an external `PRAnalysisReportV1` bundle with normalized affected-test areas and optional test-inventory coverage findings; complete dynamic blast radius and executed coverage remain deferred. |
 | Aider/Ripwire/lexical bakeoff | Not run | The acceptance dataset and comparative measurements remain outstanding. |
 
 ### Live retrieval finding
@@ -225,8 +225,8 @@ source, tests, build configuration, and CI. The bakeoff acceptance criteria in
 that contract are measured on Intacct examples; Ripwire's published comparison
 does not substitute for that evaluation.
 
-The implemented repository-map and local coordinator slices, and their
-validation history, are recorded in the contract's
+The implemented repository-map, local coordinator, and optional test-inventory
+cross-reference slices, and their validation history, are recorded in the contract's
 [execution status](ia-repomap-context-contract.md#execution-status) and the
 [coordinator design](strands-pr-analysis-coordinator.md).
 The local `ia-app` onboarding revision and a matching external prepared artifact
@@ -240,5 +240,7 @@ remain deferred.
 The frozen, KISS-first Strands orchestration design is recorded in
 [`strands-pr-analysis-coordinator.md`](strands-pr-analysis-coordinator.md). Its
 bounded local implementation is available for fake-tested runs; the full
-research MVP still lacks affected-test mapping, hosted acquisition, and a
-combined production blast-radius/test-suggestion workflow.
+research MVP still lacks hosted acquisition, exhaustive dynamic blast-radius
+proof, executed coverage, and a combined production blast-radius/test-suggestion
+workflow. Optional inventory cross-reference is deterministic host logic, not
+agent-discovered coverage.

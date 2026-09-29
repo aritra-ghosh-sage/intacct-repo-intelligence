@@ -23,7 +23,7 @@ result = build(BuildRequest(
     scope=("app/source",),
     query="GLSetupManager preferences",
     engine="lexical",
-    token_budget=4000,
+    token_budget=30000,
 ))
 print(result.as_dict())
 ```
@@ -40,7 +40,7 @@ Participating repositories commit this root declaration:
 schema_version = 1
 engine = "ripwire"
 scope = ["app/source"]
-token_budget = 4000
+token_budget = 30000
 php_family_extensions = [
   ".php", ".phtml", ".cls", ".ent", ".inc", ".cqry", ".rpt",
   ".menu", ".pol", ".wfl", ".shortcuts", ".qry", ".bin", ".map",

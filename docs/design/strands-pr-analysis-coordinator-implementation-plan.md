@@ -406,7 +406,9 @@ Update:
 
 Record the implemented request, early returns, fixed limits, skill boundary,
 inspection opt-in, post-run guard, external output, and remaining deferred
-work. Export `PRAnalysisRequestV1`, `PRAnalysisReportV1`, and
+work. The current implementation also supports an optional persisted
+`TestInventory` cross-reference after analysis; this is deterministic host
+logic and does not execute tests. Export `PRAnalysisRequestV1`, `PRAnalysisReportV1`, and
 `run_pr_analysis` from `ia_repomap_builder/__init__.py`.
 
 ## Files touched
@@ -471,6 +473,8 @@ and source-inspection opt-in.
 - Final `HEAD` and clean state match the pre-agent identity.
 - Output publication is atomic, external, and non-overwriting.
 - JSON and Markdown are deterministic host-generated artifacts.
+- When supplied, persisted test-inventory cross-reference is host-generated,
+  evidence-bound, and distinct from executed coverage.
 - All existing and new lightweight tests pass.
 - No deferred integration or target-repository change enters the slice.
 

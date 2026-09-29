@@ -4,7 +4,9 @@
 schema_version = 1
 engine = "ripwire"
 scope = ["app/source"]
-token_budget = 4000
+# Keep changed-symbol rows available for large PRs; the adapter still applies
+# its own bounded candidate and evidence limits after parsing.
+token_budget = 30000
 php_family_extensions = [
   ".php", ".phtml", ".cls", ".ent", ".inc", ".cqry", ".rpt",
   ".menu", ".pol", ".wfl", ".shortcuts", ".qry", ".bin", ".map",

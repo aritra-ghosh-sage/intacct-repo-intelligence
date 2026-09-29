@@ -130,7 +130,7 @@ class PrContextTests(unittest.TestCase):
         self.assertEqual(config.schema_version, 1)
         self.assertEqual(config.engine, "ripwire")
         self.assertEqual(config.scope, ("app/source",))
-        self.assertEqual(config.token_budget, 4000)
+        self.assertEqual(config.token_budget, 30000)
         self.assertEqual(config.map_php_scope, ("app/source",))
         self.assertEqual(set(config.php_family_extensions), PHP_FAMILY_EXTENSIONS)
 
