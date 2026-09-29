@@ -535,8 +535,14 @@ class EvidenceSession:
         self._inspection_requested_term_count += len(term_list)
         self._inspection_requested_path_count += len(path_list)
         self._rejected_inspection_values.update(
-            value for value in [*term_list, *path_list]
-            if isinstance(value, str) and value
+            value
+            for value in term_list
+            if isinstance(value, str) and value and value not in self._inspection_terms
+        )
+        self._rejected_inspection_values.update(
+            value
+            for value in path_list
+            if isinstance(value, str) and value and value not in self._inspection_paths
         )
         self._inspection_last_request_hash = sha256(canonical).hexdigest()[:16]
         self._record_gap({
@@ -1093,6 +1099,11 @@ def run_coordinator(
     inspection_root = inspection_repo_root or (
         impact_request.repo_root if impact_request is not None else None
     )
+    from .pr_analysis_inspection import MAX_CALLS, MAX_FILES, MAX_TERMS
+
+    inspection_max_terms = MAX_TERMS
+    inspection_max_files = MAX_FILES
+    inspection_max_calls = MAX_CALLS
     if allow_source_inspection and inspection_root is not None:
         from .pr_analysis_inspection import make_repository_inspection_tool
 
@@ -1161,7 +1172,13 @@ def run_coordinator(
             "paths": list(session.authorized_inspection_paths),
         },
         "analysis_mode": "degraded_file_diff" if degraded else "symbol_seeded",
-        "limits": {"impact_calls": 0 if degraded else 5, "inspection_calls": 2, "impact_rows": 20},
+        "limits": {
+            "impact_calls": 0 if degraded else 5,
+            "inspection_calls": inspection_max_calls,
+            "inspection_terms_per_call": inspection_max_terms,
+            "inspection_paths_per_call": inspection_max_files,
+            "impact_rows": 20,
+        },
     }
     prompt = (
         "Analyze this PR context as a lower-bound, evidence-bound report. "
@@ -1186,6 +1203,12 @@ def run_coordinator(
         "Source inspection is opt-in. When inspection is available, use only "
         "exact terms and paths from inspection_allowlist. Copy each requested "
         "term and path exactly; omit inspection when the needed value is absent. "
+        f"Each inspection call accepts at most {inspection_max_terms} unique terms "
+        f"and {inspection_max_files} paths, with at most {inspection_max_calls} calls. "
+        f"If more than {inspection_max_terms} selected allowlisted terms are needed, "
+        f"partition them across the available calls (for example, {inspection_max_terms} "
+        f"terms in the first call and the remaining terms in the second); never put "
+        "more than the per-call limit in one request. "
         "After a successful first inspection, the host may provide bounded "
         "follow-up literals discovered in returned excerpts or match paths; use "
         "only those host-authorized values and never invent new ones. Never "
@@ -1665,8 +1688,12 @@ def _analysis_error_report(
             "phase": "analysis",
             "summary": {
                 "purpose": "Evidence-bound PR context analysis",
-                "behavioral_change": "Model conclusions were discarded after repository validation failed",
+                "behavioral_change": "No validated model conclusions were published",
                 "confidence": "unavailable",
+            },
+            "metrics": {
+                **payload["metrics"],
+                "agent_invoked": report.agent.invoked,
             },
             "blast_radius": [],
             "test_areas": [],
@@ -1693,6 +1720,11 @@ def _with_agent_provenance(
         "invoked": True,
         "model_id": settings.model_id,
         "region": settings.region,
+    }
+    payload["metrics"] = {**payload["metrics"], "agent_invoked": True}
+    payload["summary"] = {
+        **payload["summary"],
+        "behavioral_change": "No validated model conclusions were published",
     }
     return PRAnalysisReportV1.model_validate(payload)
 

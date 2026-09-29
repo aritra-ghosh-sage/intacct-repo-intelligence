@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -303,6 +304,9 @@ class PRAnalysisReportTests(unittest.TestCase):
             )
             self.assertIn('"scope": "out_of_scope"', prompts[0])
             self.assertIn('"inspection_allowlist"', prompts[0])
+            self.assertIn('"inspection_terms_per_call": 8', prompts[0])
+            self.assertIn('"inspection_paths_per_call": 10', prompts[0])
+            self.assertIn("partition them across the available calls", prompts[0])
             self.assertIn('"app/source/example/Example.cls"', prompts[0])
             report_dir = Path(directory) / "reports"
             self.assertTrue((report_dir / "evidence/git-inventory.json").is_file())
@@ -423,6 +427,88 @@ class PRAnalysisReportTests(unittest.TestCase):
                 )
                 self.assertEqual(report.status, "ok")
                 self.assertEqual(no_inspection_tools, [])
+
+    def test_run_pr_analysis_inspects_ten_terms_in_two_calls(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            request = self.coordinator_request(directory)
+            repo_root = Path(request["repo_root"])
+            repo_root.mkdir(parents=True)
+            changed_path = "app/source/example/Example.cls"
+            source_path = repo_root / changed_path
+            source_path.parent.mkdir(parents=True)
+            terms = [f"coordinator_term_{index:02d}" for index in range(10)]
+            source_path.write_text("\n".join(terms) + "\n", encoding="utf-8")
+            subprocess.run(["git", "init", "-q"], cwd=repo_root, check=True)
+            subprocess.run(["git", "add", changed_path], cwd=repo_root, check=True)
+            subprocess.run(
+                [
+                    "git", "-c", "user.name=Test", "-c", "user.email=test@example.com",
+                    "commit", "-qm", "inspection fixture",
+                ],
+                cwd=repo_root,
+                check=True,
+            )
+            context = PrContextResult(
+                status="ok",
+                raw_xml="<pr-context/>\n",
+                identity=self.context_identity(),
+                changed_files=[PrChangedFile(
+                    path=changed_path,
+                    change="M",
+                    symbols=tuple(
+                        PrSymbolCandidate(changed_path, term, 1) for term in terms
+                    ),
+                )],
+            )
+            tool_results: list[dict[str, object]] = []
+
+            def factory(_settings: object, tools: list[object]) -> object:
+                self.assertEqual(len(tools), 2)
+                inspection_tool = tools[1]
+
+                def analyze(_prompt: str) -> dict[str, object]:
+                    tool_results.append(inspection_tool(terms[:8], paths=[changed_path]))  # type: ignore[operator]
+                    tool_results.append(inspection_tool(terms[8:], paths=[changed_path]))  # type: ignore[operator]
+                    return {
+                        "summary": {
+                            "purpose": "Inspect the changed example",
+                            "behavioral_change": "Ten authorized terms checked",
+                            "confidence": "candidate",
+                        },
+                        "blast_radius": [],
+                        "test_areas": [{
+                            "area": "Review changed example behavior",
+                            "paths": [changed_path],
+                            "reason": "Verify the changed source behavior.",
+                            "confidence": "candidate",
+                            "evidence_ids": ["pr-context-001"],
+                            "execution_status": "not_run",
+                        }],
+                    }
+
+                return analyze
+
+            report = run_pr_analysis(
+                request,
+                settings=BedrockSettings("test", "model"),
+                allow_source_inspection=True,
+                context_builder=lambda _: context,
+                agent_factory=factory,
+                revision_checker=lambda _: context.identity["head"],
+                dirty_checker=lambda _: False,
+            )
+
+            self.assertEqual(report.status, "ok")
+            self.assertEqual([result["status"] for result in tool_results], ["ok", "ok"])
+            self.assertEqual(
+                [result["evidence_id"] for result in tool_results],
+                ["inspection-001", "inspection-002"],
+            )
+            self.assertEqual(report.metrics["inspection_rejection_count"], 0)
+            self.assertEqual(
+                {item.evidence_id for item in report.evidence},
+                {"pr-context-001", "inspection-001", "inspection-002"},
+            )
 
     def test_run_pr_analysis_symbol_seeded_inspection_follows_public_flag(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -613,11 +699,49 @@ class PRAnalysisReportTests(unittest.TestCase):
             )
             self.assertEqual((report.status, report.phase), ("error", "analysis"))
             self.assertTrue(report.agent.invoked)
+            self.assertTrue(report.metrics["agent_invoked"])
+            self.assertEqual(
+                report.summary.behavioral_change,
+                "No validated model conclusions were published",
+            )
             self.assertEqual(report.agent.model_id, "model")
             self.assertIn("repository changed during analysis", " ".join(report.diagnostics))
             self.assertIn("repository_changed_during_analysis", {gap.kind for gap in report.gaps})
             self.assertEqual(report.summary.confidence, "unavailable")
             PRAnalysisReportV1.model_validate(report.model_dump(by_alias=True))
+
+    def test_run_pr_analysis_reports_consistent_provenance_after_agent_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            context = PrContextResult(
+                status="ok",
+                identity=self.context_identity(),
+                raw_xml="<pr-context/>",
+                changed_files=[PrChangedFile(
+                    path="app/source/example/Example.cls",
+                    change="M",
+                    symbols=(PrSymbolCandidate("app/source/example/Example.cls", "changed", 1),),
+                )],
+            )
+
+            def factory(*_args: object, **_kwargs: object) -> object:
+                return lambda _prompt: (_ for _ in ()).throw(RuntimeError("model failed"))
+
+            report = run_pr_analysis(
+                self.coordinator_request(directory),
+                settings=BedrockSettings("test", "model"),
+                context_builder=lambda _: context,
+                agent_factory=factory,
+                revision_checker=lambda _: context.identity["head"],
+                dirty_checker=lambda _: False,
+            )
+
+            self.assertEqual((report.status, report.phase), ("error", "analysis"))
+            self.assertTrue(report.agent.invoked)
+            self.assertTrue(report.metrics["agent_invoked"])
+            self.assertEqual(
+                report.summary.behavioral_change,
+                "No validated model conclusions were published",
+            )
 
     def test_run_pr_analysis_retains_tool_evidence_after_agent_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -383,6 +383,37 @@ class InspectionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "rejected inspection value"):
             session.validate_model_narrative(draft)
 
+    def test_model_narrative_allows_authorized_values_from_oversized_rejection(self) -> None:
+        session = self.session()
+        terms = [f"authorized_term_{index:02d}" for index in range(9)]
+        session.authorize_inspection_terms(terms)
+        session.record_inspection_rejection(terms, ["src/example.cls"])
+        draft = AgentAnalysisDraftV1.model_validate({
+            "summary": {
+                "purpose": f"Inspect {terms[0]}",
+                "behavioral_change": "bounded change",
+                "confidence": "candidate",
+            },
+            "blast_radius": [],
+            "test_areas": [],
+        })
+
+        session.validate_model_narrative(draft)
+
+        unauthorized_term = "UNAUTHORIZED_TERM_SENTINEL"
+        session.record_inspection_rejection([unauthorized_term], [])
+        unauthorized_draft = AgentAnalysisDraftV1.model_validate({
+            "summary": {
+                "purpose": f"Mentioned {unauthorized_term}",
+                "behavioral_change": "bounded change",
+                "confidence": "candidate",
+            },
+            "blast_radius": [],
+            "test_areas": [],
+        })
+        with self.assertRaisesRegex(ValueError, "rejected inspection value"):
+            session.validate_model_narrative(unauthorized_draft)
+
     def test_binary_match_is_disclosed_as_gap(self) -> None:
         handle, root = self.repo()
         try:
@@ -414,6 +445,42 @@ class InspectionTests(unittest.TestCase):
             self.assertEqual(len(payloads), 1)
             self.assertNotIn(b"class Example", payloads[0][1])
             self.assertNotIn(b"excerpt", payloads[0][1])
+        finally:
+            handle.cleanup()
+
+    def test_ten_authorized_terms_fit_two_bounded_inspection_calls(self) -> None:
+        handle, root = self.repo()
+        try:
+            terms = [f"inspection_term_{index:02d}" for index in range(10)]
+            readme = root / "README.md"
+            readme.write_text("\n".join(terms) + "\n", encoding="utf-8")
+            git(root, "add", "README.md")
+            git(root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "inspection terms")
+
+            session = self.session()
+            session.authorize_inspection_terms(terms)
+            payloads: list[tuple[str, bytes]] = []
+            tool = make_repository_inspection_tool(
+                session,
+                repo_root=root,
+                evidence_payloads=payloads,
+            )
+
+            first = tool(terms[:8])
+            second = tool(terms[8:])
+
+            self.assertEqual(first["status"], "ok")
+            self.assertEqual(second["status"], "ok")
+            self.assertEqual({match["term"] for match in first["matches"]}, set(terms[:8]))
+            self.assertEqual({match["term"] for match in second["matches"]}, set(terms[8:]))
+            evidence_ids = [first["evidence_id"], second["evidence_id"]]
+            self.assertTrue(all(evidence_ids))
+            self.assertEqual(len(set(evidence_ids)), 2)
+            self.assertEqual([evidence_id for evidence_id, _ in payloads], evidence_ids)
+            self.assertEqual(session.inspection_calls, 2)
+            self.assertEqual(session.inspection_rejection_metrics["inspection_rejection_count"], 0)
+            self.assertEqual(session.tool_gaps, ())
+            self.assertEqual(session.tool_diagnostics, ())
         finally:
             handle.cleanup()
 
