@@ -21,8 +21,9 @@ guidance are committed to a participating repository. Generated indexes,
 caches, and context bundles remain outside tracked source.
 
 This contract does not define an MCP server, editor integration, installable
-public CLI, LLM prompt, or GitHub write operation. It does define the local
-Python module interface used by developers and coding harnesses below.
+CLI package, LLM prompt, or GitHub write operation. It does define the local
+Python module interface and the repository's public `review` command wrapper
+used by developers and coding harnesses below.
 
 ## Repository declaration
 
@@ -196,6 +197,13 @@ an external `pr-analysis.json`, deterministic `pr-analysis.md`, and sanitized
 inspection evidence. Static relationships remain candidate lower-bound
 evidence and test areas remain `execution_status="not_run"`.
 
+The report also carries a host-owned `review_decision`: `needs_manual_review`
+for every `status="ok"` result, including partial assessments, and
+`not_available` for `status="unavailable"` or `status="error"`. This signal
+does not approve or reject a merge and does not replace human review or policy.
+The public `review` wrapper exposes the same decision only at the top level of
+its JSON envelope; its nested `result` and `report` shapes remain unchanged.
+
 ### Local module interface
 
 The package exposes three explicit module commands. Preparation and analysis
@@ -306,10 +314,30 @@ contains absolute `repo_root`, `base_ref`, `artifact_root`, and external
 `output_dir`; its report contains host-controlled status and phase, exact
 identity, changed-file seeds, candidate blast-radius/test rows, explicit gaps,
 evidence digests, and agent provenance. The model cannot choose paths, refs,
-cache preparation, or tools. Source inspection is disabled unless the host
-passes `allow_source_inspection=True`; inspection excerpts are in-memory only
-and are not written to the report bundle. Model-authored narrative is retained
-as candidate analysis, not as a source excerpt or authoritative source.
+evidence digests, agent provenance, and the host-owned review decision. The
+model cannot choose paths, refs, cache preparation, tools, or the decision.
+Source inspection is disabled unless the host passes
+`allow_source_inspection=True`; the prompt contains exact host-supplied term
+and repository-relative path allowlists. The model must copy values exactly,
+and a follow-up allowlist can contain only bounded literals and paths returned
+by the first inspection. Inspection excerpts are in-memory only and are not
+written to the report bundle. Rejected requests consume a call and expose only
+the generic `inspection request rejected` error; raw terms and paths are never
+persisted. Model-authored narrative is retained as candidate analysis, not as
+a source excerpt or authoritative source.
+
+Ripwire remains scoped to `app/source`. Git-authoritative changed-file and
+hunk evidence may include `/app/db` migration files, but those files remain
+outside the Ripwire map and carry a manual-review limitation. Exact bounded
+literal inspection is possible only for an explicitly authorized path; SQL
+parsing is not part of the contract.
+
+The caller-provided persisted test inventory is generated from the exact PR
+checkout and may be forwarded with `--test-inventory`. It contributes candidate
+cross-reference evidence only. Test areas retain
+`execution_status="not_run"`; inventory presence does not prove passing tests,
+and missing or unreadable inventory is disclosed as a
+`test_inventory_unavailable` gap.
 
 An absolute `root` attribute in retained Ripwire XML may reflect the worktree
 used when the external cache was prepared. Normalized paths are repository-

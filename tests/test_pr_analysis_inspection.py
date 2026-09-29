@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from ia_repomap_builder.config import PrChangedFile, PrContextResult, PrSymbolCandidate
-from ia_repomap_builder.pr_analysis import EvidenceSession, PreAgenticSeed
+from ia_repomap_builder.pr_analysis import (
+    AgentAnalysisDraftV1,
+    EvidenceSession,
+    PreAgenticSeed,
+)
 from ia_repomap_builder.pr_analysis_inspection import (
+    InspectionRequestRejected,
     inspect_repository,
     make_repository_inspection_tool,
 )
@@ -31,6 +39,15 @@ class InspectionTests(unittest.TestCase):
         git(root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "fixture")
         return handle, root
 
+    def session(self) -> EvidenceSession:
+        seed = PreAgenticSeed(
+            "ok",
+            "analysis",
+            context=PrContextResult("ok"),
+            allowed_symbols=(("src/example.cls", "changed"),),
+        )
+        return EvidenceSession(seed)
+
     def test_literal_search_is_tracked_and_deterministic(self) -> None:
         handle, root = self.repo()
         try:
@@ -51,9 +68,9 @@ class InspectionTests(unittest.TestCase):
     def test_terms_and_paths_must_be_authorized(self) -> None:
         handle, root = self.repo()
         try:
-            with self.assertRaises(ValueError):
+            with self.assertRaises(InspectionRequestRejected):
                 inspect_repository(root, ["unknown"], authorized_terms=[])
-            with self.assertRaises(ValueError):
+            with self.assertRaises(InspectionRequestRejected):
                 inspect_repository(
                     root,
                     ["changed"],
@@ -61,13 +78,82 @@ class InspectionTests(unittest.TestCase):
                     authorized_terms=["changed"],
                     authorized_paths=[],
                 )
-            with self.assertRaises(ValueError):
+            with self.assertRaises(InspectionRequestRejected):
                 inspect_repository(
                     root,
                     ["changed"],
                     paths=["../outside"],
                     authorized_terms=["changed"],
                     authorized_paths=["../outside"],
+                )
+        finally:
+            handle.cleanup()
+
+    def test_untracked_and_escaping_symlink_paths_are_rejected(self) -> None:
+        handle, root = self.repo()
+        outside = tempfile.NamedTemporaryFile(delete=False)
+        outside_path = Path(outside.name)
+        outside.write(b"changed\n")
+        outside.close()
+        try:
+            untracked = root / "src" / "untracked.cls"
+            untracked.write_text("changed\n", encoding="utf-8")
+            with self.assertRaises(InspectionRequestRejected):
+                inspect_repository(
+                    root,
+                    ["changed"],
+                    paths=["src/untracked.cls"],
+                    authorized_terms=["changed"],
+                    authorized_paths=["src/untracked.cls"],
+                )
+
+            escaping = root / "src" / "escaping.cls"
+            escaping.symlink_to(outside_path)
+            git(root, "add", "src/escaping.cls")
+            git(root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "symlink")
+            with self.assertRaises(InspectionRequestRejected):
+                inspect_repository(
+                    root,
+                    ["changed"],
+                    paths=["src/escaping.cls"],
+                    authorized_terms=["changed"],
+                    authorized_paths=["src/escaping.cls"],
+                )
+        finally:
+            outside_path.unlink(missing_ok=True)
+            handle.cleanup()
+
+    def test_exact_authorized_terms_and_paths_are_required(self) -> None:
+        handle, root = self.repo()
+        try:
+            result = inspect_repository(
+                root,
+                ["changed"],
+                paths=["src/example.cls"],
+                authorized_terms=["changed"],
+                authorized_paths=["src/example.cls"],
+            )
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(
+                {(match["path"], match["term"]) for match in result["matches"]},
+                {("src/example.cls", "changed")},
+            )
+
+            with self.assertRaisesRegex(ValueError, "not authorized"):
+                inspect_repository(
+                    root,
+                    ["Changed"],
+                    paths=["src/example.cls"],
+                    authorized_terms=["changed"],
+                    authorized_paths=["src/example.cls"],
+                )
+            with self.assertRaisesRegex(ValueError, "not authorized"):
+                inspect_repository(
+                    root,
+                    ["changed"],
+                    paths=["src/Example.cls"],
+                    authorized_terms=["changed"],
+                    authorized_paths=["src/example.cls"],
                 )
         finally:
             handle.cleanup()
@@ -164,6 +250,139 @@ class InspectionTests(unittest.TestCase):
         finally:
             handle.cleanup()
 
+    def test_rejected_request_is_generic_and_does_not_persist_raw_values(self) -> None:
+        handle, root = self.repo()
+        try:
+            raw_term = "UNAUTHORIZED_TERM_SENTINEL"
+            raw_path = "UNAUTHORIZED_PATH_SENTINEL.cls"
+            session = self.session()
+            payloads: list[tuple[str, bytes]] = []
+            tool = make_repository_inspection_tool(
+                session,
+                repo_root=root,
+                evidence_payloads=payloads,
+            )
+
+            result = tool([raw_term], paths=[raw_path])
+
+            self.assertEqual(result["status"], "error")
+            self.assertEqual(result["evidence_id"], None)
+            self.assertEqual(result["diagnostics"], ["inspection request rejected"])
+            self.assertEqual(
+                result["gaps"],
+                [{
+                    "kind": "inspection_unavailable",
+                    "detail": "Host rejected an inspection request; raw terms and paths were omitted",
+                }],
+            )
+            self.assertNotIn(raw_term, json.dumps(result, sort_keys=True))
+            self.assertNotIn(raw_path, json.dumps(result, sort_keys=True))
+            self.assertNotIn(raw_term, json.dumps(session.tool_gaps, sort_keys=True))
+            self.assertNotIn(raw_path, json.dumps(session.tool_gaps, sort_keys=True))
+            self.assertNotIn(raw_term, json.dumps(session.tool_diagnostics, sort_keys=True))
+            self.assertNotIn(raw_path, json.dumps(session.tool_diagnostics, sort_keys=True))
+            self.assertEqual(payloads, [])
+        finally:
+            handle.cleanup()
+
+    def test_rejection_metrics_include_counts_and_canonical_request_hash(self) -> None:
+        handle, root = self.repo()
+        try:
+            terms = ["UNAUTHORIZED_TERM_SENTINEL"]
+            paths = ["UNAUTHORIZED_PATH_SENTINEL.cls"]
+            session = self.session()
+            tool = make_repository_inspection_tool(session, repo_root=root)
+
+            result = tool(terms, paths=paths)
+
+            expected_request = json.dumps(
+                {"paths": sorted(paths), "terms": sorted(terms)},
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            expected_hash = hashlib.sha256(expected_request).hexdigest()[:16]
+            metrics = result["metrics"]
+            self.assertEqual(metrics["inspection_calls"], 1)
+            self.assertEqual(metrics["inspection_rejection_count"], 1)
+            self.assertEqual(metrics["inspection_requested_term_count"], 1)
+            self.assertEqual(metrics["inspection_requested_path_count"], 1)
+            self.assertEqual(metrics["inspection_last_request_hash"], expected_hash)
+            self.assertRegex(metrics["inspection_last_request_hash"], r"^[0-9a-f]{16}$")
+        finally:
+            handle.cleanup()
+
+    def test_rejected_calls_consume_the_two_call_inspection_budget(self) -> None:
+        handle, root = self.repo()
+        try:
+            session = self.session()
+            tool = make_repository_inspection_tool(session, repo_root=root)
+
+            first = tool(["UNAUTHORIZED_TERM_ONE"])
+            second = tool(["UNAUTHORIZED_TERM_TWO"])
+            third = tool(["UNAUTHORIZED_TERM_THREE"])
+
+            self.assertEqual(first["status"], "error")
+            self.assertEqual(second["status"], "error")
+            self.assertEqual(third["status"], "error")
+            self.assertEqual(session.inspection_calls, 2)
+            self.assertEqual(first["metrics"]["inspection_calls"], 1)
+            self.assertEqual(second["metrics"]["inspection_calls"], 2)
+            self.assertEqual(third["metrics"]["inspection_calls"], 2)
+            self.assertEqual(third["diagnostics"], ["inspection request rejected"])
+        finally:
+            handle.cleanup()
+
+    def test_operational_failure_is_unavailable_not_rejection(self) -> None:
+        handle, root = self.repo()
+        try:
+            session = self.session()
+            tool = make_repository_inspection_tool(session, repo_root=root)
+            with patch(
+                "ia_repomap_builder.pr_analysis_inspection._matching_paths",
+                side_effect=RuntimeError("simulated inspection failure"),
+            ):
+                result = tool(["changed"])
+
+            self.assertEqual(result["status"], "error")
+            self.assertEqual(result["diagnostics"], ["inspection unavailable"])
+            self.assertEqual(result["gaps"], [{
+                "kind": "inspection_unavailable",
+                "detail": "inspection unavailable",
+            }])
+            self.assertEqual(result["metrics"]["inspection_rejection_count"], 0)
+            self.assertNotIn("inspection_last_request_hash", result["metrics"])
+
+            with patch(
+                "ia_repomap_builder.pr_analysis_inspection._matching_paths",
+                side_effect=TimeoutError("simulated timeout"),
+            ):
+                timed_out = tool(["changed"])
+            self.assertEqual(timed_out["diagnostics"], ["inspection timed out"])
+            self.assertEqual(timed_out["gaps"], [{
+                "kind": "inspection_unavailable",
+                "detail": "inspection timed out",
+            }])
+            self.assertEqual(timed_out["metrics"]["inspection_rejection_count"], 0)
+        finally:
+            handle.cleanup()
+
+    def test_model_narrative_cannot_repeat_rejected_value(self) -> None:
+        session = self.session()
+        raw_term = "UNAUTHORIZED_TERM_SENTINEL"
+        session.record_inspection_rejection([raw_term], [])
+        draft = AgentAnalysisDraftV1.model_validate({
+            "summary": {
+                "purpose": f"Mentioned {raw_term}",
+                "behavioral_change": "bounded change",
+                "confidence": "candidate",
+            },
+            "blast_radius": [],
+            "test_areas": [],
+        })
+
+        with self.assertRaisesRegex(ValueError, "rejected inspection value"):
+            session.validate_model_narrative(draft)
+
     def test_binary_match_is_disclosed_as_gap(self) -> None:
         handle, root = self.repo()
         try:
@@ -228,9 +447,22 @@ class InspectionTests(unittest.TestCase):
             tool = make_repository_inspection_tool(session, repo_root=root)
             first = tool(["changed"])
             self.assertEqual(first["status"], "ok")
-            second = tool(["Example"])
+            self.assertIn("documented", session.authorized_inspection_terms)
+            self.assertIn("README.md", session.authorized_inspection_paths)
+            second = tool(["documented"], paths=["README.md"])
             self.assertEqual(second["status"], "ok")
-            self.assertTrue(second["matches"])
+            self.assertEqual(
+                [(match["path"], match["term"]) for match in second["matches"]],
+                [("README.md", "documented")],
+            )
+        finally:
+            handle.cleanup()
+
+    def test_inspection_is_opt_in_through_an_explicit_allowlist(self) -> None:
+        handle, root = self.repo()
+        try:
+            with self.assertRaisesRegex(ValueError, "not authorized"):
+                inspect_repository(root, ["changed"])
         finally:
             handle.cleanup()
 

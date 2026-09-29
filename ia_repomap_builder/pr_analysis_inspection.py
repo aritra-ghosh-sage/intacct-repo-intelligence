@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-
 MAX_CALLS = 2
 MAX_TERMS = 8
 MAX_MATCHES_PER_TERM = 20
@@ -19,6 +18,10 @@ MAX_FILE_BYTES = 1024 * 1024
 TIMEOUT_SECONDS = 30
 MAX_DISCOVERED_LITERAL_LENGTH = 256
 _DISCOVERED_LITERAL = re.compile(r"[A-Za-z0-9_.$:/-]{1,256}")
+
+
+class InspectionRequestRejected(ValueError):
+    """Raised when a model inspection request violates host authorization."""
 
 
 @dataclass(frozen=True)
@@ -33,11 +36,11 @@ class InspectionMatch:
 def _relative_path(root: Path, value: str) -> Path:
     path = Path(value)
     if not value or path.is_absolute() or ".." in path.parts:
-        raise ValueError("inspection paths must be repository-relative")
+        raise InspectionRequestRejected("inspection paths must be repository-relative")
     resolved = (root / path).resolve(strict=True)
     root_resolved = root.resolve(strict=True)
     if resolved != root_resolved and root_resolved not in resolved.parents:
-        raise ValueError("inspection path escapes repository root")
+        raise InspectionRequestRejected("inspection path escapes repository root")
     return path
 
 
@@ -51,12 +54,16 @@ def _tracked_paths(root: Path, requested: Iterable[str] | None) -> set[str]:
         completed = subprocess.run(
             args, check=True, capture_output=True, timeout=TIMEOUT_SECONDS
         )
+    except subprocess.TimeoutExpired as exc:
+        raise TimeoutError("inspection timed out") from exc
     except (OSError, subprocess.SubprocessError) as exc:
         raise ValueError(f"tracked-file inspection failed: {exc}") from exc
     tracked = {item.decode("utf-8") for item in completed.stdout.split(b"\0") if item}
     if requested_paths and tracked != set(requested_paths):
         missing = sorted(set(requested_paths) - tracked)
-        raise ValueError(f"inspection paths are not tracked: {', '.join(missing)}")
+        raise InspectionRequestRejected(
+            f"inspection paths are not tracked: {', '.join(missing)}"
+        )
     return tracked
 
 
@@ -79,6 +86,8 @@ def _matching_paths(root: Path, terms: list[str], requested: Iterable[str] | Non
         completed = subprocess.run(
             args, check=False, capture_output=True, timeout=TIMEOUT_SECONDS
         )
+    except subprocess.TimeoutExpired as exc:
+        raise TimeoutError("inspection timed out") from exc
     except (OSError, subprocess.SubprocessError) as exc:
         raise ValueError(f"tracked-file inspection failed: {exc}") from exc
     if completed.returncode not in (0, 1):
@@ -91,8 +100,7 @@ def _matching_paths(root: Path, terms: list[str], requested: Iterable[str] | Non
         value = item.decode("utf-8")
         # ``git grep`` prefixes paths with the searched tree-ish when an
         # explicit revision is supplied (``HEAD:path``).
-        if value.startswith("HEAD:"):
-            value = value[5:]
+        value = value.removeprefix("HEAD:")
         paths.add(value)
     return paths
 
@@ -114,21 +122,27 @@ def inspect_repository(
     root = root.resolve(strict=True)
     term_list = list(terms)
     if not 1 <= len(term_list) <= MAX_TERMS or any(not isinstance(t, str) or not t for t in term_list):
-        raise ValueError(f"inspection requires one to {MAX_TERMS} non-empty literal terms")
+        raise InspectionRequestRejected(
+            f"inspection requires one to {MAX_TERMS} non-empty literal terms"
+        )
     if len(set(term_list)) != len(term_list):
-        raise ValueError("inspection terms must be unique")
+        raise InspectionRequestRejected("inspection terms must be unique")
     allowed = set(authorized_terms)
     unauthorized = sorted(set(term_list) - allowed)
     if unauthorized:
-        raise ValueError(f"inspection terms are not authorized: {', '.join(unauthorized)}")
+        raise InspectionRequestRejected(
+            f"inspection terms are not authorized: {', '.join(unauthorized)}"
+        )
     requested_paths = list(paths) if paths is not None else None
     if requested_paths is not None and len(requested_paths) > MAX_FILES:
-        raise ValueError(f"inspection accepts at most {MAX_FILES} paths")
+        raise InspectionRequestRejected(f"inspection accepts at most {MAX_FILES} paths")
     allowed_path_set = set(authorized_paths)
     if requested_paths is not None:
         unauthorized_paths = sorted(set(requested_paths) - allowed_path_set)
         if unauthorized_paths:
-            raise ValueError(f"inspection paths are not authorized: {', '.join(unauthorized_paths)}")
+            raise InspectionRequestRejected(
+                f"inspection paths are not authorized: {', '.join(unauthorized_paths)}"
+            )
     tracked = _matching_paths(root, term_list, requested_paths)
     ordered = sorted(tracked)
     selected = ordered[:MAX_FILES]
@@ -149,7 +163,7 @@ def inspect_repository(
         try:
             resolved = absolute.resolve(strict=True)
             if absolute.is_symlink() and (resolved != root and root not in resolved.parents):
-                raise ValueError("symlink escapes repository root")
+                raise InspectionRequestRejected("symlink escapes repository root")
             if absolute.stat().st_size > MAX_FILE_BYTES:
                 gaps.append({"kind": "inspection_file_skipped", "detail": f"file exceeds {MAX_FILE_BYTES} bytes", "path": relative})
                 continue
@@ -234,6 +248,22 @@ def make_repository_inspection_tool(
     def inspect_repository_evidence(terms: list[str], paths: list[str] | None = None) -> dict[str, Any]:
         try:
             session.consume_inspection_call()
+        except Exception:
+            # A call beyond the host-enforced budget cannot consume another
+            # slot and must not expose request data in model diagnostics.
+            session.record_inspection_rejection(terms, paths)
+            return {
+                "status": "error",
+                "matches": [],
+                "gaps": [{"kind": "inspection_unavailable", "detail": "inspection request rejected"}],
+                "diagnostics": ["inspection request rejected"],
+                "metrics": {
+                    "inspection_calls": session.inspection_calls,
+                    **session.inspection_rejection_metrics,
+                },
+                "evidence_id": None,
+            }
+        try:
             result = inspect_repository(
                 repo_root,
                 terms,
@@ -241,14 +271,46 @@ def make_repository_inspection_tool(
                 authorized_terms=session.authorized_inspection_terms,
                 authorized_paths=session.authorized_inspection_paths,
             )
-        except Exception as exc:
-            session.record_tool_failure("inspection_unavailable", str(exc))
+        except InspectionRequestRejected:
+            session.record_inspection_rejection(terms, paths)
             return {
                 "status": "error",
                 "matches": [],
-                "gaps": [{"kind": "inspection_unavailable", "detail": str(exc)}],
-                "diagnostics": [str(exc)],
-                "metrics": {"inspection_calls": session.inspection_calls},
+                "gaps": [{
+                    "kind": "inspection_unavailable",
+                    "detail": "Host rejected an inspection request; raw terms and paths were omitted",
+                }],
+                "diagnostics": ["inspection request rejected"],
+                "metrics": {
+                    "inspection_calls": session.inspection_calls,
+                    **session.inspection_rejection_metrics,
+                },
+                "evidence_id": None,
+            }
+        except TimeoutError:
+            session.record_tool_failure("inspection_unavailable", "inspection timed out")
+            return {
+                "status": "error",
+                "matches": [],
+                "gaps": [{"kind": "inspection_unavailable", "detail": "inspection timed out"}],
+                "diagnostics": ["inspection timed out"],
+                "metrics": {
+                    "inspection_calls": session.inspection_calls,
+                    **session.inspection_rejection_metrics,
+                },
+                "evidence_id": None,
+            }
+        except Exception:
+            session.record_tool_failure("inspection_unavailable", "inspection unavailable")
+            return {
+                "status": "error",
+                "matches": [],
+                "gaps": [{"kind": "inspection_unavailable", "detail": "inspection unavailable"}],
+                "diagnostics": ["inspection unavailable"],
+                "metrics": {
+                    "inspection_calls": session.inspection_calls,
+                    **session.inspection_rejection_metrics,
+                },
                 "evidence_id": None,
             }
         session.record_tool_result(result)

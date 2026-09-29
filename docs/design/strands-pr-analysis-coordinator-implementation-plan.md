@@ -73,12 +73,17 @@ graph, cache, agent framework, retry system, or policy engine.
 - Count rejected tool calls against the relevant limit.
 - Keep the combined ceiling at seven model-callable tool requests.
 - Record candidate test areas with `execution_status="not_run"`.
+- Derive host-owned `review_decision`: `needs_manual_review` for every `ok`
+  report, including partial assessments, and `not_available` for
+  `unavailable` or `error` outcomes.
 - Recheck the exact `HEAD` and clean-tree state after agent execution.
 - Require explicit host opt-in before source excerpts may reach Bedrock.
 - Use fake agents and evidence providers in the default tests.
 - Keep live Bedrock validation optional and environment-gated.
-- Do not add a CLI, MCP, editor, GitHub, publication, test-execution, or
-  multi-agent integration.
+- Do not add an MCP, editor, GitHub, publication, test-execution, or
+  multi-agent integration. The existing public `review` CLI wrapper may expose
+  the host-owned decision described below; it does not issue merge approval or
+  rejection.
 
 ## Ripwire skill boundary
 
@@ -137,6 +142,13 @@ def run_pr_analysis(
 ) -> PRAnalysisReportV1:
     ...
 ```
+
+The Python coordinator returns the complete `PRAnalysisReportV1`. The public
+`review` CLI is a separate exact-PR setup and orchestration wrapper. Its JSON
+envelope adds exactly one top-level `review_decision`; nested `result` and
+`report` shapes remain unchanged. Setup or settings failure before a report
+bundle exists returns CLI-only `not_available` and does not create a synthetic
+report.
 
 The injectable callables are test seams, not another public abstraction.
 The coordinator constructs PR context with the existing defaults:
@@ -283,7 +295,7 @@ Keep orchestration in `ia_repomap_builder/pr_analysis.py`:
    references, and fixed limits.
 3. Do not serialize `PrContextResult.as_dict()` into the prompt because it
    includes raw XML.
-4. Construct one Bedrock model with temperature `0`, a 4,096-token response
+4. Construct one Bedrock model with temperature `0`, an 8,192-token response
    limit, the configured region and model, and the configured AWS profile when
    present.
 5. Use Strands' sequential tool executor.
@@ -294,7 +306,9 @@ Keep orchestration in `ia_repomap_builder/pr_analysis.py`:
 
 The fixed prompt requires candidate-only conclusions, exact evidence IDs,
 explicit gaps, lower-bound wording, and `execution_status="not_run"`. It must
-not ask for hidden reasoning, severity, a merge verdict, or exhaustive impact.
+not ask for hidden reasoning, severity, merge approval/rejection, or exhaustive
+impact. The host derives the review decision from the final report status; the
+model draft does not contain that field.
 
 After agent execution, re-read `HEAD` and working-tree state. Require the
 original exact head and a clean tree. On mismatch, add
@@ -313,6 +327,8 @@ context.
 - Limits and sequencing do not depend on prompt compliance.
 - Invalid model evidence cannot become a partial success.
 - A changed head or dirty checkout cannot produce `status="ok"`.
+- Every `ok` report maps to `needs_manual_review`; every `unavailable` or
+  `error` report maps to `not_available`.
 
 ## Slice 4: atomic external output
 
@@ -408,8 +424,26 @@ Record the implemented request, early returns, fixed limits, skill boundary,
 inspection opt-in, post-run guard, external output, and remaining deferred
 work. The current implementation also supports an optional persisted
 `TestInventory` cross-reference after analysis; this is deterministic host
-logic and does not execute tests. Export `PRAnalysisRequestV1`, `PRAnalysisReportV1`, and
-`run_pr_analysis` from `ia_repomap_builder/__init__.py`.
+logic and does not execute tests. The inventory must come from the exact PR
+checkout; `--test-inventory` forwards its normalized path, inventory findings
+remain candidate evidence, every test area remains `not_run`, and missing or
+unreadable inventory is disclosed as `test_inventory_unavailable`. Export
+`PRAnalysisRequestV1`, `PRAnalysisReportV1`, and `run_pr_analysis` from
+`ia_repomap_builder/__init__.py`.
+
+Inspection remains opt-in. The prompt carries exact host-supplied term and
+path allowlists. The model must copy values exactly and may not invent search
+terms or paths. A bounded follow-up allowlist may contain only literals and
+paths returned by the first inspection. Rejected requests consume a slot,
+return the generic model-facing error `inspection request rejected`, and omit
+raw values from persisted diagnostics. Record only rejection count, requested
+term/path counts, and a 16-character SHA-256 prefix of canonical compact JSON
+with sorted terms and paths.
+
+Ripwire remains scoped to `app/source`. `/app/db` migration files remain
+Git-authoritative out-of-scope evidence with manual-review limitations. Exact
+bounded literal inspection is allowed only for an explicitly authorized path;
+SQL parsing is out of scope.
 
 ## Files touched
 
@@ -422,6 +456,10 @@ schemas/ia-repomap.pr-analysis-v1.schema.json
 tests/test_pr_analysis.py
 tests/test_pr_analysis_inspection.py
 tests/test_pr_analysis_output.py
+ia_repomap_builder/review.py
+ia_repomap_builder/cli.py
+tests/test_review.py
+tests/test_cli.py
 ia_repomap_builder/README.md
 docs/design/strands-pr-analysis-coordinator.md
 docs/design/ia-repomap-context-contract.md
@@ -429,7 +467,10 @@ docs/design/llm-agent-pr-blast-radius-research.md
 ```
 
 Do not modify the Ripwire checkout, target `ia-app`, repository-map caches, or
-the public module CLI.
+generated artifacts. The existing public `review` CLI may be updated only
+within the separate review-wrapper slice to carry the top-level decision and
+keep stdout JSON-only; this documentation slice does not authorize code
+changes.
 
 The plan file itself is an intended tracked documentation change:
 
@@ -473,8 +514,14 @@ and source-inspection opt-in.
 - Final `HEAD` and clean state match the pre-agent identity.
 - Output publication is atomic, external, and non-overwriting.
 - JSON and Markdown are deterministic host-generated artifacts.
+- Every `ok` report carries `review_decision="needs_manual_review"`; every
+  `unavailable` or `error` outcome carries `review_decision="not_available"`.
+- The public review CLI emits exactly one JSON document on stdout, routes
+  progress to stderr, and adds the decision only at the top level.
 - When supplied, persisted test-inventory cross-reference is host-generated,
   evidence-bound, and distinct from executed coverage.
+- Unauthorized inspection values do not appear in model diagnostics or
+  persisted artifacts; migration files remain outside Ripwire scope.
 - All existing and new lightweight tests pass.
 - No deferred integration or target-repository change enters the slice.
 

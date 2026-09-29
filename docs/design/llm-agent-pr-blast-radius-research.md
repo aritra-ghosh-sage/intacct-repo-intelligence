@@ -172,7 +172,10 @@ agent, enforces bounded symbol-impact and optional source-inspection tools,
 checks the exact clean `HEAD` after analysis, and writes an atomic external
 JSON/Markdown bundle with raw XML evidence. This is a local, fake-tested
 coordinator surface; it is not a hosted agent loop or a claim of live Bedrock
-availability.
+availability. The host-owned outcome distinguishes `needs_manual_review` for
+every successful report, including partial assessments, from `not_available`
+for unavailable or error outcomes. This is not a merge recommendation,
+approval, or rejection.
 
 The research MVP is therefore at these boundaries:
 
@@ -182,7 +185,7 @@ The research MVP is therefore at these boundaries:
 | Direct callers | Partial | `direct-callers-v1` normalizes callers for hunk-selected symbols with explicit cap and location gaps. |
 | Symbol-scoped transitive impact | Partial | `symbol-impact-v1` expands one selected symbol on demand; counts and rows remain static-analysis floors with explicit graph gaps. |
 | Affected tests | Partial | Ripwire PR-context test paths are normalized into deterministic candidate `test_areas` with `execution_status="not_run"`; this is not executed coverage. |
-| Bounded coordinator agent loop | Partial | A local Strands coordinator consumes the seed, may request bounded impact and opt-in inspection, and emits a schema-validated report; no hosted or GitHub loop exists. |
+| Bounded coordinator agent loop | Partial | A local Strands coordinator consumes the seed, may request bounded impact and opt-in inspection, and emits a schema-validated report with a host-owned manual-review/availability signal; no hosted or GitHub loop exists. |
 | Test-index cross-reference | Partial | When the caller supplies a persisted `TestInventory`, the host performs a deterministic path/module/API-object cross-reference and records covered, partial, or gap findings; executed test coverage remains unavailable. |
 | Evidence-bound blast-radius/test-suggestion JSON | Partial | The coordinator writes an external `PRAnalysisReportV1` bundle with normalized affected-test areas and optional test-inventory coverage findings; complete dynamic blast radius and executed coverage remain deferred. |
 | Aider/Ripwire/lexical bakeoff | Not run | The acceptance dataset and comparative measurements remain outstanding. |
@@ -224,6 +227,23 @@ navigation evidence. Agents must verify consequential conclusions against
 source, tests, build configuration, and CI. The bakeoff acceptance criteria in
 that contract are measured on Intacct examples; Ripwire's published comparison
 does not substitute for that evaluation.
+
+Inspection remains host-opt-in and exact-value constrained. The prompt carries
+host-supplied literal term and repository-relative path allowlists; the model
+must copy them exactly and may not invent search concepts. A bounded second
+inspection can use only literals and paths returned by the first. Rejected
+requests consume the inspection budget and expose only a generic error; raw
+terms and paths are omitted from persisted diagnostics. The host may retain
+only rejection counts, requested term/path counts, and a 16-character SHA-256
+prefix of canonical compact JSON with sorted terms and paths.
+
+Ripwire covers `app/source` only. `/app/db` migration files remain
+Git-authoritative out-of-scope evidence with an explicit manual-review
+limitation. Exact bounded inspection of an authorized migration path is
+permitted when opted in, but SQL parsing, test execution, and CI collection
+remain outside this research slice. A caller-provided persisted test inventory
+is exact-checkout candidate evidence; `--test-inventory` forwarding does not
+execute tests, and all test areas remain `execution_status="not_run"`.
 
 The implemented repository-map, local coordinator, and optional test-inventory
 cross-reference slices, and their validation history, are recorded in the contract's

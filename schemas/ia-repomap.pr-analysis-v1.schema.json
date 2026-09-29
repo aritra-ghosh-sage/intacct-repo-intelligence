@@ -5,13 +5,14 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "schema", "status", "assessment", "phase", "request", "identity", "summary",
+    "schema", "status", "review_decision", "assessment", "phase", "request", "identity", "summary",
     "changed_files", "impacted_files", "blast_radius", "test_areas", "gaps", "evidence",
     "diagnostics", "remediation", "metrics", "agent"
   ],
   "properties": {
     "schema": { "const": "ia-repomap.pr-analysis/v1" },
     "status": { "enum": ["ok", "unavailable", "error"] },
+    "review_decision": { "enum": ["needs_manual_review", "not_available"] },
     "assessment": { "enum": ["complete", "partial", "unavailable", "error"] },
     "phase": {
       "enum": ["request_validation", "readiness", "pr_context", "analysis", "persistence"]
@@ -32,6 +33,24 @@
     "agent": { "$ref": "#/$defs/Agent" }
   },
   "allOf": [
+    {
+      "if": {
+        "properties": { "status": { "const": "ok" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": { "review_decision": { "const": "needs_manual_review" } }
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "enum": ["unavailable", "error"] } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": { "review_decision": { "const": "not_available" } }
+      }
+    },
     {
       "if": {
         "properties": { "status": { "const": "ok" } },

@@ -30,6 +30,7 @@ class PRAnalysisOutputTests(unittest.TestCase):
         return PRAnalysisReportV1.model_validate({
             "schema": "ia-repomap.pr-analysis/v1",
             "status": "ok",
+            "review_decision": "needs_manual_review",
             "assessment": assessment,
             "phase": "analysis",
             "request": {"repository": "intacct/ia-app", "base": "a" * 40, "analysis_schema": "ia-repomap.pr-analysis/v1"},
@@ -55,8 +56,10 @@ class PRAnalysisOutputTests(unittest.TestCase):
             write_pr_analysis_bundle(output, report, self.payload(report), repo_root=Path(root) / "repo")
             parsed = json.loads((output / "pr-analysis.json").read_text())
             self.assertEqual(parsed["schema"], "ia-repomap.pr-analysis/v1")
+            self.assertEqual(parsed["review_decision"], "needs_manual_review")
             self.assertEqual((output / "evidence/pr-context.xml").read_bytes(), b"<pr-context/>\n")
             self.assertIn("# PR analysis", (output / "pr-analysis.md").read_text())
+            self.assertIn("review decision: `needs_manual_review`", (output / "pr-analysis.md").read_text())
             first = (output / "pr-analysis.json").read_bytes()
             with self.assertRaises(FileExistsError):
                 write_pr_analysis_bundle(output, report, self.payload(report), repo_root=Path(root) / "repo")
@@ -261,6 +264,7 @@ class PRAnalysisOutputTests(unittest.TestCase):
             report = PRAnalysisReportV1.model_validate({
                 "schema": "ia-repomap.pr-analysis/v1",
                 "status": "ok",
+                "review_decision": "needs_manual_review",
                 "assessment": "complete",
                 "phase": "analysis",
                 "request": {"repository": "intacct/ia-app", "base": "a" * 40, "analysis_schema": "ia-repomap.pr-analysis/v1"},

@@ -301,6 +301,8 @@ class PRAnalysisReportTests(unittest.TestCase):
                 ["in_scope", "out_of_scope"],
             )
             self.assertIn('"scope": "out_of_scope"', prompts[0])
+            self.assertIn('"inspection_allowlist"', prompts[0])
+            self.assertIn('"app/source/example/Example.cls"', prompts[0])
             report_dir = Path(directory) / "reports"
             self.assertTrue((report_dir / "evidence/git-inventory.json").is_file())
             self.assertFalse((report_dir / "evidence/git-inventory-001.xml").exists())
@@ -620,6 +622,7 @@ class PRAnalysisReportTests(unittest.TestCase):
         return {
             "schema": "ia-repomap.pr-analysis/v1",
             "status": "ok",
+            "review_decision": "needs_manual_review",
             "assessment": "complete",
             "phase": "analysis",
             "request": {
@@ -662,7 +665,28 @@ class PRAnalysisReportTests(unittest.TestCase):
     def test_valid_report_parses_and_serializes_external_schema_name(self) -> None:
         report = PRAnalysisReportV1.model_validate(self.valid_payload())
         self.assertEqual(report.schema_, "ia-repomap.pr-analysis/v1")
+        self.assertEqual(report.review_decision, "needs_manual_review")
         self.assertIn('"schema":"ia-repomap.pr-analysis/v1"', report.model_dump_json(by_alias=True))
+
+    def test_review_decision_is_host_mapped_from_status(self) -> None:
+        payload = self.valid_payload()
+        payload["review_decision"] = "not_available"
+        self.assertEqual(
+            PRAnalysisReportV1.model_validate(payload).review_decision,
+            "needs_manual_review",
+        )
+
+        unavailable = self.valid_payload()
+        unavailable.update({"status": "unavailable", "assessment": "unavailable"})
+        self.assertEqual(
+            PRAnalysisReportV1.model_validate(unavailable).review_decision,
+            "not_available",
+        )
+
+        invalid = self.valid_payload()
+        invalid["review_decision"] = "approve"
+        with self.assertRaises(ValidationError):
+            PRAnalysisReportV1.model_validate(invalid)
 
     def test_unknown_fields_are_rejected(self) -> None:
         payload = self.valid_payload()
@@ -769,6 +793,9 @@ class PRAnalysisReportTests(unittest.TestCase):
             payload = self.valid_payload()
             payload["status"] = status
             payload["assessment"] = assessment
+            payload["review_decision"] = (
+                "needs_manual_review" if status == "ok" else "not_available"
+            )
             jsonschema.validate(payload, schema)
 
         partial_payload = self.valid_payload()
@@ -789,6 +816,9 @@ class PRAnalysisReportTests(unittest.TestCase):
                 payload["status"] = status
                 payload["assessment"] = assessment
                 payload["gaps"] = gaps
+                payload["review_decision"] = (
+                    "needs_manual_review" if status == "ok" else "not_available"
+                )
                 with self.assertRaises(jsonschema.ValidationError):
                     jsonschema.validate(payload, schema)
 
@@ -976,7 +1006,7 @@ class PRAnalysisReportTests(unittest.TestCase):
     def test_bedrock_agent_uses_deterministic_generation_limits(self) -> None:
         agent = build_bedrock_agent(BedrockSettings(region="us-east-1", model_id="test-model"))
         self.assertEqual(agent.model.config["temperature"], 0)
-        self.assertEqual(agent.model.config["max_tokens"], 2048)
+        self.assertEqual(agent.model.config["max_tokens"], 8192)
         self.assertEqual(type(agent.tool_executor).__name__, "SequentialToolExecutor")
 
     @unittest.skipUnless(

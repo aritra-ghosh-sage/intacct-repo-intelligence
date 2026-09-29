@@ -34,6 +34,7 @@ from .pr_test_coverage import TestInventoryCoverage
 Confidence = Literal["candidate", "unresolved", "unavailable"]
 Status = Literal["ok", "unavailable", "error"]
 Assessment = Literal["complete", "partial", "unavailable", "error"]
+ReviewDecision = Literal["needs_manual_review", "not_available"]
 Phase = Literal["request_validation", "readiness", "pr_context", "analysis", "persistence"]
 Relationship = Literal["direct_caller", "transitive_reacher", "source_reference"]
 Change = Literal["A", "M", "D", "R", "C"]
@@ -210,6 +211,12 @@ def _assessment_for(status: str, gaps: list[Mapping[str, Any]] | list[Gap]) -> A
     return "partial" if assessment_gap_kinds(gaps) else "complete"
 
 
+def _review_decision_for(status: str) -> ReviewDecision:
+    """Map a host-owned report status to its non-approval review outcome."""
+
+    return "needs_manual_review" if status == "ok" else "not_available"
+
+
 class Evidence(StrictModel):
     evidence_id: str = Field(min_length=1)
     kind: Literal[
@@ -241,6 +248,7 @@ class PRAnalysisReportV1(StrictModel):
 
     schema_: Literal["ia-repomap.pr-analysis/v1"] = Field(alias="schema")
     status: Status
+    review_decision: ReviewDecision
     assessment: Assessment
     phase: Phase
     request: Request
@@ -260,6 +268,9 @@ class PRAnalysisReportV1(StrictModel):
 
     @model_validator(mode="after")
     def validate_outcome_provenance(self) -> PRAnalysisReportV1:
+        # The model draft never supplies this value.  Re-derive it on every
+        # validation so all host transformations retain the same decision.
+        object.__setattr__(self, "review_decision", _review_decision_for(self.status))
         expected_assessment = _assessment_for(self.status, self.gaps)
         if self.assessment != expected_assessment:
             raise ValueError(
@@ -422,6 +433,11 @@ class EvidenceSession:
         self._records: dict[str, EvidenceRecord] = {}
         self._impact_calls = 0
         self._inspection_calls = 0
+        self._inspection_rejection_count = 0
+        self._inspection_requested_term_count = 0
+        self._inspection_requested_path_count = 0
+        self._inspection_last_request_hash: str | None = None
+        self._rejected_inspection_values: set[str] = set()
         self._tool_gaps: list[dict[str, Any]] = []
         self._tool_diagnostics: list[str] = []
         self._inspection_paths = frozenset(self._allowed_paths)
@@ -489,6 +505,58 @@ class EvidenceSession:
     def record_tool_diagnostic(self, diagnostic: str) -> None:
         if diagnostic:
             self._tool_diagnostics.append(diagnostic)
+
+    def record_inspection_rejection(
+        self,
+        terms: Any,
+        paths: Any,
+    ) -> None:
+        """Record sanitized inspection rejection telemetry without raw input."""
+
+        term_list = list(terms) if isinstance(terms, (list, tuple)) else []
+        path_list = list(paths) if isinstance(paths, (list, tuple)) else []
+        canonical = json.dumps(
+            {
+                "paths": sorted(path_list, key=lambda value: str(value)),
+                "terms": sorted(term_list, key=lambda value: str(value)),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+        self._inspection_rejection_count += 1
+        self._inspection_requested_term_count += len(term_list)
+        self._inspection_requested_path_count += len(path_list)
+        self._rejected_inspection_values.update(
+            value for value in [*term_list, *path_list]
+            if isinstance(value, str) and value
+        )
+        self._inspection_last_request_hash = sha256(canonical).hexdigest()[:16]
+        self._record_gap({
+            "kind": "inspection_unavailable",
+            "detail": "Host rejected an inspection request; raw terms and paths were omitted",
+        })
+        self._tool_diagnostics.append("inspection request rejected")
+
+    @property
+    def inspection_rejection_metrics(self) -> dict[str, Any]:
+        metrics: dict[str, Any] = {
+            "inspection_rejection_count": self._inspection_rejection_count,
+            "inspection_requested_term_count": self._inspection_requested_term_count,
+            "inspection_requested_path_count": self._inspection_requested_path_count,
+        }
+        if self._inspection_last_request_hash is not None:
+            metrics["inspection_last_request_hash"] = self._inspection_last_request_hash
+        return metrics
+
+    def validate_model_narrative(self, draft: AgentAnalysisDraftV1) -> None:
+        """Fail closed if model text repeats a rejected inspection value."""
+
+        if not self._rejected_inspection_values:
+            return
+        narrative = json.dumps(draft.model_dump(mode="python"), sort_keys=True, default=str)
+        if any(value in narrative for value in self._rejected_inspection_values):
+            raise ValueError("model output referenced a rejected inspection value")
 
     def require_evidence(self, evidence_ids: tuple[str, ...] | list[str]) -> None:
         missing = [item for item in evidence_ids if item not in self._records]
@@ -629,6 +697,7 @@ def _with_tool_observations(
     payload["gaps"] = [*payload["gaps"], *session.tool_gaps]
     payload["assessment"] = _assessment_for(payload["status"], payload["gaps"])
     payload["diagnostics"] = [*payload["diagnostics"], *session.tool_diagnostics]
+    payload["metrics"] = {**payload["metrics"], **session.inspection_rejection_metrics}
     return PRAnalysisReportV1.model_validate(payload)
 
 
@@ -1059,6 +1128,10 @@ def run_coordinator(
         ],
         "allowed_symbols": list(session.allowed_symbols),
         "allowed_paths": list(session.allowed_paths),
+        "inspection_allowlist": {
+            "terms": list(session.authorized_inspection_terms),
+            "paths": list(session.authorized_inspection_paths),
+        },
         "analysis_mode": "degraded_file_diff" if degraded else "symbol_seeded",
         "limits": {"impact_calls": 0 if degraded else 5, "inspection_calls": 2, "impact_rows": 20},
     }
@@ -1077,6 +1150,14 @@ def run_coordinator(
         "unresolved, out-of-scope, and unavailable gaps explicitly. "
         "Use at most five impact calls and two inspection calls; request a next "
         "impact page only when has_more is true and next_offset is supplied. "
+        "Source inspection is opt-in. When inspection is available, use only "
+        "exact terms and paths from inspection_allowlist. Copy each requested "
+        "term and path exactly; omit inspection when the needed value is absent. "
+        "After a successful first inspection, the host may provide bounded "
+        "follow-up literals discovered in returned excerpts or match paths; use "
+        "only those host-authorized values and never invent new ones. Never "
+        "invent feature names, PR-summary phrases, SQL terms, or informal "
+        "concepts, and do not interpret SQL semantics. "
         "Inspect source before consequential claims, distinguish candidate "
         "test areas from executed coverage, keep test execution_status as "
         "not_run, and do not claim exhaustive impact. Keep the final report "
@@ -1122,6 +1203,7 @@ def run_coordinator(
     else:
         structured = getattr(result, "structured_output", result)
         draft = structured if isinstance(structured, AgentAnalysisDraftV1) else AgentAnalysisDraftV1.model_validate(structured)
+    session.validate_model_narrative(draft)
     draft, discarded_model_rows = _sanitize_model_draft(session, draft)
     if degraded and draft.blast_radius:
         raise ValueError("degraded analysis cannot produce symbol-level blast-radius rows")
@@ -1182,6 +1264,7 @@ def run_coordinator(
     report = PRAnalysisReportV1(
         schema="ia-repomap.pr-analysis/v1",
         status="ok",
+        review_decision="needs_manual_review",
         assessment=_assessment_for("ok", gaps),
         phase="analysis",
         request={"repository": identity["repository_id"], "base": identity["base_revision"], "analysis_schema": "ia-repomap.pr-analysis/v1"},
@@ -1216,6 +1299,7 @@ def run_coordinator(
         metrics={
             "impact_calls": session.impact_calls,
             "inspection_calls": session.inspection_calls,
+            **session.inspection_rejection_metrics,
             "agent_output_complete": not fallback_used,
             **({"ripwire_skill_profiles": ",".join(profile.name for profile in skill_profiles)} if skill_profiles else {}),
             **({"fallback_mode": "evidence_only"} if fallback_used else {}),
@@ -1315,6 +1399,7 @@ def _report_from_context(
     return PRAnalysisReportV1(
         schema="ia-repomap.pr-analysis/v1",
         status=effective_status,
+        review_decision=_review_decision_for(effective_status),
         assessment=_assessment_for(effective_status, gaps),
         phase=phase,
         request=request_data,

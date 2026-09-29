@@ -118,6 +118,19 @@ class ReviewRunResult:
     remediation: tuple[str, ...] = ()
     setup: ReviewSetupResult | None = field(default=None, repr=False, compare=False)
 
+    @property
+    def review_decision(self) -> str:
+        """Return the host-owned availability/manual-review decision.
+
+        This is deliberately not included in :meth:`as_dict`: the review CLI
+        exposes it only at the top-level envelope, while the nested result
+        shape remains backwards-compatible.
+        """
+
+        if self.status in {"ok", "partial"} and self.report_status in {None, "ok"}:
+            return "needs_manual_review"
+        return "not_available"
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "status": self.status,

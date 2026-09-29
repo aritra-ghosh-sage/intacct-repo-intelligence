@@ -103,6 +103,7 @@ def _markdown(report: PRAnalysisReportV1) -> str:
         "# PR analysis",
         "",
         f"- status: `{data['status']}`",
+        f"- review decision: `{data['review_decision']}`",
         f"- assessment: `{data['assessment']}`",
         f"- assessment gaps: {', '.join(f'`{kind}`' for kind in assessment_gap_kinds(data['gaps'])) or 'None'}",
         f"- phase: `{data['phase']}`",

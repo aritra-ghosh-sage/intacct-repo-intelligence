@@ -13,10 +13,11 @@ from unittest.mock import patch
 
 from ia_repomap_builder import BuildResult
 from ia_repomap_builder.review import (
-    PRMetadata,
     REQUIRED_RIPWIRE_SKILLS,
-    ReviewSetupError,
+    PRMetadata,
     ReviewRequest,
+    ReviewRunResult,
+    ReviewSetupError,
     _fetch_and_verify,
     acquire_review_checkout,
     marker_env,
@@ -329,7 +330,54 @@ class ReviewTests(unittest.TestCase):
         ) as analysis:
             result = run_review(ReviewRequest(self.metadata.url, self.source, self.workspace))
         self.assertEqual(result.status, "unavailable")
+        self.assertEqual(result.review_decision, "not_available")
+        self.assertIsNone(result.report_status)
+        self.assertEqual(result.report_files, ())
         analysis.assert_not_called()
+
+    def test_run_review_settings_failure_is_not_available_without_report(self) -> None:
+        checkout = acquire_review_checkout(
+            self.metadata, repo=self.source, workspace=self.workspace, runner=self._runner
+        )
+        setup = SimpleNamespace(
+            status="ok", metadata=self.metadata, checkout=checkout,
+            artifact_root=self.workspace / "artifacts",
+            report_directory=self.workspace / "reports" / "run",
+            skill_policy=None, base_sha=self.base, head_sha=self.head, remediation=(),
+        )
+        with patch("ia_repomap_builder.review.setup_review", return_value=setup), patch(
+            "ia_repomap_builder.review.load_bedrock_settings",
+            side_effect=OSError("settings unavailable"),
+        ), patch("ia_repomap_builder.review.run_pr_analysis") as analysis:
+            result = run_review(ReviewRequest(self.metadata.url, self.source))
+
+        self.assertEqual(result.status, "unavailable")
+        self.assertEqual(result.review_decision, "not_available")
+        self.assertIsNone(result.report_status)
+        self.assertEqual(result.report_files, ())
+        analysis.assert_not_called()
+
+    def test_review_decision_is_host_derived_from_status(self) -> None:
+        self.assertEqual(
+            ReviewRunResult(status="ok", assessment="partial").review_decision,
+            "needs_manual_review",
+        )
+        self.assertEqual(
+            ReviewRunResult(status="error", assessment="error").review_decision,
+            "not_available",
+        )
+        self.assertEqual(
+            ReviewRunResult(
+                status="ok", assessment="error", report_status="error"
+            ).review_decision,
+            "not_available",
+        )
+        self.assertEqual(
+            ReviewRunResult(
+                status="error", assessment="error", report_status="ok"
+            ).review_decision,
+            "not_available",
+        )
 
     def test_run_review_passes_exact_shas_and_returns_partial_report_success(self) -> None:
         checkout = acquire_review_checkout(
@@ -364,6 +412,7 @@ class ReviewTests(unittest.TestCase):
         request = observed["request"]
         self.assertEqual(result.status, "ok")
         self.assertEqual(result.assessment, "partial")
+        self.assertEqual(result.review_decision, "needs_manual_review")
         self.assertEqual(result.base_sha, self.base)
         self.assertEqual(result.head_sha, self.head)
         self.assertEqual(result.report_files, ("report.json",))

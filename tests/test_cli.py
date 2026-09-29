@@ -105,6 +105,8 @@ class CliTests(unittest.TestCase):
         self._assert_public_envelope(payload, "review")
         self.assertEqual(payload["result"]["assessment"], "error")
         self.assertEqual(payload["result"]["report"], {"status": None, "assessment": None, "files": []})
+        self.assertEqual(payload["review_decision"], "not_available")
+        self.assertNotIn("review_decision", payload["result"])
         self.assertIn("--repo", payload["result"]["diagnostics"][0])
 
     def test_review_forwards_exact_identity_and_inspect_and_writes_report_envelope(self) -> None:
@@ -144,6 +146,8 @@ class CliTests(unittest.TestCase):
         self.assertEqual(payload["report"]["assessment"], "partial")
         self.assertEqual(payload["report"]["files"], ["pr-analysis.json", "pr-analysis.md"])
         self.assertEqual(payload["result"]["report"], payload["report"])
+        self.assertEqual(payload["review_decision"], "needs_manual_review")
+        self.assertNotIn("review_decision", payload["result"])
         self.assertNotIn("artifact-root", payload["request"])
 
     def test_review_forwards_test_inventory_path(self) -> None:
@@ -188,6 +192,7 @@ class CliTests(unittest.TestCase):
         self._assert_public_envelope(payload, "review")
         self.assertEqual(payload["status"], "unavailable")
         self.assertEqual(payload["assessment"], "unavailable")
+        self.assertEqual(payload["review_decision"], "not_available")
 
     def test_partial_status_returns_success_exit_code(self) -> None:
         result = ReviewRunResult(status="partial", assessment="partial")
@@ -198,6 +203,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self._assert_public_envelope(payload, "review")
         self.assertEqual(payload["status"], "partial")
+        self.assertEqual(payload["review_decision"], "needs_manual_review")
 
     def test_review_setup_error_is_json_error(self) -> None:
         result = ReviewRunResult(status="error", assessment="error", remediation=("PR URL must be canonical GitHub URL",))
@@ -212,7 +218,48 @@ class CliTests(unittest.TestCase):
         self._assert_public_envelope(payload, "review")
         self.assertEqual(payload["status"], "error")
         self.assertEqual(payload["assessment"], "error")
+        self.assertEqual(payload["review_decision"], "not_available")
         self.assertIn("canonical GitHub URL", payload["remediation"][0])
+
+    def test_review_routes_agent_progress_to_stderr_and_keeps_stdout_json(self) -> None:
+        result = ReviewRunResult(status="ok", assessment="partial")
+
+        def noisy_review(_request: ReviewRequest) -> ReviewRunResult:
+            print("agent progress: inspecting checkout")
+            return result
+
+        with patch("ia_repomap_builder.cli.run_review", side_effect=noisy_review):
+            code, payload, stderr = self._run(
+                "review",
+                "https://github.com/intacct/ia-app/pull/50176",
+                "--repo",
+                str(self.root),
+            )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["review_decision"], "needs_manual_review")
+        self.assertNotIn("agent progress", json.dumps(payload))
+        self.assertIn("agent progress: inspecting checkout", stderr)
+
+    def test_review_defensive_failure_is_not_available_without_synthetic_report(self) -> None:
+        with patch(
+            "ia_repomap_builder.cli.run_review",
+            side_effect=RuntimeError("unexpected review failure"),
+        ):
+            code, payload, _ = self._run(
+                "review",
+                "https://github.com/intacct/ia-app/pull/50176",
+                "--repo",
+                str(self.root),
+            )
+
+        self.assertEqual(code, EXIT_ERROR)
+        self.assertEqual(payload["review_decision"], "not_available")
+        self.assertEqual(
+            payload["result"]["report"],
+            {"status": None, "assessment": None, "files": []},
+        )
+        self.assertIsNone(payload["report_directory"])
 
     def test_review_gh_authentication_failure_is_unavailable(self) -> None:
         result = ReviewRunResult(status="unavailable", assessment="unavailable", remediation=("gh auth status",))

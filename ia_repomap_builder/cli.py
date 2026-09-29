@@ -8,6 +8,7 @@ import os
 import sys
 import tempfile
 from collections.abc import Sequence
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -15,16 +16,18 @@ from .config import PrContextRequest, PrImpactRequest
 from .impact import build_symbol_impact
 from .pr_context import build_pr_context
 from .readiness import prepare_repomap
-from .test_inventory import build_test_inventory, persist_test_inventory
 from .review import (
     ReviewRequest,
     ReviewRunResult,
     ReviewSetupResult,
-    prepare_repomap_for_cli as prepare_repomap,
     run_review,
     setup_review,
     workspace_root,
 )
+from .review import (
+    prepare_repomap_for_cli as prepare_repomap,
+)
+from .test_inventory import build_test_inventory, persist_test_inventory
 
 COMMAND_SCHEMA = "ia-repomap.command-result/v1"
 EXIT_OK = 0
@@ -113,7 +116,7 @@ def main(
     """
 
     out = stdout if stdout is not None else sys.stdout
-    _ = stderr if stderr is not None else sys.stderr
+    err = stderr if stderr is not None else sys.stderr
     parser = _parser()
     raw_args = list(argv) if argv is not None else sys.argv[1:]
     try:
@@ -138,7 +141,7 @@ def main(
     if command == "setup":
         return _run_setup(args, out)
     if command == "review":
-        return _run_review(args, out)
+        return _run_review(args, out, err)
     if command not in {"prepare", "pr-context", "symbol-impact", "test-inventory"}:
         return _emit_failure(
             out,
@@ -333,7 +336,9 @@ def _setup_envelope(request: dict[str, Any], result: ReviewSetupResult) -> dict[
 
 
 def _review_envelope(request: dict[str, Any], result: ReviewRunResult) -> dict[str, Any]:
-    return _public_envelope("review", request, result.as_dict())
+    payload = _public_envelope("review", request, result.as_dict())
+    payload["review_decision"] = result.review_decision
+    return payload
 
 
 def _public_envelope(
@@ -371,10 +376,14 @@ def _run_setup(args: argparse.Namespace, out: TextIO) -> int:
     return _exit_code(result.status)
 
 
-def _run_review(args: argparse.Namespace, out: TextIO) -> int:
+def _run_review(args: argparse.Namespace, out: TextIO, err: TextIO) -> int:
     request, request_payload = _review_request(args)
     try:
-        result = run_review(request)
+        # Agent SDKs and test doubles may write progress directly to stdout.
+        # Keep the review command's stdout a single JSON document by routing
+        # that incidental output to the caller-provided stderr stream.
+        with redirect_stdout(err), redirect_stderr(err):
+            result = run_review(request)
     except Exception as exc:  # pragma: no cover - defensive public command boundary
         result = ReviewRunResult(
             status="error",
@@ -400,7 +409,10 @@ def _emit_failure(
 ) -> int:
     result = _failure_result(command, diagnostic, remediation)
     if command in {"setup", "review"}:
-        _write_payload(out, _public_envelope(command, request or {}, result))
+        payload = _public_envelope(command, request or {}, result)
+        if command == "review":
+            payload["review_decision"] = "not_available"
+        _write_payload(out, payload)
         return EXIT_ERROR
     payload = {
         "schema": COMMAND_SCHEMA,
