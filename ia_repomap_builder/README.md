@@ -56,8 +56,9 @@ an index. Readiness uses Ripwire `--doctor` to reject a named lean cache that
 the current binary would replace with a cold parse. Readiness gates on the
 doctor report's named `index-cache` row (`source="cache-flag"` and
 `lean="ok"`); unrelated doctor failures remain visible as warnings rather
-than invalidating an otherwise consumable named cache. See the canonical
-contract for the manifest and normalized result formats.
+than invalidating an otherwise consumable named cache. The doctor check has a
+15-minute timeout to accommodate large source trees and slower cache scans.
+See the canonical contract for the manifest and normalized result formats.
 
 The Python-only readiness and PR-context APIs are:
 

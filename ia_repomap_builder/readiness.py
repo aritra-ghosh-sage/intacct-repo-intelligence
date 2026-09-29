@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
-import hashlib
 import shutil
 import subprocess
 import tempfile
@@ -21,8 +21,8 @@ from .config import (
     REPOMAP_CONFIG_FILENAME,
     REPOMAP_SCHEMA_VERSION,
     BuildResult,
-    PrepareRepoMapRequest,
     PrContextRequest,
+    PrepareRepoMapRequest,
     RepoMapConfig,
 )
 from .engines import _ripwire_binary
@@ -38,6 +38,7 @@ from .identity import (
 )
 
 MANIFEST_SCHEMA = "ia-repomap.manifest/v1"
+RIPWIRE_DOCTOR_TIMEOUT_SECONDS = 900
 _ALLOWED_CONFIG_KEYS = frozenset(
     {
         "schema_version",
@@ -481,7 +482,7 @@ def _validate_ripwire_lean_cache(
             check=False,
             capture_output=True,
             text=True,
-            timeout=300,
+            timeout=RIPWIRE_DOCTOR_TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return _CacheValidation("error", f"Ripwire cache validation failed: {exc}")
