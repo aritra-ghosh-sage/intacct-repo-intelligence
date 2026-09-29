@@ -21,6 +21,7 @@ from ia_repomap_builder.config import (
     PrContextRequest,
     PrContextResult,
     PrImpactedFileCandidate,
+    PrImpactCandidate,
     PrImpactRequest,
     PrImpactResult,
     PrSymbolCandidate,
@@ -309,6 +310,52 @@ class PRAnalysisReportTests(unittest.TestCase):
             self.assertEqual(observed_tools, [])
             self.assertTrue((report_dir / "pr-analysis.json").is_file())
             self.assert_checked_in_schema(report)
+
+    def test_run_pr_analysis_success_preserves_rename_inventory_provenance(self) -> None:
+        old_path = "app/source/example/OldName.cls"
+        new_path = "app/source/example/NewName.cls"
+        context = PrContextResult(
+            status="ok",
+            raw_xml="<pr-context/>\n",
+            identity=self.context_identity(),
+            changed_files=[PrChangedFile(
+                path=new_path,
+                change="R",
+                old_path=old_path,
+                symbols=(PrSymbolCandidate(new_path, "changed", 1),),
+            )],
+            git_inventory=({
+                "path": new_path,
+                "old_path": old_path,
+                "change": "R",
+                "scope": "in_scope",
+            },),
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            report = run_pr_analysis(
+                self.coordinator_request(directory),
+                settings=BedrockSettings("test", "model"),
+                context_builder=lambda _: context,
+                agent_factory=lambda _settings, _tools: lambda _prompt: {
+                    "summary": {
+                        "purpose": "test",
+                        "behavioral_change": "candidate",
+                        "confidence": "candidate",
+                    },
+                    "blast_radius": [],
+                    "test_areas": [],
+                },
+                revision_checker=lambda _: context.identity["head"],
+                dirty_checker=lambda _: False,
+            )
+
+        self.assertEqual(report.changed_files[0].old_path, old_path)
+        self.assertEqual(
+            report.changed_files[0].evidence_ids,
+            ["git-inventory-001", "pr-context-001"],
+        )
+        self.assertEqual(report.agent.prompt_version, "pr-analysis-prompt-v2")
 
     def test_run_pr_analysis_degraded_inspection_follows_public_flag(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1414,6 +1461,113 @@ class PRAnalysisReportTests(unittest.TestCase):
         self.assertIn("File-only", prompts[0])
         self.assertIn("must use only allowlisted path/name pairs", prompts[0])
         self.assertIn("Test-area paths must come from allowed_paths", prompts[0])
+        self.assertIn("symbol_impact provides reachability evidence only", prompts[0])
+        self.assertIn("exact pair appears in changed_files[].symbols[].callers", prompts[0])
+        self.assertEqual(report.agent.prompt_version, "pr-analysis-prompt-v2")
+
+    def test_coordinator_keeps_only_direct_callers_from_pr_context_records(self) -> None:
+        changed_path = "app/source/example/Example.cls"
+        caller_path = "app/source/service/Caller.cls"
+        reachable_path = "app/source/service/Reachable.cls"
+        context = PrContextResult(
+            status="ok",
+            raw_xml="<pr-context/>\n",
+            identity=self.context_identity(),
+            changed_files=[PrChangedFile(
+                path=changed_path,
+                change="M",
+                symbols=(
+                    PrSymbolCandidate(
+                        changed_path,
+                        "changed",
+                        1,
+                        callers=(PrCallerCandidate(caller_path, "caller", 2),),
+                    ),
+                    PrSymbolCandidate(
+                        changed_path,
+                        "recursive",
+                        3,
+                        callers=(PrCallerCandidate(changed_path, "recursive", 3),),
+                    ),
+                ),
+            )],
+        )
+        impact = PrImpactResult(
+            status="ok",
+            candidates=[PrImpactCandidate(reachable_path, "reachable", 4)],
+            raw_xml="<impact/>\n",
+        )
+
+        def direct_row(
+            source_path: str,
+            source_symbol: str,
+            target_path: str,
+            target_symbol: str,
+            evidence_ids: list[str],
+        ) -> dict[str, object]:
+            return {
+                "source_path": source_path,
+                "source_symbol": source_symbol,
+                "target_path": target_path,
+                "target_symbol": target_symbol,
+                "relationship": "direct_caller",
+                "graph_distance": 1,
+                "confidence": "candidate",
+                "evidence_ids": evidence_ids,
+                "reason": "candidate direct caller",
+            }
+
+        def agent_factory(_settings: object, tools: list[object]) -> object:
+            def agent(_prompt: str) -> dict[str, object]:
+                tools[0](changed_path, "changed")  # type: ignore[operator]
+                return {
+                    "summary": {
+                        "purpose": "test",
+                        "behavioral_change": "candidate",
+                        "confidence": "candidate",
+                    },
+                    "blast_radius": [
+                        direct_row(
+                            changed_path, "changed", caller_path, "caller",
+                            ["pr-context-001"],
+                        ),
+                        direct_row(
+                            changed_path, "recursive", changed_path, "recursive",
+                            ["pr-context-001"],
+                        ),
+                        direct_row(
+                            changed_path, "changed", changed_path, "changed",
+                            ["pr-context-001"],
+                        ),
+                        direct_row(
+                            changed_path, "changed", reachable_path, "reachable",
+                            ["pr-context-001", "symbol-impact-001"],
+                        ),
+                        direct_row(
+                            changed_path, "changed", caller_path, "caller",
+                            ["symbol-impact-001"],
+                        ),
+                    ],
+                    "test_areas": [],
+                }
+
+            return agent
+
+        report = run_coordinator(
+            prepare_pre_agentic_seed(self.context_request(), context_builder=lambda _: context),
+            PrImpactRequest(Path("/repo"), Path("/artifacts"), changed_path, "changed"),
+            BedrockSettings(region="test", model_id="fake"),
+            agent_factory=agent_factory,
+            impact_builder=lambda _: impact,
+        )
+
+        self.assertEqual(
+            [(row.source_symbol, row.target_symbol) for row in report.blast_radius],
+            [("changed", "caller"), ("recursive", "recursive")],
+        )
+        discarded = next(gap for gap in report.gaps if gap.kind == "model_rows_discarded")
+        self.assertEqual(discarded.count, 3)
+        self.assertIn("direct-caller edges absent from PR-context caller records", discarded.detail)
 
     def test_degraded_coordinator_returns_file_action_without_symbol_impact_tool(self) -> None:
         context = PrContextResult(

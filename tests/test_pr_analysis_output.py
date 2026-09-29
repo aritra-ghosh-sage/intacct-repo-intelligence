@@ -65,6 +65,32 @@ class PRAnalysisOutputTests(unittest.TestCase):
                 write_pr_analysis_bundle(output, report, self.payload(report), repo_root=Path(root) / "repo")
             self.assertEqual(first, (output / "pr-analysis.json").read_bytes())
 
+    def test_markdown_renders_both_paths_for_a_rename(self) -> None:
+        payload = self.report().model_dump(mode="json", by_alias=True)
+        payload["changed_files"] = [{
+            "path": "app/source/example/NewName.cls",
+            "change": "R",
+            "old_path": "app/source/example/OldName.cls",
+            "symbols": [],
+            "evidence_ids": ["pr-context-001"],
+        }]
+        report = PRAnalysisReportV1.model_validate(payload)
+
+        with tempfile.TemporaryDirectory() as root:
+            output = Path(root) / "bundle"
+            write_pr_analysis_bundle(
+                output,
+                report,
+                self.payload(report),
+                repo_root=Path(root) / "repo",
+            )
+            markdown = (output / "pr-analysis.md").read_text()
+
+        self.assertIn(
+            "`R` `app/source/example/OldName.cls → app/source/example/NewName.cls`",
+            markdown,
+        )
+
     def test_markdown_lists_all_impacted_files_and_dependent_symbol_counts(self) -> None:
         impacted_files = [
             {

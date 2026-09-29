@@ -122,7 +122,10 @@ def _markdown(report: PRAnalysisReportV1) -> str:
         "",
     ]
     for changed in data["changed_files"]:
-        lines.append(f"- `{changed['change']}` `{changed['path']}`")
+        display_path = changed["path"]
+        if changed.get("old_path"):
+            display_path = f"{changed['old_path']} → {display_path}"
+        lines.append(f"- `{changed['change']}` `{display_path}`")
         for symbol in changed["symbols"]:
             line = f"  - `{symbol['name']}`"
             if symbol.get("line") is not None:
