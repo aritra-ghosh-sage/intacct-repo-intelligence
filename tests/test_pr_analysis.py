@@ -17,6 +17,7 @@ from pydantic import ValidationError
 from ia_repomap_builder.config import (
     PrAffectedTestCandidate,
     PrCallerCandidate,
+    PrChangedElementCandidate,
     PrChangedFile,
     PrContextGap,
     PrContextRequest,
@@ -32,15 +33,21 @@ from ia_repomap_builder.pr_analysis import (
     BedrockSettings,
     EvidenceRecord,
     EvidenceSession,
+    PreAgenticSeed,
     PRAnalysisReportV1,
     PRAnalysisRequestV1,
     _affected_test_areas,
     build_bedrock_agent,
     load_bedrock_settings,
     prepare_pre_agentic_seed,
+    _report_from_context,
     run_coordinator,
     run_pr_analysis,
     run_symbol_impact_once,
+)
+from ia_repomap_builder.pr_analysis_inspection import (
+    InspectionRequestRejected,
+    inspect_repository,
 )
 from ia_repomap_builder.pr_analysis_skills import LoadedRipwireSkill, RipwireSkillPolicy
 
@@ -62,6 +69,148 @@ def _live_coordinator_enabled() -> bool:
 
 
 class PRAnalysisReportTests(unittest.TestCase):
+    def test_changed_elements_project_but_never_authorize_symbol_impact_or_rows(self) -> None:
+        changed_path = "app/source/gl/Added.ent"
+        element = PrChangedElementCandidate(
+            path=changed_path,
+            name="glautostatpostsetup.object.PROPERTYLEASEGROUPKEY",
+            line=39,
+            kind="ent_schema_member",
+            inspection_terms=("PROPERTYLEASEGROUPKEY",),
+        )
+        context = PrContextResult(
+            status="ok",
+            raw_xml="<pr-context/>\n",
+            identity=self.context_identity(),
+            changed_files=[PrChangedFile(
+                path=changed_path,
+                change="M",
+                changed_elements=(element,),
+            )],
+        )
+        seed = PreAgenticSeed("ok", "analysis", context)
+        prompt_capture: list[str] = []
+        sessions: list[EvidenceSession] = []
+
+        def factory(_settings: object, tools: list[object]) -> object:
+            self.assertEqual(tools, [])
+
+            def agent(prompt: str) -> dict[str, object]:
+                prompt_capture.append(prompt)
+                return {
+                    "summary": {
+                        "purpose": "Inspect schema metadata",
+                        "behavioral_change": "Candidate metadata changed",
+                        "confidence": "candidate",
+                    },
+                    "blast_radius": [{
+                        "source_path": changed_path,
+                        "source_symbol": element.name,
+                        "target_path": changed_path,
+                        "target_symbol": element.name,
+                        "relationship": "transitive_reacher",
+                        "graph_distance": None,
+                        "confidence": "candidate",
+                        "evidence_ids": ["pr-context-001"],
+                        "reason": "metadata locator is not a callable symbol",
+                    }],
+                    "test_areas": [],
+                }
+
+            return agent
+
+        report = run_coordinator(
+            seed,
+            None,
+            BedrockSettings(region="test", model_id="fake"),
+            agent_factory=factory,
+            session_sink=sessions,
+        )
+        session = sessions[0]
+        self.assertEqual(session.allowed_symbols, ())
+        self.assertIn("PROPERTYLEASEGROUPKEY", session.authorized_inspection_terms)
+        self.assertEqual(len(report.changed_files[0].changed_elements), 1)
+        self.assertEqual(report.changed_files[0].symbols, [])
+        self.assertEqual(report.blast_radius, [])
+        self.assertNotIn("no_candidate_symbols", {gap.kind for gap in report.gaps})
+        self.assertIn('"changed_elements"', prompt_capture[0])
+        self.assertIn("PROPERTYLEASEGROUPKEY", prompt_capture[0])
+        self.assertIn('"allowed_symbols": []', prompt_capture[0])
+        with self.assertRaisesRegex(ValueError, "not a PR-context candidate symbol"):
+            session.authorize_impact(changed_path, element.name)
+
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            source = repo / changed_path
+            source.parent.mkdir(parents=True)
+            source.write_text("PROPERTYLEASEGROUPKEY\n", encoding="utf-8")
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "add", changed_path], cwd=repo, check=True)
+            subprocess.run(
+                ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "fixture"],
+                cwd=repo,
+                check=True,
+            )
+            accepted = inspect_repository(
+                repo,
+                ["PROPERTYLEASEGROUPKEY"],
+                paths=[changed_path],
+                authorized_terms=session.authorized_inspection_terms,
+                authorized_paths=session.authorized_inspection_paths,
+            )
+            self.assertEqual(accepted["status"], "ok")
+            with self.assertRaises(InspectionRequestRejected):
+                inspect_repository(
+                    repo,
+                    ["UNRELATED_UNAUTHORIZED_TERM"],
+                    paths=[changed_path],
+                    authorized_terms=session.authorized_inspection_terms,
+                    authorized_paths=session.authorized_inspection_paths,
+                )
+
+    def test_old_v1_changed_file_without_changed_elements_still_validates(self) -> None:
+        payload = self.valid_payload()
+        payload["changed_files"] = [{
+            "path": "app/source/legacy/Legacy.ent",
+            "change": "M",
+            "symbols": [],
+            "evidence_ids": ["pr-context-001"],
+        }]
+        payload["evidence"] = [{
+            "evidence_id": "pr-context-001",
+            "kind": "pr_context_xml",
+            "relative_path": "evidence/pr-context.xml",
+            "sha256": "a" * 64,
+        }]
+        report = PRAnalysisReportV1.model_validate(payload)
+        self.assertEqual(report.changed_files[0].changed_elements, [])
+        jsonschema.validate(payload, json.loads(
+            (Path(__file__).parents[1] / "schemas" / "ia-repomap.pr-analysis-v1.schema.json").read_text()
+        ))
+
+    def test_early_reports_keep_changed_elements_without_empty_symbol_gap(self) -> None:
+        element = PrChangedElementCandidate(
+            path="app/source/gl/schema.ent",
+            name="schema.object.PROPERTYLEASEGROUPKEY",
+            line=39,
+            kind="ent_schema_member",
+            inspection_terms=("PROPERTYLEASEGROUPKEY",),
+        )
+        context = PrContextResult(
+            status="ok",
+            raw_xml="<pr-context/>\n",
+            identity=self.context_identity(),
+            changed_files=[PrChangedFile(
+                path=element.path,
+                change="M",
+                changed_elements=(element,),
+            )],
+        )
+        report = _report_from_context(None, context, status="ok", phase="pr_context")
+        self.assertEqual(report.changed_files[0].changed_elements[0].name, element.name)
+        self.assertNotIn("no_candidate_symbols", {gap.kind for gap in report.gaps})
+        self.assert_checked_in_schema(report)
+
     def test_affected_test_area_text_is_bounded_for_long_migration_paths(self) -> None:
         changed_path = (
             "app/db/db_migration/db_migration_ddl/scripts/Nov26/"
@@ -1158,6 +1307,74 @@ class PRAnalysisReportTests(unittest.TestCase):
         self.assertEqual(settings.region, "us-east-1")
         self.assertEqual(settings.model_id, "test-model")
         self.assertEqual(settings.profile, "dev")
+
+    def test_bedrock_settings_load_credentials_from_env_file_without_exposing_them(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / ".env.local"
+            path.write_text(
+                "AWS_REGION=us-east-1\nBEDROCK_MODEL_ID=test-model\n"
+                "AWS_ACCESS_KEY_ID=file-access\n"
+                "AWS_SECRET_ACCESS_KEY=file-secret\n"
+                "AWS_SESSION_TOKEN=file-session\n",
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {}, clear=True):
+                settings = load_bedrock_settings(str(path))
+        self.assertEqual(settings.access_key_id, "file-access")
+        self.assertEqual(settings.secret_access_key, "file-secret")
+        self.assertEqual(settings.session_token, "file-session")
+        self.assertNotIn("file-secret", repr(settings))
+
+    def test_process_credentials_override_dotenv_credentials(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / ".env.local"
+            path.write_text(
+                "AWS_REGION=us-east-1\nBEDROCK_MODEL_ID=test-model\n"
+                "AWS_ACCESS_KEY_ID=file-access\nAWS_SECRET_ACCESS_KEY=file-secret\n",
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {
+                "AWS_ACCESS_KEY_ID": "env-access",
+                "AWS_SECRET_ACCESS_KEY": "env-secret",
+                "AWS_SESSION_TOKEN": "env-session",
+            }, clear=True):
+                settings = load_bedrock_settings(str(path))
+        self.assertEqual(settings.access_key_id, "env-access")
+        self.assertEqual(settings.secret_access_key, "env-secret")
+        self.assertEqual(settings.session_token, "env-session")
+
+    def test_partial_process_credential_pair_does_not_mix_with_dotenv(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / ".env.local"
+            path.write_text(
+                "AWS_REGION=us-east-1\nBEDROCK_MODEL_ID=test-model\n"
+                "AWS_ACCESS_KEY_ID=file-access\nAWS_SECRET_ACCESS_KEY=file-secret\n",
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"AWS_ACCESS_KEY_ID": "env-access"}, clear=True):
+                with self.assertRaisesRegex(ValueError, "both be set in process environment"):
+                    load_bedrock_settings(str(path))
+
+    def test_bedrock_agent_passes_loaded_credentials_to_boto3(self) -> None:
+        settings = BedrockSettings(
+            region="us-east-1",
+            model_id="test-model",
+            access_key_id="access",
+            secret_access_key="secret",
+            session_token="session",
+        )
+        session = object()
+        with patch("boto3.Session", return_value=session) as make_session, patch(
+            "strands.models.BedrockModel"
+        ) as model_class:
+            build_bedrock_agent(settings)
+        make_session.assert_called_once_with(
+            aws_access_key_id="access",
+            aws_secret_access_key="secret",
+            aws_session_token="session",
+            region_name="us-east-1",
+        )
+        self.assertIs(model_class.call_args.kwargs["boto_session"], session)
 
     def test_bedrock_settings_require_region_and_model(self) -> None:
         empty_settings = {

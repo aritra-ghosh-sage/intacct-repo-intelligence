@@ -91,6 +91,43 @@ class PRAnalysisOutputTests(unittest.TestCase):
             markdown,
         )
 
+    def test_changed_elements_render_deterministically_in_json_and_markdown(self) -> None:
+        payload = self.report().model_dump(mode="json", by_alias=True)
+        element = {
+            "path": "app/source/api/openapi.yaml",
+            "name": "openapi.propertyLeaseGroup.key",
+            "line": 39,
+            "kind": "openapi_property",
+            "inspection_terms": ["propertyLeaseGroup", "PROPERTYLEASEGROUPKEY"],
+            "confidence": "candidate",
+        }
+        payload["changed_files"][0]["changed_elements"] = [element]
+        report = PRAnalysisReportV1.model_validate(payload)
+
+        with tempfile.TemporaryDirectory() as root:
+            output = Path(root) / "bundle"
+            write_pr_analysis_bundle(
+                output,
+                report,
+                self.payload(report),
+                repo_root=Path(root) / "repo",
+            )
+            report_json = (output / "pr-analysis.json").read_bytes()
+            markdown = (output / "pr-analysis.md").read_text()
+
+        expected_json = json.dumps(
+            report.model_dump(mode="json", by_alias=True),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8") + b"\n"
+        self.assertEqual(report_json, expected_json)
+        self.assertIn('"changed_elements":[{"confidence":"candidate"', report_json.decode())
+        self.assertIn(
+            "  - metadata `openapi.propertyLeaseGroup.key` (`openapi_property`, line 39)",
+            markdown,
+        )
+
     def test_markdown_lists_all_impacted_files_and_dependent_symbol_counts(self) -> None:
         impacted_files = [
             {

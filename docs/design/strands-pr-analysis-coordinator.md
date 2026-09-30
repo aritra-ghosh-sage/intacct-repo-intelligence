@@ -20,14 +20,11 @@ The design follows KISS and YAGNI:
   and rendering;
 - the model selects useful follow-up evidence and writes the structured
   analysis;
-- no GitHub write/publication, MCP, editor, queue, memory, or test-execution
-  integration.
+- no GitHub, MCP, editor, queue, memory, or test-execution integration.
 
-V1 does not issue a merge recommendation, merge approval or rejection,
-severity score, or claim of complete test coverage. It does expose a
-host-owned availability/manual-review signal for the local review wrapper and
-the persisted report. That signal is not a policy decision about whether a PR
-should merge.
+V1 does not issue a merge recommendation, review verdict, severity score, or
+claim of complete test coverage. Those decisions require separate evaluation
+and policy.
 
 The repository-map evidence contract remains
 [`ia-repomap-context-contract.md`](ia-repomap-context-contract.md). The
@@ -52,7 +49,6 @@ research rationale remains
 | Human output | Markdown rendered deterministically from the JSON report |
 | Persistence | External output directory only; no overwrite |
 | Publication | None |
-| Review decision | Host-owned `needs_manual_review` or `not_available`; never merge approval/rejection |
 
 Changing a frozen choice requires a new schema or a documented v2 decision.
 
@@ -174,7 +170,7 @@ Bedrock model ID or inference-profile ID
 Credentials are never accepted as request fields or written to reports.
 The model ID and AWS region are recorded as non-secret run provenance. The
 initial implementation uses a `BedrockModel` with temperature `0` and a
-8,192-token response ceiling. This reduces variation but does not make model
+4,096-token response ceiling. This reduces variation but does not make model
 output byte-deterministic.
 
 Strands uses boto3 for its Bedrock provider and accepts an explicit model ID or
@@ -233,13 +229,16 @@ instructions:
    with `phase="pr_context"`, diagnostics, gaps, and retained evidence
    metadata when available. Strands is not invoked.
 4. A successful PR-context result with no hunk-selected candidate symbols
-   produces a valid deterministic lower-bound report. This is not evidence of
-   no impact, and Strands is not invoked.
-5. Only a successful result containing candidate symbols creates the agent.
+  remains eligible for the degraded file/diff path. Candidate metadata
+  elements may be included there and suppress `no_candidate_symbols`, but do
+  not enable symbol-impact calls or symbol-level blast-radius rows.
+5. Symbol-impact expansion is available only when the host has candidate
+  symbols; metadata elements alone never create symbol authorization.
 
 The agent seed contains only the exact identity, changed files, candidate
-symbols, allowed `(symbol_path, symbol_name)` pairs, evidence identifiers, and
-fixed tool limits. The model cannot choose repository or artifact roots, the
+symbols and metadata elements, allowed `(symbol_path, symbol_name)` pairs,
+evidence identifiers, and fixed tool limits. Element inspection terms join the
+bounded inspection allowlist but never the allowed-symbol set. The model cannot choose repository or artifact roots, the
 base, cache, preparation, arbitrary paths or symbols, shell commands, tests,
 writes, or publication. The symbol-impact tool is always available after a
 successful seed; the repository inspection tool is added only when the host
@@ -322,24 +321,6 @@ This is one read-only tool combining focused source inspection and test-area
 discovery. It accepts repository-relative paths and literal search terms. It
 does not execute shell supplied by the model.
 
-The host places an exact allowlist in the prompt:
-
-```json
-{
-  "inspection_allowlist": {
-    "terms": ["exact literal terms"],
-    "paths": ["exact/repository-relative/paths"]
-  }
-}
-```
-
-The model must copy terms and paths exactly, omit inspection when the desired
-value is absent, and never invent feature names, PR-summary phrases, SQL
-terms, or informal concepts. After a successful first inspection, the host
-may provide a follow-up allowlist containing only bounded literals discovered
-in returned excerpts and returned match paths. The second request is still
-host-authorized; the model cannot introduce new values.
-
 Allowed discovery keys are:
 
 - changed or impacted symbol names;
@@ -368,21 +349,6 @@ not those excerpts; model-authored narrative remains candidate evidence rather
 than source authority. A no-match query emits `inspection_no_match`, and files
 omitted by the ten-file cap emit `inspection_truncated`; literals visible in a
 returned excerpt may be used as terms for the next bounded inspection call.
-Rejected requests consume an inspection slot and return only
-`inspection request rejected` to the model. Raw unauthorized terms and paths
-must not appear in diagnostics, gaps, remediation, reports, or evidence. The
-host records only `inspection_rejection_count`,
-`inspection_requested_term_count`, `inspection_requested_path_count`, and
-`inspection_last_request_hash`. The last value is the first 16 hexadecimal
-characters of SHA-256 over canonical compact JSON with sorted `terms` and
-`paths`. A persisted rejection gap uses the generic detail
-`Host rejected an inspection request; raw terms and paths were omitted`.
-
-Ripwire remains limited to `app/source`. Git-authoritative changed-file and
-hunk inventory may include `/app/db` migration files, but those files are
-outside the Ripwire map and retain an explicit manual-review limitation. Exact
-bounded literal inspection of an authorized migration path is permitted only
-with host opt-in; the coordinator never parses SQL.
 
 ## Blast-radius decision flow
 
@@ -394,6 +360,7 @@ graph distance.
 | 0 | Exact head, base, merge base, configuration, engine | Confirmed identity or unavailable |
 | 1 | Git changed file | `confirmed` change evidence |
 | 2 | Positive-side hunk attributed to an enclosing definition | `candidate` changed symbol |
+| 2a | Positive-side hunk attributed to supported `.ent` or OpenAPI metadata | `candidate` changed element; inspection literals only |
 | 3 | Ripwire direct caller attached to that definition | `candidate` relationship with graph distance `1` |
 | 4 | `symbol-impact-v1` reacher | `candidate` lower-bound relationship; graph distance unknown |
 | 5 | Source or configuration reference, including dynamic dispatch | `candidate` source-verified relationship |
@@ -410,7 +377,9 @@ flowchart TD
     Changed[Confirmed changed file] --> Hunk{Positive-side hunk?}
     Hunk -->|No| Gap1[hunk gap]
     Hunk -->|Yes| Symbol{Enclosing symbol?}
-    Symbol -->|No| Gap2[unresolved attribution]
+    Symbol -->|No| Element{Supported metadata element?}
+    Element -->|No| Gap2[unresolved attribution]
+    Element -->|Yes| Metadata[Inspection-only metadata candidate]
     Symbol -->|Yes| Direct[Direct caller candidates]
     Symbol --> Impact[Optional bounded impact]
     Direct --> Verify[Bounded source and configuration verification]
@@ -470,7 +439,6 @@ Its top-level fields are:
 ```text
 schema          exact schema string
 status          ok | unavailable | error
-review_decision needs_manual_review | not_available; host-derived only
 identity        repository, head, base, merge base, config and engine identity
 summary         concise purpose and behavioral change
 changed_files   Git-confirmed files with hunk-selected symbols
@@ -519,16 +487,12 @@ transitive reachers and source references. Every test-area row must carry
 Evidence identifiers must exist in the current invocation's evidence session.
 Unknown fields, invented evidence identifiers, invalid enum values, missing
 required fields, or collection limits exceeded by the model response produce
-`status="error"`; they never produce a partially usable report. The
-`review_decision` is derived after host status validation: every `ok` report,
-including `assessment="partial"`, is `needs_manual_review`; `unavailable` and
-`error` are `not_available`. The model draft has no decision field and cannot
-override this value. Deterministic
+`status="error"`; they never produce a partially usable report. Deterministic
 early returns use this same report schema: `unavailable` for missing or stale
 prerequisites, `error` for validation or integrity failures, and `ok` with
 explicit gaps when no candidate symbols are available. V1 deliberately does
-not include severity, merge recommendation, merge approval/rejection,
-ownership, executed coverage, or publication state.
+not include severity, merge recommendation, ownership, executed coverage, or
+publication state.
 
 The report does not use `confirmed` for static call relationships in v1.
 `confirmed` is reserved for exact Git change and revision identity evidence.
@@ -557,12 +521,11 @@ The LLM does not generate a second independent Markdown narrative. The renderer
 includes:
 
 1. identity and status;
-2. host-owned review decision;
-3. concise summary;
-4. changed files and symbols;
-5. lower-bound blast radius;
-6. candidate test areas;
-7. explicit gaps and evidence references.
+2. concise summary;
+3. changed files and symbols;
+4. lower-bound blast radius;
+5. candidate test areas;
+6. explicit gaps and evidence references.
 
 Neither output is written inside the target checkout. No output is committed by
 the coordinator.
@@ -570,25 +533,14 @@ the coordinator.
 ## Status and failure rules
 
 - `ok`: valid analysis was produced for the exact checkout. Gaps may still make
-  the blast radius a lower bound, and the review decision is
-  `needs_manual_review`.
+  the blast radius a lower bound.
 - `unavailable`: a required prerequisite is missing or stale, including the
-  checkout, marker, binary, cache, manifest, base, or merge base; the review
-  decision is `not_available`.
+  checkout, marker, binary, cache, manifest, base, or merge base.
 - `error`: request validation, tool execution, structured-output validation,
-  evidence validation, output writing, or post-run revision checks failed; the
-  review decision is `not_available`.
+  evidence validation, output writing, or post-run revision checks failed.
 
 An empty candidate set is an `ok` result with explicit scope or attribution
 gaps, not proof that the PR has no impact.
-
-The public `review` CLI wraps exact PR setup and this Python coordinator. Its
-JSON envelope adds exactly one top-level `review_decision`; the nested
-`result` and nested `report` shapes remain unchanged. The CLI emits exactly one
-JSON document on stdout. Agent progress and diagnostics are routed to stderr.
-If setup or settings fail before a report can be persisted, the CLI emits
-`not_available` and states that no analysis bundle was produced; it does not
-create a synthetic report.
 
 The coordinator does not retry with a different index, base, model, or broader
 search. It may permit the structured-output correction behavior performed by
@@ -613,13 +565,6 @@ silently.
 - Persisted inspection evidence contains citations and digests, not source
   excerpts or credentials. Model-authored narrative remains untrusted
   candidate text and must be verified against source.
-- Unauthorized inspection diagnostics are sanitized; raw requested terms and
-  paths are never persisted.
-- A caller-provided persisted test inventory is exact-checkout evidence only.
-  It is forwarded by the review CLI, produces candidate cross-reference
-  findings, and never changes `execution_status="not_run"` into executed
-  coverage. Missing or unreadable inventory is a disclosed
-  `test_inventory_unavailable` gap.
 - Every output is keyed to the exact analyzed revision and refuses overwrite.
 
 ## Implementation status and boundary
@@ -654,11 +599,6 @@ The slice does not change Ripwire, repository-map caches, the target
 repository, existing request/result contracts, or add a public command-line,
 MCP, editor, GitHub, publication, test-execution, or multi-agent integration.
 
-An optional caller-supplied persisted `TestInventory` can be cross-referenced
-after analysis by deterministic host code. This adds evidence-bound covered,
-partial, or gap findings and suggested test scaffolds; it does not execute
-tests or turn candidate test areas into executed coverage.
-
 ## Lightweight validation
 
 Use fake evidence APIs and a fake Strands model for ordinary tests. No AWS call
@@ -680,8 +620,6 @@ Tests cover:
 - deterministic Markdown rendering from fixed JSON;
 - no overwrite and no target-repository writes;
 - credentials and source excerpts absent from persisted output.
-- optional test-inventory coverage findings remain deterministic and explicitly
-  distinguish unavailable inventory from executed coverage.
 
 An environment-gated Bedrock smoke test may verify one synthetic repository.
 It must not use proprietary source and must require explicit AWS and model

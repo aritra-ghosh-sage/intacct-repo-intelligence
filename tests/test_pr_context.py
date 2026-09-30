@@ -25,7 +25,9 @@ from ia_repomap_builder import (
 )
 from ia_repomap_builder.pr_context import (
     _GitChange,
+    _extract_changed_element_spans,
     _hunk_line_ranges,
+    _git_head_file,
     _in_scope_changes,
     _parse_pr_context_xml,
     _select_hunk_symbols,
@@ -491,6 +493,172 @@ not a hunk @@ -1 +2 @@
                     with self.assertRaisesRegex(ValueError, "cannot read Git hunks"):
                         _hunk_line_ranges(self.root, "base", "head", "app/source/foo.cls")
 
+    def test_ent_metadata_extracts_object_import_order_and_schema_members(self) -> None:
+        path = "app/source/gl/glautostatpostsetup.ent"
+        source = """\
+<?php
+$kSchemas['object'] = array(
+    'PROPERTYLEASEGROUPKEY' => array('type' => 'string'),
+);
+$kSchemas['importOrder'] = array(
+    'PROPERTYLEASEGROUPKEY' => 1,
+);
+$kSchemas['schema'] = array(
+    'PROPERTYLEASEGROUPKEY' => 'propertyLeaseGroup',
+);
+"""
+        spans = _extract_changed_element_spans(path, source)
+        self.assertEqual(
+            [(item.candidate.name, item.candidate.line, item.candidate.kind) for item in spans],
+            [
+                ("glautostatpostsetup.object.PROPERTYLEASEGROUPKEY", 3, "ent_schema_member"),
+                ("glautostatpostsetup.importOrder.PROPERTYLEASEGROUPKEY", 6, "ent_schema_member"),
+                ("glautostatpostsetup.schema.PROPERTYLEASEGROUPKEY", 9, "ent_schema_mapping"),
+            ],
+        )
+        self.assertIn("PROPERTYLEASEGROUPKEY", spans[0].candidate.inspection_terms)
+        self.assertIn("propertyLeaseGroup", spans[2].candidate.inspection_terms)
+
+    def test_ent_dynamic_array_members_remain_unresolved(self) -> None:
+        source = """\
+<?php
+$kSchemas['object'] = array(
+    'KNOWN_MEMBER' => array('type' => 'string'),
+    $dynamicName => array('type' => 'string'),
+);
+"""
+        self.assertEqual(
+            _extract_changed_element_spans("app/source/gl/schema.ent", source),
+            (),
+        )
+
+    def test_ent_bracket_arrays_extract_literal_members(self) -> None:
+        source = """\
+<?php
+$kSchemas['object'] = [
+    'BRACKET_MEMBER' => ['type' => 'string'],
+];
+"""
+        spans = _extract_changed_element_spans("app/source/gl/schema.ent", source)
+        self.assertEqual([item.candidate.name for item in spans], ["schema.object.BRACKET_MEMBER"])
+
+    def test_openapi_property_spans_include_nested_domain_and_mapping_literals(self) -> None:
+        path = "app/source/api/openapi.yaml"
+        source = "\n".join((
+            "openapi: 3.0.0",
+            "components:",
+            "  schemas:",
+            "    Example:",
+            "      type: object",
+            "      properties:",
+            "        costTypeGroup:",
+            "          description: existing property",
+            "          x-mappedTo: COSTTYPEGROUPKEY",
+            "        workOrderGroup:",
+            "          description: existing property",
+            "        loanAccountGroup:",
+            "          description: existing property",
+            "        propertyLeaseGroup:",
+            "          type: object",
+            "          properties:",
+            "            key:",
+            "              description: existing nested property",
+            "              x-mappedTo: PROPERTYLEASEGROUPKEY",
+            "            newlyAdded:",
+            "              description: new nested property",
+        )) + "\n"
+        spans = _extract_changed_element_spans(path, source)
+        by_name = {item.candidate.name: item for item in spans}
+        self.assertEqual(by_name["openapi.Example.costTypeGroup"].candidate.line, 7)
+        self.assertIn("COSTTYPEGROUPKEY", by_name["openapi.Example.costTypeGroup"].candidate.inspection_terms)
+        self.assertIn("openapi.Example.workOrderGroup", by_name)
+        self.assertIn("openapi.Example.loanAccountGroup", by_name)
+        self.assertEqual(by_name["openapi.Example.propertyLeaseGroup.key"].candidate.line, 17)
+        self.assertIn("propertyLeaseGroup", by_name["openapi.Example.propertyLeaseGroup.key"].candidate.inspection_terms)
+        self.assertIn("PROPERTYLEASEGROUPKEY", by_name["openapi.Example.propertyLeaseGroup.key"].candidate.inspection_terms)
+        self.assertEqual(by_name["openapi.Example.propertyLeaseGroup.newlyAdded"].candidate.line, 20)
+
+    def test_metadata_attribution_resolves_only_supported_unmatched_hunks(self) -> None:
+        xml = """\
+<pr-context schema="ripwire.pr-context/v1">
+  <file p="code.cls">
+    <changed-symbols><s t="method" n="run" p="code.cls:5"/></changed-symbols>
+  </file>
+  <file p="schema.ent"><changed-symbols count="0"/></file>
+  <file p="openapi.yaml"><changed-symbols count="0"/></file>
+  <file p="broken.yaml"><changed-symbols count="0"/></file>
+    <file p="malformed.yaml"><changed-symbols count="0"/></file>
+</pr-context>
+"""
+        ent_source = """\
+<?php
+$kSchemas['object'] = array(
+    'MEMBER' => array('type' => 'string'),
+);
+"""
+        yaml_source = """\
+openapi: 3.0.0
+properties:
+  propertyLeaseGroup:
+    description: existing
+"""
+        broken_source = """\
+openapi: 3.0.0
+properties:
+  unsupported: { type: string }
+"""
+        sources = {
+            "app/source/schema.ent": ent_source,
+            "app/source/openapi.yaml": yaml_source,
+            "app/source/broken.yaml": broken_source,
+        }
+        changes = [
+            _GitChange("app/source/code.cls", "M"),
+            _GitChange("app/source/schema.ent", "M"),
+            _GitChange("app/source/openapi.yaml", "M"),
+            _GitChange("app/source/broken.yaml", "M"),
+        ]
+        spans = {
+            path: _extract_changed_element_spans(path, source)
+            for path, source in sources.items()
+        }
+        changed, gaps, metrics = _parse_pr_context_xml(
+            self.root,
+            "app/source",
+            xml,
+            changes,
+            hunk_ranges={
+                "app/source/code.cls": ((5, 5),),
+                "app/source/schema.ent": ((3, 3),),
+                "app/source/openapi.yaml": ((4, 4),),
+                "app/source/broken.yaml": ((3, 3),),
+            },
+            changed_elements_by_path=spans,
+        )
+        by_path = {item.path: item for item in changed}
+        self.assertEqual([item.name for item in by_path["app/source/code.cls"].symbols], ["run"])
+        self.assertEqual(by_path["app/source/code.cls"].changed_elements, ())
+        self.assertEqual(len(by_path["app/source/schema.ent"].changed_elements), 1)
+        self.assertEqual(len(by_path["app/source/openapi.yaml"].changed_elements), 1)
+        self.assertEqual(by_path["app/source/broken.yaml"].changed_elements, ())
+        self.assertEqual(metrics["hunks_resolved_by_elements"], 2)
+        self.assertEqual(metrics["element_candidates_before"], 2)
+        self.assertEqual(metrics["element_candidates_after"], 2)
+        self.assertEqual(metrics["hunks_unresolved"], 1)
+        unresolved = [gap for gap in gaps if gap.kind == "hunk_symbol_unresolved"]
+        self.assertEqual(len(unresolved), 1)
+        self.assertEqual(unresolved[0].count, 1)
+
+    def test_head_file_reader_ignores_mutable_worktree_content(self) -> None:
+        path = self.root / "app/source/gl/Added.ent"
+        committed = path.read_text(encoding="utf-8")
+        path.write_text("working tree only", encoding="utf-8")
+        head = self._git_head()
+        self.assertEqual(
+            _git_head_file(self.root, head, "app/source/gl/Added.ent"),
+            committed,
+        )
+
     def test_selects_enclosing_method_for_method_body_hunks(self) -> None:
         path = "app/source/apar/CustomerPrintTemplateValidator.cls"
         symbols = (
@@ -713,6 +881,56 @@ not a hunk @@ -1 +2 @@
         changed_payload = payload["changed_files"][0]
         self.assertEqual(changed_payload["impact_files"][0]["confidence"], "candidate")
         self.assertEqual(changed_payload["affected_tests"][0]["confidence"], "candidate")
+
+    def test_pr_context_serialization_includes_changed_elements(self) -> None:
+        path = "app/source/gl/schema.ent"
+        source = """\
+<?php
+$kSchemas['object'] = array(
+    'PROPERTYLEASEGROUPKEY' => array('type' => 'string'),
+);
+"""
+        spans = _extract_changed_element_spans(path, source)
+        changed, _, _ = _parse_pr_context_xml(
+            self.root,
+            "app/source",
+            '<pr-context schema="ripwire.pr-context/v1"><file p="gl/schema.ent"><changed-symbols count="0"/></file></pr-context>',
+            [_GitChange(path, "M")],
+            hunk_ranges={path: ((3, 3),)},
+            changed_elements_by_path={path: spans},
+        )
+        payload = PrContextResult(status="ok", changed_files=changed).as_dict()
+        self.assertEqual(
+            payload["changed_files"][0]["changed_elements"][0]["name"],
+            "schema.object.PROPERTYLEASEGROUPKEY",
+        )
+
+    def test_ripwire_unavailable_result_keeps_head_attributed_metadata(self) -> None:
+        ready = BuildResult(
+            engine="ripwire",
+            status="ok",
+            identity={"head": "head-sha", "merge_base": "base-sha", "lean_cache": "/tmp/index"},
+        )
+        source = """\
+<?php
+$kSchemas['object'] = array(
+    'PROPERTYLEASEGROUPKEY' => array('type' => 'string'),
+);
+"""
+        with (
+            patch("ia_repomap_builder.pr_context.check_repomap_readiness", return_value=ready),
+            patch("ia_repomap_builder.pr_context._git_changes", return_value=[_GitChange("app/source/gl/schema.ent", "M")]),
+            patch("ia_repomap_builder.pr_context._hunk_line_ranges", return_value=((3, 3),)),
+            patch("ia_repomap_builder.pr_context._git_head_file", return_value=source),
+            patch("ia_repomap_builder.pr_context._ripwire_binary", return_value=None),
+        ):
+            result = build_pr_context(PrContextRequest(self.root, self.artifacts, "HEAD~1"))
+        self.assertEqual(result.status, "unavailable")
+        self.assertEqual(result.changed_files[0].symbols, ())
+        self.assertEqual(
+            result.changed_files[0].changed_elements[0].name,
+            "schema.object.PROPERTYLEASEGROUPKEY",
+        )
 
     def test_scope_filtering_preserves_explicit_gaps(self) -> None:
         selected, gaps = _in_scope_changes(

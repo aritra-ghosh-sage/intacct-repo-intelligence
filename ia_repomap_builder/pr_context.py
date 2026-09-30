@@ -13,6 +13,7 @@ from pathlib import Path
 from .config import (
     PrAffectedTestCandidate,
     PrCallerCandidate,
+    PrChangedElementCandidate,
     PrChangedFile,
     PrContextGap,
     PrContextRequest,
@@ -41,9 +42,31 @@ class _CallerEvidence:
     capped: bool = False
 
 
+@dataclass(frozen=True)
+class _ElementSpan:
+    candidate: PrChangedElementCandidate
+    start_line: int
+    end_line: int
+    depth: int
+
+
 _HUNK_HEADER = re.compile(
     r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@"
 )
+_ENT_SCHEMA_ASSIGNMENT = re.compile(
+    r"\$kSchemas\s*\[\s*(['\"])(object|importOrder|schema)\1\s*\]"
+    r"\s*=\s*(?:array\s*\(|\[)",
+)
+_PHP_ARRAY_OPEN = re.compile(r"array\s*\(|\[")
+_YAML_PROPERTY_KEY = re.compile(r"^([ \t]*)(['\"]?)([A-Za-z0-9_.-]+)\2[ \t]*:[ \t]*(?:#.*)?$")
+_YAML_MAPPING_LINE = re.compile(r"^( *)(?:'[^']+'|\"[^\"]+\"|[A-Za-z0-9_.$/-]+)[ \t]*:")
+_YAML_SEQUENCE_LINE = re.compile(r"^( *)-(?:[ \t]+.*)?$")
+_YAML_MAPPED_TO = re.compile(
+    r"(?m)^[ \t]*x-mappedTo[ \t]*:[ \t]*(?:['\"]([^'\"]+)['\"]|([A-Za-z0-9_.-]+))[ \t]*(?:#.*)?$"
+)
+_GENERIC_OPENAPI_PROPERTIES = frozenset({"key", "id", "href"})
+_PHP_ENTRY = re.compile(r"^[ \t]*(['\"])([A-Za-z0-9_.-]+)\1[ \t]*=>")
+_PHP_STRING = re.compile(r"(['\"])([^'\"\r\n]{1,160})\1")
 
 
 def build_pr_context(request: PrContextRequest) -> PrContextResult:
@@ -82,6 +105,7 @@ def build_pr_context(request: PrContextRequest) -> PrContextResult:
     in_scope, gaps = _in_scope_changes(changes, config.scope)
     inventory = tuple(_change_dict(change, config.scope) for change in changes)
     hunk_ranges: dict[str, tuple[tuple[int, int], ...]] = {}
+    head_elements: dict[str, tuple[_ElementSpan, ...]] = {}
     for change in in_scope:
         if change.change == "D":
             gaps.append(PrContextGap(
@@ -99,6 +123,9 @@ def build_pr_context(request: PrContextRequest) -> PrContextResult:
                 readiness.identity["head"],
                 change.path,
             )
+            source = _git_head_file(root, readiness.identity["head"], change.path)
+            if source is not None:
+                head_elements[change.path] = _extract_changed_element_spans(change.path, source)
         except ValueError as exc:
             gaps.append(
                 PrContextGap(
@@ -111,7 +138,7 @@ def build_pr_context(request: PrContextRequest) -> PrContextResult:
         return PrContextResult(
             status="unavailable",
             diagnostics=["Ripwire binary became unavailable after readiness check"],
-            changed_files=_host_changed_files(changes, config.scope),
+            changed_files=_host_changed_files(changes, config.scope, hunk_ranges, head_elements),
             gaps=gaps,
             identity=readiness.identity,
             git_inventory=inventory,
@@ -140,7 +167,7 @@ def build_pr_context(request: PrContextRequest) -> PrContextResult:
     except (OSError, subprocess.SubprocessError) as exc:
         return PrContextResult(
             status="error",
-            changed_files=_host_changed_files(changes, config.scope),
+            changed_files=_host_changed_files(changes, config.scope, hunk_ranges, head_elements),
             gaps=gaps,
             diagnostics=[f"Ripwire PR-context invocation failed: {exc}"],
             identity=readiness.identity,
@@ -149,7 +176,7 @@ def build_pr_context(request: PrContextRequest) -> PrContextResult:
     if completed.returncode != 0:
         return PrContextResult(
             status="error",
-            changed_files=_host_changed_files(changes, config.scope),
+            changed_files=_host_changed_files(changes, config.scope, hunk_ranges, head_elements),
             gaps=gaps,
             diagnostics=[f"Ripwire PR-context exited {completed.returncode}: {completed.stderr.strip()[:500]}"],
             identity=readiness.identity,
@@ -162,11 +189,12 @@ def build_pr_context(request: PrContextRequest) -> PrContextResult:
             completed.stdout,
             in_scope,
             hunk_ranges=hunk_ranges,
+            changed_elements_by_path=head_elements,
         )
     except ValueError as exc:
         return PrContextResult(
             status="error",
-            changed_files=_host_changed_files(changes, config.scope),
+            changed_files=_host_changed_files(changes, config.scope, hunk_ranges, head_elements),
             gaps=gaps,
             diagnostics=[str(exc)],
             identity=readiness.identity,
@@ -224,16 +252,45 @@ def _change_dict(change: _GitChange, scope: tuple[str, ...]) -> dict[str, object
     }
 
 
-def _host_changed_files(changes: Sequence[_GitChange], scope: tuple[str, ...]) -> list[PrChangedFile]:
+def _host_changed_files(
+    changes: Sequence[_GitChange],
+    scope: tuple[str, ...],
+    hunk_ranges: Mapping[str, Sequence[tuple[int, int]]] | None = None,
+    elements_by_path: Mapping[str, Sequence[_ElementSpan]] | None = None,
+) -> list[PrChangedFile]:
     return [
         PrChangedFile(
             path=change.path,
             change=change.change,
             old_path=change.old_path,
+            changed_elements=_select_hunk_elements(
+                (elements_by_path or {}).get(change.path, ()),
+                (hunk_ranges or {}).get(change.path, ()),
+            ),
             scope="in_scope" if any(_path_in_scope(change.path, item) for item in scope) else "out_of_scope",
         )
         for change in changes
     ]
+
+
+def _select_hunk_elements(
+    elements: Sequence[_ElementSpan],
+    ranges: Sequence[tuple[int, int]],
+) -> tuple[PrChangedElementCandidate, ...]:
+    selected: dict[tuple[str, int], PrChangedElementCandidate] = {}
+    for start, end in ranges:
+        matching = [
+            element for element in elements
+            if element.start_line <= end and start <= element.end_line
+        ]
+        if not matching:
+            continue
+        deepest = max(element.depth for element in matching)
+        best = [element for element in matching if element.depth == deepest]
+        if len(best) == 1:
+            element = best[0]
+            selected[(element.candidate.name, element.candidate.line)] = element.candidate
+    return tuple(sorted(selected.values(), key=lambda item: (item.line, item.name, item.kind)))
 
 
 def _git_changes(root: Path, merge_base: str) -> list[_GitChange]:
@@ -316,6 +373,340 @@ def _hunk_line_ranges(
     return tuple(ranges)
 
 
+def _git_head_file(root: Path, head: str, path: str) -> str | None:
+    """Read a changed file from the verified revision, never from the worktree."""
+
+    try:
+        return subprocess.check_output(
+            ["git", "-C", str(root), "show", f"{head}:{path}"],
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError, UnicodeError):
+        return None
+
+
+def _extract_changed_element_spans(path: str, source: str) -> tuple[_ElementSpan, ...]:
+    suffix = Path(path).suffix.lower()
+    if suffix == ".ent":
+        return _extract_ent_elements(path, source)
+    if suffix in {".yaml", ".yml"}:
+        return _extract_openapi_elements(path, source)
+    return ()
+
+
+def _extract_ent_elements(path: str, source: str) -> tuple[_ElementSpan, ...]:
+    matches = list(_ENT_SCHEMA_ASSIGNMENT.finditer(source))
+    section_counts: dict[str, int] = {}
+    for match in matches:
+        section_counts[match.group(2)] = section_counts.get(match.group(2), 0) + 1
+
+    elements: list[_ElementSpan] = []
+    for match in matches:
+        section = match.group(2)
+        if section_counts[section] != 1:
+            continue
+        openers = list(_PHP_ARRAY_OPEN.finditer(source, match.start(), match.end()))
+        if not openers:
+            continue
+        opener = openers[-1]
+        opening_index = opener.end() - 1
+        close_index, entries = _scan_php_array(source, opening_index)
+        if close_index is None or not entries or any(not key for key, _, _ in entries):
+            continue
+        for index, (key, start, value_start) in enumerate(entries):
+            next_start = entries[index + 1][1] if index + 1 < len(entries) else close_index
+            value_end = next_start
+            while value_end > value_start and source[value_end - 1].isspace():
+                value_end -= 1
+            if value_end > value_start and source[value_end - 1] == ",":
+                value_end -= 1
+            while value_end > value_start and source[value_end - 1].isspace():
+                value_end -= 1
+            value = source[start:value_end]
+            terms = _unique_bounded_terms([key, *(item.group(2) for item in _PHP_STRING.finditer(value))])
+            if not terms:
+                continue
+            kind = "ent_schema_mapping" if section == "schema" else "ent_schema_member"
+            name = f"{Path(path).stem}.{section}.{key}"
+            elements.append(_ElementSpan(
+                PrChangedElementCandidate(path, name, _line_number(source, start), kind, terms),
+                _line_number(source, start),
+                _line_number(source, value_end),
+                1,
+            ))
+    return tuple(sorted(elements, key=lambda item: (item.start_line, item.candidate.name)))
+
+
+def _scan_php_array(
+    source: str, opening_index: int
+) -> tuple[int | None, list[tuple[str, int, int]]]:
+    """Find direct literal-key entries in one balanced PHP array expression."""
+
+    opening = source[opening_index]
+    closing_for = {"[": "]", "(": ")", "{": "}"}
+    if opening not in closing_for:
+        return None, []
+    stack = [closing_for[opening]]
+    quote: str | None = None
+    block_comment = False
+    line_comment = False
+    entries: list[tuple[str, int, int]] = []
+    line_start = source.rfind("\n", 0, opening_index) + 1
+    index = opening_index + 1
+    close_index: int | None = None
+    while index < len(source):
+        char = source[index]
+        following = source[index + 1] if index + 1 < len(source) else ""
+        if index == line_start and not quote and not block_comment and not line_comment and len(stack) == 1:
+            line_end = source.find("\n", index, len(source))
+            if line_end < 0:
+                line_end = len(source)
+            line_text = source[index:line_end]
+            entry = _PHP_ENTRY.match(line_text)
+            if entry is not None:
+                key = entry.group(2)
+                entries.append((key, index, index + entry.end()))
+            else:
+                stripped = line_text.strip()
+                if stripped and not stripped.startswith(("//", "#", "/*", "*", ")", "]", ",")):
+                    entries.append(("", index, index))
+        if line_comment:
+            if char == "\n":
+                line_comment = False
+        elif block_comment:
+            if char == "*" and following == "/":
+                block_comment = False
+                index += 1
+        elif quote:
+            if char == "\\":
+                index += 1
+            elif char == quote:
+                quote = None
+        elif char in {"'", '"'}:
+            quote = char
+        elif char == "/" and following == "*":
+            block_comment = True
+            index += 1
+        elif (char == "/" and following == "/") or char == "#":
+            line_comment = True
+            if char == "/":
+                index += 1
+        elif char in closing_for:
+            stack.append(closing_for[char])
+        elif stack and char == stack[-1]:
+            stack.pop()
+            if not stack:
+                close_index = index
+                break
+        if char == "\n":
+            line_start = index + 1
+        index += 1
+    return close_index, entries
+
+
+def _extract_openapi_elements(path: str, source: str) -> tuple[_ElementSpan, ...]:
+    lines = source.splitlines()
+    if any(re.match(r"^\s*\t", line) for line in lines):
+        return ()
+    is_openapi = "openapi" in path.lower() or any(
+        re.match(r"^(?:openapi|swagger)\s*:", line) for line in lines
+    )
+    if not is_openapi:
+        return ()
+    scalar_lines = _yaml_block_scalar_lines(lines)
+    properties_headers: list[int] = []
+    for index, line in enumerate(lines):
+        if index not in scalar_lines and re.match(r"^[ \t]*properties[ \t]*:[ \t]*(?:#.*)?$", line):
+            properties_headers.append(index)
+
+    provisional: list[dict[str, object]] = []
+    for header_index in properties_headers:
+        parent_indent = len(lines[header_index]) - len(lines[header_index].lstrip(" \t"))
+        schema_name = _openapi_schema_name(lines, header_index)
+        section_end = len(lines)
+        for index in range(header_index + 1, len(lines)):
+            if index in scalar_lines or not lines[index].strip() or lines[index].lstrip().startswith("#"):
+                continue
+            indent = len(lines[index]) - len(lines[index].lstrip(" \t"))
+            if indent <= parent_indent:
+                section_end = index
+                break
+        children: list[tuple[int, int, str]] = []
+        child_indent: int | None = None
+        malformed = False
+        for index in range(header_index + 1, section_end):
+            line = lines[index]
+            if index in scalar_lines or not line.strip() or line.lstrip().startswith("#"):
+                continue
+            indent = len(line) - len(line.lstrip(" \t"))
+            if indent <= parent_indent:
+                continue
+            match = _YAML_PROPERTY_KEY.match(line)
+            if child_indent is None:
+                if match is None:
+                    malformed = True
+                    break
+                child_indent = indent
+            if indent == child_indent:
+                if match is None:
+                    malformed = True
+                    break
+                children.append((index, indent, match.group(3)))
+        if malformed or not children:
+            continue
+        names = [name for _, _, name in children]
+        if len(names) != len(set(names)):
+            continue
+        for child_index, indent, name in children:
+            sibling = next((item[0] for item in children if item[0] > child_index), section_end)
+            end_index = sibling - 1
+            while end_index >= child_index and (not lines[end_index].strip() or lines[end_index].lstrip().startswith("#")):
+                end_index -= 1
+            block = "\n".join(lines[child_index:end_index + 1])
+            if re.search(r"[{}]|(?:^|\s)[&*][A-Za-z0-9_-]+", block):
+                continue
+            if not _yaml_property_block_supported(lines, child_index, end_index, scalar_lines):
+                continue
+            provisional.append({
+                "line_index": child_index,
+                "end_index": end_index,
+                "name": name,
+                "indent": indent,
+                "schema_name": schema_name,
+            })
+
+    provisional.sort(key=lambda item: int(item["line_index"]))
+    elements: list[_ElementSpan] = []
+    stem = Path(path).stem
+    for item in provisional:
+        line_index = int(item["line_index"])
+        end_index = int(item["end_index"])
+        enclosing = [
+            parent for parent in provisional
+            if int(parent["line_index"]) < line_index <= int(parent["end_index"])
+        ]
+        enclosing.sort(key=lambda parent: int(parent["line_index"]))
+        ancestors = [str(parent["name"]) for parent in enclosing]
+        own_name = str(item["name"])
+        schema_name = str(item["schema_name"]) if item.get("schema_name") else None
+        qualified_parts = [stem, *([schema_name] if schema_name else []), *ancestors, own_name]
+        qualified = ".".join(qualified_parts)
+        terms = [
+            part for part in (*ancestors, own_name)
+            if part.lower() not in _GENERIC_OPENAPI_PROPERTIES
+        ]
+        ancestor_blocks = [
+            "\n".join(lines[int(parent["line_index"]):int(parent["end_index"]) + 1])
+            for parent in enclosing
+        ]
+        block = "\n".join(lines[line_index:end_index + 1])
+        terms.extend(
+            match.group(1) or match.group(2)
+            for match in _YAML_MAPPED_TO.finditer("\n".join([*ancestor_blocks, block]))
+        )
+        unique_terms = _unique_bounded_terms(terms)
+        if not unique_terms:
+            continue
+        elements.append(_ElementSpan(
+            PrChangedElementCandidate(
+                path=path,
+                name=qualified,
+                line=line_index + 1,
+                kind="openapi_property",
+                inspection_terms=unique_terms,
+            ),
+            line_index + 1,
+            end_index + 1,
+            len(qualified_parts) - 1,
+        ))
+    return tuple(sorted(elements, key=lambda item: (item.start_line, item.candidate.name)))
+
+
+def _openapi_schema_name(lines: Sequence[str], properties_index: int) -> str | None:
+    """Return the nearest OpenAPI schema mapping key containing properties."""
+
+    headers: list[tuple[int, int]] = []
+    for index, line in enumerate(lines[:properties_index]):
+        match = re.match(r"^( *)schemas[ \t]*:[ \t]*(?:#.*)?$", line)
+        if match:
+            headers.append((index, len(match.group(1))))
+    if not headers:
+        return None
+    header_index, schema_indent = headers[-1]
+    schema_key_indent = schema_indent + 2
+    schema_name: str | None = None
+    for line in lines[header_index + 1:properties_index]:
+        match = _YAML_PROPERTY_KEY.match(line)
+        if match and len(match.group(1)) == schema_key_indent:
+            schema_name = match.group(3)
+    return schema_name
+
+
+def _yaml_property_block_supported(
+    lines: Sequence[str],
+    start: int,
+    end: int,
+    scalar_lines: set[int],
+) -> bool:
+    indentation_levels: list[int] = []
+    for index in range(start, end + 1):
+        line = lines[index]
+        if index in scalar_lines or not line.strip() or line.lstrip().startswith("#"):
+            continue
+        mapping = _YAML_MAPPING_LINE.match(line)
+        sequence = _YAML_SEQUENCE_LINE.match(line)
+        if mapping is None and sequence is None:
+            return False
+        indentation = len(line) - len(line.lstrip(" "))
+        if not indentation_levels:
+            indentation_levels.append(indentation)
+        elif indentation > indentation_levels[-1]:
+            indentation_levels.append(indentation)
+        else:
+            while indentation_levels and indentation < indentation_levels[-1]:
+                indentation_levels.pop()
+            if not indentation_levels or indentation != indentation_levels[-1]:
+                return False
+    return True
+
+
+def _yaml_block_scalar_lines(lines: Sequence[str]) -> set[int]:
+    """Mark block-scalar body lines so their text is not parsed as YAML keys."""
+
+    scalar_lines: set[int] = set()
+    scalar_indent: int | None = None
+    for index, line in enumerate(lines):
+        if scalar_indent is not None:
+            indent = len(line) - len(line.lstrip(" "))
+            if line.strip() and indent > scalar_indent:
+                scalar_lines.add(index)
+                continue
+            scalar_indent = None
+        match = re.match(r"^( *)[^#]+:[ \t]*[|>][+-]?(?:[1-9])?(?:[ \t]+#.*)?$", line)
+        if match:
+            scalar_indent = len(line) - len(line.lstrip(" "))
+    return scalar_lines
+
+
+def _unique_bounded_terms(values: Sequence[str]) -> tuple[str, ...]:
+    unique: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        term = value.strip()
+        if not term or len(term) > 160 or term in seen:
+            continue
+        unique.append(term)
+        seen.add(term)
+        if len(unique) == 16:
+            break
+    return tuple(unique)
+
+
+def _line_number(source: str, offset: int) -> int:
+    return source.count("\n", 0, offset) + 1
+
+
 def _in_scope_changes(
     changes: list[_GitChange], scope: tuple[str, ...]
 ) -> tuple[list[_GitChange], list[PrContextGap]]:
@@ -358,6 +749,7 @@ def _parse_pr_context_xml(
     changes: list[_GitChange],
     *,
     hunk_ranges: Mapping[str, Sequence[tuple[int, int]]] | None = None,
+    changed_elements_by_path: Mapping[str, Sequence[_ElementSpan]] | None = None,
 ) -> tuple[list[PrChangedFile], list[PrContextGap], dict[str, int | str]]:
     try:
         root = ET.fromstring(output)
@@ -418,8 +810,12 @@ def _parse_pr_context_xml(
     direct_callers_unresolved = 0
     direct_callers_capped = 0
     hunks_ambiguous = 0
+    element_candidates_before = sum(len(items) for items in (changed_elements_by_path or {}).values())
+    element_candidates_after = 0
+    hunks_resolved_by_elements = 0
     for change in changes:
         symbols = symbols_by_path.get(change.path, ())
+        changed_elements: tuple[PrChangedElementCandidate, ...] = ()
         symbols_before += len(symbols)
         direct_callers_before += sum(len(symbol.callers) for symbol in symbols)
         if change.change != "D" and change.path not in xml_paths:
@@ -443,6 +839,33 @@ def _parse_pr_context_xml(
                 )
             else:
                 symbols, missing_lines, unresolved = _select_hunk_symbols(symbols, ranges)
+                selected_elements: dict[tuple[str, int], PrChangedElementCandidate] = {}
+                final_unresolved = 0
+                file_element_spans = (changed_elements_by_path or {}).get(change.path, ())
+                for hunk_start, hunk_end in ranges:
+                    hunk_symbols, _, _ = _select_hunk_symbols(
+                        symbols_by_path.get(change.path, ()), ((hunk_start, hunk_end),)
+                    )
+                    if hunk_symbols:
+                        continue
+                    matching_elements = [
+                        element for element in file_element_spans
+                        if element.start_line <= hunk_end and hunk_start <= element.end_line
+                    ]
+                    if matching_elements:
+                        deepest = max(element.depth for element in matching_elements)
+                        best = [element for element in matching_elements if element.depth == deepest]
+                        if len(best) == 1:
+                            element = best[0]
+                            selected_elements[(element.candidate.name, element.candidate.line)] = element.candidate
+                            hunks_resolved_by_elements += 1
+                            continue
+                    final_unresolved += 1
+                changed_elements = tuple(sorted(
+                    selected_elements.values(),
+                    key=lambda item: (item.line, item.name, item.kind),
+                ))
+                element_candidates_after += len(changed_elements)
                 ambiguous = _ambiguous_hunk_groups(symbols, ranges)
                 hunks_ambiguous += ambiguous
                 if ambiguous:
@@ -451,7 +874,7 @@ def _parse_pr_context_xml(
                         detail=f"Multiple candidate symbols share changed hunk lines in {change.path}",
                         count=ambiguous,
                     ))
-                hunks_unresolved += unresolved
+                hunks_unresolved += final_unresolved
                 if missing_lines:
                     gaps.append(
                         PrContextGap(
@@ -463,12 +886,12 @@ def _parse_pr_context_xml(
                             count=missing_lines,
                         )
                     )
-                if unresolved:
+                if final_unresolved:
                     gaps.append(
                         PrContextGap(
                             kind="hunk_symbol_unresolved",
-                            detail=f"Changed hunks could not be attributed to a symbol in {change.path}",
-                            count=unresolved,
+                            detail=f"Changed hunks could not be attributed to a symbol or metadata element in {change.path}",
+                            count=final_unresolved,
                         )
                     )
         for symbol in symbols:
@@ -511,6 +934,7 @@ def _parse_pr_context_xml(
                 change=change.change,
                 old_path=change.old_path,
                 symbols=symbols,
+                changed_elements=changed_elements,
                 impact_files=impact_by_path.get(change.path, ()),
                 affected_tests=tests_by_path.get(change.path, ()),
             )
@@ -551,6 +975,9 @@ def _parse_pr_context_xml(
                 "hunks_total": hunks_total,
                 "hunks_unresolved": hunks_unresolved,
                 "hunks_ambiguous": hunks_ambiguous,
+                "element_candidates_before": element_candidates_before,
+                "element_candidates_after": element_candidates_after,
+                "hunks_resolved_by_elements": hunks_resolved_by_elements,
                 "relationship_selection": "direct-callers-v1",
                 "direct_callers_before": direct_callers_before,
                 "direct_callers_after": direct_callers_after,

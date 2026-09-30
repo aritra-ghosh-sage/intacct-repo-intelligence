@@ -23,7 +23,7 @@ result = build(BuildRequest(
     scope=("app/source",),
     query="GLSetupManager preferences",
     engine="lexical",
-    token_budget=30000,
+    token_budget=4000,
 ))
 print(result.as_dict())
 ```
@@ -40,7 +40,7 @@ Participating repositories commit this root declaration:
 schema_version = 1
 engine = "ripwire"
 scope = ["app/source"]
-token_budget = 30000
+token_budget = 4000
 php_family_extensions = [
   ".php", ".phtml", ".cls", ".ent", ".inc", ".cqry", ".rpt",
   ".menu", ".pol", ".wfl", ".shortcuts", ".qry", ".bin", ".map",
@@ -56,9 +56,8 @@ an index. Readiness uses Ripwire `--doctor` to reject a named lean cache that
 the current binary would replace with a cold parse. Readiness gates on the
 doctor report's named `index-cache` row (`source="cache-flag"` and
 `lean="ok"`); unrelated doctor failures remain visible as warnings rather
-than invalidating an otherwise consumable named cache. The doctor check has a
-15-minute timeout to accommodate large source trees and slower cache scans.
-See the canonical contract for the manifest and normalized result formats.
+than invalidating an otherwise consumable named cache. See the canonical
+contract for the manifest and normalized result formats.
 
 The Python-only readiness and PR-context APIs are:
 
@@ -108,8 +107,8 @@ expansion is on demand and is not automatically run for every PR symbol.
 
 ## Strands PR-analysis coordinator
 
-The coordinator API and the review wrapper are separate interfaces. The local
-coordinator is available through Python:
+The local coordinator is available through the Python interface, not a public
+CLI:
 
 ```python
 from ia_repomap_builder import PRAnalysisRequestV1, run_pr_analysis
@@ -131,34 +130,14 @@ symbol-impact calls. Bounded repository inspection is a separate, read-only
 tool and is available only when the host passes
 `allow_source_inspection=True`; it permits at most two calls and retains only
 sanitized citations in the external bundle.
+Changed `.ent` schema entries and block-style OpenAPI properties may also appear
+as `changed_elements` when their verified-head spans overlap changed hunks.
+These are candidate metadata locators, not callable symbols: their exact
+inspection terms are authorized, but they cannot authorize symbol-impact or
+blast-radius endpoints and do not establish runtime impact.
 Inspection reports disclose no-match results and omitted matching files or
 matches as explicit gaps; literals visible in bounded excerpts may authorize a
 single subsequent inspection query.
-
-The report includes the host-owned `review_decision` value:
-
-```text
-status=ok, including assessment=partial  -> needs_manual_review
-status=unavailable or error              -> not_available
-```
-
-This is an availability/manual-review signal, not a merge recommendation,
-approval, rejection, severity score, or claim of complete test coverage. The
-model cannot choose or override it. It is persisted in `pr-analysis.json` and
-shown by the deterministic Markdown renderer.
-
-The host supplies exact inspection `terms` and repository-relative `paths` in
-the prompt. The model must copy those values exactly, omit inspection when a
-value is absent, and must not invent feature names, PR-summary phrases, SQL
-terms, or informal concepts. Follow-up inspection is limited to bounded
-literals and paths returned by the host from the first inspection.
-
-Rejected inspection requests consume an inspection slot and return only the
-generic model-facing error `inspection request rejected`. Raw unauthorized
-terms and paths are not written to diagnostics, gaps, reports, or evidence.
-Host metrics retain only the rejection count, requested term/path counts, and
-the first 16 hexadecimal characters of a SHA-256 hash over canonical compact
-JSON containing sorted `terms` and `paths`.
 
 Reports are written atomically to the external `output_dir` as deterministic
 `pr-analysis.json` and `pr-analysis.md`, with raw Ripwire XML retained under
@@ -177,9 +156,8 @@ it is not live until reviewed and merged. Hunk attribution has been validated
 on an isolated, exact-revision PR #50176 checkout with an external index; it is
 not generally available. The local module interfaces support explicit
 preparation, readiness-gated PR-context retrieval, on-demand symbol impact,
-and the bounded coordinator described above. The `review` command is a public
-wrapper around exact PR setup and the Python coordinator; it does not change
-the coordinator's evidence boundaries or issue merge approval/rejection.
+and the bounded coordinator described above. MCP, editor, harness, hosted-PR,
+and public CLI integrations remain deferred.
 
 ## Running PR context, impact, and analysis
 
@@ -297,10 +275,13 @@ unresolved edges, importer rows, malformed locations, and out-of-scope rows.
 
 ### 6. Run the full Strands PR-analysis coordinator
 
-The full coordinator is a Python API, not a standalone public CLI. Bedrock
-settings are required when candidate symbols are present. Credentials must
-come from the standard boto3 chain or the selected AWS profile; they are not
-request fields.
+The full coordinator is a Python API, not a public CLI. Bedrock settings are
+required when candidate symbols are present. Set `AWS_ACCESS_KEY_ID` and
+`AWS_SECRET_ACCESS_KEY` in the process environment or `.env.local`, with an
+optional `AWS_SESSION_TOKEN`; process environment values take precedence. If
+no key pair is set, boto3's standard credential chain and optional
+`AWS_PROFILE` remain available. Credentials are not request fields and are
+never written to reports.
 
 ```python
 from ia_repomap_builder import PRAnalysisRequestV1, run_pr_analysis
@@ -328,24 +309,6 @@ If `allow_source_inspection=True`, it can also request up to two bounded,
 read-only inspection calls. The host controls request validation, readiness,
 tool limits, evidence validation, post-run repository checks, and persistence.
 
-The Python API returns the complete `PRAnalysisReportV1`. The public review
-wrapper is the `review` subcommand:
-
-```shell
-./.venv/bin/python -m ia_repomap_builder review \
-  https://github.com/intacct/ia-app/pull/123 \
-  --repo /path/to/ia-app \
-  --workspace /safe/external/review-state \
-  [--inspect] \
-  [--test-inventory /safe/external/test-inventory.json]
-```
-
-The review command emits exactly one JSON document on stdout. Agent progress
-and diagnostic output go to stderr. Its envelope adds exactly one top-level
-`review_decision`; the existing nested `result` and nested `report` objects
-are unchanged. Setup or settings failures before a report bundle exists emit
-`review_decision="not_available"` without creating a synthetic report.
-
 ### 7. Read the outputs
 
 The module commands emit command-result JSON envelopes. The full coordinator
@@ -367,7 +330,6 @@ fields are:
 
 ```text
 status          ok | unavailable | error
-review_decision needs_manual_review | not_available
 phase           request_validation | readiness | pr_context | analysis | persistence
 changed_files   Git-confirmed changed files and candidate symbols
 blast_radius    candidate lower-bound relationships
@@ -382,21 +344,6 @@ Exit code `0` means `ok`, `3` means `unavailable` with remediation, and `2`
 means invalid input or an execution error. `agent.invoked=false` means the
 host produced a deterministic report without Strands. `agent.invoked=true`
 means model and region provenance are recorded under `agent`.
-
-The caller may pass a persisted `test-inventory.json` to the review wrapper.
-It must have been generated from the exact PR checkout. The path is forwarded
-unchanged after normalization and the inventory supplies only candidate
-cross-reference evidence. Test areas always remain
-`execution_status="not_run"`; inventory presence does not prove that tests
-passed. A missing or unreadable inventory is disclosed as a
-`test_inventory_unavailable` gap and does not crash the analysis.
-
-Ripwire remains scoped to `app/source`. Changed files under `/app/db`,
-including migration files, remain Git-authoritative file/hunk evidence outside
-the Ripwire map and carry an explicit manual-review limitation. Exact bounded
-literal inspection of such a path is allowed only when source inspection is
-opted in and the path and term are host-authorized. The workflow never parses
-SQL, executes tests, or collects CI results.
 
 For a participating Intacct repository, copy the small
 `templates/.ia-repomap.toml` declaration and the

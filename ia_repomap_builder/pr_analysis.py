@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, Literal
@@ -102,12 +102,33 @@ class Symbol(StrictModel):
     confidence: Confidence
 
 
+class ChangedElement(StrictModel):
+    """A changed metadata declaration, kept distinct from executable symbols."""
+
+    path: str
+    name: str = Field(min_length=1, max_length=240)
+    line: int = Field(ge=1)
+    kind: Literal["ent_schema_member", "ent_schema_mapping", "openapi_property"]
+    inspection_terms: list[str] = Field(min_length=1, max_length=16)
+    confidence: Literal["candidate"] = "candidate"
+
+    @field_validator("inspection_terms")
+    @classmethod
+    def unique_inspection_terms(cls, value: list[str]) -> list[str]:
+        if any(not term or len(term) > 160 for term in value):
+            raise ValueError("inspection_terms must contain bounded non-empty literals")
+        if len(value) != len(set(value)):
+            raise ValueError("inspection_terms must be unique")
+        return value
+
+
 class ChangedFile(StrictModel):
     path: str
     change: Change
     old_path: str | None = None
     scope: Literal["in_scope", "out_of_scope"] = "in_scope"
     symbols: list[Symbol] = Field(max_length=100)
+    changed_elements: list[ChangedElement] = Field(default_factory=list, max_length=100)
     evidence_ids: list[str] = Field(min_length=1, max_length=20)
 
     @field_validator("evidence_ids")
@@ -454,6 +475,9 @@ class EvidenceSession:
             filename = Path(path).name
             inspection_terms.add(filename)
             inspection_terms.add(Path(filename).stem)
+        for changed in seed.context.changed_files:
+            for element in getattr(changed, "changed_elements", ()):
+                inspection_terms.update(element.inspection_terms)
         self._inspection_terms = frozenset(inspection_terms)
 
     def register(self, record: EvidenceRecord) -> None:
@@ -1136,6 +1160,17 @@ def run_coordinator(
                 }
                 for symbol in changed.symbols
             ],
+            "changed_elements": [
+                {
+                    "path": element.path,
+                    "name": element.name,
+                    "line": element.line,
+                    "kind": element.kind,
+                    "inspection_terms": list(element.inspection_terms),
+                    "confidence": element.confidence,
+                }
+                for element in changed.changed_elements
+            ],
             "impact_files": [
                 {
                     "path": item.path,
@@ -1196,6 +1231,9 @@ def run_coordinator(
         "in the host-generated impacted_files section; never turn an impact "
         "file path into an invented target symbol. Test-area paths must come "
         "from allowed_paths. Do not invent unsupported paths or symbols. "
+        "changed_elements are candidate metadata locators, not callable symbols; "
+        "they authorize only their listed inspection terms and never symbol "
+        "impact or blast-radius endpoints. "
         "cite registered evidence IDs, and report ambiguity, truncation, "
         "unresolved, out-of-scope, and unavailable gaps explicitly. "
         "Use at most five impact calls and two inspection calls; request a next "
@@ -1304,10 +1342,11 @@ def run_coordinator(
         ),
         *([{
             "kind": "no_candidate_symbols",
-            "detail": "No candidate symbols were returned by PR context; symbol-level impact remains unresolved",
+            "detail": "No candidate symbols or metadata elements were returned by PR context; attribution remains unresolved",
         }] if degraded and not any(
-            gap.kind == "no_candidate_symbols" for gap in seed.context.gaps
-        ) else []),
+            changed.symbols or changed.changed_elements
+            for changed in seed.context.changed_files
+        ) and not any(gap.kind == "no_candidate_symbols" for gap in seed.context.gaps) else []),
         *_coverage_gaps(seed.context),
         *session.tool_gaps,
         *([{
@@ -1344,6 +1383,17 @@ def run_coordinator(
                         "confidence": symbol.confidence,
                     }
                     for symbol in changed.symbols
+                ],
+                "changed_elements": [
+                    {
+                        "path": element.path,
+                        "name": element.name,
+                        "line": element.line,
+                        "kind": element.kind,
+                        "inspection_terms": list(element.inspection_terms),
+                        "confidence": element.confidence,
+                    }
+                    for element in changed.changed_elements
                 ],
                 "evidence_ids": (["git-inventory-001"] if seed.context.git_inventory else []) + ["pr-context-001"],
             }
@@ -1438,13 +1488,26 @@ def _report_from_context(
                 }
                 for symbol in changed.symbols
             ],
+            "changed_elements": [
+                {
+                    "path": element.path,
+                    "name": element.name,
+                    "line": element.line,
+                    "kind": element.kind,
+                    "inspection_terms": list(element.inspection_terms),
+                    "confidence": element.confidence,
+                }
+                for element in changed.changed_elements
+            ],
             "evidence_ids": (["git-inventory-001"] if context.git_inventory else []) + (["pr-context-001"] if context.raw_xml or context.changed_files else []),
         }
         for changed in context.changed_files
     ]
     gaps = [gap.__dict__ for gap in context.gaps]
-    if effective_status == "ok" and changed_files and not any(file["symbols"] for file in changed_files):
-        gaps.append({"kind": "no_candidate_symbols", "detail": "No candidate symbols were returned by PR context"})
+    if effective_status == "ok" and changed_files and not any(
+        file["symbols"] or file["changed_elements"] for file in changed_files
+    ):
+        gaps.append({"kind": "no_candidate_symbols", "detail": "No candidate symbols or metadata elements were returned by PR context"})
     if effective_status == "unavailable":
         remediation = [
             "Verify the exact clean checkout and prepared external index before retrying"
@@ -1824,10 +1887,13 @@ class BedrockSettings:
     region: str
     model_id: str
     profile: str | None = None
+    access_key_id: str | None = field(default=None, repr=False)
+    secret_access_key: str | None = field(default=None, repr=False)
+    session_token: str | None = field(default=None, repr=False)
 
 
 def load_bedrock_settings(env_file: str = ".env.local") -> BedrockSettings:
-    """Load non-secret Bedrock settings; credentials stay with boto3."""
+    """Load Bedrock settings and optional static AWS credentials."""
 
     values = dotenv_values(env_file)
     region = (
@@ -1846,7 +1912,30 @@ def load_bedrock_settings(env_file: str = ".env.local") -> BedrockSettings:
             "BEDROCK_MODEL_ID is required in the process environment or .env.local"
         )
     profile = os.environ.get("AWS_PROFILE") or values.get("AWS_PROFILE") or None
-    return BedrockSettings(region=region.strip(), model_id=model_id.strip(), profile=profile)
+    env_access_key = os.environ.get("AWS_ACCESS_KEY_ID")
+    env_secret_key = os.environ.get("AWS_SECRET_ACCESS_KEY")
+    if env_access_key or env_secret_key:
+        access_key_id = env_access_key
+        secret_access_key = env_secret_key
+        session_token = os.environ.get("AWS_SESSION_TOKEN") or None
+        source = "process environment"
+    else:
+        access_key_id = values.get("AWS_ACCESS_KEY_ID") or None
+        secret_access_key = values.get("AWS_SECRET_ACCESS_KEY") or None
+        session_token = values.get("AWS_SESSION_TOKEN") or None
+        source = env_file
+    if bool(access_key_id) != bool(secret_access_key):
+        raise ValueError(
+            f"AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must both be set in {source}"
+        )
+    return BedrockSettings(
+        region=region.strip(),
+        model_id=model_id.strip(),
+        profile=profile,
+        access_key_id=access_key_id,
+        secret_access_key=secret_access_key,
+        session_token=session_token if access_key_id else None,
+    )
 
 
 def build_bedrock_agent(settings: BedrockSettings, *, tools: list[Any] | None = None) -> Any:
@@ -1858,7 +1947,16 @@ def build_bedrock_agent(settings: BedrockSettings, *, tools: list[Any] | None = 
     except ImportError as exc:  # pragma: no cover - environment dependent
         raise RuntimeError("strands-agents is required for the Bedrock coordinator") from exc
     boto_session = None
-    if settings.profile:
+    if settings.access_key_id and settings.secret_access_key:
+        import boto3
+
+        boto_session = boto3.Session(
+            aws_access_key_id=settings.access_key_id,
+            aws_secret_access_key=settings.secret_access_key,
+            aws_session_token=settings.session_token,
+            region_name=settings.region,
+        )
+    elif settings.profile:
         import boto3
 
         boto_session = boto3.Session(profile_name=settings.profile, region_name=settings.region)

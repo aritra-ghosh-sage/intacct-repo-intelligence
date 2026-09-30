@@ -131,6 +131,11 @@ def _markdown(report: PRAnalysisReportV1) -> str:
             if symbol.get("line") is not None:
                 line += f" (line {symbol['line']})"
             lines.append(line)
+        for element in changed["changed_elements"]:
+            lines.append(
+                f"  - metadata `{element['name']}` "
+                f"(`{element['kind']}`, line {element['line']})"
+            )
     if not data["changed_files"]:
         lines.append("- None")
     lines.extend(["", "## Candidate impacted files", ""])

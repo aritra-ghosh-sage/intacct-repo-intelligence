@@ -163,6 +163,18 @@ class PrSymbolCandidate:
 
 
 @dataclass(frozen=True)
+class PrChangedElementCandidate:
+    """A changed metadata declaration, distinct from executable symbols."""
+
+    path: str
+    name: str
+    line: int
+    kind: str
+    inspection_terms: tuple[str, ...]
+    confidence: str = "candidate"
+
+
+@dataclass(frozen=True)
 class PrImpactedFileCandidate:
     """A candidate impacted file summarized by Ripwire PR context."""
 
@@ -182,12 +194,13 @@ class PrAffectedTestCandidate:
 
 @dataclass(frozen=True)
 class PrChangedFile:
-    """A Git-authoritative changed path with optional candidate symbols."""
+    """A Git-authoritative changed path with candidate evidence."""
 
     path: str
     change: str
     old_path: str | None = None
     symbols: tuple[PrSymbolCandidate, ...] = ()
+    changed_elements: tuple[PrChangedElementCandidate, ...] = ()
     impact_files: tuple[PrImpactedFileCandidate, ...] = ()
     affected_tests: tuple[PrAffectedTestCandidate, ...] = ()
     scope: str = "in_scope"
@@ -233,6 +246,17 @@ class PrContextResult:
                             "callers": [caller.__dict__ for caller in symbol.callers],
                         }
                         for symbol in changed.symbols
+                    ],
+                    "changed_elements": [
+                        {
+                            "path": element.path,
+                            "name": element.name,
+                            "line": element.line,
+                            "kind": element.kind,
+                            "inspection_terms": list(element.inspection_terms),
+                            "confidence": element.confidence,
+                        }
+                        for element in changed.changed_elements
                     ],
                     "impact_files": [item.__dict__ for item in changed.impact_files],
                     "affected_tests": [item.__dict__ for item in changed.affected_tests],

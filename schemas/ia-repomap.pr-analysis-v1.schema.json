@@ -193,6 +193,7 @@
         "old_path": { "anyOf": [{ "$ref": "#/$defs/RepoPath" }, { "type": "null" }] },
         "scope": { "enum": ["in_scope", "out_of_scope"] },
         "symbols": { "type": "array", "items": { "$ref": "#/$defs/Symbol" }, "maxItems": 100 },
+        "changed_elements": { "type": "array", "items": { "$ref": "#/$defs/ChangedElement" }, "maxItems": 100 },
         "evidence_ids": { "$ref": "#/$defs/EvidenceIds" }
       }
     },
@@ -216,6 +217,21 @@
         "line": { "type": ["integer", "null"], "minimum": 1 },
         "kind": { "type": ["string", "null"] },
         "confidence": { "$ref": "#/$defs/Confidence" }
+      }
+    },
+    "ChangedElement": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "name", "line", "kind", "inspection_terms", "confidence"],
+      "properties": {
+        "path": { "$ref": "#/$defs/RepoPath" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "line": { "type": "integer", "minimum": 1 },
+        "kind": { "enum": ["ent_schema_member", "ent_schema_mapping", "openapi_property"] },
+        "inspection_terms": {
+          "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 160 }
+        },
+        "confidence": { "const": "candidate" }
       }
     },
     "BlastRadiusRow": {
