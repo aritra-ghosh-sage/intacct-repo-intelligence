@@ -456,6 +456,8 @@ class PRAnalysisReportTests(unittest.TestCase):
             self.assertIn('"inspection_terms_per_call": 8', prompts[0])
             self.assertIn('"inspection_paths_per_call": 10', prompts[0])
             self.assertIn("partition them across the available calls", prompts[0])
+            self.assertIn("do not call inspection again", prompts[0])
+            self.assertIn("Continue the report using evidence already collected", prompts[0])
             self.assertIn('"app/source/example/Example.cls"', prompts[0])
             report_dir = Path(directory) / "reports"
             self.assertTrue((report_dir / "evidence/git-inventory.json").is_file())
@@ -577,7 +579,7 @@ class PRAnalysisReportTests(unittest.TestCase):
                 self.assertEqual(report.status, "ok")
                 self.assertEqual(no_inspection_tools, [])
 
-    def test_run_pr_analysis_inspects_ten_terms_in_two_calls(self) -> None:
+    def test_run_pr_analysis_preserves_inspection_evidence_after_rejection(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             request = self.coordinator_request(directory)
             repo_root = Path(request["repo_root"])
@@ -618,6 +620,7 @@ class PRAnalysisReportTests(unittest.TestCase):
                 def analyze(_prompt: str) -> dict[str, object]:
                     tool_results.append(inspection_tool(terms[:8], paths=[changed_path]))  # type: ignore[operator]
                     tool_results.append(inspection_tool(terms[8:], paths=[changed_path]))  # type: ignore[operator]
+                    tool_results.append(inspection_tool(terms[:1], paths=[changed_path]))  # type: ignore[operator]
                     return {
                         "summary": {
                             "purpose": "Inspect the changed example",
@@ -648,12 +651,14 @@ class PRAnalysisReportTests(unittest.TestCase):
             )
 
             self.assertEqual(report.status, "ok")
-            self.assertEqual([result["status"] for result in tool_results], ["ok", "ok"])
+            self.assertEqual([result["status"] for result in tool_results], ["ok", "ok", "error"])
             self.assertEqual(
                 [result["evidence_id"] for result in tool_results],
-                ["inspection-001", "inspection-002"],
+                ["inspection-001", "inspection-002", None],
             )
-            self.assertEqual(report.metrics["inspection_rejection_count"], 0)
+            self.assertEqual(report.assessment, "partial")
+            self.assertIn("inspection_unavailable", {gap.kind for gap in report.gaps})
+            self.assertEqual(report.metrics["inspection_rejection_count"], 1)
             self.assertEqual(
                 {item.evidence_id for item in report.evidence},
                 {"pr-context-001", "inspection-001", "inspection-002"},

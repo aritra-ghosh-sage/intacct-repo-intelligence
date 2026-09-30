@@ -311,24 +311,29 @@ class InspectionTests(unittest.TestCase):
         finally:
             handle.cleanup()
 
-    def test_rejected_calls_consume_the_two_call_inspection_budget(self) -> None:
+    def test_rejected_call_stops_inspection(self) -> None:
         handle, root = self.repo()
         try:
             session = self.session()
             tool = make_repository_inspection_tool(session, repo_root=root)
-
-            first = tool(["UNAUTHORIZED_TERM_ONE"])
-            second = tool(["UNAUTHORIZED_TERM_TWO"])
-            third = tool(["UNAUTHORIZED_TERM_THREE"])
+            with patch(
+                "ia_repomap_builder.pr_analysis_inspection.inspect_repository",
+                wraps=inspect_repository,
+            ) as inspect:
+                first = tool(["UNAUTHORIZED_TERM_ONE"])
+                second = tool(["changed"])
+                third = tool(["changed"])
 
             self.assertEqual(first["status"], "error")
             self.assertEqual(second["status"], "error")
             self.assertEqual(third["status"], "error")
-            self.assertEqual(session.inspection_calls, 2)
+            self.assertEqual(inspect.call_count, 1)
+            self.assertEqual(session.inspection_calls, 1)
             self.assertEqual(first["metrics"]["inspection_calls"], 1)
-            self.assertEqual(second["metrics"]["inspection_calls"], 2)
-            self.assertEqual(third["metrics"]["inspection_calls"], 2)
-            self.assertEqual(third["diagnostics"], ["inspection request rejected"])
+            self.assertEqual(second["metrics"]["inspection_calls"], 1)
+            self.assertEqual(third["metrics"]["inspection_calls"], 1)
+            self.assertEqual(third["diagnostics"], ["inspection unavailable"])
+            self.assertEqual(session.inspection_rejection_metrics["inspection_rejection_count"], 1)
         finally:
             handle.cleanup()
 
@@ -337,11 +342,14 @@ class InspectionTests(unittest.TestCase):
         try:
             session = self.session()
             tool = make_repository_inspection_tool(session, repo_root=root)
+            successful = tool(["changed"])
+            self.assertEqual(successful["status"], "ok")
             with patch(
                 "ia_repomap_builder.pr_analysis_inspection._matching_paths",
                 side_effect=RuntimeError("simulated inspection failure"),
-            ):
+            ) as matching_paths:
                 result = tool(["changed"])
+                after_failure = tool(["changed"])
 
             self.assertEqual(result["status"], "error")
             self.assertEqual(result["diagnostics"], ["inspection unavailable"])
@@ -351,18 +359,26 @@ class InspectionTests(unittest.TestCase):
             }])
             self.assertEqual(result["metrics"]["inspection_rejection_count"], 0)
             self.assertNotIn("inspection_last_request_hash", result["metrics"])
+            self.assertEqual(after_failure["diagnostics"], ["inspection unavailable"])
+            self.assertEqual(matching_paths.call_count, 1)
+            session.require_evidence(["inspection-001"])
 
+            session = self.session()
+            tool = make_repository_inspection_tool(session, repo_root=root)
             with patch(
                 "ia_repomap_builder.pr_analysis_inspection._matching_paths",
                 side_effect=TimeoutError("simulated timeout"),
-            ):
+            ) as matching_paths:
                 timed_out = tool(["changed"])
+                after_timeout = tool(["changed"])
             self.assertEqual(timed_out["diagnostics"], ["inspection timed out"])
             self.assertEqual(timed_out["gaps"], [{
                 "kind": "inspection_unavailable",
                 "detail": "inspection timed out",
             }])
             self.assertEqual(timed_out["metrics"]["inspection_rejection_count"], 0)
+            self.assertEqual(after_timeout["diagnostics"], ["inspection unavailable"])
+            self.assertEqual(matching_paths.call_count, 1)
         finally:
             handle.cleanup()
 

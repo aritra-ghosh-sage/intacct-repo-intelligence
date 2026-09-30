@@ -461,6 +461,7 @@ class EvidenceSession:
         self._records: dict[str, EvidenceRecord] = {}
         self._impact_calls = 0
         self._inspection_calls = 0
+        self._inspection_unavailable = False
         self._inspection_rejection_count = 0
         self._inspection_requested_term_count = 0
         self._inspection_requested_path_count = 0
@@ -533,6 +534,10 @@ class EvidenceSession:
         if diagnostic:
             self._tool_diagnostics.append(diagnostic)
 
+    def record_inspection_failure(self, diagnostic: str) -> None:
+        self._inspection_unavailable = True
+        self.record_tool_failure("inspection_unavailable", diagnostic)
+
     def record_tool_diagnostic(self, diagnostic: str) -> None:
         if diagnostic:
             self._tool_diagnostics.append(diagnostic)
@@ -544,6 +549,7 @@ class EvidenceSession:
     ) -> None:
         """Record sanitized inspection rejection telemetry without raw input."""
 
+        self._inspection_unavailable = True
         term_list = list(terms) if isinstance(terms, (list, tuple)) else []
         path_list = list(paths) if isinstance(paths, (list, tuple)) else []
         canonical = json.dumps(
@@ -616,6 +622,10 @@ class EvidenceSession:
     @property
     def inspection_calls(self) -> int:
         return self._inspection_calls
+
+    @property
+    def inspection_unavailable(self) -> bool:
+        return self._inspection_unavailable
 
     def consume_inspection_call(self) -> None:
         if self._inspection_calls >= 2:
@@ -1247,6 +1257,10 @@ def run_coordinator(
         f"partition them across the available calls (for example, {inspection_max_terms} "
         f"terms in the first call and the remaining terms in the second); never put "
         "more than the per-call limit in one request. "
+        "If an inspection call returns status=error or an inspection_unavailable gap, "
+        "do not call inspection again. Continue the report using evidence already "
+        "collected, retain the unavailable gap, and never repeat rejected terms or "
+        "paths in the report. "
         "After a successful first inspection, the host may provide bounded "
         "follow-up literals discovered in returned excerpts or match paths; use "
         "only those host-authorized values and never invent new ones. Never "

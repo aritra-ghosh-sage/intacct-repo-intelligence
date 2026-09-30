@@ -246,6 +246,18 @@ def make_repository_inspection_tool(
 
     @tool
     def inspect_repository_evidence(terms: list[str], paths: list[str] | None = None) -> dict[str, Any]:
+        if session.inspection_unavailable:
+            return {
+                "status": "error",
+                "matches": [],
+                "gaps": [{"kind": "inspection_unavailable", "detail": "inspection unavailable"}],
+                "diagnostics": ["inspection unavailable"],
+                "metrics": {
+                    "inspection_calls": session.inspection_calls,
+                    **session.inspection_rejection_metrics,
+                },
+                "evidence_id": None,
+            }
         try:
             session.consume_inspection_call()
         except Exception:
@@ -288,7 +300,7 @@ def make_repository_inspection_tool(
                 "evidence_id": None,
             }
         except TimeoutError:
-            session.record_tool_failure("inspection_unavailable", "inspection timed out")
+            session.record_inspection_failure("inspection timed out")
             return {
                 "status": "error",
                 "matches": [],
@@ -301,7 +313,7 @@ def make_repository_inspection_tool(
                 "evidence_id": None,
             }
         except Exception:
-            session.record_tool_failure("inspection_unavailable", "inspection unavailable")
+            session.record_inspection_failure("inspection unavailable")
             return {
                 "status": "error",
                 "matches": [],
