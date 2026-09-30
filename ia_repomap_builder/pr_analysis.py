@@ -1974,12 +1974,15 @@ def build_bedrock_agent(settings: BedrockSettings, *, tools: list[Any] | None = 
         import boto3
 
         boto_session = boto3.Session(profile_name=settings.profile, region_name=settings.region)
+    model_kwargs = {}
+    if boto_session is None:
+        model_kwargs["region_name"] = settings.region
     model = BedrockModel(
         boto_session=boto_session,
         model_id=settings.model_id,
-        region_name=settings.region,
         temperature=0,
         max_tokens=MAX_AGENT_RESPONSE_TOKENS,
+        **model_kwargs,
     )
     from strands.tools.executors import SequentialToolExecutor
 

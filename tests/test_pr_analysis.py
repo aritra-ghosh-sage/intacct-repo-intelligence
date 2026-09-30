@@ -1380,6 +1380,28 @@ class PRAnalysisReportTests(unittest.TestCase):
             region_name="us-east-1",
         )
         self.assertIs(model_class.call_args.kwargs["boto_session"], session)
+        self.assertNotIn("region_name", model_class.call_args.kwargs)
+
+    def test_bedrock_agent_does_not_duplicate_region_for_profile_session(self) -> None:
+        settings = BedrockSettings(
+            region="us-east-1",
+            model_id="test-model",
+            profile="test-profile",
+        )
+        session = object()
+        with patch("boto3.Session", return_value=session) as make_session, patch(
+            "strands.models.BedrockModel"
+        ) as model_class:
+            build_bedrock_agent(settings)
+        make_session.assert_called_once_with(profile_name="test-profile", region_name="us-east-1")
+        self.assertIs(model_class.call_args.kwargs["boto_session"], session)
+        self.assertNotIn("region_name", model_class.call_args.kwargs)
+
+    def test_bedrock_agent_passes_region_without_custom_session(self) -> None:
+        with patch("strands.models.BedrockModel") as model_class:
+            build_bedrock_agent(BedrockSettings(region="us-east-1", model_id="test-model"))
+        self.assertIsNone(model_class.call_args.kwargs["boto_session"])
+        self.assertEqual(model_class.call_args.kwargs["region_name"], "us-east-1")
 
     def test_bedrock_settings_require_region_and_model(self) -> None:
         empty_settings = {
