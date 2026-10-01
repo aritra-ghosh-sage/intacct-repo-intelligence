@@ -51,10 +51,14 @@ class _ElementSpan:
 
 
 _HUNK_HEADER = re.compile(
-    r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@"
+    r"^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@"
 )
 _ENT_SCHEMA_ASSIGNMENT = re.compile(
     r"\$kSchemas\s*\[\s*(['\"])(object|importOrder|schema)\1\s*\]"
+    r"\s*=\s*(?:array\s*\(|\[)",
+)
+_ENT_ENTITY_ASSIGNMENT = re.compile(
+    r"\$kSchemas\s*\[\s*(['\"])([A-Za-z0-9_.-]+)\1\s*\]"
     r"\s*=\s*(?:array\s*\(|\[)",
 )
 _PHP_ARRAY_OPEN = re.compile(r"array\s*\(|\[")
@@ -66,6 +70,7 @@ _YAML_MAPPED_TO = re.compile(
 )
 _GENERIC_OPENAPI_PROPERTIES = frozenset({"key", "id", "href"})
 _PHP_ENTRY = re.compile(r"^[ \t]*(['\"])([A-Za-z0-9_.-]+)\1[ \t]*=>")
+_PHP_LIST_ENTRY = re.compile(r"^[ \t]*(['\"])([A-Za-z0-9_.-]+)\1[ \t]*,?[ \t]*(?:#.*|//.*)?$")
 _PHP_STRING = re.compile(r"(['\"])([^'\"\r\n]{1,160})\1")
 
 
@@ -105,6 +110,7 @@ def build_pr_context(request: PrContextRequest) -> PrContextResult:
     in_scope, gaps = _in_scope_changes(changes, config.scope)
     inventory = tuple(_change_dict(change, config.scope) for change in changes)
     hunk_ranges: dict[str, tuple[tuple[int, int], ...]] = {}
+    hunk_deletion_lines: dict[str, int] = {}
     head_elements: dict[str, tuple[_ElementSpan, ...]] = {}
     for change in in_scope:
         if change.change == "D":
@@ -117,12 +123,16 @@ def build_pr_context(request: PrContextRequest) -> PrContextResult:
         if change.change not in {"A", "M", "R", "C"}:
             continue
         try:
+            deleted_lines: list[int] = []
             hunk_ranges[change.path] = _hunk_line_ranges(
                 root,
                 readiness.identity["merge_base"],
                 readiness.identity["head"],
                 change.path,
+                deleted_lines=deleted_lines,
             )
+            if deleted_lines:
+                hunk_deletion_lines[change.path] = sum(deleted_lines)
             source = _git_head_file(root, readiness.identity["head"], change.path)
             if source is not None:
                 head_elements[change.path] = _extract_changed_element_spans(change.path, source)
@@ -133,6 +143,14 @@ def build_pr_context(request: PrContextRequest) -> PrContextResult:
                     detail=f"Git hunk ranges are unavailable for {change.path}: {exc}",
                 )
             )
+    for path, count in sorted(hunk_deletion_lines.items()):
+        gaps.append(PrContextGap(
+            kind="hunk_deletion_limited",
+            detail=(
+                f"Deleted lines in {path} have no positive-side symbol or metadata attribution"
+            ),
+            count=count,
+        ))
     binary = _ripwire_binary()
     if binary is None:
         return PrContextResult(
@@ -287,8 +305,7 @@ def _select_hunk_elements(
             continue
         deepest = max(element.depth for element in matching)
         best = [element for element in matching if element.depth == deepest]
-        if len(best) == 1:
-            element = best[0]
+        for element in best:
             selected[(element.candidate.name, element.candidate.line)] = element.candidate
     return tuple(sorted(selected.values(), key=lambda item: (item.line, item.name, item.kind)))
 
@@ -334,6 +351,8 @@ def _hunk_line_ranges(
     merge_base: str,
     head: str,
     path: str,
+    *,
+    deleted_lines: list[int] | None = None,
 ) -> tuple[tuple[int, int], ...]:
     """Return inclusive new-file line ranges from a zero-context Git diff."""
 
@@ -362,14 +381,32 @@ def _hunk_line_ranges(
         raise ValueError(f"cannot read Git hunks: {exc}") from exc
 
     ranges: list[tuple[int, int]] = []
+    old_remaining = 0
+    new_remaining = 0
     for line in completed.stdout.splitlines():
         match = _HUNK_HEADER.match(line)
-        if match is None:
+        if match is not None:
+            old_count = int(match.group(1) or "1")
+            start = int(match.group(2))
+            new_count = int(match.group(3) or "1")
+            old_remaining = old_count
+            new_remaining = new_count
+            if new_count > 0:
+                ranges.append((start, start + new_count - 1))
             continue
-        start = int(match.group(1))
-        count = int(match.group(2) or "1")
-        if count > 0:
-            ranges.append((start, start + count - 1))
+        if old_remaining == 0 and new_remaining == 0:
+            continue
+        if line.startswith("\\"):
+            continue
+        if line.startswith("-") and old_remaining > 0:
+            if deleted_lines is not None:
+                deleted_lines.append(1)
+            old_remaining -= 1
+        elif line.startswith("+") and new_remaining > 0:
+            new_remaining -= 1
+        elif line.startswith(" "):
+            old_remaining = max(old_remaining - 1, 0)
+            new_remaining = max(new_remaining - 1, 0)
     return tuple(ranges)
 
 
@@ -396,7 +433,14 @@ def _extract_changed_element_spans(path: str, source: str) -> tuple[_ElementSpan
 
 
 def _extract_ent_elements(path: str, source: str) -> tuple[_ElementSpan, ...]:
-    matches = list(_ENT_SCHEMA_ASSIGNMENT.finditer(source))
+    # Mask comments before matching assignments so commented examples cannot
+    # become attribution evidence. Keep offsets and line numbers unchanged.
+    code = _mask_php_comments(source)
+    nested_elements = _extract_nested_ent_elements(path, source, code)
+    matches = [
+        match for match in _ENT_SCHEMA_ASSIGNMENT.finditer(code)
+        if not _php_offset_in_string(code, match.start())
+    ]
     section_counts: dict[str, int] = {}
     for match in matches:
         section_counts[match.group(2)] = section_counts.get(match.group(2), 0) + 1
@@ -406,12 +450,12 @@ def _extract_ent_elements(path: str, source: str) -> tuple[_ElementSpan, ...]:
         section = match.group(2)
         if section_counts[section] != 1:
             continue
-        openers = list(_PHP_ARRAY_OPEN.finditer(source, match.start(), match.end()))
+        openers = list(_PHP_ARRAY_OPEN.finditer(code, match.start(), match.end()))
         if not openers:
             continue
         opener = openers[-1]
         opening_index = opener.end() - 1
-        close_index, entries = _scan_php_array(source, opening_index)
+        close_index, entries = _scan_php_array(code, opening_index)
         if close_index is None or not entries or any(not key for key, _, _ in entries):
             continue
         for index, (key, start, value_start) in enumerate(entries):
@@ -423,7 +467,9 @@ def _extract_ent_elements(path: str, source: str) -> tuple[_ElementSpan, ...]:
                 value_end -= 1
             while value_end > value_start and source[value_end - 1].isspace():
                 value_end -= 1
-            value = source[start:value_end]
+            value = source[value_start:value_end]
+            if not _php_static_literal_value(value):
+                continue
             terms = _unique_bounded_terms([key, *(item.group(2) for item in _PHP_STRING.finditer(value))])
             if not terms:
                 continue
@@ -435,13 +481,295 @@ def _extract_ent_elements(path: str, source: str) -> tuple[_ElementSpan, ...]:
                 _line_number(source, value_end),
                 1,
             ))
+    elements.extend(nested_elements)
     return tuple(sorted(elements, key=lambda item: (item.start_line, item.candidate.name)))
+
+
+def _extract_nested_ent_elements(
+    path: str, source: str, code: str
+) -> list[_ElementSpan]:
+    """Extract field locators from direct literal ``$kSchemas[entity]`` arrays."""
+
+    assignments = [
+        match for match in _ENT_ENTITY_ASSIGNMENT.finditer(code)
+        if not _php_offset_in_string(code, match.start())
+    ]
+    entity_counts: dict[str, int] = {}
+    for assignment in assignments:
+        entity = assignment.group(2)
+        entity_counts[entity] = entity_counts.get(entity, 0) + 1
+
+    elements: list[_ElementSpan] = []
+    for assignment in assignments:
+        entity = assignment.group(2)
+        if entity in {"object", "importOrder", "schema"} or entity_counts[entity] != 1:
+            continue
+        opening_index = assignment.end() - 1
+        entity_close, sections = _scan_php_array(code, opening_index)
+        if (
+            entity_close is None
+            or not _php_assignment_ends_at_array(code, entity_close)
+            or any(not key for key, _, _ in sections)
+        ):
+            continue
+        recognized_sections = [
+            section for section, _, _ in sections
+            if section in {"object", "importOrder", "schema"}
+        ]
+        if len(recognized_sections) != len(set(recognized_sections)):
+            continue
+        entity_elements: list[_ElementSpan] = []
+        malformed = False
+        seen_sections: set[str] = set()
+        for index, (section, _, value_start) in enumerate(sections):
+            if section not in {"object", "importOrder", "schema"}:
+                continue
+            seen_sections.add(section)
+            value_limit = sections[index + 1][1] if index + 1 < len(sections) else entity_close
+            section_open = _php_array_open_at(code, value_start, value_limit)
+            if section_open is None:
+                malformed = True
+                break
+            section_close, fields = _scan_php_array(code, section_open)
+            if (
+                section_close is None
+                or section_close >= value_limit
+                or _php_entry_value_end(code, value_start, value_limit) != section_close + 1
+                or not fields
+            ):
+                malformed = True
+                break
+            if any(not key for key, _, _ in fields):
+                malformed = True
+                break
+            for field_index, (field, field_start, field_value_start) in enumerate(fields):
+                field_limit = fields[field_index + 1][1] if field_index + 1 < len(fields) else section_close
+                line_end = code.find("\n", field_start, field_limit)
+                if line_end < 0:
+                    line_end = field_limit
+                line = code[field_start:line_end]
+                keyed = _PHP_ENTRY.match(line) is not None
+                if section == "schema" and keyed:
+                    value_end = _php_entry_value_end(code, field_value_start, field_limit)
+                    value = code[field_value_start:value_end]
+                    static_value = _php_static_literal_value(value)
+                elif section in {"object", "importOrder"} and not keyed:
+                    value_end = line_end
+                    value = line
+                    static_value = bool(_PHP_LIST_ENTRY.match(line))
+                else:
+                    malformed = True
+                    break
+                if not static_value:
+                    malformed = True
+                    break
+                terms = _unique_bounded_terms(
+                    [field, *(item.group(2) for item in _PHP_STRING.finditer(code[field_start:value_end]))]
+                )
+                if not terms:
+                    malformed = True
+                    break
+                kind = "ent_schema_mapping" if section == "schema" else "ent_schema_member"
+                name = f"{entity}.{section}.{field}"
+                entity_elements.append(_ElementSpan(
+                    PrChangedElementCandidate(path, name, _line_number(source, field_start), kind, terms),
+                    _line_number(source, field_start),
+                    _line_number(source, value_end),
+                    2,
+                ))
+            if malformed:
+                break
+        if not malformed:
+            elements.extend(entity_elements)
+    return elements
+
+
+def _php_array_open_at(source: str, start: int, limit: int | None = None) -> int | None:
+    end = len(source) if limit is None else limit
+    index = start
+    while index < end and source[index].isspace():
+        index += 1
+    if source.startswith("array", index):
+        index += len("array")
+        while index < end and source[index].isspace():
+            index += 1
+        return index if index < end and source[index] == "(" else None
+    return index if index < end and source[index] == "[" else None
+
+
+def _php_entry_value_end(source: str, start: int, limit: int) -> int:
+    end = limit
+    while end > start and source[end - 1].isspace():
+        end -= 1
+    if end > start and source[end - 1] == ",":
+        end -= 1
+    while end > start and source[end - 1].isspace():
+        end -= 1
+    return end
+
+
+def _php_assignment_ends_at_array(source: str, close_index: int) -> bool:
+    semicolon = source.find(";", close_index + 1)
+    if semicolon < 0:
+        return False
+    return not source[close_index + 1:semicolon].strip()
+
+
+def _php_static_literal_value(value: str) -> bool:
+    """Accept one quoted/numeric scalar or a recursively literal PHP array."""
+
+    text = value.strip()
+    end = _php_literal_end(text, 0)
+    return end is not None and not text[end:].strip()
+
+
+def _php_literal_end(source: str, start: int) -> int | None:
+    index = _skip_php_space(source, start)
+    if index >= len(source):
+        return None
+    if source.startswith("array", index):
+        after_word = index + len("array")
+        if after_word < len(source) and (source[after_word].isalnum() or source[after_word] == "_"):
+            return None
+        after_word = _skip_php_space(source, after_word)
+        if after_word >= len(source) or source[after_word] != "(":
+            return None
+        return _php_array_literal_end(source, after_word + 1, ")")
+    if source[index] == "[":
+        return _php_array_literal_end(source, index + 1, "]")
+    if source[index] in {"'", '"'}:
+        quote = source[index]
+        index += 1
+        while index < len(source):
+            if source[index] == "\\":
+                index += 2
+                continue
+            if quote == '"' and source[index] == "$":
+                return None
+            if source[index] == quote:
+                return index + 1
+            index += 1
+        return None
+    number = re.match(r"[0-9]+", source[index:])
+    return index + len(number.group(0)) if number else None
+
+
+def _php_array_literal_end(source: str, start: int, closing: str) -> int | None:
+    index = _skip_php_space(source, start)
+    if index < len(source) and source[index] == closing:
+        return index + 1
+    while index < len(source):
+        first_end = _php_literal_end(source, index)
+        if first_end is None:
+            return None
+        index = _skip_php_space(source, first_end)
+        if source.startswith("=>", index):
+            value_end = _php_literal_end(source, index + 2)
+            if value_end is None:
+                return None
+            index = _skip_php_space(source, value_end)
+        if index < len(source) and source[index] == ",":
+            index = _skip_php_space(source, index + 1)
+            if index < len(source) and source[index] == closing:
+                return index + 1
+            continue
+        if index < len(source) and source[index] == closing:
+            return index + 1
+        return None
+    return None
+
+
+def _skip_php_space(source: str, index: int) -> int:
+    while index < len(source) and source[index].isspace():
+        index += 1
+    return index
+
+
+def _mask_php_comments(source: str) -> str:
+    """Replace PHP line and block comments with spaces while preserving lines."""
+
+    chars = list(source)
+    index = 0
+    quote: str | None = None
+    while index < len(source):
+        char = source[index]
+        following = source[index + 1] if index + 1 < len(source) else ""
+        if quote:
+            if char == "\\":
+                index += 2
+                continue
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            index += 1
+            continue
+        if source.startswith("<<<", index):
+            heredoc = re.match(
+                r"<<<[ \t]*(?:(['\"])([A-Za-z_][A-Za-z0-9_]*)\1|([A-Za-z_][A-Za-z0-9_]*))",
+                source[index:],
+            )
+            if heredoc is not None:
+                tag = heredoc.group(2) or heredoc.group(3)
+                opening_end = index + heredoc.end()
+                body_start = source.find("\n", opening_end)
+                body_start = len(source) if body_start < 0 else body_start + 1
+                terminator = re.compile(rf"(?m)^[ \t]*{re.escape(tag)}(?=[ \t]*(?:[,;)]|$))")
+                ending = terminator.search(source, body_start)
+                mask_end = len(source) if ending is None else ending.end()
+                for offset in range(index, mask_end):
+                    if source[offset] == "\n":
+                        continue
+                    chars[offset] = " "
+                if index < len(chars) and mask_end > index:
+                    chars[index] = "@"
+                index = mask_end
+                continue
+        if char == "#" or (char == "/" and following == "/"):
+            end = source.find("\n", index)
+            if end < 0:
+                end = len(source)
+            for offset in range(index, end):
+                chars[offset] = " "
+            index = end
+            continue
+        if char == "/" and following == "*":
+            end = source.find("*/", index + 2)
+            end = len(source) if end < 0 else end + 2
+            for offset in range(index, end):
+                if chars[offset] != "\n":
+                    chars[offset] = " "
+            index = end
+            continue
+        index += 1
+    return "".join(chars)
+
+
+def _php_offset_in_string(source: str, offset: int) -> bool:
+    """Return whether an offset falls inside a quoted PHP string literal."""
+
+    quote: str | None = None
+    index = 0
+    while index < offset:
+        char = source[index]
+        if quote:
+            if char == "\\":
+                index += 2
+                continue
+            if char == quote:
+                quote = None
+        elif char in {"'", '"'}:
+            quote = char
+        index += 1
+    return quote is not None
 
 
 def _scan_php_array(
     source: str, opening_index: int
 ) -> tuple[int | None, list[tuple[str, int, int]]]:
-    """Find direct literal-key entries in one balanced PHP array expression."""
+    """Find direct literal entries, splitting only at this array's commas."""
 
     opening = source[opening_index]
     closing_for = {"[": "]", "(": ")", "{": "}"}
@@ -452,25 +780,30 @@ def _scan_php_array(
     block_comment = False
     line_comment = False
     entries: list[tuple[str, int, int]] = []
-    line_start = source.rfind("\n", 0, opening_index) + 1
     index = opening_index + 1
-    close_index: int | None = None
+
+    def record_segment(start: int, end: int) -> None:
+        while start < end and source[start].isspace():
+            start += 1
+        while end > start and source[end - 1].isspace():
+            end -= 1
+        if start >= end:
+            return
+        segment = source[start:end]
+        keyed = _PHP_ENTRY.match(segment)
+        if keyed is not None:
+            entries.append((keyed.group(2), start, start + keyed.end()))
+            return
+        listed = _PHP_LIST_ENTRY.match(segment)
+        if listed is not None:
+            entries.append((listed.group(2), start, end))
+            return
+        entries.append(("", start, start))
+
+    segment_start = index
     while index < len(source):
         char = source[index]
         following = source[index + 1] if index + 1 < len(source) else ""
-        if index == line_start and not quote and not block_comment and not line_comment and len(stack) == 1:
-            line_end = source.find("\n", index, len(source))
-            if line_end < 0:
-                line_end = len(source)
-            line_text = source[index:line_end]
-            entry = _PHP_ENTRY.match(line_text)
-            if entry is not None:
-                key = entry.group(2)
-                entries.append((key, index, index + entry.end()))
-            else:
-                stripped = line_text.strip()
-                if stripped and not stripped.startswith(("//", "#", "/*", "*", ")", "]", ",")):
-                    entries.append(("", index, index))
         if line_comment:
             if char == "\n":
                 line_comment = False
@@ -495,14 +828,15 @@ def _scan_php_array(
         elif char in closing_for:
             stack.append(closing_for[char])
         elif stack and char == stack[-1]:
+            if len(stack) == 1:
+                record_segment(segment_start, index)
+                return index, entries
             stack.pop()
-            if not stack:
-                close_index = index
-                break
-        if char == "\n":
-            line_start = index + 1
+        elif char == "," and len(stack) == 1:
+            record_segment(segment_start, index)
+            segment_start = index + 1
         index += 1
-    return close_index, entries
+    return None, entries
 
 
 def _extract_openapi_elements(path: str, source: str) -> tuple[_ElementSpan, ...]:
@@ -813,6 +1147,7 @@ def _parse_pr_context_xml(
     element_candidates_before = sum(len(items) for items in (changed_elements_by_path or {}).values())
     element_candidates_after = 0
     hunks_resolved_by_elements = 0
+    metadata_hunks_unresolved = 0
     for change in changes:
         symbols = symbols_by_path.get(change.path, ())
         changed_elements: tuple[PrChangedElementCandidate, ...] = ()
@@ -846,21 +1181,23 @@ def _parse_pr_context_xml(
                     hunk_symbols, _, _ = _select_hunk_symbols(
                         symbols_by_path.get(change.path, ()), ((hunk_start, hunk_end),)
                     )
-                    if hunk_symbols:
-                        continue
                     matching_elements = [
                         element for element in file_element_spans
                         if element.start_line <= hunk_end and hunk_start <= element.end_line
                     ]
+                    if Path(change.path).suffix.lower() == ".ent" and not matching_elements:
+                        metadata_hunks_unresolved += 1
                     if matching_elements:
                         deepest = max(element.depth for element in matching_elements)
                         best = [element for element in matching_elements if element.depth == deepest]
-                        if len(best) == 1:
-                            element = best[0]
-                            selected_elements[(element.candidate.name, element.candidate.line)] = element.candidate
-                            hunks_resolved_by_elements += 1
+                        if best:
+                            for element in best:
+                                selected_elements[(element.candidate.name, element.candidate.line)] = element.candidate
+                            if not hunk_symbols:
+                                hunks_resolved_by_elements += 1
                             continue
-                    final_unresolved += 1
+                    if not hunk_symbols:
+                        final_unresolved += 1
                 changed_elements = tuple(sorted(
                     selected_elements.values(),
                     key=lambda item: (item.line, item.name, item.kind),
@@ -939,6 +1276,13 @@ def _parse_pr_context_xml(
                 affected_tests=tests_by_path.get(change.path, ()),
             )
         )
+
+    if metadata_hunks_unresolved:
+        gaps.append(PrContextGap(
+            kind="metadata_element_unresolved",
+            detail="Changed .ent hunks without supported direct metadata attribution remain unresolved",
+            count=metadata_hunks_unresolved,
+        ))
 
     changed_paths = {change.path for change in changes}
     unmatched = len(xml_paths - changed_paths)

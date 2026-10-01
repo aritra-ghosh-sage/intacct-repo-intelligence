@@ -481,6 +481,79 @@ not a hunk @@ -1 +2 @@
         )
         self.assertEqual(run.call_args.kwargs["timeout"], 30)
 
+    def test_hunk_line_ranges_retain_deleted_line_counts(self) -> None:
+        diff = """\
+@@ -5 +4,0 @@
+-REMOVED_FIELD
+@@ -8,0 +7 @@
++ADDED_FIELD
+@@ -10 +9 @@
+-REPLACED_OLD_FIELD
++REPLACED_NEW_FIELD
+"""
+        deleted_lines: list[int] = []
+        with patch(
+            "ia_repomap_builder.pr_context.subprocess.run",
+            return_value=SimpleNamespace(stdout=diff),
+        ):
+            ranges = _hunk_line_ranges(
+                self.root,
+                "base",
+                "head",
+                "app/source/gl/entity.ent",
+                deleted_lines=deleted_lines,
+            )
+        self.assertEqual(ranges, ((7, 7), (9, 9)))
+        self.assertEqual(deleted_lines, [1, 1])
+
+    def test_mixed_ent_addition_keeps_positive_attribution_and_deletion_gap(self) -> None:
+        source = """\
+<?php
+$kSchemas['entity'] = [
+    'object' => [
+        'EXISTING_FIELD',
+    ],
+    'schema' => [
+        'ADDED_FIELD' => 'db_field',
+    ],
+];
+"""
+        diff = """\
+@@ -8 +7 @@
+-OLD_FIELD
++ADDED_FIELD
+"""
+        readiness = BuildResult(
+            "ripwire",
+            "ok",
+            identity={"merge_base": "base", "head": "head"},
+        )
+        config = SimpleNamespace(scope=("app/source",), token_budget=4000)
+        with (
+            patch("ia_repomap_builder.pr_context.check_repomap_readiness", return_value=readiness),
+            patch("ia_repomap_builder.pr_context.load_repomap_config", return_value=config),
+            patch(
+                "ia_repomap_builder.pr_context._git_changes",
+                return_value=[_GitChange("app/source/gl/entity.ent", "M")],
+            ),
+            patch(
+                "ia_repomap_builder.pr_context.subprocess.run",
+                return_value=SimpleNamespace(stdout=diff),
+            ),
+            patch("ia_repomap_builder.pr_context._git_head_file", return_value=source),
+            patch("ia_repomap_builder.pr_context._ripwire_binary", return_value=None),
+        ):
+            result = build_pr_context(PrContextRequest(self.root, self.artifacts, "base"))
+        self.assertEqual(result.status, "unavailable")
+        self.assertEqual(
+            [element.name for element in result.changed_files[0].changed_elements],
+            ["entity.schema.ADDED_FIELD"],
+        )
+        deletion_gaps = [gap for gap in result.gaps if gap.kind == "hunk_deletion_limited"]
+        self.assertEqual(len(deletion_gaps), 1)
+        self.assertEqual(deletion_gaps[0].count, 1)
+        self.assertNotIn("hunk_no_head_lines", {gap.kind for gap in result.gaps})
+
     def test_hunk_line_ranges_convert_subprocess_failures(self) -> None:
         failures = (
             OSError("missing git"),
@@ -541,6 +614,256 @@ $kSchemas['object'] = [
 """
         spans = _extract_changed_element_spans("app/source/gl/schema.ent", source)
         self.assertEqual([item.candidate.name for item in spans], ["schema.object.BRACKET_MEMBER"])
+
+    def test_nested_ent_schema_attribution_matches_glautostatpostsetup_lines(self) -> None:
+        lines = [""] * 107
+        lines[0] = "<?php"
+        lines[1] = "$kSchemas['glautostatpostsetup'] = ["
+        lines[2] = "    'object' => ["
+        lines[38] = "        'PROPERTYLEASEGROUPKEY',"
+        lines[39] = "    ],"
+        lines[40] = "    'importOrder' => ["
+        lines[71] = "        'PROPERTYLEASEGROUPKEY',"
+        lines[72] = "    ],"
+        lines[73] = "    'schema' => ["
+        lines[104] = "        'PROPERTYLEASEGROUPKEY' => 'database_field',"
+        lines[105] = "    ],"
+        lines[106] = "];"
+        spans = _extract_changed_element_spans(
+            "app/source/gl/glautostatpostsetup.ent", "\n".join(lines) + "\n"
+        )
+        self.assertEqual(
+            [(item.candidate.name, item.candidate.line) for item in spans],
+            [
+                ("glautostatpostsetup.object.PROPERTYLEASEGROUPKEY", 39),
+                ("glautostatpostsetup.importOrder.PROPERTYLEASEGROUPKEY", 72),
+                ("glautostatpostsetup.schema.PROPERTYLEASEGROUPKEY", 105),
+            ],
+        )
+
+    def test_nested_ent_hunk_keeps_all_entries_and_coexisting_symbol(self) -> None:
+        path = "app/source/gl/glautostatpostsetup.ent"
+        source = """\
+<?php
+$kSchemas['glautostatpostsetup'] = [
+    'object' => [
+        'OBJECT_FIELD',
+    ],
+    'importOrder' => [
+        'IMPORT_FIELD',
+    ],
+    'schema' => [
+        'SCHEMA_FIELD' => 'database_field',
+    ],
+];
+"""
+        xml = """\
+<pr-context schema="ripwire.pr-context/v1">
+  <file p="gl/glautostatpostsetup.ent">
+    <changed-symbols><s t="method" n="loader" p="gl/glautostatpostsetup.ent:4"/></changed-symbols>
+  </file>
+</pr-context>
+"""
+        spans = _extract_changed_element_spans(path, source)
+        changed, gaps, _ = _parse_pr_context_xml(
+            self.root,
+            "app/source",
+            xml,
+            [_GitChange(path, "M")],
+            hunk_ranges={path: ((4, 10),)},
+            changed_elements_by_path={path: spans},
+        )
+        self.assertEqual(
+            [item.name for item in changed[0].changed_elements],
+            [
+                "glautostatpostsetup.object.OBJECT_FIELD",
+                "glautostatpostsetup.importOrder.IMPORT_FIELD",
+                "glautostatpostsetup.schema.SCHEMA_FIELD",
+            ],
+        )
+        self.assertEqual([item.name for item in changed[0].symbols], ["loader"])
+        self.assertNotIn("hunk_symbol_unresolved", {gap.kind for gap in gaps})
+
+    def test_nested_ent_comments_malformed_dynamic_and_include_remain_unresolved(self) -> None:
+        cases = {
+            "comment": """\
+<?php
+/* $kSchemas['entity'] = ['object' => ['COMMENTED_FIELD']]; */
+// $kSchemas['other'] = ['object' => ['COMMENTED_FIELD']];
+""",
+            "malformed": """\
+<?php
+$kSchemas['entity'] = [
+    'object' => [,],
+];
+""",
+            "merge": """\
+<?php
+$kSchemas['entity'] = [
+    'object' => array_merge(['MERGED_FIELD'], $defaults),
+];
+""",
+            "include": """\
+<?php
+$kSchemas['entity'] = [
+    'object' => include 'fields.php',
+];
+""",
+            "wrong_object_shape": """\
+<?php
+$kSchemas['entity'] = [
+    'object' => [
+        'FIELD' => ['type' => 'string'],
+    ],
+];
+""",
+            "wrong_schema_shape": """\
+<?php
+$kSchemas['entity'] = [
+    'schema' => [
+        'FIELD',
+    ],
+];
+""",
+            "duplicate_section": """\
+<?php
+$kSchemas['entity'] = [
+    'object' => [
+        'FIRST_FIELD',
+    ],
+    'object' => [
+        'SECOND_FIELD',
+    ],
+];
+""",
+            "string_literal": '''\
+<?php
+$example = "\n$kSchemas['entity'] = [\n    'object' => [\n        'FALSE_FIELD',\n    ],\n];";
+''',
+            "heredoc_literal": """\
+<?php
+$example = <<<BODY
+$kSchemas['entity'] = [
+    'object' => [
+        'HEREDOC_FIELD',
+    ],
+];
+BODY;
+""",
+            "nowdoc_literal": """\
+<?php
+$example = <<<'BODY'
+$kSchemas['entity'] = [
+    'object' => [
+        'NOWDOC_FIELD',
+    ],
+];
+BODY;
+""",
+            "interpolated_string": """\
+<?php
+$kSchemas['entity'] = [
+    'schema' => [
+        'FIELD' => "$dynamic",
+    ],
+];
+""",
+        }
+        path = "app/source/gl/entity.ent"
+        for label, source in cases.items():
+            with self.subTest(label=label):
+                spans = _extract_changed_element_spans(path, source)
+                self.assertEqual(spans, ())
+                changed, gaps, metrics = _parse_pr_context_xml(
+                    self.root,
+                    "app/source",
+                    '<pr-context schema="ripwire.pr-context/v1"><file p="gl/entity.ent"><changed-symbols count="0"/></file></pr-context>',
+                    [_GitChange(path, "M")],
+                    hunk_ranges={path: ((3, 3),)},
+                    changed_elements_by_path={path: spans},
+                )
+                self.assertEqual(changed[0].changed_elements, ())
+                self.assertIn("hunk_symbol_unresolved", {gap.kind for gap in gaps})
+                self.assertEqual(metrics["hunks_unresolved"], 1)
+
+    def test_nested_ent_comment_literals_do_not_leak_into_inspection_terms(self) -> None:
+        source = """\
+<?php
+$kSchemas['entity'] = [
+    'schema' => [
+        'FIELD' => ['type' => 'string', /* 'COMMENT_ONLY_LITERAL' */],
+    ],
+];
+"""
+        spans = _extract_changed_element_spans("app/source/gl/entity.ent", source)
+        self.assertEqual(len(spans), 1)
+        self.assertIn("string", spans[0].candidate.inspection_terms)
+        self.assertNotIn("COMMENT_ONLY_LITERAL", spans[0].candidate.inspection_terms)
+
+    def test_nested_ent_inline_documented_form_extracts_each_section(self) -> None:
+        source = """\
+<?php
+$kSchemas['inlineEntity'] = ['object' => ['FIELD'], 'importOrder' => ['FIELD'], 'schema' => ['FIELD' => 'db_field']];
+"""
+        spans = _extract_changed_element_spans("app/source/gl/inlineEntity.ent", source)
+        self.assertEqual(
+            [item.candidate.name for item in spans],
+            [
+                "inlineEntity.importOrder.FIELD",
+                "inlineEntity.object.FIELD",
+                "inlineEntity.schema.FIELD",
+            ],
+        )
+        self.assertIn("db_field", spans[2].candidate.inspection_terms)
+
+    def test_dynamic_ent_hunk_keeps_symbol_and_metadata_unresolved_gap(self) -> None:
+        path = "app/source/gl/entity.ent"
+        source = """\
+<?php
+$kSchemas['entity'] = [
+    'object' => array_merge(['FIELD'], $defaults),
+];
+"""
+        xml = """\
+<pr-context schema="ripwire.pr-context/v1">
+  <file p="gl/entity.ent">
+    <changed-symbols><s t="method" n="loader" p="gl/entity.ent:3"/></changed-symbols>
+  </file>
+</pr-context>
+"""
+        spans = _extract_changed_element_spans(path, source)
+        changed, gaps, _ = _parse_pr_context_xml(
+            self.root,
+            "app/source",
+            xml,
+            [_GitChange(path, "M")],
+            hunk_ranges={path: ((3, 3),)},
+            changed_elements_by_path={path: spans},
+        )
+        self.assertEqual([item.name for item in changed[0].symbols], ["loader"])
+        self.assertEqual(changed[0].changed_elements, ())
+        self.assertIn("metadata_element_unresolved", {gap.kind for gap in gaps})
+        self.assertNotIn("hunk_symbol_unresolved", {gap.kind for gap in gaps})
+
+    def test_deleted_ent_has_explicit_no_head_line_gap(self) -> None:
+        readiness = BuildResult(
+            "ripwire",
+            "ok",
+            identity={"merge_base": "base", "head": "head"},
+        )
+        config = SimpleNamespace(scope=("app/source",), token_budget=4000)
+        with (
+            patch("ia_repomap_builder.pr_context.check_repomap_readiness", return_value=readiness),
+            patch("ia_repomap_builder.pr_context.load_repomap_config", return_value=config),
+            patch(
+                "ia_repomap_builder.pr_context._git_changes",
+                return_value=[_GitChange("app/source/gl/glautostatpostsetup.ent", "D")],
+            ),
+            patch("ia_repomap_builder.pr_context._ripwire_binary", return_value=None),
+        ):
+            result = build_pr_context(PrContextRequest(self.root, self.artifacts, "base"))
+        self.assertEqual(result.status, "unavailable")
+        self.assertIn("hunk_no_head_lines", {gap.kind for gap in result.gaps})
 
     def test_openapi_property_spans_include_nested_domain_and_mapping_literals(self) -> None:
         path = "app/source/api/openapi.yaml"
@@ -827,7 +1150,12 @@ properties:
         self.assertEqual(metrics["direct_callers_capped"], 2)
         self.assertEqual(
             {gap.kind for gap in gaps},
-            {"caller_location_unavailable", "caller_out_of_scope", "caller_truncated"},
+            {
+                "caller_location_unavailable",
+                "caller_out_of_scope",
+                "caller_truncated",
+                "metadata_element_unresolved",
+            },
         )
         self.assertTrue(all(not caller.path.startswith("/") for caller in symbol.callers))
 
@@ -1033,6 +1361,7 @@ $kSchemas['object'] = array(
             "base-sha",
             "head-sha",
             "app/source/gl/Added.ent",
+            deleted_lines=[],
         )
 
     def test_post_run_checkout_change_discards_context(self) -> None:

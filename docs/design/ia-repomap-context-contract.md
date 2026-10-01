@@ -270,16 +270,30 @@ numbers produce `hunk_symbol_line_unavailable`. Raw Ripwire XML remains
 verbatim canonical evidence in every successful result.
 
 For supported metadata files, the host reads the changed file from the verified
-Git head and uses a conservative fallback after symbol attribution. Conventional
-`.ent` arrays under `$kSchemas['object']`, `$kSchemas['importOrder']`, and
-`$kSchemas['schema']`, plus block-style OpenAPI YAML properties, are exposed as
-`changed_elements` when their declaration spans overlap positive-side hunks.
-OpenAPI properties nested below generic `key`, `id`, or `href` names retain a
-qualified locator; inspection terms include the enclosing domain property and
-any literal `x-mappedTo` value. Unsupported or ambiguous syntax remains
-unresolved. Elements stay separate from `symbols` and cannot authorize symbol
-impact, callers, or blast-radius endpoints. Attribution locates candidate
-metadata only; it does not prove runtime callers, complete impact, or test
+Git head and uses a conservative fallback after symbol attribution. In `.ent`
+files, direct literal entries in the following nested declaration form are
+attributed when their declaration spans overlap positive-side Git hunks:
+
+```php
+$kSchemas['entity'] = [
+    'object' => ['FIELD'],
+    'importOrder' => ['FIELD'],
+    'schema' => ['FIELD' => 'database_field'],
+];
+```
+
+Each resulting `changed_elements` locator qualifies the entity and declaration
+section, for example `entity.schema.FIELD`. This identifies the changed
+declaration location only; it does not resolve an effective schema. Includes,
+merges, defaults, runtime mutations, deletions, unsupported syntax, and
+ambiguous declarations remain unresolved or deletion-limited. Block-style
+OpenAPI YAML properties are also exposed as `changed_elements` when their
+declaration spans overlap positive-side hunks. OpenAPI properties nested below
+generic `key`, `id`, or `href` names retain a qualified locator; inspection
+terms include the enclosing domain property and any literal `x-mappedTo` value.
+Elements stay separate from `symbols` and cannot authorize symbol impact,
+callers, or blast-radius endpoints. Static metadata evidence and attribution do
+not prove runtime impact, runtime callers, complete impact, or executed test
 coverage.
 
 The adapter uses `direct-callers-v1` to normalize only `<caller>` rows attached

@@ -199,6 +199,7 @@ class Gap(StrictModel):
 
 _MATERIAL_GAP_KINDS = frozenset({
     "coverage_unavailable",
+    "metadata_impact_unresolved",
     "model_rows_discarded",
     "no_candidate_symbols",
     "hunk_no_head_lines",
@@ -237,6 +238,31 @@ def _review_decision_for(status: str) -> ReviewDecision:
     """Map a host-owned report status to its non-approval review outcome."""
 
     return "needs_manual_review" if status == "ok" else "not_available"
+
+
+def _metadata_impact_gaps(context: PrContextResult) -> list[dict[str, Any]]:
+    """Keep declaration attribution separate from validated runtime impact."""
+
+    gaps: list[dict[str, Any]] = []
+    for changed in context.changed_files:
+        if not changed.path.lower().endswith(".ent"):
+            continue
+        # A positive impact record attached to this exact changed file is
+        # separate host-parsed relationship evidence. Unrelated source-symbol
+        # callers cannot be attributed to a metadata declaration.
+        has_runtime_relationship = any(
+            impact.dependent_symbols > 0 for impact in changed.impact_files
+        )
+        if has_runtime_relationship:
+            continue
+        gaps.append({
+            "kind": "metadata_impact_unresolved",
+            "detail": (
+                f"Changed .ent content in {changed.path} has no host-validated runtime "
+                "relationship attribution"
+            ),
+        })
+    return gaps
 
 
 class Evidence(StrictModel):
@@ -1354,6 +1380,7 @@ def run_coordinator(
             }
             for gap in seed.context.gaps
         ),
+        *_metadata_impact_gaps(seed.context),
         *([{
             "kind": "no_candidate_symbols",
             "detail": "No candidate symbols or metadata elements were returned by PR context; attribution remains unresolved",
@@ -1518,6 +1545,7 @@ def _report_from_context(
         for changed in context.changed_files
     ]
     gaps = [gap.__dict__ for gap in context.gaps]
+    gaps.extend(_metadata_impact_gaps(context))
     if effective_status == "ok" and changed_files and not any(
         file["symbols"] or file["changed_elements"] for file in changed_files
     ):

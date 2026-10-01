@@ -113,6 +113,16 @@ class PRAnalysisReportTests(unittest.TestCase):
                         "confidence": "candidate",
                         "evidence_ids": ["pr-context-001"],
                         "reason": "metadata locator is not a callable symbol",
+                    }, {
+                        "source_path": changed_path,
+                        "source_symbol": element.name,
+                        "target_path": changed_path,
+                        "target_symbol": element.name,
+                        "relationship": "direct_caller",
+                        "graph_distance": 1,
+                        "confidence": "candidate",
+                        "evidence_ids": ["pr-context-001"],
+                        "reason": "metadata locator is not a caller",
                     }],
                     "test_areas": [],
                 }
@@ -129,9 +139,12 @@ class PRAnalysisReportTests(unittest.TestCase):
         session = sessions[0]
         self.assertEqual(session.allowed_symbols, ())
         self.assertIn("PROPERTYLEASEGROUPKEY", session.authorized_inspection_terms)
+        self.assertNotIn(element.name, session.authorized_inspection_terms)
         self.assertEqual(len(report.changed_files[0].changed_elements), 1)
         self.assertEqual(report.changed_files[0].symbols, [])
         self.assertEqual(report.blast_radius, [])
+        self.assertEqual(report.assessment, "partial")
+        self.assertIn("metadata_impact_unresolved", {gap.kind for gap in report.gaps})
         self.assertNotIn("no_candidate_symbols", {gap.kind for gap in report.gaps})
         self.assertIn('"changed_elements"', prompt_capture[0])
         self.assertIn("PROPERTYLEASEGROUPKEY", prompt_capture[0])
@@ -209,7 +222,124 @@ class PRAnalysisReportTests(unittest.TestCase):
         report = _report_from_context(None, context, status="ok", phase="pr_context")
         self.assertEqual(report.changed_files[0].changed_elements[0].name, element.name)
         self.assertNotIn("no_candidate_symbols", {gap.kind for gap in report.gaps})
+        self.assertIn("metadata_impact_unresolved", {gap.kind for gap in report.gaps})
+        self.assertEqual(report.assessment, "partial")
         self.assert_checked_in_schema(report)
+
+    def test_ent_without_attributed_elements_or_symbols_keeps_metadata_gap(self) -> None:
+        context = PrContextResult(
+            status="ok",
+            raw_xml="<pr-context/>\n",
+            identity=self.context_identity(),
+            changed_files=[PrChangedFile(
+                path="app/source/gl/Unsupported.ent",
+                change="M",
+            )],
+        )
+
+        report = _report_from_context(None, context, status="ok", phase="pr_context")
+
+        self.assertEqual(report.changed_files[0].changed_elements, [])
+        self.assertEqual(report.changed_files[0].symbols, [])
+        self.assertIn("no_candidate_symbols", {gap.kind for gap in report.gaps})
+        self.assertIn("metadata_impact_unresolved", {gap.kind for gap in report.gaps})
+        self.assertEqual(report.assessment, "partial")
+
+    def test_ent_symbol_without_metadata_or_host_impact_keeps_metadata_gap(self) -> None:
+        ent_path = "app/source/gl/Unsupported.ent"
+        context = PrContextResult(
+            status="ok",
+            raw_xml="<pr-context/>\n",
+            identity=self.context_identity(),
+            changed_files=[PrChangedFile(
+                path=ent_path,
+                change="M",
+                symbols=(PrSymbolCandidate(
+                    path=ent_path,
+                    name="UnsupportedEntity.getValue",
+                    line=12,
+                ),),
+            )],
+        )
+
+        report = _report_from_context(None, context, status="ok", phase="pr_context")
+
+        self.assertEqual(report.changed_files[0].changed_elements, [])
+        self.assertEqual(report.changed_files[0].symbols[0].name, "UnsupportedEntity.getValue")
+        self.assertIn("metadata_impact_unresolved", {gap.kind for gap in report.gaps})
+        self.assertEqual(report.assessment, "partial")
+
+    def test_metadata_coexists_with_unrelated_ripwire_symbol(self) -> None:
+        ent_path = "app/source/gl/schema.ent"
+        element = PrChangedElementCandidate(
+            path=ent_path,
+            name="schema.object.PROPERTYLEASEGROUPKEY",
+            line=39,
+            kind="ent_schema_member",
+            inspection_terms=("PROPERTYLEASEGROUPKEY",),
+        )
+        symbol = PrSymbolCandidate(
+            path="app/source/gl/SchemaHandler.cls",
+            name="SchemaHandler.loadSchema",
+            line=24,
+            callers=(PrCallerCandidate(
+                path="app/source/gl/Entry.cls",
+                name="Entry.start",
+                line=12,
+            ),),
+        )
+        context = PrContextResult(
+            status="ok",
+            raw_xml="<pr-context/>\n",
+            identity=self.context_identity(),
+            changed_files=[
+                PrChangedFile(path=ent_path, change="M", changed_elements=(element,)),
+                PrChangedFile(path=symbol.path, change="M", symbols=(symbol,)),
+            ],
+        )
+        session = EvidenceSession(PreAgenticSeed("ok", "analysis", context))
+        report = _report_from_context(None, context, status="ok", phase="pr_context")
+
+        self.assertEqual(
+            session.allowed_symbols,
+            (("app/source/gl/Entry.cls", "Entry.start"), (symbol.path, symbol.name)),
+        )
+        self.assertIn("PROPERTYLEASEGROUPKEY", session.authorized_inspection_terms)
+        self.assertNotIn(element.name, session.allowed_symbols)
+        session.authorize_impact(symbol.path, symbol.name)
+        with self.assertRaisesRegex(ValueError, "not a PR-context candidate symbol"):
+            session.authorize_impact(element.path, element.name)
+        self.assertEqual(report.changed_files[0].changed_elements[0].name, element.name)
+        self.assertEqual(report.changed_files[1].symbols[0].name, symbol.name)
+        self.assertIn("metadata_impact_unresolved", {gap.kind for gap in report.gaps})
+
+    def test_file_linked_host_impact_evidence_resolves_metadata_impact_gap(self) -> None:
+        ent_path = "app/source/gl/schema.ent"
+        element = PrChangedElementCandidate(
+            path=ent_path,
+            name="schema.object.PROPERTYLEASEGROUPKEY",
+            line=39,
+            kind="ent_schema_member",
+            inspection_terms=("PROPERTYLEASEGROUPKEY",),
+        )
+        context = PrContextResult(
+            status="ok",
+            raw_xml="<pr-context/>\n",
+            identity=self.context_identity(),
+            changed_files=[PrChangedFile(
+                path=ent_path,
+                change="M",
+                changed_elements=(element,),
+                impact_files=(PrImpactedFileCandidate(
+                    path="app/source/gl/SchemaHandler.cls",
+                    dependent_symbols=2,
+                ),),
+            )],
+        )
+        report = _report_from_context(None, context, status="ok", phase="pr_context")
+
+        self.assertNotIn("metadata_impact_unresolved", {gap.kind for gap in report.gaps})
+        self.assertEqual(len(report.impacted_files), 1)
 
     def test_affected_test_area_text_is_bounded_for_long_migration_paths(self) -> None:
         changed_path = (
