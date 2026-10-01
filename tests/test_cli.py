@@ -65,6 +65,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(payload["schema"], COMMAND_SCHEMA)
         self.assertEqual(payload["status"], "error")
         self.assertIn("command is required", payload["result"]["diagnostics"][0])
+        self.assertIn("propose-tests", payload["result"]["diagnostics"][0])
 
     def test_test_inventory_persists_external_artifact(self) -> None:
         inventory = SimpleNamespace(
@@ -275,6 +276,92 @@ class CliTests(unittest.TestCase):
         self.assertEqual(payload["status"], "unavailable")
         self.assertEqual(payload["assessment"], "unavailable")
         self.assertIn("gh auth status", payload["remediation"][0])
+
+    def test_propose_tests_dispatches_saved_report_and_explicit_jira_key(self) -> None:
+        report_dir = Path(self.tempdir.name) / "saved-report"
+        app_repo = Path(self.tempdir.name) / "app-repo"
+        test_repo = Path(self.tempdir.name) / "test-repo"
+        output_dir = Path(self.tempdir.name) / "proposals"
+        result = {"status": "ok", "diagnostics": [], "remediation": [], "proposals": []}
+        with patch("ia_repomap_builder.cli._run_test_proposals_engine", return_value=result) as engine:
+            code, payload, stderr = self._run(
+                "propose-tests",
+                "--report-dir", str(report_dir),
+                "--app-repo", str(app_repo),
+                "--test-repo", str(test_repo),
+                "--output-dir", str(output_dir),
+                "--jira-key", "IA-12345",
+            )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(stderr, "")
+        self._assert_public_envelope(payload, "propose-tests")
+        engine.assert_called_once_with(
+            report_dir.resolve(), app_repo.resolve(), test_repo.resolve(), output_dir.resolve(), "IA-12345"
+        )
+        self.assertEqual(payload["request"]["jira_key"], "IA-12345")
+
+    def test_propose_tests_does_not_require_or_infer_jira_key(self) -> None:
+        result = {
+            "status": "partial",
+            "diagnostics": ["Jira key was not supplied"],
+            "remediation": ["Provide --jira-key to render a scaffold."],
+        }
+        with patch("ia_repomap_builder.cli._run_test_proposals_engine", return_value=result) as engine:
+            code, payload, _ = self._run(
+                "propose-tests",
+                "--report-dir", str(Path(self.tempdir.name) / "report"),
+                "--app-repo", str(self.root),
+                "--test-repo", str(Path(self.tempdir.name) / "test-repo"),
+                "--output-dir", str(Path(self.tempdir.name) / "output"),
+            )
+
+        self.assertEqual(code, 0)
+        self.assertNotIn("jira_key", payload["request"])
+        self.assertIsNone(engine.call_args.args[-1])
+        self.assertEqual(payload["status"], "partial")
+
+    def test_propose_tests_requires_absolute_paths_before_dispatch(self) -> None:
+        with patch("ia_repomap_builder.cli._run_test_proposals_engine") as engine:
+            code, payload, _ = self._run(
+                "propose-tests",
+                "--report-dir", "relative-report",
+                "--app-repo", str(self.root),
+                "--test-repo", str(Path(self.tempdir.name) / "test-repo"),
+                "--output-dir", str(Path(self.tempdir.name) / "output"),
+            )
+
+        self.assertEqual(code, EXIT_ERROR)
+        engine.assert_not_called()
+        self.assertEqual(payload["command"], "propose-tests")
+        self.assertIn("must be an absolute path", payload["result"]["diagnostics"][0])
+
+    def test_propose_tests_missing_required_paths_is_json_error(self) -> None:
+        with patch("ia_repomap_builder.cli._run_test_proposals_engine") as engine:
+            code, payload, _ = self._run("propose-tests", "--report-dir", str(self.tempdir.name))
+
+        self.assertEqual(code, EXIT_ERROR)
+        engine.assert_not_called()
+        self.assertEqual(payload["command"], "propose-tests")
+        self.assertIn("--app-repo", payload["result"]["diagnostics"][0])
+
+    def test_propose_tests_engine_failure_is_one_json_error(self) -> None:
+        with patch(
+            "ia_repomap_builder.cli._run_test_proposals_engine",
+            side_effect=RuntimeError("bad saved report"),
+        ):
+            code, payload, stderr = self._run(
+                "propose-tests",
+                "--report-dir", str(Path(self.tempdir.name) / "report"),
+                "--app-repo", str(self.root),
+                "--test-repo", str(Path(self.tempdir.name) / "test-repo"),
+                "--output-dir", str(Path(self.tempdir.name) / "output"),
+            )
+
+        self.assertEqual(code, EXIT_ERROR)
+        self.assertEqual(stderr, "")
+        self.assertEqual(payload["command"], "propose-tests")
+        self.assertIn("bad saved report", payload["result"]["diagnostics"][0])
 
     def test_review_missing_bedrock_settings_is_unavailable(self) -> None:
         result = ReviewRunResult(

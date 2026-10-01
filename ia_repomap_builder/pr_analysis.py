@@ -1847,15 +1847,28 @@ def _apply_test_inventory_coverage(
     if request.test_inventory_path is None or report.status != "ok":
         return report, []
 
-    from .pr_test_coverage import evaluate_test_coverage, load_persisted_test_inventory, render_suggested_stub
+    from .pr_test_coverage import (
+        evaluate_test_coverage,
+        is_rest_api_contract_path,
+        load_persisted_test_inventory,
+    )
 
     payload = report.model_dump(mode="python", by_alias=True)
     inventory_evidence_id = "test-inventory-001"
     try:
         raw_bytes = request.test_inventory_path.read_bytes()
         inventory = load_persisted_test_inventory(request.test_inventory_path)
+        api_contract_changes = [
+            changed.path
+            for changed in report.changed_files
+            if changed.scope == "in_scope"
+            and (
+                is_rest_api_contract_path(changed.path)
+                or (changed.old_path is not None and is_rest_api_contract_path(changed.old_path))
+            )
+        ]
         coverage = evaluate_test_coverage(
-            [changed.path for changed in report.changed_files],
+            api_contract_changes,
             report.test_areas,
             inventory,
             inventory_evidence_id=inventory_evidence_id,
@@ -1872,7 +1885,6 @@ def _apply_test_inventory_coverage(
         payload["assessment"] = _assessment_for(payload["status"], payload["gaps"])
         return PRAnalysisReportV1.model_validate(payload), []
 
-    gap_by_evidence_id = {gap.evidence_ids[0]: gap for gap in coverage.gaps}
     new_payloads: list[tuple[str, bytes]] = [(inventory_evidence_id, raw_bytes)]
     new_evidence = [{
         "evidence_id": inventory_evidence_id,
@@ -1880,17 +1892,6 @@ def _apply_test_inventory_coverage(
         "relative_path": "evidence/test-inventory.json",
         "sha256": sha256(raw_bytes).hexdigest(),
     }]
-    for artifact in coverage.suggested_artifacts:
-        gap = gap_by_evidence_id[artifact.evidence_id]
-        stub_bytes = render_suggested_stub(gap).encode("utf-8")
-        new_payloads.append((artifact.evidence_id, stub_bytes))
-        new_evidence.append({
-            "evidence_id": artifact.evidence_id,
-            "kind": "suggested_test_stub",
-            "relative_path": artifact.relative_path,
-            "sha256": sha256(stub_bytes).hexdigest(),
-        })
-
     payload["test_inventory_coverage"] = json.loads(coverage.model_dump_json())
     payload["evidence"] = [*payload["evidence"], *new_evidence]
     if coverage.diagnostics:

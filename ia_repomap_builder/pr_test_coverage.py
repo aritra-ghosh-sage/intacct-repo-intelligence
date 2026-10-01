@@ -3,10 +3,9 @@
 
 This module is intentionally agent-free: it only reads an already-persisted
 ``inventory.json`` (produced by ``test_inventory.persist_test_inventory``) and
-classifies each changed PR path as ``covered`` (a matching executable suite),
-``partial`` (only a heuristic module/API-object match, or a fixture-only
-suite), or ``gap`` (no match at all). Gaps are conservative by construction:
-an ambiguous or unresolved match is a ``gap``, never a false ``covered``.
+cross-references changed API contract paths with candidate suites. An exact
+feature-path match may be ``covered``; heuristic matches are navigation
+candidates only, and gaps are not rendered as generic test scaffolds.
 """
 
 from __future__ import annotations
@@ -21,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from . import test_inventory as ti
 
 MAX_MATCHED_SUITE_IDS = 50
+# Retained as the compatibility bound for the v1 ``suggested_artifacts`` field.
 MAX_SUGGESTED_STUBS = 20
 
 CoverageStatus = Literal["covered", "partial", "gap"]
@@ -147,6 +147,26 @@ def _module_token(changed_path: str) -> str | None:
     return parts[0] if parts else None
 
 
+def is_rest_api_contract_path(changed_path: str) -> bool:
+    """Return whether a path is an explicit OpenAPI contract artifact."""
+
+    path = Path(changed_path)
+    return (
+        path.suffix.lower() in {".yaml", ".yml", ".json"}
+        and path.as_posix().lower().startswith("app/source/openapispec/")
+    )
+
+
+def _is_sql_change_path(changed_path: str) -> bool:
+    path = Path(changed_path)
+    parts = {part.lower() for part in path.parts}
+    return (
+        path.suffix.lower() in {".sql", ".ddl", ".dml"}
+        or "db_migration" in parts
+        or "sql" in parts
+    )
+
+
 def _build_module_index(inventory: ti.TestInventory) -> dict[str, set[str]]:
     index: dict[str, set[str]] = {}
     for suite in inventory.suites:
@@ -186,39 +206,6 @@ def _suite_is_executable(inventory: ti.TestInventory, suite_id: str) -> bool:
     return False
 
 
-def render_suggested_stub(gap: CoverageGap) -> str:
-    """Render a deterministic Gherkin scaffold stub for one coverage gap."""
-
-    tags = " ".join(sorted({"@needs-review", *gap.suggested_tags}))
-    lines = [
-        tags,
-        f"Feature: {gap.suggested_area}",
-        "",
-        f"  # Suggested by ia_repomap test-inventory coverage cross-reference: {gap.reason}",
-        f"  Scenario: Cover changes in {gap.changed_path}",
-        "    Given a request exercising the changed behavior",
-        "    When the request is submitted",
-        "    Then the response confirms the expected behavior",
-        "",
-    ]
-    return "\n".join(lines)
-
-
-def _slug(value: str) -> str:
-    token = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
-    return re.sub(r"-{2,}", "-", token) or "gap"
-
-
-def _unique_stub_slug(base_slug: str, used: set[str]) -> str:
-    slug = base_slug
-    suffix = 2
-    while slug in used:
-        slug = f"{base_slug}-{suffix}"
-        suffix += 1
-    used.add(slug)
-    return slug
-
-
 def evaluate_test_coverage(
     changed_paths: list[str],
     test_areas: list,
@@ -240,13 +227,12 @@ def evaluate_test_coverage(
 
     findings: list[CoverageFinding] = []
     gaps: list[CoverageGap] = []
-    suggested: list[SuggestedTestArtifact] = []
-    used_stub_slugs: set[str] = set()
-    truncated_stubs = 0
     truncated_match_findings = 0
     omitted_match_ids = 0
 
-    for changed_path in sorted(dict.fromkeys(changed_paths)):
+    sql_paths = {path for path in changed_paths if _is_sql_change_path(path)}
+    eligible_paths = set(changed_paths) - sql_paths
+    for changed_path in sorted(eligible_paths):
         known_paths = _known_test_paths_for(test_areas, changed_path)
         matched: set[str] = set()
         module_only_match = False
@@ -288,10 +274,15 @@ def evaluate_test_coverage(
                 "the result is too broad to establish candidate coverage."
             )
         elif matched:
-            status = "partial"
+            # A module/object token match is useful for navigation, but there
+            # is no cross-repository link proving that it covers this change.
+            # Keep the candidate suite ids while reporting the behavior as a
+            # gap to machine consumers.
+            status = "gap"
             reason = (
-                f"No direct test-path match for {changed_path}; matched inventory "
-                f"suite(s) by module/API-object heuristic: {', '.join(sorted(matched))}."
+                f"Navigation candidate only; no direct test-path match for {changed_path}. "
+                f"Module/API-object heuristic matched suite(s): {', '.join(sorted(matched))}; "
+                "this does not establish coverage, so the API change remains unmatched."
             )
         else:
             status = "gap"
@@ -314,29 +305,17 @@ def evaluate_test_coverage(
 
         if status == "gap":
             module = _module_token(changed_path) or "general"
-            gap_index = len(gaps) + 1
-            stub_available = len(suggested) < MAX_SUGGESTED_STUBS
-            gap_evidence_id = f"test-coverage-gap-{gap_index:03d}" if stub_available else inventory_evidence_id
             gap = CoverageGap(
                 changed_path=changed_path,
                 suggested_area=f"Add test coverage for {changed_path}"[:120],
                 suggested_tags=[f"@{module}"],
                 reason=reason[:200],
-                evidence_ids=[gap_evidence_id],
+                evidence_ids=[inventory_evidence_id],
             )
             gaps.append(gap)
-            if stub_available:
-                stub_slug = _unique_stub_slug(_slug(changed_path), used_stub_slugs)
-                suggested.append(SuggestedTestArtifact(
-                    evidence_id=gap_evidence_id,
-                    relative_path=f"evidence/coverage/suggested/{stub_slug}.feature.suggested",
-                    description=f"Suggested scaffold scenario for {changed_path}",
-                ))
-            else:
-                truncated_stubs += 1
 
     metrics = {
-        "changed_paths": len(changed_paths),
+        "changed_paths": len(eligible_paths),
         "covered": sum(1 for f in findings if f.status == "covered"),
         "partial": sum(1 for f in findings if f.status == "partial"),
         "gap": sum(1 for f in findings if f.status == "gap"),
@@ -344,16 +323,15 @@ def evaluate_test_coverage(
         "omitted_match_ids": omitted_match_ids,
     }
     diagnostics = []
+    if sql_paths:
+        diagnostics.append(
+            f"excluded {len(sql_paths)} SQL change(s) from REST API test matching"
+        )
     if truncated_match_findings:
         diagnostics.append(
             f"{omitted_match_ids} matched suite id(s) omitted across "
             f"{truncated_match_findings} finding(s) by the {MAX_MATCHED_SUITE_IDS}-id cap"
         )
-    if truncated_stubs:
-        diagnostics.append(
-            f"{truncated_stubs} coverage gap(s) exceeded the {MAX_SUGGESTED_STUBS} suggested-stub cap"
-        )
-
     return TestInventoryCoverage(
         status="ok",
         inventory_identity=InventoryIdentity(
@@ -363,7 +341,9 @@ def evaluate_test_coverage(
         ),
         findings=findings,
         gaps=gaps,
-        suggested_artifacts=suggested,
+        # The v1 field remains for report compatibility. Inventory similarity
+        # alone is insufficient evidence to emit a test scaffold.
+        suggested_artifacts=[],
         metrics=metrics,
         diagnostics=diagnostics,
     )

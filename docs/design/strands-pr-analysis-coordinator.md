@@ -52,6 +52,39 @@ research rationale remains
 
 Changing a frozen choice requires a new schema or a documented v2 decision.
 
+## Optional REST API test proposals
+
+REST API test proposals are a separate, opt-in post-analysis command. It reads
+an existing saved PR report and the exact app and REST API test checkouts; it
+does not rerun PR analysis or modify those inputs. The proposal output is
+written to a new external directory.
+
+```shell
+./.venv/bin/python -m ia_repomap_builder propose-tests \
+  --report-dir /path/to/saved/pr-analysis \
+  --app-repo /path/to/exact/ia-app-checkout \
+  --test-repo /path/to/exact/ia-restapi-automation-tests-checkout \
+  --output-dir /path/to/new/external/test-proposals \
+  --jira-key IA-12345
+```
+
+All four paths must be absolute. `--jira-key` is optional and must be supplied
+explicitly; it is never inferred from PR metadata. A proposal may describe
+API-observable behavior and point to a target feature or identify missing
+prerequisites. SQL changes do not produce REST API coverage claims or generic
+feature stubs. Similar names and module-level matches are navigation evidence,
+not proof that a behavior is covered.
+
+Any suggested scaffold follows conventions verified in the target checkout:
+feature files live below `features/<module>/`, feature and scenario tags use
+the module and explicit Jira key, and request/response fixtures use the
+module-level `features/<module>/input/<object>/` and
+`features/<module>/output/<object>/` JSON layout. Gherkin steps use the
+target repo's `object` alias and existing generic REST step form. The command
+checks structure and fixture references only. It does not run a REST API test
+runner, so every proposal remains `not_run` and structural validation must not
+be presented as executed coverage.
+
 ## Inputs
 
 The caller supplies four values:

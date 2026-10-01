@@ -12,7 +12,6 @@ from ia_repomap_builder.pr_test_coverage import (
     MAX_SUGGESTED_STUBS,
     evaluate_test_coverage,
     load_persisted_test_inventory,
-    render_suggested_stub,
 )
 from ia_repomap_builder.test_inventory import (
     InventoryGap,
@@ -181,11 +180,14 @@ class EvaluateTestCoverageTests(unittest.TestCase):
         )
 
         finding = result.findings[0]
-        self.assertEqual(finding.status, "partial")
+        self.assertEqual(finding.status, "gap")
         self.assertEqual(finding.match_basis, "module_api_object")
         self.assertEqual(finding.matched_suite_ids, ["features/gl"])
         self.assertEqual(finding.matched_suite_count, 1)
-        self.assertEqual(result.gaps, [])
+        self.assertIn("Navigation candidate only", finding.reason)
+        self.assertIn("does not establish coverage", finding.reason)
+        self.assertEqual(len(result.gaps), 1)
+        self.assertEqual(result.metrics["partial"], 0)
 
     def test_broad_module_only_match_is_bounded_ambiguity_gap(self) -> None:
         inventory = _inventory(tuple(
@@ -219,7 +221,7 @@ class EvaluateTestCoverageTests(unittest.TestCase):
         self.assertTrue(any("50-id cap" in diagnostic for diagnostic in result.diagnostics))
         self.assertEqual(len(result.gaps), 1)
 
-    def test_module_only_match_at_cap_remains_partial(self) -> None:
+    def test_module_only_match_at_cap_remains_gap(self) -> None:
         inventory = _inventory(tuple(
             InventorySuite(
                 suite_id=f"features/gl/input/suite-{index:02d}",
@@ -237,10 +239,10 @@ class EvaluateTestCoverageTests(unittest.TestCase):
         )
 
         finding = result.findings[0]
-        self.assertEqual(finding.status, "partial")
+        self.assertEqual(finding.status, "gap")
         self.assertEqual(finding.matched_suite_count, MAX_MATCHED_SUITE_IDS)
         self.assertEqual(result.metrics["omitted_match_ids"], 0)
-        self.assertEqual(result.gaps, [])
+        self.assertEqual(len(result.gaps), 1)
 
     def test_direct_path_matches_over_cap_preserve_covered_status(self) -> None:
         inventory = _inventory(tuple(
@@ -291,11 +293,11 @@ class EvaluateTestCoverageTests(unittest.TestCase):
         )
 
         finding = result.findings[0]
-        self.assertEqual(finding.status, "partial")
+        self.assertEqual(finding.status, "gap")
         self.assertEqual(finding.matched_suite_ids, ["features/shared/input/foo"])
         self.assertEqual(finding.matched_suite_count, 1)
 
-    def test_no_match_is_a_gap_with_suggested_stub(self) -> None:
+    def test_no_match_is_a_gap_without_generic_scaffold(self) -> None:
         inventory = _inventory((
             InventorySuite(
                 suite_id="features/ap",
@@ -316,36 +318,26 @@ class EvaluateTestCoverageTests(unittest.TestCase):
         self.assertEqual(finding.status, "gap")
         self.assertEqual(finding.match_basis, "none")
         self.assertEqual(len(result.gaps), 1)
-        self.assertEqual(len(result.suggested_artifacts), 1)
+        self.assertEqual(result.suggested_artifacts, [])
         gap = result.gaps[0]
-        artifact = result.suggested_artifacts[0]
-        self.assertEqual(gap.evidence_ids, [artifact.evidence_id])
-        self.assertTrue(artifact.relative_path.startswith("evidence/coverage/suggested/"))
-        self.assertTrue(artifact.relative_path.endswith(".feature.suggested"))
+        self.assertEqual(gap.evidence_ids, ["test-inventory-001"])
 
-        stub = render_suggested_stub(gap)
-        self.assertIn("@needs-review", stub)
-        self.assertIn("Feature:", stub)
-        self.assertIn("Scenario: Cover changes in app/source/gl/GLSetupManager.cls", stub)
-
-    def test_suggested_stub_paths_are_unique_when_slugs_collide(self) -> None:
+    def test_sql_changes_are_excluded_from_rest_inventory_matching(self) -> None:
         inventory = _inventory(())
         result = evaluate_test_coverage(
-            [
-                "app/source/gl/GLSetupManager.cls",
-                "app/source/gl/gl-setup-manager.cls",
-            ],
+            ["app/db/db_migration/ddl/add_property.sql"],
             [],
             inventory,
             inventory_evidence_id="test-inventory-001",
         )
 
-        self.assertEqual(len(result.gaps), 2)
-        self.assertEqual(len(result.suggested_artifacts), 2)
-        relative_paths = [artifact.relative_path for artifact in result.suggested_artifacts]
-        self.assertEqual(len(relative_paths), len(set(relative_paths)))
+        self.assertEqual(result.findings, [])
+        self.assertEqual(result.gaps, [])
+        self.assertEqual(result.suggested_artifacts, [])
+        self.assertEqual(result.metrics["changed_paths"], 0)
+        self.assertTrue(any("excluded 1 SQL change" in item for item in result.diagnostics))
 
-    def test_suggested_stub_cap_is_enforced(self) -> None:
+    def test_gaps_remain_unscaffolded_over_legacy_suggested_artifact_cap(self) -> None:
         inventory = _inventory(())
         changed_paths = [f"app/source/gl/File{i}.cls" for i in range(MAX_SUGGESTED_STUBS + 5)]
 
@@ -357,19 +349,7 @@ class EvaluateTestCoverageTests(unittest.TestCase):
         )
 
         self.assertEqual(len(result.gaps), MAX_SUGGESTED_STUBS + 5)
-        self.assertEqual(len(result.suggested_artifacts), MAX_SUGGESTED_STUBS)
-        self.assertTrue(any("exceeded" in diagnostic for diagnostic in result.diagnostics))
-
-    def test_render_suggested_stub_is_deterministic(self) -> None:
-        inventory = _inventory(())
-        result = evaluate_test_coverage(
-            ["app/source/gl/GLSetupManager.cls"],
-            [],
-            inventory,
-            inventory_evidence_id="test-inventory-001",
-        )
-        gap = result.gaps[0]
-        self.assertEqual(render_suggested_stub(gap), render_suggested_stub(gap))
+        self.assertEqual(result.suggested_artifacts, [])
 
 
 class InventoryGapDataclassSanityTests(unittest.TestCase):

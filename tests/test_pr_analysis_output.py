@@ -353,11 +353,16 @@ class PRAnalysisOutputTests(unittest.TestCase):
             ]
             write_pr_analysis_bundle(output, report, payload, repo_root=Path(root) / "repo")
             markdown = (output / "pr-analysis.md").read_text()
-            self.assertIn("## Test inventory coverage", markdown)
-            self.assertIn("`gap` `app/source/example.cls`", markdown)
+            self.assertIn("## REST API test inventory candidates", markdown)
+            self.assertIn("heuristic matches are navigation candidates", markdown)
+            self.assertIn("`navigation candidate` `app/source/example.cls`", markdown)
             self.assertIn("(showing 1 of 2)", markdown)
-            self.assertIn("Suggested corrective tests", markdown)
-            self.assertIn("Suggested test scaffolds", markdown)
+            self.assertIn("API contract coverage gaps", markdown)
+            self.assertIn("behavioral coverage is unestablished", markdown)
+            self.assertNotIn("no matching suite established", markdown)
+            self.assertNotIn("Suggested corrective tests", markdown)
+            self.assertNotIn("Suggested test scaffolds", markdown)
+            self.assertIn("not validated as a usable test scaffold", markdown)
             self.assertTrue((output / "evidence/coverage/suggested/example.feature.suggested").is_file())
 
 

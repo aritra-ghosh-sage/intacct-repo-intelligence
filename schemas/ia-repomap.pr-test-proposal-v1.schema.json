@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ia-repomap.pr-test-proposal/v1",
+  "title": "ia-repomap PR test proposal report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "status", "prompt_version", "identity", "jira_key", "proposals", "execution_status"],
+  "properties": {
+    "schema": { "const": "ia-repomap.pr-test-proposal/v1" },
+    "status": { "enum": ["ok", "unavailable", "error"] },
+    "prompt_version": { "type": "string", "minLength": 1 },
+    "identity": { "$ref": "#/$defs/Identity" },
+    "jira_key": { "type": ["string", "null"], "pattern": "^IA-[0-9]+$" },
+    "proposals": { "type": "array", "maxItems": 20, "items": { "$ref": "#/$defs/ProposalResult" } },
+    "execution_status": { "const": "not_run" }
+  },
+  "$defs": {
+    "Identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["app_head", "test_head", "test_repository_id", "inventory_digest", "report_sha256", "inventory_sha256"],
+      "properties": {
+        "app_head": { "$ref": "#/$defs/Sha" },
+        "test_head": { "$ref": "#/$defs/Sha" },
+        "test_repository_id": { "type": "string", "minLength": 1 },
+        "inventory_digest": { "$ref": "#/$defs/Digest" },
+        "report_sha256": { "$ref": "#/$defs/Digest" },
+        "inventory_sha256": { "$ref": "#/$defs/Digest" }
+      }
+    },
+    "ProposalResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["proposal", "scaffold_status", "artifacts", "artifact_sha256", "execution_status"],
+      "properties": {
+        "proposal": { "$ref": "#/$defs/Proposal" },
+        "scaffold_status": { "enum": ["ready", "proposal_with_gaps"] },
+        "artifacts": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "artifact_sha256": { "type": "object", "additionalProperties": { "$ref": "#/$defs/Digest" } },
+        "execution_status": { "const": "not_run" }
+      }
+    },
+    "Proposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "method", "route", "changed_field", "expected_behavior", "prerequisites", "gaps", "evidence_paths", "feature_path", "scenario_name", "tag", "test_repo_object_alias", "test_repo_uri", "response_status", "request_case", "expected_case", "request_fixture", "expected_fixture"],
+      "properties": {
+        "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "method": { "type": "string", "minLength": 3, "maxLength": 8 },
+        "route": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "changed_field": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "expected_behavior": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "prerequisites": { "type": "array", "maxItems": 20, "items": { "type": "string" } },
+        "gaps": { "type": "array", "maxItems": 20, "items": { "type": "string" } },
+        "evidence_paths": { "type": "array", "maxItems": 20, "items": { "type": "string" } },
+        "feature_path": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "scenario_name": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "tag": { "enum": ["sanity", "regression", null] },
+        "test_repo_object_alias": { "type": ["string", "null"], "maxLength": 160 },
+        "test_repo_uri": { "type": ["string", "null"], "maxLength": 300 },
+        "response_status": { "type": ["integer", "null"], "minimum": 100, "maximum": 599 },
+        "request_case": { "type": ["string", "null"], "maxLength": 80 },
+        "expected_case": { "type": ["string", "null"], "maxLength": 80 },
+        "request_fixture": { "type": ["object", "null"] },
+        "expected_fixture": { "type": ["object", "null"] }
+      }
+    },
+    "Sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "Digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}

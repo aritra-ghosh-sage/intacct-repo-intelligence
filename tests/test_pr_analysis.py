@@ -2506,7 +2506,7 @@ class TestInventoryCoverageWiringTests(unittest.TestCase):
                 raw_xml="<pr-context/>",
                 identity=self.context_identity(),
                 changed_files=[PrChangedFile(
-                    path="app/source/example/Example.cls",
+                    path="app/source/openapispec/example/objects.example.yaml",
                     change="M",
                     affected_tests=[PrAffectedTestCandidate("features/example/example.feature")],
                 )],
@@ -2523,7 +2523,7 @@ class TestInventoryCoverageWiringTests(unittest.TestCase):
             self.assertIn("test-inventory-001", {item.evidence_id for item in report.evidence})
             self.assert_checked_in_schema(report)
 
-    def test_supplied_test_inventory_path_gap_produces_suggested_stub_evidence(self) -> None:
+    def test_inventory_coverage_ignores_non_api_and_sql_changes_without_scaffolds(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             inventory_path = root / "test-inventory" / "inventory.json"
@@ -2532,21 +2532,32 @@ class TestInventoryCoverageWiringTests(unittest.TestCase):
                 status="ok",
                 raw_xml="<pr-context/>",
                 identity=self.context_identity(),
-                changed_files=[PrChangedFile(path="app/source/other/Other.cls", change="M")],
+                changed_files=[
+                    PrChangedFile(
+                        path="app/source/openapispec/other/objects.other.yaml",
+                        change="M",
+                    ),
+                    PrChangedFile(path="app/db/db_migration/ddl/add_field.sql", change="M"),
+                    PrChangedFile(path="app/source/other/Other.cls", change="M"),
+                    PrChangedFile(
+                        path="app/source/openapispec/ignored/objects.ignored.yaml",
+                        change="M",
+                        scope="out_of_scope",
+                    ),
+                ],
             )
             request = self.coordinator_request(directory)
             request["test_inventory_path"] = str(inventory_path)
             report = run_pr_analysis(request, context_builder=lambda _: context)
 
             coverage = report.test_inventory_coverage
+            self.assertEqual([finding.changed_path for finding in coverage.findings], [
+                "app/source/openapispec/other/objects.other.yaml",
+            ])
             self.assertEqual(coverage.findings[0].status, "gap")
             self.assertEqual(len(coverage.gaps), 1)
-            self.assertEqual(len(coverage.suggested_artifacts), 1)
-            stub_evidence_id = coverage.suggested_artifacts[0].evidence_id
-            self.assertIn(stub_evidence_id, {item.evidence_id for item in report.evidence})
-            stub_bundle_path = root / "reports" / coverage.suggested_artifacts[0].relative_path
-            self.assertTrue(stub_bundle_path.is_file())
-            self.assertIn("@needs-review", stub_bundle_path.read_text(encoding="utf-8"))
+            self.assertEqual(coverage.suggested_artifacts, [])
+            self.assertEqual({item.kind for item in report.evidence}, {"pr_context_xml", "test_inventory"})
             self.assert_checked_in_schema(report)
 
     def test_missing_test_inventory_path_is_a_disclosed_gap_not_a_failure(self) -> None:

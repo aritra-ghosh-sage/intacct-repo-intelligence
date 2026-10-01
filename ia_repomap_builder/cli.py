@@ -93,6 +93,16 @@ def _parser() -> argparse.ArgumentParser:
         dest="test_inventory_path",
         help="path to a persisted test-inventory.json artifact for coverage cross-reference",
     )
+
+    proposals = commands.add_parser(
+        "propose-tests",
+        help="propose target-repository REST API tests from a saved PR analysis",
+    )
+    proposals.add_argument("--report-dir", required=True, help="saved PR analysis directory (absolute path)")
+    proposals.add_argument("--app-repo", required=True, help="exact app repository checkout (absolute path)")
+    proposals.add_argument("--test-repo", required=True, help="exact REST API test repository checkout (absolute path)")
+    proposals.add_argument("--output-dir", required=True, help="new external proposal output directory (absolute path)")
+    proposals.add_argument("--jira-key", help="explicit Jira scenario key, for example IA-12345")
     return parser
 
 
@@ -127,7 +137,7 @@ def main(
         return int(exc.code) if isinstance(exc.code, int) else EXIT_ERROR
     except ValueError as exc:
         command = next(
-            (item for item in raw_args if item in {"prepare", "pr-context", "symbol-impact", "test-inventory", "setup", "review"}),
+            (item for item in raw_args if item in {"prepare", "pr-context", "symbol-impact", "test-inventory", "setup", "review", "propose-tests"}),
             None,
         )
         return _emit_failure(
@@ -142,11 +152,13 @@ def main(
         return _run_setup(args, out)
     if command == "review":
         return _run_review(args, out, err)
+    if command == "propose-tests":
+        return _run_test_proposals(args, out)
     if command not in {"prepare", "pr-context", "symbol-impact", "test-inventory"}:
         return _emit_failure(
             out,
             command=None,
-            diagnostic="a command is required: setup, review, prepare, pr-context, symbol-impact, or test-inventory",
+            diagnostic="a command is required: setup, review, propose-tests, prepare, pr-context, symbol-impact, or test-inventory",
             remediation=["Run `python -m ia_repomap_builder --help` for valid commands."],
         )
 
@@ -392,6 +404,75 @@ def _run_review(args: argparse.Namespace, out: TextIO, err: TextIO) -> int:
         )
     _write_payload(out, _review_envelope(request_payload, result))
     return _exit_code(result.status)
+
+
+def _run_test_proposals(args: argparse.Namespace, out: TextIO) -> int:
+    raw_paths = {
+        "report_dir": args.report_dir,
+        "app_repo": args.app_repo,
+        "test_repo": args.test_repo,
+        "output_dir": args.output_dir,
+    }
+    for name, value in raw_paths.items():
+        if not Path(value).expanduser().is_absolute():
+            return _emit_failure(
+                out,
+                command="propose-tests",
+                request=raw_paths,
+                diagnostic=f"--{name.replace('_', '-')} must be an absolute path: {value}",
+                remediation=[f"Provide an absolute --{name.replace('_', '-')} path and rerun."],
+            )
+    request = {
+        "report_dir": str(Path(args.report_dir).expanduser().resolve()),
+        "app_repo": str(Path(args.app_repo).expanduser().resolve()),
+        "test_repo": str(Path(args.test_repo).expanduser().resolve()),
+        "output_dir": str(Path(args.output_dir).expanduser().resolve()),
+    }
+    if args.jira_key:
+        request["jira_key"] = args.jira_key
+    try:
+        # Keep this optional workflow independent of the regular PR-analysis
+        # import path and make it consume only the caller's saved report.
+        result = _run_test_proposals_engine(
+            Path(request["report_dir"]),
+            Path(request["app_repo"]),
+            Path(request["test_repo"]),
+            Path(request["output_dir"]),
+            args.jira_key,
+        )
+    except Exception as exc:  # pragma: no cover - defensive command boundary
+        return _emit_failure(
+            out,
+            command="propose-tests",
+            request=request,
+            diagnostic=f"propose-tests execution failed: {type(exc).__name__}: {exc}",
+            remediation=["Inspect the diagnostic, correct the input or environment, and rerun."],
+        )
+    result_dict = result if isinstance(result, dict) else result.as_dict()
+    payload = {
+        "schema": COMMAND_SCHEMA,
+        "command": "propose-tests",
+        "request": request,
+        "status": result_dict.get("status", "error"),
+        "result": result_dict,
+        "remediation": [],
+    }
+    payload["remediation"] = list(result_dict.get("remediation", [])) or _remediation("propose-tests", result)
+    _write_payload(out, payload)
+    result_status = result.get("status", "error") if isinstance(result, dict) else result.status
+    return _exit_code(result_status)
+
+
+def _run_test_proposals_engine(
+    report_dir: Path,
+    app_repo: Path,
+    test_repo: Path,
+    output_dir: Path,
+    jira_key: str | None,
+) -> Any:
+    from .pr_test_proposals import run_test_proposals
+
+    return run_test_proposals(report_dir, app_repo, test_repo, output_dir, jira_key)
 
 
 def _write_review_result(out: TextIO, payload: dict[str, Any]) -> int:

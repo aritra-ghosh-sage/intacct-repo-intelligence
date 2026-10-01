@@ -172,28 +172,39 @@ def _markdown(report: PRAnalysisReportV1) -> str:
         lines.append("- None")
     coverage = data.get("test_inventory_coverage")
     if coverage is not None:
-        lines.extend(["", "## Test inventory coverage", ""])
+        lines.extend(["", "## REST API test inventory candidates", ""])
         lines.append(f"- status: `{coverage['status']}`")
+        lines.append("- heuristic matches are navigation candidates and do not verify behavioral coverage")
         for finding in coverage["findings"]:
             suites = ", ".join(f"`{item}`" for item in finding["matched_suite_ids"]) or "(no suites)"
             matched_count = finding["matched_suite_count"]
             shown_count = len(finding["matched_suite_ids"])
             count_suffix = f" (showing {shown_count} of {matched_count})" if shown_count < matched_count else ""
+            label = (
+                "navigation candidate"
+                if finding["match_basis"] == "module_api_object"
+                else finding["status"]
+            )
             lines.append(
-                f"- `{finding['status']}` `{finding['changed_path']}` "
+                f"- `{label}` `{finding['changed_path']}` "
                 f"(`{finding['match_basis']}`): {suites}{count_suffix} — {finding['reason']}"
             )
         if not coverage["findings"]:
             lines.append("- None")
         if coverage["gaps"]:
-            lines.extend(["", "Suggested corrective tests", ""])
+            lines.extend(["", "API contract coverage gaps", ""])
             for gap in coverage["gaps"]:
-                tags = ", ".join(gap["suggested_tags"]) or "(no tags)"
-                lines.append(f"- `{gap['changed_path']}`: {gap['suggested_area']} ({tags}) — {gap['reason']}")
+                lines.append(
+                    f"- `{gap['changed_path']}`: behavioral coverage is unestablished — "
+                    f"{gap['reason']}"
+                )
         if coverage["suggested_artifacts"]:
-            lines.extend(["", "Suggested test scaffolds", ""])
+            lines.extend(["", "Unverified artifact references", ""])
             for artifact in coverage["suggested_artifacts"]:
-                lines.append(f"- `{artifact['relative_path']}`: {artifact['description']}")
+                lines.append(
+                    f"- `{artifact['relative_path']}`: {artifact['description']} "
+                    "(not validated as a usable test scaffold)"
+                )
         for diagnostic in coverage["diagnostics"]:
             lines.append(f"- diagnostic: {diagnostic}")
     lines.extend(["", "## Gaps and diagnostics", ""])
